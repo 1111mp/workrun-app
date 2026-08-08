@@ -16,6 +16,10 @@ export async function patchWorkrunConfig(
   return invoke('patch_workrun_config', { payload });
 }
 
+export async function getModelCatalog(): Promise<ModelDefinition[]> {
+  return invoke<ModelDefinition[]>('model_catalog_list');
+}
+
 export async function getSystemTheme() {
   return invoke<AppBaseTheme>('get_system_theme');
 }

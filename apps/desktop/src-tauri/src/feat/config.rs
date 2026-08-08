@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use crate::config::{Config, IWorkrun};
+use crate::config::{Config, WorkrunPatch};
 use crate::{
     core::{autostart, logger::Logger, tray},
     logging,
@@ -20,7 +20,7 @@ bitflags! {
 }
 
 /// Patch Workrun Configuration
-pub async fn patch_workrun(patch: &IWorkrun, need_save_file: bool) -> Result<()> {
+pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result<()> {
     Config::workrun().await.edit_draft(|s| s.patch_config(patch));
 
     let update_flags = determine_update_flags(patch);
@@ -43,7 +43,7 @@ pub async fn patch_workrun(patch: &IWorkrun, need_save_file: bool) -> Result<()>
     Ok(())
 }
 
-fn determine_update_flags(patch: &IWorkrun) -> UpdateFlags {
+fn determine_update_flags(patch: &WorkrunPatch) -> UpdateFlags {
     let auto_launch = patch.enable_auto_launch;
     let locale = &patch.locale;
     let log_level = &patch.app_log_level;
@@ -68,7 +68,7 @@ fn determine_update_flags(patch: &IWorkrun) -> UpdateFlags {
     update_flags
 }
 
-async fn process_terminated_flags(update_flags: UpdateFlags, patch: &IWorkrun) -> Result<()> {
+async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatch) -> Result<()> {
     if update_flags.contains(UpdateFlags::LAUNCH) {
         autostart::update_launch().await?;
     }
@@ -85,4 +85,18 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &IWorkrun) -
     }
 
     Ok(())
+}
+
+impl WorkrunPatch {
+    fn get_log_level(&self) -> log::LevelFilter {
+        match self.app_log_level.as_deref().map(str::to_lowercase).as_deref() {
+            Some("silent") => log::LevelFilter::Off,
+            Some("error") => log::LevelFilter::Error,
+            Some("warn") => log::LevelFilter::Warn,
+            Some("info") => log::LevelFilter::Info,
+            Some("debug") => log::LevelFilter::Debug,
+            Some("trace") => log::LevelFilter::Trace,
+            _ => log::LevelFilter::Info,
+        }
+    }
 }

@@ -1,7 +1,7 @@
 use super::CmdResult;
 use crate::{
     cmd::StringifyErr as _,
-    config::{Config, IWorkrun, SharedDraft},
+    config::{Config, IWorkrun, SharedDraft, WorkrunPatch},
     feat,
 };
 
@@ -15,6 +15,6 @@ pub async fn get_workrun_config() -> CmdResult<SharedDraft<IWorkrun>> {
 
 /// patch workrun configuration
 #[tauri::command]
-pub async fn patch_workrun_config(payload: IWorkrun) -> CmdResult {
+pub async fn patch_workrun_config(payload: WorkrunPatch) -> CmdResult {
     feat::patch_workrun(&payload, true).await.stringify_err()
 }

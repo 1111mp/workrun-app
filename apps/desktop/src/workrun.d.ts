@@ -12,13 +12,17 @@ type ModelProvider =
   | 'groq'
   | 'ollama';
 
-type ModelProfile = {
+type ModelDefinition = {
   id: string;
   name: string;
   provider: ModelProvider;
   model: string;
+};
+
+type ProviderCredential = {
+  provider: ModelProvider;
   baseUrl?: string;
-  api_key?: string;
+  apiKey?: string;
 };
 
 interface IWorkrunConfig {
@@ -33,5 +37,5 @@ interface IWorkrunConfig {
   app_log_max_count?: number;
   auto_log_clean?: 0 | 1 | 2 | 3 | 4;
   // model profile
-  model_profiles?: ModelProfile[];
+  provider_credentials?: ProviderCredential[];
 }

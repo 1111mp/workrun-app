@@ -4,7 +4,7 @@
 //! runtime model.  The only execution data is a node's `id`, `type`, `data`,
 //! and the edge endpoint/handle information.
 
-use crate::config::{ModelProfile, ModelProvider};
+use crate::config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog};
 use adk_rust::{
     graph::{
         AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError, Node as AdkGraphNode,
@@ -106,7 +106,7 @@ impl CompiledWorkflow {
 }
 
 /// Compile a React Flow document into an executable ADK `StateGraph`.
-pub fn compile(dsl: WorkflowDsl, profiles: &[ModelProfile]) -> Result<CompiledWorkflow> {
+pub fn compile(dsl: WorkflowDsl, config: &IWorkrun) -> Result<CompiledWorkflow> {
     let nodes: HashMap<_, _> = dsl.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
     if nodes.len() != dsl.nodes.len() {
         bail!("workflow contains duplicate node ids");
@@ -165,7 +165,7 @@ pub fn compile(dsl: WorkflowDsl, profiles: &[ModelProfile]) -> Result<CompiledWo
             "remote_agent" => graph.add_node(remote_a2a_graph_node(node)?),
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
-            "agent" => add_local_agent_node(graph, node, profiles)?,
+            "agent" => add_local_agent_node(graph, node, config)?,
             _ => add_control_node(graph, node),
         };
     }
@@ -240,21 +240,21 @@ fn add_control_node(graph: StateGraph, node: &WorkflowNode) -> StateGraph {
     })
 }
 
-fn add_local_agent_node(graph: StateGraph, node: &WorkflowNode, profiles: &[ModelProfile]) -> Result<StateGraph> {
+fn add_local_agent_node(graph: StateGraph, node: &WorkflowNode, config: &IWorkrun) -> Result<StateGraph> {
     let id = node.id.clone();
     let description = string_data(node, "description").unwrap_or_default();
     let instruction = string_data(node, "instruction").unwrap_or_default();
     let profile_id =
         string_data(node, "modelProfileId").ok_or_else(|| anyhow!("agent node `{id}` needs data.modelProfileId"))?;
-    let profile = profiles
-        .iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| anyhow!("agent node `{id}` references unknown model profile `{profile_id}`"))?;
-    let label = format!("{}/{}", profile.id, profile.model);
+    let model = model_catalog()
+        .into_iter()
+        .find(|model| model.id == profile_id)
+        .ok_or_else(|| anyhow!("agent node `{id}` references unknown model `{profile_id}`"))?;
+    let label = format!("{}/{}", model.id, model.model);
     let agent = LlmAgentBuilder::new(id.clone())
         .description(description)
         .instruction(instruction)
-        .model(create_model(profile)?)
+        .model(create_model(&model, config)?)
         .build()?;
     Ok(graph.add_node(
         AdkAgentNode::new(Arc::new(agent))
@@ -263,32 +263,32 @@ fn add_local_agent_node(graph: StateGraph, node: &WorkflowNode, profiles: &[Mode
     ))
 }
 
-fn create_model(profile: &ModelProfile) -> Result<Arc<dyn Llm>> {
-    let api_key = profile.api_key.as_deref();
-    if profile.provider != ModelProvider::Ollama && api_key.is_none_or(|api_key| api_key.trim().is_empty()) {
-        bail!("model profile `{}` has no API key", profile.id);
+fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
+    let credential = config.credential_for(&model.provider);
+    let api_key = credential.and_then(|credential| credential.api_key.as_deref());
+    if model.provider != ModelProvider::Ollama && api_key.is_none_or(|api_key| api_key.trim().is_empty()) {
+        bail!("provider for model `{}` has no API key", model.id);
     }
     let api_key = api_key.unwrap_or_default();
-    Ok(match profile.provider {
-        ModelProvider::Gemini => Arc::new(GeminiModel::new(api_key, &profile.model)?),
+    Ok(match model.provider {
+        ModelProvider::Gemini => Arc::new(GeminiModel::new(api_key, &model.model)?),
         ModelProvider::OpenAi | ModelProvider::OpenAiStrict => {
-            Arc::new(OpenAIClient::new(OpenAIConfig::new(api_key, &profile.model))?)
+            Arc::new(OpenAIClient::new(OpenAIConfig::new(api_key, &model.model))?)
         },
-        ModelProvider::Anthropic => Arc::new(AnthropicClient::new(AnthropicConfig::new(api_key, &profile.model))?),
-        ModelProvider::DeepSeek => Arc::new(DeepSeekClient::new(DeepSeekConfig::new(api_key, &profile.model))?),
+        ModelProvider::Anthropic => Arc::new(AnthropicClient::new(AnthropicConfig::new(api_key, &model.model))?),
+        ModelProvider::DeepSeek => Arc::new(DeepSeekClient::new(DeepSeekConfig::new(api_key, &model.model))?),
         ModelProvider::Groq => {
-            let config = match profile.base_url.as_deref() {
-                Some(url) => GroqConfig::new(api_key, &profile.model).with_base_url(url),
-                None => GroqConfig::new(api_key, &profile.model),
+            let config = match credential.and_then(|credential| credential.base_url.as_deref()) {
+                Some(url) => GroqConfig::new(api_key, &model.model).with_base_url(url),
+                None => GroqConfig::new(api_key, &model.model),
             };
             Arc::new(GroqClient::new(config)?)
         },
         ModelProvider::Ollama => Arc::new(OllamaModel::new(
-            profile
-                .base_url
-                .as_ref()
-                .map(|url| OllamaConfig::with_host(url, &profile.model))
-                .unwrap_or_else(|| OllamaConfig::new(&profile.model)),
+            credential
+                .and_then(|credential| credential.base_url.as_ref())
+                .map(|url| OllamaConfig::with_host(url, &model.model))
+                .unwrap_or_else(|| OllamaConfig::new(&model.model)),
         )?),
     })
 }
@@ -586,7 +586,11 @@ mod tests {
         .unwrap();
         let mut input = State::new();
         input.insert("approved".into(), json!(true));
-        let result = compile(dsl, &[]).unwrap().run(input, "test").await.unwrap();
+        let result = compile(dsl, &Default::default())
+            .unwrap()
+            .run(input, "test")
+            .await
+            .unwrap();
         assert_eq!(result.state["workflow.last_node"], json!("check"));
     }
 
@@ -604,7 +608,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let compiled = compile(dsl, &[]).unwrap();
+        let compiled = compile(dsl, &Default::default()).unwrap();
         assert_eq!(compiled.plan().executable_nodes, vec!["remote"]);
     }
 }

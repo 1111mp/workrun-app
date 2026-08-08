@@ -12,6 +12,7 @@ import { AboutSettings } from './about-settings';
 import { AppearanceSettings } from './appearance-settings';
 import { GeneralSettings } from './general-settings';
 import { LoggerSettings } from './logger-settings';
+import { ModelProfilesSettings } from './model-profiles-settings';
 import { formSchema, type SettingsForm } from './settings-schema';
 
 function SettingsPage() {
@@ -34,6 +35,8 @@ function SettingsPage() {
       auto_log_clean: `${config?.auto_log_clean ?? 0}`,
       app_log_max_size: config?.app_log_max_size ?? 128,
       app_log_max_count: config?.app_log_max_count ?? 8,
+      // model
+      provider_credentials: config?.provider_credentials ?? [],
     },
   });
 
@@ -62,6 +65,8 @@ function SettingsPage() {
       ) as IWorkrunConfig['auto_log_clean'],
       app_log_max_size: values.app_log_max_size,
       app_log_max_count: values.app_log_max_count,
+      // model
+      provider_credentials: values.provider_credentials,
     };
 
     if (settings.locale && settings.locale !== config?.locale) {
@@ -94,6 +99,7 @@ function SettingsPage() {
             <GeneralSettings form={form} />
             <AppearanceSettings form={form} />
             <LoggerSettings form={form} />
+            <ModelProfilesSettings form={form} />
             <AboutSettings />
           </FieldGroup>
         </form>

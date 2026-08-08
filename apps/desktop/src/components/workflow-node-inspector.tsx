@@ -26,7 +26,7 @@ type WorkflowNodeInspectorProps = {
   node: Node | null;
   onClose: () => void;
   onDataChange: (nodeId: string, patch: Record<string, unknown>) => void;
-  modelProfiles?: ModelProfile[];
+  modelProfiles?: ModelDefinition[];
 };
 
 const nodeTitles: Record<string, string> = {
@@ -39,7 +39,7 @@ const nodeTitles: Record<string, string> = {
   end: 'End',
 };
 
-const modelProviderLabels: Record<ModelProfile['provider'], string> = {
+const modelProviderLabels: Record<ModelDefinition['provider'], string> = {
   gemini: 'Gemini',
   open_ai: 'OpenAI',
   open_ai_strict: 'OpenAI Strict',
@@ -49,9 +49,9 @@ const modelProviderLabels: Record<ModelProfile['provider'], string> = {
   ollama: 'Ollama',
 };
 
-function groupModelProfiles(modelProfiles: ModelProfile[]) {
+function groupModelProfiles(modelProfiles: ModelDefinition[]) {
   return modelProfiles.reduce<
-    Partial<Record<ModelProfile['provider'], ModelProfile[]>>
+    Partial<Record<ModelDefinition['provider'], ModelDefinition[]>>
   >((groups, profile) => {
     (groups[profile.provider] ??= []).push(profile);
     return groups;
@@ -143,7 +143,7 @@ function WorkflowNodeInspector({
                         <SelectLabel>
                           {
                             modelProviderLabels[
-                              provider as ModelProfile['provider']
+                              provider as ModelDefinition['provider']
                             ]
                           }
                         </SelectLabel>

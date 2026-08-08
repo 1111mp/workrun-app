@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -35,7 +36,8 @@ import {
 } from '@/components/nodes';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowSidebar } from '@/components/workflow-sidebar';
-import { useWorkflowStore, useWorkrunStore } from '@/stores';
+import { getModelCatalog } from '@/services/cmd';
+import { useWorkflowStore } from '@/stores';
 
 const nodeTypes = {
   // basic nodes
@@ -161,8 +163,6 @@ function getAbsolutePosition(node: Node, nodes: Node[]) {
 }
 
 function WorkflowEditor() {
-  const config = useWorkrunStore((state) => state.config);
-
   const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
@@ -190,10 +190,10 @@ function WorkflowEditor() {
   const [reactFlowInstance, setReactFlowInstance] =
     useState<ReactFlowInstance | null>(null);
 
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
-
-  console.log('nodes', nodes);
-  console.log('edges', edges);
+  const { data: modelCatalog } = useQuery({
+    queryKey: ['modelCatalog'],
+    queryFn: getModelCatalog,
+  });
 
   // Keyboard event handlers for modifier key and undo/redo
   useEffect(() => {
@@ -228,6 +228,8 @@ function WorkflowEditor() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
 
   const addPaletteNode = (type: WorkflowNodeType, x: number, y: number) => {
     if (!reactFlowInstance) {
@@ -388,7 +390,7 @@ function WorkflowEditor() {
         </div>
         <WorkflowNodeInspector
           node={selectedNode}
-          modelProfiles={config?.model_profiles}
+          modelProfiles={modelCatalog}
           onClose={closeInspector}
           onDataChange={onNodeDataChange}
         />

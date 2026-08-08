@@ -36,6 +36,39 @@ pub struct ModelProfile {
     pub api_key: Option<String>,
 }
 
+/// Static model metadata. This is the only model data exposed to the frontend.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDefinition {
+    pub id: String,
+    pub name: String,
+    pub provider: ModelProvider,
+    pub model: String,
+}
+
+/// Per-provider user credential persisted in `workrun.yaml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCredential {
+    pub provider: ModelProvider,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::config::serialize_encrypted",
+        deserialize_with = "crate::config::deserialize_encrypted"
+    )]
+    pub api_key: Option<String>,
+}
+
+pub fn credential_provider(provider: &ModelProvider) -> ModelProvider {
+    match provider {
+        ModelProvider::OpenAiStrict => ModelProvider::OpenAi,
+        provider => provider.clone(),
+    }
+}
+
 fn default_model_profiles() -> Vec<ModelProfile> {
     [
         (
@@ -100,12 +133,24 @@ fn default_model_profiles() -> Vec<ModelProfile> {
     .collect()
 }
 
+pub fn model_catalog() -> Vec<ModelDefinition> {
+    default_model_profiles()
+        .into_iter()
+        .map(|profile| ModelDefinition {
+            id: profile.id,
+            name: profile.name,
+            provider: profile.provider,
+            model: profile.model,
+        })
+        .collect()
+}
+
 /// Workrun configuration
 /// ### `workrun.yaml` schema
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IWorkrun {
-    #[serde(default = "default_model_profiles")]
-    pub model_profiles: Vec<ModelProfile>,
+    #[serde(default)]
+    pub provider_credentials: Vec<ProviderCredential>,
     /// app log level
     /// silent | error | warn | info | debug | trace
     pub app_log_level: Option<String>,
@@ -137,10 +182,27 @@ pub struct IWorkrun {
     pub auto_log_clean: Option<i32>,
 }
 
+/// Partial Workrun configuration received from the frontend.
+///
+/// This is deliberately separate from `IWorkrun` so missing fields remain untouched.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkrunPatch {
+    pub provider_credentials: Option<Vec<ProviderCredential>>,
+    pub app_log_level: Option<String>,
+    pub app_log_max_size: Option<u64>,
+    pub app_log_max_count: Option<usize>,
+    pub locale: Option<String>,
+    pub theme: Option<String>,
+    pub enable_auto_launch: Option<bool>,
+    pub enable_silent_start: Option<bool>,
+    pub auto_check_update: Option<bool>,
+    pub auto_log_clean: Option<i32>,
+}
+
 impl Default for IWorkrun {
     fn default() -> Self {
         Self {
-            model_profiles: default_model_profiles(),
+            provider_credentials: Vec::new(),
             app_log_level: None,
             app_log_max_size: None,
             app_log_max_count: None,
@@ -192,13 +254,31 @@ impl IWorkrun {
 
     /// patch workrun config
     /// only save to file
-    pub fn patch_config(&mut self, patch: &Self) {
+    pub fn patch_config(&mut self, patch: &WorkrunPatch) {
         macro_rules! patch {
             ($key: tt) => {
                 if patch.$key.is_some() {
                     self.$key = patch.$key.clone();
                 }
             };
+        }
+
+        if let Some(credentials) = &patch.provider_credentials {
+            for credential in credentials {
+                let provider = credential_provider(&credential.provider);
+                let mut credential = credential.clone();
+                credential.provider = provider.clone();
+                credential.api_key = credential.api_key.filter(|key| !key.trim().is_empty());
+                if let Some(existing) = self
+                    .provider_credentials
+                    .iter_mut()
+                    .find(|item| item.provider == provider)
+                {
+                    *existing = credential;
+                } else {
+                    self.provider_credentials.push(credential);
+                }
+            }
         }
 
         patch!(app_log_level);
@@ -210,6 +290,11 @@ impl IWorkrun {
         patch!(enable_silent_start);
         patch!(auto_check_update);
         patch!(auto_log_clean);
+    }
+
+    pub fn credential_for(&self, provider: &ModelProvider) -> Option<&ProviderCredential> {
+        let provider = credential_provider(provider);
+        self.provider_credentials.iter().find(|item| item.provider == provider)
     }
 
     /// get app log level

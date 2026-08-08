@@ -79,6 +79,7 @@ pub fn run() {
             // workrun
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,
+            cmd::model::model_catalog_list,
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,

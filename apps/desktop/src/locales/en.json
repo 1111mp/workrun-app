@@ -37,6 +37,17 @@
       }
     },
 
+    "models": {
+      "title": "Models",
+      "description": "Set one API key for all models from the same provider. Changes are saved automatically.",
+      "modelCount_one": "Applies to {{count}} model",
+      "modelCount_other": "Applies to {{count}} models",
+      "gemini": "API key for Gemini",
+      "openAi": "API key for OpenAI",
+      "anthropic": "API key for Anthropic",
+      "deepSeek": "API key for DeepSeek"
+    },
+
     "about": {
       "title": "About",
       "checkForUpdates": "Check for Updates",

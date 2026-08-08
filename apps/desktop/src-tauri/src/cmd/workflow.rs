@@ -11,8 +11,8 @@ use serde_json::Value;
 #[tauri::command]
 pub async fn workflow_compile(dsl: Value) -> CmdResult<WorkflowPlan> {
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
-    let profiles = Config::workrun().await.latest_arc().model_profiles.clone();
-    let compiled = workflow::compile(dsl, &profiles).stringify_err()?;
+    let config = Config::workrun().await.latest_arc();
+    let compiled = workflow::compile(dsl, &config).stringify_err()?;
     Ok(compiled.plan().clone())
 }
 
@@ -22,8 +22,8 @@ pub async fn workflow_compile(dsl: Value) -> CmdResult<WorkflowPlan> {
 pub async fn workflow_run(dsl: Value, initial_state: Value, thread_id: Option<String>) -> CmdResult<WorkflowRunResult> {
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
     let state: State = serde_json::from_value(initial_state).stringify_err()?;
-    let profiles = Config::workrun().await.latest_arc().model_profiles.clone();
-    let compiled = workflow::compile(dsl, &profiles).stringify_err()?;
+    let config = Config::workrun().await.latest_arc();
+    let compiled = workflow::compile(dsl, &config).stringify_err()?;
     compiled
         .run(state, thread_id.as_deref().unwrap_or("workflow-run"))
         .await
