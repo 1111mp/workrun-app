@@ -12,7 +12,7 @@ import { temporal } from 'zundo';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
-const maxHistoryEntries = 100;
+const maxHistoryEntries = 50;
 
 type TrackedWorkflowState = {
   nodes: Node[];
@@ -195,14 +195,21 @@ export const useWorkflowStore = create<WorkflowStore>()(
       },
     })),
     {
+      // Only track nodes and edges for undo/redo
+      // Exclude selected, width, height, measured (dimension changes from React Flow rendering)
       partialize: (state): TrackedWorkflowState => ({
         nodes: state.nodes.map(
-          ({ selected, dragging, measured, width, height, ...node }) => node,
-        ) as Node[],
-        edges: state.edges.map(({ selected, ...edge }) => edge) as Edge[],
+          ({ selected: _selected, width: _width, height: _height, ...node }) =>
+            node as Node,
+        ),
+        edges: state.edges.map(
+          ({ selected: _selected, ...edge }) => edge as Edge,
+        ),
       }),
+      // Prevent duplicate history entries for identical states
       equality: (pastState, currentState) =>
         JSON.stringify(pastState) === JSON.stringify(currentState),
+      // Limit history stack size
       limit: maxHistoryEntries,
     },
   ),

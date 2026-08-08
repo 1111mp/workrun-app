@@ -1,0 +1,78 @@
+{
+  "settings": {
+    "title": "设置",
+    "restartSynclan": "重启 Synclan？",
+    "restartDescription": "部分更改需要重启后才能生效。Synclan 将立即重启。",
+    "restart": "重启",
+
+    "general": {
+      "title": "通用",
+      "language": "语言",
+      "autoCheckForUpdates": "自动检查更新",
+      "launchAtLogin": "登录时启动",
+      "startMinimized": "启动时最小化"
+    },
+
+    "appearance": {
+      "title": "外观",
+      "theme": "主题",
+      "system": "跟随系统",
+      "dark": "深色",
+      "light": "浅色"
+    },
+
+    "log": {
+      "title": "日志",
+      "level": "日志级别",
+      "cleanup": "日志清理",
+      "maxSize": "最大日志大小",
+      "maxCount": "最大日志数量",
+      "fileCount": "个",
+      "autoClean": {
+        "0": "不清理",
+        "1": "保留 1 天",
+        "2": "保留 7 天",
+        "3": "保留 30 天",
+        "4": "保留 90 天"
+      }
+    },
+
+    "about": {
+      "title": "关于",
+      "checkForUpdates": "检查更新",
+      "checkNow": "立即检查更新",
+      "version": "版本",
+      "versionCopied": "版本号已复制到剪贴板"
+    }
+  },
+
+  "notFound": {
+    "title": "404 - 页面不存在",
+    "description": "你访问的页面不存在。",
+    "backHome": "返回首页",
+    "needHelp": "需要帮助？",
+    "contactSupport": "联系支持"
+  },
+
+  "updater": {
+    "upToDate": "当前已是最新版本",
+    "failedToCheck": "检查更新失败",
+    "checkFailedDescription": "请检查网络连接后重试。",
+    "updateInfo": "更新信息",
+    "updateDescription": "更新以体验最新改进和修复，获得更好的使用体验。",
+    "currentVersion": "当前版本",
+    "newVersion": "新版本",
+    "releaseNotes": "更新日志",
+    "downloadProgress": "下载进度",
+    "quitAndInstall": "退出并安装",
+    "update": "更新",
+    "downloadFailed": "更新下载失败",
+    "installFailed": "更新安装失败，请重试。"
+  },
+
+  "confirm": {
+    "title": "确定吗？",
+    "cancel": "取消",
+    "confirm": "确定"
+  }
+}

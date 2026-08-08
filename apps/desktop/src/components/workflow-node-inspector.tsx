@@ -10,6 +10,13 @@ import {
   FieldGroup,
   Input,
   Label,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
   Textarea,
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
@@ -19,6 +26,7 @@ type WorkflowNodeInspectorProps = {
   node: Node | null;
   onClose: () => void;
   onDataChange: (nodeId: string, patch: Record<string, unknown>) => void;
+  modelProfiles?: ModelProfile[];
 };
 
 const nodeTitles: Record<string, string> = {
@@ -30,6 +38,25 @@ const nodeTitles: Record<string, string> = {
   start: 'Start',
   end: 'End',
 };
+
+const modelProviderLabels: Record<ModelProfile['provider'], string> = {
+  gemini: 'Gemini',
+  open_ai: 'OpenAI',
+  open_ai_strict: 'OpenAI Strict',
+  anthropic: 'Anthropic',
+  deep_seek: 'DeepSeek',
+  groq: 'Groq',
+  ollama: 'Ollama',
+};
+
+function groupModelProfiles(modelProfiles: ModelProfile[]) {
+  return modelProfiles.reduce<
+    Partial<Record<ModelProfile['provider'], ModelProfile[]>>
+  >((groups, profile) => {
+    (groups[profile.provider] ??= []).push(profile);
+    return groups;
+  }, {});
+}
 
 function getText(data: Record<string, unknown>, key: string) {
   const value = data[key];
@@ -66,9 +93,11 @@ function WorkflowNodeInspector({
   node,
   onClose,
   onDataChange,
+  modelProfiles = [],
 }: WorkflowNodeInspectorProps) {
   const data = node?.data ?? {};
   const title = node ? (nodeTitles[node.type ?? ''] ?? 'Node') : 'Node';
+  const profilesByProvider = groupModelProfiles(modelProfiles);
 
   const updateData = (patch: Record<string, unknown>) => {
     if (node) {
@@ -92,13 +121,43 @@ function WorkflowNodeInspector({
               value={getText(data, 'name')}
               onChange={(name) => updateData({ name })}
             />
-            <TextField
-              id='agent-model'
-              label='Model'
-              description='The model identifier this agent uses to complete its work.'
-              value={getText(data, 'model')}
-              onChange={(model) => updateData({ model })}
-            />
+            <Field>
+              <Label htmlFor='agent-model-profile'>Model profile</Label>
+              <FieldDescription>
+                Selects the provider, model, and encrypted credential used by
+                this agent.
+              </FieldDescription>
+              <Select
+                value={getText(data, 'modelProfileId')}
+                onValueChange={(modelProfileId) =>
+                  updateData({ modelProfileId })
+                }
+              >
+                <SelectTrigger id='agent-model-profile' className='w-full'>
+                  <SelectValue placeholder='Select a model profile' />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(profilesByProvider).map(
+                    ([provider, profiles]) => (
+                      <SelectGroup key={provider}>
+                        <SelectLabel>
+                          {
+                            modelProviderLabels[
+                              provider as ModelProfile['provider']
+                            ]
+                          }
+                        </SelectLabel>
+                        {profiles?.map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            {profile.name} · {profile.model}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ),
+                  )}
+                </SelectContent>
+              </Select>
+            </Field>
             <TextareaField
               id='agent-description'
               label='Description'

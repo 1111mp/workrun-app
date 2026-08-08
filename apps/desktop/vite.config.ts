@@ -7,8 +7,6 @@ import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { defineConfig, normalizePath } from 'vite';
 import { createHtmlPlugin } from 'vite-plugin-html';
 
-import packageJson from './package.json';
-
 const host = process.env.TAURI_DEV_HOST;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,7 +27,6 @@ export default defineConfig(async ({ mode }) => ({
   define: {
     OS_ARCH: `"${process.arch}"`,
     OS_PLATFORM: `"${process.platform}"`,
-    __APP_VERSION__: JSON.stringify(packageJson.version),
     MODULES_ROOT_PATH:
       mode === 'production'
         ? `""`

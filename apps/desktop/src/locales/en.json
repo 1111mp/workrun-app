@@ -1,0 +1,78 @@
+{
+  "settings": {
+    "title": "Settings",
+    "restartSynclan": "Restart Synclan?",
+    "restartDescription": "Some changes require a restart to take effect. Synclan will restart now.",
+    "restart": "Restart",
+
+    "general": {
+      "title": "General",
+      "language": "Language",
+      "autoCheckForUpdates": "Auto Check for Updates",
+      "launchAtLogin": "Launch at Login",
+      "startMinimized": "Start Minimized"
+    },
+
+    "appearance": {
+      "title": "Appearance",
+      "theme": "Theme",
+      "system": "System",
+      "dark": "Dark",
+      "light": "Light"
+    },
+
+    "log": {
+      "title": "Log",
+      "level": "Log Level",
+      "cleanup": "Log Cleanup",
+      "maxSize": "Max Log Size",
+      "maxCount": "Max Log Count",
+      "fileCount": "File",
+      "autoClean": {
+        "0": "Never Clean",
+        "1": "Retain 1 Day",
+        "2": "Retain 7 Days",
+        "3": "Retain 30 Days",
+        "4": "Retain 90 Days"
+      }
+    },
+
+    "about": {
+      "title": "About",
+      "checkForUpdates": "Check for Updates",
+      "checkNow": "Check Now",
+      "version": "Version",
+      "versionCopied": "Version copied to clipboard"
+    }
+  },
+
+  "notFound": {
+    "title": "404 - Not Found",
+    "description": "The page you're looking for doesn't exist.",
+    "backHome": "Back to Home",
+    "needHelp": "Need help?",
+    "contactSupport": "Contact support"
+  },
+
+  "updater": {
+    "upToDate": "You're using the latest version",
+    "failedToCheck": "Failed to check for updates",
+    "checkFailedDescription": "Please check your network connection and try again.",
+    "updateInfo": "Update Info",
+    "updateDescription": "Update to enjoy a better experience with the latest improvements and fixes.",
+    "currentVersion": "Current Version",
+    "newVersion": "New Version",
+    "releaseNotes": "Release Notes",
+    "downloadProgress": "Download progress",
+    "quitAndInstall": "Quit and Install",
+    "update": "Update",
+    "downloadFailed": "Failed to download update",
+    "installFailed": "Update installation failed. Please try again."
+  },
+
+  "confirm": {
+    "title": "Are you sure?",
+    "cancel": "Cancel",
+    "confirm": "Confirm"
+  }
+}

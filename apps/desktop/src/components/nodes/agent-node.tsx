@@ -33,7 +33,10 @@ function AgentNode({
         {data.description}
       </p>
       <div className='text-muted-foreground mt-3 border-t border-violet-500/20 pt-2 text-xs'>
-        Model: <span className='text-foreground'>{data.model}</span>
+        Model profile:{' '}
+        <span className='text-foreground'>
+          {data.modelProfileId || 'Not selected'}
+        </span>
       </div>
       <Handle
         type='source'

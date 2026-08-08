@@ -14,7 +14,7 @@ type WorkflowNodeType =
 // ---------- Agent Node ----------
 type WorkflowAgentNodeData = {
   name: string;
-  model: string;
+  modelProfileId: string;
   description: string;
   instruction: string;
 };
@@ -114,7 +114,12 @@ type WorkflowNode =
   | WorkflowSwitchNode
   | WorkflowGroupNode;
 
-type WorkflowEdge = {};
+/** Execution-relevant subset of a React Flow edge. */
+type WorkflowEdge = {
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+};
 
 type Workflow = {
   id: string;

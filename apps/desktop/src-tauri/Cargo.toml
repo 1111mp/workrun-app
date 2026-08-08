@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 name = "workrun_lib"
 
 [dependencies]
-adk-rust = { workspace = true, features = ["full"] }
+adk-rust = { workspace = true, features = ["full", "deepseek", "groq", "ollama"] }
 aes-gcm = "0.11.0"
 anyhow = { workspace = true }
 async-trait = "0.1.91"
@@ -60,6 +60,7 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
 tokio = { workspace = true }
+bitflags = { workspace = true }
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

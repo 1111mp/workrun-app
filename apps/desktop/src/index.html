@@ -1,10 +1,30 @@
 <!doctype html>
-<html lang="en" class="dark size-full" style="color-scheme: dark">
+<html lang="en" class="size-full">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <title>Workrun</title>
+
+    <style type="text/css">
+      :root {
+        --background: oklch(1 0 0);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: oklch(0.145 0 0);
+        }
+      }
+
+      html,
+      body {
+        background-color: var(--background);
+      }
+    </style>
+    <% if (MODE === "development") { %>
+    <script defer src="http://localhost:8097"></script>
+    <% } %>
   </head>
 
   <body class="size-full">

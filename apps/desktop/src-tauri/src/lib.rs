@@ -2,6 +2,7 @@ mod cmd;
 mod config;
 mod core;
 mod feat;
+mod module;
 mod process;
 mod utils;
 
@@ -74,7 +75,16 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![]);
+        .invoke_handler(tauri::generate_handler![
+            // workrun
+            cmd::workrun::get_workrun_config,
+            cmd::workrun::patch_workrun_config,
+            // workflow
+            cmd::workflow::workflow_compile,
+            cmd::workflow::workflow_run,
+            // system
+            cmd::system::get_system_theme,
+        ]);
 
     // Under memory pressure on macOS, the WKWebView rendering process may be
     // terminated by the system (resulting in a blank window).

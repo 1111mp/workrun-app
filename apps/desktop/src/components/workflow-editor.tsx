@@ -21,7 +21,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import { Redo2Icon, Undo2Icon } from 'lucide-react';
-import { useEffect, useState, type DragEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 
 import {
@@ -34,11 +34,8 @@ import {
   SwitchNode,
 } from '@/components/nodes';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
-import {
-  workflowNodeMimeType,
-  WorkflowSidebar,
-} from '@/components/workflow-sidebar';
-import { useWorkflowStore } from '@/stores/workflow.store';
+import { WorkflowSidebar } from '@/components/workflow-sidebar';
+import { useWorkflowStore, useWorkrunStore } from '@/stores';
 
 const nodeTypes = {
   // basic nodes
@@ -52,26 +49,12 @@ const nodeTypes = {
   group: GroupNode,
 };
 
-const workflowNodeTypes = new Set<WorkflowNodeType>([
-  'agent',
-  'remote_agent',
-  'if_else',
-  'switch',
-  'start',
-  'end',
-  'group',
-]);
-
-function isWorkflowNodeType(value: string): value is WorkflowNodeType {
-  return workflowNodeTypes.has(value as WorkflowNodeType);
-}
-
 function createNodeData(type: WorkflowNodeType) {
   switch (type) {
     case 'agent':
       return {
         name: 'New agent',
-        model: 'Select a model',
+        modelProfileId: '',
         description: 'Describe this agent’s responsibility',
         instruction: '',
       };
@@ -178,6 +161,8 @@ function getAbsolutePosition(node: Node, nodes: Node[]) {
 }
 
 function WorkflowEditor() {
+  const config = useWorkrunStore((state) => state.config);
+
   const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
@@ -204,7 +189,11 @@ function WorkflowEditor() {
 
   const [reactFlowInstance, setReactFlowInstance] =
     useState<ReactFlowInstance | null>(null);
+
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+
+  console.log('nodes', nodes);
+  console.log('edges', edges);
 
   // Keyboard event handlers for modifier key and undo/redo
   useEffect(() => {
@@ -240,22 +229,14 @@ function WorkflowEditor() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const onDragOver = (event: DragEvent) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-  };
-
-  const onDrop = (event: DragEvent) => {
-    event.preventDefault();
-
-    const type = event.dataTransfer.getData(workflowNodeMimeType);
-    if (!reactFlowInstance || !isWorkflowNodeType(type)) {
+  const addPaletteNode = (type: WorkflowNodeType, x: number, y: number) => {
+    if (!reactFlowInstance) {
       return;
     }
 
     const position = reactFlowInstance.screenToFlowPosition({
-      x: event.clientX,
-      y: event.clientY,
+      x,
+      y,
     });
     const group =
       type === 'group' ? undefined : findGroupAtPosition(nodes, position);
@@ -327,7 +308,7 @@ function WorkflowEditor() {
 
   return (
     <SidebarProvider className='flex size-full grow flex-row'>
-      <WorkflowSidebar />
+      <WorkflowSidebar onNodeDrop={addPaletteNode} />
       <SidebarInset>
         <header className='flex h-12 shrink-0 items-center gap-2'>
           <div className='flex items-center gap-2 px-4'>
@@ -367,8 +348,6 @@ function WorkflowEditor() {
             onSelectionChange={({ nodes: selectedNodes }) =>
               setSelectedNodeId(selectedNodes.at(-1)?.id ?? null)
             }
-            onDragOver={onDragOver}
-            onDrop={onDrop}
           >
             <MiniMap />
             <Controls />
@@ -409,6 +388,7 @@ function WorkflowEditor() {
         </div>
         <WorkflowNodeInspector
           node={selectedNode}
+          modelProfiles={config?.model_profiles}
           onClose={closeInspector}
           onDataChange={onNodeDataChange}
         />

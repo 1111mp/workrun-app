@@ -1,12 +1,21 @@
-import { ReactFlowProvider } from '@xyflow/react';
+import { Toaster, TooltipProvider } from '@workspace/ui/components';
+import { RouterProvider } from 'react-router';
 
-import { WorkflowEditor } from '@/components';
+import { UpdateDialog } from '@/components';
+import { useTheme } from '@/hooks';
+import { router } from '@/routes';
 
 function App() {
+  useTheme();
+
   return (
-    <ReactFlowProvider>
-      <WorkflowEditor />
-    </ReactFlowProvider>
+    <>
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>
+      <Toaster id='global' position='top-center' richColors={true} />
+      <UpdateDialog />
+    </>
   );
 }
 

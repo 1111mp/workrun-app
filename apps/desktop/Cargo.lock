@@ -303,7 +303,9 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures",
+ "ollama-rs",
  "reqwest 0.12.28",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "tokio",
@@ -4416,6 +4418,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ollama-rs"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fed8739c37da731774bd5b39209bbd9b770f0c1d9a000c4b859c824badac3e8e"
+dependencies = [
+ "async-stream",
+ "log",
+ "reqwest 0.12.28",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-stream",
+ "url",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6152,6 +6173,12 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "string_cache"
@@ -8645,6 +8672,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.23.1",
+ "bitflags 2.13.1",
  "chrono",
  "console-subscriber",
  "dark-light",
