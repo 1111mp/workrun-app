@@ -1,0 +1,70 @@
+[config]
+# Skip loading of all core tasks which saves up a bit on toml parsing and task creation
+skip_core_tasks = true
+# Skips loading Git related environment variables
+skip_git_env_info = true
+# Skips loading rust related environment variables
+skip_rust_env_info = true
+# Skips loading the current crate related environment variables
+skip_crate_env_info = true
+
+# --- Backend ---
+
+[tasks.rust-fmt]
+description = "Format all Rust source files using rustfmt"
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--", "--emit=files"]
+
+[tasks.rust-clippy]
+description = "Run Clippy lints for all targets and features, deny all warnings"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+# --- Frontend ---
+
+[tasks.typecheck]
+description = "Run TypeScript type checking"
+command = "pnpm"
+args = ["typecheck"]
+
+[tasks.lint-staged]
+description = "Run lint-staged on staged frontend files"
+command = "pnpm"
+args = ["exec", "lint-staged"]
+
+# --- Git Hooks ---
+
+[tasks.pre-commit]
+description = "Pre-commit hook: format Rust files and lint staged frontend files"
+script_runner = "@duckscript"
+script = '''
+# rust related changes
+has_rust = exec git diff --cached --quiet -- "*.rs" Cargo.toml Cargo.lock
+if eq ${has_rust.code} 1
+  cm_run_task rust-fmt
+end
+
+# frontend checks
+has_frontend = exec git diff --cached --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.css" "*.html"
+if eq ${has_frontend.code} 1
+  cm_run_task lint-staged
+end
+'''
+
+[tasks.pre-push]
+description = "Pre-push hook: run clippy for Rust and type checking for frontend"
+script_runner = "@duckscript"
+script = '''
+# rust related changes
+has_rust = exec git diff --cached --quiet -- "*.rs" Cargo.toml Cargo.lock
+if eq ${has_rust.code} 1
+  cm_run_task rust-clippy
+end
+
+# frontend related changes
+has_frontend = exec git diff --cached --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.css" "*.html"
+if eq ${has_frontend.code} 1
+  cm_run_task typecheck
+end
+'''

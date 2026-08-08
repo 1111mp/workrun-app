@@ -1,0 +1,33 @@
+{
+  "name": "workrun-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:app": "turbo dev --filter workrun",
+    "ui:dev": "turbo ui:dev --filter workrun",
+    "oxlint": "turbo oxlint",
+    "format": "turbo format",
+    "typecheck": "turbo typecheck",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "lucide-react": "^1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "cross-env": "^10.1.0",
+    "husky": "^9.1.7",
+    "oxfmt": "^0.62.0",
+    "oxlint": "^1.77.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "turbo": "^2.10.9",
+    "typescript": "~7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.20.0"
+}

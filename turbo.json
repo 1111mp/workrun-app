@@ -1,0 +1,22 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "tasks": {
+    "oxlint": {
+      "dependsOn": ["^oxlint"]
+    },
+    "format": {
+      "dependsOn": ["^format"]
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"]
+    },
+    "dev": {
+      "persistent": true,
+      "cache": false
+    },
+    "ui:dev": {
+      "persistent": true,
+      "cache": false
+    }
+  }
+}

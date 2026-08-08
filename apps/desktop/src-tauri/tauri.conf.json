@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "workrun",
+  "version": "0.1.0",
+  "identifier": "io.github.1111mp.workrun",
+  "build": {
+    "beforeDevCommand": "pnpm ui:dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm ui:build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": {
+        "default-src": "'self' blob: data: filesystem: asset: tauri: http: https: ws: wss:",
+        "script-src": "'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'",
+        "style-src-elem": "'self' 'unsafe-inline'",
+        "style-src-attr": "'self' 'unsafe-inline'",
+        "img-src": "'self' blob: data: asset: tauri: http: https:",
+        "font-src": "'self' data: asset: tauri:",
+        "connect-src": "'self' ipc: tauri: asset: http://asset.localhost http://ipc.localhost http: https: ws: wss:"
+      },
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**", "$RESOURCE/../**", "**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources",
+      "icons/icon.png"
+    ],
+    "publisher": "Workrun",
+    "copyright": "MIT License",
+    "licenseFile": "../LICENSE",
+    "license": "MIT",
+    "category": "Productivity",
+    "shortDescription": "",
+    "longDescription": "",
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNGN0NBQ0FGRkUyRTdFNEYKUldSUGZpNytyNng4UHpKazhiTXRQbUVQQVBnZjIzRVZXYXZMd3dXb1JISUovMUQySkgydkwrdzAK",
+      "endpoints": [
+        "https://github.com/1111mp/workrun-app/releases/download/updater/update.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@workspace/json-schema-form",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@rjsf/core": "^6.7.1",
+    "@rjsf/utils": "^6.7.1",
+    "@rjsf/validator-ajv8": "^6.7.1",
+    "@workspace/ui": "workspace:*"
+  }
+}

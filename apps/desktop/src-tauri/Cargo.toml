@@ -1,0 +1,78 @@
+[package]
+name = "workrun"
+version = "0.1.0"
+description = "workrun"
+authors = ["The1111mp@outlook.com"]
+build = "build.rs"
+default-run = "workrun"
+repository = "https://github.com/1111mp/workrun-app.git"
+license = "MIT"
+edition = "2024"
+rust-version = "1.97"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["cdylib", "rlib", "staticlib"]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "workrun_lib"
+
+[dependencies]
+adk-rust = { workspace = true, features = ["full"] }
+aes-gcm = "0.11.0"
+anyhow = { workspace = true }
+async-trait = "0.1.91"
+base64 = "0.23.1"
+chrono = { workspace = true }
+console-subscriber = { version = "0.5.0", optional = true }
+dark-light = { git = "https://github.com/rust-dark-light/dark-light" }
+dunce = "1.0.5"
+flexi_logger = { workspace = true }
+futures = "0.3.33"
+getrandom = "0.4.3"
+log = { workspace = true }
+once_cell = { version = "1.21.4", features = ["parking_lot"] }
+open = "5.4.1"
+parking_lot = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+sys-locale = "0.3.2"
+tauri = { workspace = true, features = [
+  "devtools",
+  "image-ico",
+  "image-png",
+  "macos-private-api",
+  "protocol-asset",
+  "tray-icon",
+] }
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-devtools = "2.1.0"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-fs = "2.5.1"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-single-instance = "2.4.3"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-window-state = "2.4.1"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[target."cfg(not(windows))".dependencies]
+libc = "0.2.186"
+
+[target."cfg(windows)".dependencies]
+deelevate = { workspace = true }
+windows = { version = "0.62.2", features = ["Win32_Globalization"] }
+
+[features]
+default = []
+tauri-dev = []
+tokio-trace = ["console-subscriber"]
+tracing = []

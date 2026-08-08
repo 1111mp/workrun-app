@@ -1,0 +1,47 @@
+{
+  "name": "workrun",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cross-env RUST_BACKTRACE=full tauri dev",
+    "build": "tauri build",
+    "build:verbose": "tauri build --verbose",
+    "ui:dev": "vite --config vite.config.ts",
+    "ui:build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "oxlint": "oxlint src scripts --type-aware",
+    "oxlint:fix": "oxlint src scripts --fix",
+    "format": "oxfmt --check src",
+    "format:write": "oxfmt --write src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@rjsf/utils": "^6.7.1",
+    "@rjsf/validator-ajv8": "^6.7.1",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@workspace/json-schema-form": "workspace:*",
+    "@workspace/ui": "workspace:*",
+    "@xyflow/react": "^12.11.2",
+    "ajv-errors": "^3.0.0",
+    "immer": "^11.1.16",
+    "lucide-react": "^1.28.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zundo": "^2.3.0",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2",
+    "@vitejs/plugin-react": "^6.0.5",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.0",
+    "vite-plugin-html": "^3.2.2"
+  },
+  "packageManager": "pnpm@11.18.0"
+}
