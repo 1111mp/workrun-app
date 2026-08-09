@@ -1,12 +1,16 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
   Button,
+  Field,
+  FieldGroup,
+  FieldLabel,
+  Input,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Separator,
   SidebarInset,
   SidebarProvider,
@@ -22,7 +26,13 @@ import {
   type Node,
   type ReactFlowInstance,
 } from '@xyflow/react';
-import { Play, Redo2Icon, Undo2Icon } from 'lucide-react';
+import {
+  Play,
+  Redo2Icon,
+  SaveIcon,
+  Settings2Icon,
+  Undo2Icon,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
@@ -37,9 +47,19 @@ import {
   SwitchNode,
 } from '@/components/nodes';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
+import { WorkflowRunPanel } from '@/components/workflow-run-panel';
+import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { WorkflowSidebar } from '@/components/workflow-sidebar';
 import { getModelCatalog } from '@/services/cmd';
-import { runWorkflow, toWorkflowDsl } from '@/services/workflow';
+import {
+  loadWorkflowDocument,
+  runWorkflow,
+  saveWorkflowDocument,
+  toWorkflowDocument,
+  toWorkflowDsl,
+  type WorkflowRunEvent,
+  type WorkflowRunView,
+} from '@/services/workflow';
 import { useWorkflowStore } from '@/stores';
 
 const nodeTypes = {
@@ -53,6 +73,53 @@ const nodeTypes = {
   switch: SwitchNode,
   group: GroupNode,
 };
+
+const WORKFLOW_MODE = [
+  {
+    value: 'task',
+    label: 'Task',
+  },
+  {
+    value: 'chat',
+    label: 'Chat',
+  },
+];
+
+const initialRunView: WorkflowRunView = {
+  status: 'idle',
+  nodes: [],
+  messages: [],
+};
+
+function runningNode(
+  nodes: WorkflowRunView['nodes'],
+  nodeId: string,
+): WorkflowRunView['nodes'] {
+  const existing = nodes.find((node) => node.id === nodeId);
+  if (existing) {
+    return nodes.map((node) =>
+      node.id === nodeId ? { ...node, status: 'running' } : node,
+    );
+  }
+
+  return [...nodes, { id: nodeId, status: 'running' }];
+}
+
+function finishNode(
+  nodes: WorkflowRunView['nodes'],
+  nodeId: string,
+  durationMs?: number,
+  status: 'completed' | 'failed' = 'completed',
+): WorkflowRunView['nodes'] {
+  const existing = nodes.find((node) => node.id === nodeId);
+  if (existing) {
+    return nodes.map((node) =>
+      node.id === nodeId ? { ...node, status, durationMs } : node,
+    );
+  }
+
+  return [{ id: nodeId, status, durationMs }, ...nodes];
+}
 
 function createNodeData(type: WorkflowNodeType) {
   switch (type) {
@@ -169,6 +236,7 @@ function WorkflowEditor() {
   const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
+  const workflowSettings = useWorkflowStore((state) => state.settings);
   const canUndo = useStore(
     useWorkflowStore.temporal,
     (state) => state.pastStates.length > 0,
@@ -182,6 +250,10 @@ function WorkflowEditor() {
   const addNode = useWorkflowStore((state) => state.addNode);
   const addConnection = useWorkflowStore((state) => state.addConnection);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const updateWorkflowSettings = useWorkflowStore(
+    (state) => state.updateSettings,
+  );
+  const replaceWorkflow = useWorkflowStore((state) => state.replaceWorkflow);
   const setNodes = useWorkflowStore((state) => state.setNodes);
   const setSelectedNodeId = useWorkflowStore(
     (state) => state.setSelectedNodeId,
@@ -193,29 +265,152 @@ function WorkflowEditor() {
   const [reactFlowInstance, setReactFlowInstance] =
     useState<ReactFlowInstance | null>(null);
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [runPanelOpen, setRunPanelOpen] = useState(false);
+  const [showRunOutput, setShowRunOutput] = useState(false);
+  const [runView, setRunView] = useState<WorkflowRunView>(initialRunView);
+  const [lastRunInput, setLastRunInput] = useState<Record<string, unknown>>();
+  const [savedDocument, setSavedDocument] = useState(() =>
+    JSON.stringify(toWorkflowDocument(nodes, edges, workflowSettings)),
+  );
+
+  const workflowDocument = toWorkflowDocument(nodes, edges, workflowSettings);
+  const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
+  const isDirty = workflowDocumentSnapshot !== savedDocument;
+
+  useEffect(() => {
+    const saved = loadWorkflowDocument();
+    if (!saved) return;
+
+    replaceWorkflow(saved);
+    setSavedDocument(JSON.stringify(saved));
+  }, [replaceWorkflow]);
 
   const { data: modelCatalog } = useQuery({
     queryKey: ['modelCatalog'],
     queryFn: getModelCatalog,
   });
 
+  const handleRunEvent = (event: WorkflowRunEvent) => {
+    switch (event.type) {
+      case 'node_start':
+        setRunningNodeId(event.node);
+        setRunView((current) => ({
+          ...current,
+          activeNodeId: event.node,
+          nodes: runningNode(current.nodes, event.node),
+        }));
+        return;
+      case 'node_end':
+        setRunView((current) => ({
+          ...current,
+          activeNodeId:
+            current.activeNodeId === event.node
+              ? undefined
+              : current.activeNodeId,
+          nodes: finishNode(current.nodes, event.node, event.duration_ms),
+          messages: current.messages.map((message) =>
+            message.nodeId === event.node
+              ? { ...message, isStreaming: false }
+              : message,
+          ),
+        }));
+        return;
+      case 'message':
+        if (!event.content) return;
+        setRunView((current) => {
+          const lastMessage = current.messages.at(-1);
+          const isSameStreamingMessage =
+            lastMessage?.nodeId === event.node && lastMessage.isStreaming;
+          const messages = isSameStreamingMessage
+            ? [
+                ...current.messages.slice(0, -1),
+                {
+                  ...lastMessage,
+                  content: lastMessage.content + event.content,
+                  isStreaming: !event.is_final,
+                },
+              ]
+            : [
+                ...current.messages,
+                {
+                  id: crypto.randomUUID(),
+                  nodeId: event.node,
+                  content: event.content,
+                  isStreaming: !event.is_final,
+                },
+              ];
+          return { ...current, messages };
+        });
+        return;
+      case 'done':
+        setRunView((current) => ({
+          ...current,
+          status: 'completed',
+          activeNodeId: undefined,
+          endedAt: Date.now(),
+          totalSteps: event.total_steps,
+          finalState: event.state,
+          messages: current.messages.map((message) => ({
+            ...message,
+            isStreaming: false,
+          })),
+        }));
+        return;
+      case 'error':
+        setRunView((current) => ({
+          ...current,
+          status: 'failed',
+          activeNodeId: undefined,
+          endedAt: Date.now(),
+          error: event.message,
+          nodes: event.node
+            ? finishNode(current.nodes, event.node, undefined, 'failed')
+            : current.nodes,
+          messages: current.messages.map((message) => ({
+            ...message,
+            isStreaming: false,
+          })),
+        }));
+        return;
+      case 'interrupted':
+        setRunView((current) => ({
+          ...current,
+          status: 'interrupted',
+          activeNodeId: undefined,
+          endedAt: Date.now(),
+          error: event.message,
+          messages: current.messages.map((message) => ({
+            ...message,
+            isStreaming: false,
+          })),
+        }));
+        return;
+      default:
+        return;
+    }
+  };
+
   const runMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (initialState: Record<string, unknown>) =>
       runWorkflow(
-        toWorkflowDsl(nodes, edges),
-        {
-          input:
-            'Write a Python function that returns the factorial of a number.',
-        },
+        toWorkflowDsl(nodes, edges, workflowSettings),
+        initialState,
         crypto.randomUUID(),
-        (event) => {
-          console.log('event: ', event);
-          if (event.type === 'node_start') {
-            setRunningNodeId(event.node);
-          }
-        },
+        handleRunEvent,
       ),
     onSuccess: (result) => {
+      setRunView((current) => ({
+        ...current,
+        status: 'completed',
+        activeNodeId: undefined,
+        endedAt: current.endedAt ?? Date.now(),
+        finalState: result.state,
+        messages: current.messages.map((message) => ({
+          ...message,
+          isStreaming: false,
+        })),
+      }));
       const lastNode = result.state['workflow.last_node'];
       toast.success('Workflow completed', {
         toasterId: 'global',
@@ -226,6 +421,17 @@ function WorkflowEditor() {
       });
     },
     onError: (error) => {
+      setRunView((current) => ({
+        ...current,
+        status: 'failed',
+        activeNodeId: undefined,
+        endedAt: Date.now(),
+        error: error instanceof Error ? error.message : String(error),
+        messages: current.messages.map((message) => ({
+          ...message,
+          isStreaming: false,
+        })),
+      }));
       toast.error('Workflow failed', {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
@@ -347,30 +553,109 @@ function WorkflowEditor() {
     clearSelection();
   };
 
+  const saveWorkflow = () => {
+    try {
+      saveWorkflowDocument(workflowDocument);
+      setSavedDocument(workflowDocumentSnapshot);
+      toast.success('Workflow saved', { toasterId: 'global' });
+    } catch (error) {
+      toast.error('Workflow could not be saved', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const startRun = () => {
+    if (
+      workflowSettings.mode === 'task' &&
+      workflowSettings.inputSchema.fields.length === 0
+    ) {
+      startWorkflowRun({});
+      return;
+    }
+    setShowRunOutput(false);
+    setRunPanelOpen(true);
+  };
+
+  const startWorkflowRun = (initialState: Record<string, unknown>) => {
+    setLastRunInput(initialState);
+    setRunView({
+      status: 'running',
+      startedAt: Date.now(),
+      nodes: [],
+      messages: [],
+    });
+    setRunPanelOpen(true);
+    setShowRunOutput(true);
+    runMutation.mutate(initialState);
+  };
+
   return (
     <SidebarProvider className='flex size-full grow flex-row'>
       <WorkflowSidebar onNodeDrop={addPaletteNode} />
       <SidebarInset>
-        <header className='flex h-12 shrink-0 items-center gap-2'>
-          <div className='flex items-center gap-2 px-4'>
+        <header className='flex h-12 shrink-0 items-center gap-2 pr-4'>
+          <div className='flex flex-1 items-center gap-2 px-4'>
             <SidebarTrigger className='-ml-1' />
             <Separator
               orientation='vertical'
               className='my-auto mr-2 data-[orientation=vertical]:h-4'
             />
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem className='hidden md:block'>
-                  <BreadcrumbLink href='#'>
-                    Build Your Application
-                  </BreadcrumbLink>
-                </BreadcrumbItem>
-                <BreadcrumbSeparator className='hidden md:block' />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>Data Fetching</BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
+            <FieldGroup className='flex-row items-center gap-2'>
+              <Field className='w-52'>
+                <FieldLabel className='sr-only' htmlFor='workflow-name'>
+                  Workflow name
+                </FieldLabel>
+                <Input
+                  id='workflow-name'
+                  className='border-none'
+                  value={workflowSettings.name}
+                  onChange={(event) =>
+                    updateWorkflowSettings({ name: event.target.value })
+                  }
+                />
+              </Field>
+              <Field className='w-28'>
+                <FieldLabel className='sr-only' htmlFor='workflow-mode'>
+                  Run mode
+                </FieldLabel>
+                <Select
+                  items={WORKFLOW_MODE}
+                  value={workflowSettings.mode}
+                  onValueChange={(mode) =>
+                    updateWorkflowSettings({ mode: mode as WorkflowMode })
+                  }
+                >
+                  <SelectTrigger id='workflow-mode' className='w-full'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {WORKFLOW_MODE.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
+          </div>
+          <div className='flex items-center gap-2'>
+            <Button
+              variant='ghost'
+              size='sm'
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2Icon data-icon='inline-start' />
+              More settings
+            </Button>
+            <Button size='sm' disabled={!isDirty} onClick={saveWorkflow}>
+              <SaveIcon data-icon='inline-start' />
+              Save
+            </Button>
           </div>
         </header>
         <div className='flex flex-1'>
@@ -430,7 +715,7 @@ function WorkflowEditor() {
                 <Button
                   variant='secondary'
                   disabled={runMutation.isPending}
-                  onClick={() => runMutation.mutate()}
+                  onClick={startRun}
                 >
                   {runMutation.isPending ? (
                     <Spinner data-icon='inline-start' />
@@ -452,6 +737,24 @@ function WorkflowEditor() {
           modelProfiles={modelCatalog}
           onClose={closeInspector}
           onDataChange={onNodeDataChange}
+        />
+        <WorkflowSettingsPanel
+          open={settingsOpen}
+          settings={workflowSettings}
+          onOpenChange={setSettingsOpen}
+          onSettingsChange={updateWorkflowSettings}
+        />
+        <WorkflowRunPanel
+          open={runPanelOpen}
+          settings={workflowSettings}
+          run={runView}
+          isRunning={runMutation.isPending}
+          showOutput={showRunOutput}
+          onOpenChange={setRunPanelOpen}
+          onRun={startWorkflowRun}
+          onRunAgain={() => {
+            if (lastRunInput) startWorkflowRun(lastRunInput);
+          }}
         />
       </SidebarInset>
     </SidebarProvider>

@@ -2,9 +2,17 @@ import { Drawer as DrawerPrimitive } from '@base-ui/react/drawer';
 import { cn } from '@workspace/ui/lib/utils';
 import * as React from 'react';
 
+type HorizontalSnapPoint = number | string;
+
 type DrawerContextProps = {
+  hasHorizontalSnapPoints: boolean;
   hasSnapPoints: boolean;
+  horizontalDragWidth: number | undefined;
+  horizontalSnapPoint: HorizontalSnapPoint | undefined;
+  horizontalSnapPoints: HorizontalSnapPoint[] | undefined;
   modal: DrawerPrimitive.Root.Props['modal'];
+  setHorizontalDragWidth: (width: number | undefined) => void;
+  setHorizontalSnapPoint: (snapPoint: HorizontalSnapPoint) => void;
   showSwipeHandle: boolean;
   swipeDirection: NonNullable<DrawerPrimitive.Root.Props['swipeDirection']>;
 };
@@ -24,16 +32,66 @@ function useDrawer() {
 function Drawer({
   modal = true,
   showSwipeHandle = false,
+  horizontalSnapPoints,
+  defaultHorizontalSnapPoint,
+  horizontalSnapPoint: controlledHorizontalSnapPoint,
+  onHorizontalSnapPointChange,
   snapPoints,
   swipeDirection = 'down',
   ...props
 }: DrawerPrimitive.Root.Props & {
+  defaultHorizontalSnapPoint?: HorizontalSnapPoint;
+  horizontalSnapPoint?: HorizontalSnapPoint;
+  horizontalSnapPoints?: HorizontalSnapPoint[];
+  onHorizontalSnapPointChange?: (snapPoint: HorizontalSnapPoint) => void;
   showSwipeHandle?: boolean;
 }) {
   const hasSnapPoints = snapPoints != null && snapPoints.length > 0;
+  const hasHorizontalSnapPoints =
+    horizontalSnapPoints != null && horizontalSnapPoints.length > 0;
+  const [uncontrolledHorizontalSnapPoint, setUncontrolledHorizontalSnapPoint] =
+    React.useState<HorizontalSnapPoint | undefined>(
+      defaultHorizontalSnapPoint ?? horizontalSnapPoints?.[0],
+    );
+  const [horizontalDragWidth, setHorizontalDragWidth] = React.useState<
+    number | undefined
+  >();
+  const horizontalSnapPoint =
+    controlledHorizontalSnapPoint ?? uncontrolledHorizontalSnapPoint;
+  const setHorizontalSnapPoint = React.useCallback(
+    (snapPoint: HorizontalSnapPoint) => {
+      if (controlledHorizontalSnapPoint === undefined) {
+        setUncontrolledHorizontalSnapPoint(snapPoint);
+      }
+      onHorizontalSnapPointChange?.(snapPoint);
+    },
+    [controlledHorizontalSnapPoint, onHorizontalSnapPointChange],
+  );
   const contextValue = React.useMemo(
-    () => ({ hasSnapPoints, modal, showSwipeHandle, swipeDirection }),
-    [hasSnapPoints, modal, showSwipeHandle, swipeDirection],
+    () => ({
+      hasHorizontalSnapPoints,
+      hasSnapPoints,
+      horizontalDragWidth,
+      horizontalSnapPoint,
+      horizontalSnapPoints,
+      modal,
+      setHorizontalDragWidth,
+      setHorizontalSnapPoint,
+      showSwipeHandle,
+      swipeDirection,
+    }),
+    [
+      hasHorizontalSnapPoints,
+      hasSnapPoints,
+      horizontalDragWidth,
+      horizontalSnapPoint,
+      horizontalSnapPoints,
+      modal,
+      setHorizontalDragWidth,
+      setHorizontalSnapPoint,
+      showSwipeHandle,
+      swipeDirection,
+    ],
   );
 
   return (
@@ -47,6 +105,35 @@ function Drawer({
       />
     </DrawerContext.Provider>
   );
+}
+
+function horizontalSnapPointCssValue(snapPoint: HorizontalSnapPoint) {
+  if (typeof snapPoint === 'string') return snapPoint;
+  return snapPoint > 0 && snapPoint <= 1
+    ? `${snapPoint * 100}vw`
+    : `${snapPoint}px`;
+}
+
+function horizontalSnapPointPixels(
+  snapPoint: HorizontalSnapPoint,
+  viewportWidth: number,
+) {
+  if (typeof snapPoint === 'number') {
+    return snapPoint > 0 && snapPoint <= 1
+      ? snapPoint * viewportWidth
+      : snapPoint;
+  }
+
+  const value = Number.parseFloat(snapPoint);
+  if (Number.isNaN(value)) return undefined;
+  if (snapPoint.endsWith('px')) return value;
+  if (snapPoint.endsWith('rem')) {
+    return (
+      value *
+      Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+    );
+  }
+  return undefined;
 }
 
 function DrawerTrigger({ ...props }: DrawerPrimitive.Trigger.Props) {
@@ -97,11 +184,26 @@ function DrawerSwipeHandle({
 function DrawerContent({
   className,
   children,
+  style,
   ...props
 }: DrawerPrimitive.Popup.Props) {
-  const { hasSnapPoints, modal, showSwipeHandle, swipeDirection } = useDrawer();
+  const {
+    hasHorizontalSnapPoints,
+    hasSnapPoints,
+    horizontalDragWidth,
+    horizontalSnapPoint,
+    modal,
+    showSwipeHandle,
+    swipeDirection,
+  } = useDrawer();
   const swipeAxis =
     swipeDirection === 'down' || swipeDirection === 'up' ? 'y' : 'x';
+  const width =
+    swipeAxis === 'x' && horizontalDragWidth !== undefined
+      ? `${horizontalDragWidth}px`
+      : swipeAxis === 'x' && horizontalSnapPoint !== undefined
+        ? horizontalSnapPointCssValue(horizontalSnapPoint)
+        : undefined;
 
   return (
     <DrawerPortal data-slot='drawer-portal'>
@@ -116,10 +218,13 @@ function DrawerContent({
         <DrawerPrimitive.Popup
           data-slot='drawer-popup'
           data-swipe-axis={swipeAxis}
+          data-horizontal-snap-points={
+            hasHorizontalSnapPoints && swipeAxis === 'x' ? '' : undefined
+          }
           data-snap-points={hasSnapPoints ? '' : undefined}
           className={cn(
             // Base.
-            'group/drawer-popup pointer-events-auto fixed z-50 m-(--drawer-inset,0px) flex h-(--drawer-content-height) max-h-(--drawer-content-max-height,none) min-h-0 w-(--drawer-content-width,auto) transform-[translate3d(var(--translate-x,0px),var(--translate-y,0px),0)_scale(var(--stack-scale))] flex-col bg-popover text-sm text-popover-foreground transition-[transform,height,opacity,filter] duration-450 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform outline-none select-none [interpolate-size:allow-keywords] data-[swipe-direction=down]:rounded-t-xl data-[swipe-direction=down]:border-t data-[swipe-direction=left]:rounded-r-xl data-[swipe-direction=left]:border-r data-[swipe-direction=right]:rounded-l-xl data-[swipe-direction=right]:border-l data-[swipe-direction=up]:rounded-b-xl data-[swipe-direction=up]:border-b',
+            'group/drawer-popup pointer-events-auto fixed z-50 m-(--drawer-inset,0px) flex h-(--drawer-content-height) max-h-(--drawer-content-max-height,none) min-h-0 w-(--drawer-content-width,auto) transform-[translate3d(var(--translate-x,0px),var(--translate-y,0px),0)_scale(var(--stack-scale))] flex-col bg-popover text-sm text-popover-foreground transition-[transform,height,width,opacity,filter] duration-450 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform outline-none select-none [interpolate-size:allow-keywords] data-[swipe-direction=down]:rounded-t-xl data-[swipe-direction=down]:border-t data-[swipe-direction=left]:rounded-r-xl data-[swipe-direction=left]:border-r data-[swipe-direction=right]:rounded-l-xl data-[swipe-direction=right]:border-l data-[swipe-direction=up]:rounded-b-xl data-[swipe-direction=up]:border-b',
             // Nested.
             'data-nested-drawer-open:overflow-hidden data-nested-drawer-open:brightness-95',
             // Bleed.
@@ -144,9 +249,29 @@ function DrawerContent({
             'data-[swipe-direction=right]:right-0 data-[swipe-direction=right]:origin-right data-[swipe-direction=right]:[--closed-transform:translate3d(calc(100%+var(--drawer-inset,0px)+2px),0,0)] data-[swipe-direction=right]:[--translate-x:calc(var(--drawer-swipe-movement-x)-var(--stack-peek-offset)-(var(--stack-shrink)*100%))]',
             className,
           )}
+          style={(state) => {
+            const resolvedStyle =
+              typeof style === 'function' ? style(state) : style;
+            return {
+              ...resolvedStyle,
+              maxWidth:
+                swipeAxis === 'x' && hasHorizontalSnapPoints
+                  ? 'calc(100vw - 2rem)'
+                  : resolvedStyle?.maxWidth,
+              transitionDuration:
+                horizontalDragWidth !== undefined
+                  ? '0ms'
+                  : resolvedStyle?.transitionDuration,
+              width: width ?? resolvedStyle?.width,
+            };
+          }}
           {...props}
         >
-          {showSwipeHandle && <DrawerSwipeHandle />}
+          {hasHorizontalSnapPoints && swipeAxis === 'x' ? (
+            <DrawerHorizontalResizeHandle />
+          ) : (
+            showSwipeHandle && <DrawerSwipeHandle />
+          )}
           <DrawerPrimitive.Content
             data-slot='drawer-content'
             className={cn(
@@ -158,6 +283,96 @@ function DrawerContent({
         </DrawerPrimitive.Popup>
       </DrawerPrimitive.Viewport>
     </DrawerPortal>
+  );
+}
+
+function DrawerHorizontalResizeHandle() {
+  const {
+    horizontalSnapPoints,
+    setHorizontalDragWidth,
+    setHorizontalSnapPoint,
+    swipeDirection,
+  } = useDrawer();
+  const resize = React.useRef<
+    { startWidth: number; startX: number } | undefined
+  >(undefined);
+  const dragWidth = React.useRef<number | undefined>(undefined);
+
+  const findClosestSnapPoint = React.useCallback(
+    (width: number) => {
+      if (!horizontalSnapPoints) return undefined;
+      return horizontalSnapPoints.reduce<HorizontalSnapPoint | undefined>(
+        (closest, snapPoint) => {
+          const snapWidth = horizontalSnapPointPixels(
+            snapPoint,
+            window.innerWidth,
+          );
+          const closestWidth =
+            closest === undefined
+              ? undefined
+              : horizontalSnapPointPixels(closest, window.innerWidth);
+          if (snapWidth === undefined) return closest;
+          if (
+            closestWidth === undefined ||
+            Math.abs(snapWidth - width) < Math.abs(closestWidth - width)
+          ) {
+            return snapPoint;
+          }
+          return closest;
+        },
+        undefined,
+      );
+    },
+    [horizontalSnapPoints],
+  );
+
+  return (
+    <div
+      aria-label='Resize drawer width'
+      aria-orientation='vertical'
+      className='after:bg-muted hover:after:bg-border absolute top-1/2 left-0 z-10 flex h-24 w-3 -translate-y-1/2 cursor-ew-resize touch-none items-center justify-center transition-opacity duration-200 group-data-[swipe-direction=left]/drawer-popup:right-0 group-data-[swipe-direction=left]/drawer-popup:left-auto after:block after:h-16 after:w-1 after:rounded-full active:cursor-ew-resize'
+      role='separator'
+      onPointerDown={(event) => {
+        const popup = event.currentTarget.closest<HTMLElement>(
+          '[data-slot="drawer-popup"]',
+        );
+        if (!popup) return;
+        event.preventDefault();
+        event.stopPropagation();
+        resize.current = {
+          startWidth: popup.getBoundingClientRect().width,
+          startX: event.clientX,
+        };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (!resize.current) return;
+        const delta = event.clientX - resize.current.startX;
+        const nextWidth =
+          swipeDirection === 'right'
+            ? resize.current.startWidth - delta
+            : resize.current.startWidth + delta;
+        dragWidth.current = Math.max(
+          16 * 12,
+          Math.min(window.innerWidth - 32, nextWidth),
+        );
+        setHorizontalDragWidth(dragWidth.current);
+      }}
+      onPointerUp={() => {
+        if (dragWidth.current !== undefined) {
+          const snapPoint = findClosestSnapPoint(dragWidth.current);
+          if (snapPoint !== undefined) setHorizontalSnapPoint(snapPoint);
+        }
+        resize.current = undefined;
+        dragWidth.current = undefined;
+        setHorizontalDragWidth(undefined);
+      }}
+      onPointerCancel={() => {
+        resize.current = undefined;
+        dragWidth.current = undefined;
+        setHorizontalDragWidth(undefined);
+      }}
+    />
   );
 }
 

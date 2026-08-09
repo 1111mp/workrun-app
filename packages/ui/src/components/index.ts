@@ -20,6 +20,7 @@ export * from './message';
 export * from './message-scroller';
 export * from './progress';
 export * from './questionnaire';
+export * from './resizable';
 export * from './scroll-area';
 export * from './select';
 export * from './separator';

@@ -19,7 +19,12 @@ type TrackedWorkflowState = {
   edges: Edge[];
 };
 
+type WorkflowDocumentState = TrackedWorkflowState & {
+  settings: WorkflowSettings;
+};
+
 type WorkflowStore = TrackedWorkflowState & {
+  settings: WorkflowSettings;
   selectedNodeId: string | null;
   dragStartNodes: Node[] | null;
   onNodesChange: (changes: NodeChange<Node>[]) => void;
@@ -27,6 +32,8 @@ type WorkflowStore = TrackedWorkflowState & {
   addNode: (node: Node) => void;
   addConnection: (connection: Connection | Edge) => void;
   updateNodeData: (nodeId: string, patch: Record<string, unknown>) => void;
+  updateSettings: (patch: Partial<WorkflowSettings>) => void;
+  replaceWorkflow: (workflow: WorkflowDocumentState) => void;
   setNodes: (nodes: Node[]) => void;
   setSelectedNodeId: (nodeId: string | null) => void;
   clearSelection: () => void;
@@ -43,11 +50,19 @@ const initialNodes: Node[] = [
   },
 ];
 
+const initialSettings: WorkflowSettings = {
+  name: 'Untitled workflow',
+  description: '',
+  mode: 'task',
+  inputSchema: { fields: [] },
+};
+
 export const useWorkflowStore = create<WorkflowStore>()(
   temporal(
     immer((set, get) => ({
       nodes: initialNodes,
       edges: [],
+      settings: initialSettings,
       selectedNodeId: null,
       dragStartNodes: null,
 
@@ -160,6 +175,21 @@ export const useWorkflowStore = create<WorkflowStore>()(
             );
           }
           currentNode.data = { ...currentNode.data, ...patch };
+        });
+      },
+
+      updateSettings: (patch) => {
+        set((state) => {
+          state.settings = { ...state.settings, ...patch };
+        });
+      },
+
+      replaceWorkflow: (workflow) => {
+        set({
+          nodes: workflow.nodes,
+          edges: workflow.edges,
+          settings: workflow.settings,
+          selectedNodeId: null,
         });
       },
 

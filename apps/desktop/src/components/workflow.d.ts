@@ -11,6 +11,29 @@ type WorkflowNodeType =
   | 'switch'
   | 'group';
 
+type WorkflowMode = 'task' | 'chat';
+
+type WorkflowInputType = 'string' | 'textarea' | 'number' | 'boolean';
+
+/** A parameter accepted by one workflow run. Values are never stored here. */
+type WorkflowInput = {
+  id: string;
+  key: string;
+  label: string;
+  type: WorkflowInputType;
+  required: boolean;
+  description?: string;
+};
+
+type WorkflowSettings = {
+  name: string;
+  description: string;
+  mode: WorkflowMode;
+  inputSchema: {
+    fields: WorkflowInput[];
+  };
+};
+
 // ---------- Agent Node ----------
 type WorkflowAgentNodeData = {
   name: string;
@@ -124,6 +147,9 @@ type WorkflowEdge = {
 type Workflow = {
   id: string;
   name: string;
+  description?: string;
+  mode: WorkflowMode;
+  inputSchema: WorkflowSettings['inputSchema'];
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
 };
