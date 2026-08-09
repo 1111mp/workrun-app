@@ -14,6 +14,11 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupText,
+  InputGroupTextarea,
   Marker,
   MarkerContent,
   Message,
@@ -28,13 +33,14 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import {
+  ArrowUpIcon,
   CheckCircle2Icon,
   CircleAlertIcon,
   ClipboardIcon,
   RotateCcwIcon,
   TerminalIcon,
 } from 'lucide-react';
-import { Children, type ReactNode } from 'react';
+import { Children, type ReactNode, useState } from 'react';
 import Markdown from 'react-markdown';
 
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
@@ -45,6 +51,8 @@ type WorkflowOutputPanelProps = {
   isRunning: boolean;
   onRunAgain: () => void;
   onClose: () => void;
+  isChat?: boolean;
+  onSend?: (initialState: Record<string, unknown>) => void;
 };
 
 function statusLabel(status: WorkflowRunView['status']) {
@@ -84,7 +92,10 @@ function WorkflowRunOutput({
   isRunning,
   onRunAgain,
   onClose,
+  isChat = false,
+  onSend,
 }: WorkflowOutputPanelProps) {
+  const [message, setMessage] = useState('');
   const duration = durationLabel(run);
   const output = run.messages.map((message) => message.content).join('\n\n');
 
@@ -93,10 +104,18 @@ function WorkflowRunOutput({
     await navigator.clipboard.writeText(output);
   };
 
+  const sendMessage = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const content = message.trim();
+    if (!content || isRunning || !onSend) return;
+    onSend({ input: content });
+    setMessage('');
+  };
+
   return (
     <>
       <DrawerHeader>
-        <DrawerTitle>Run output</DrawerTitle>
+        <DrawerTitle>{isChat ? 'Chat' : 'Run output'}</DrawerTitle>
         <DrawerDescription>
           {statusLabel(run.status)}
           {run.activeNodeId ? ` · ${run.activeNodeId}` : ''}
@@ -104,8 +123,8 @@ function WorkflowRunOutput({
         </DrawerDescription>
       </DrawerHeader>
 
-      <div className='flex min-h-0 flex-1 flex-col border-y'>
-        {run.nodes.length > 0 && (
+      <div className='flex min-h-0 flex-1 flex-col'>
+        {!isChat && run.nodes.length > 0 && (
           <div className='text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 px-4 py-2 text-xs'>
             {run.nodes.map((node) => (
               <span key={node.id}>
@@ -129,7 +148,7 @@ function WorkflowRunOutput({
           </Alert>
         )}
 
-        <MessageScrollerProvider autoScroll>
+        <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 p-4'>
@@ -147,11 +166,15 @@ function WorkflowRunOutput({
                       </EmptyMedia>
                       <EmptyTitle>
                         {run.status === 'running'
-                          ? 'Waiting for output'
+                          ? isChat
+                            ? 'Thinking…'
+                            : 'Waiting for output'
                           : 'No output was produced'}
                       </EmptyTitle>
                       <EmptyDescription>
-                        Model responses will appear here as they stream.
+                        {isChat
+                          ? 'Send a message to start this workflow.'
+                          : 'Model responses will appear here as they stream.'}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -159,12 +182,26 @@ function WorkflowRunOutput({
                   run.messages.map((message, index) => (
                     <MessageScrollerItem
                       key={message.id}
-                      scrollAnchor={index === run.messages.length - 1}
+                      messageId={message.id}
+                      scrollAnchor={
+                        isChat
+                          ? message.role === 'user'
+                          : index === run.messages.length - 1
+                      }
                     >
-                      <Message>
+                      <Message
+                        align={message.role === 'user' ? 'end' : 'start'}
+                      >
                         <MessageContent>
-                          <MessageHeader>{message.nodeId}</MessageHeader>
-                          <Bubble variant='secondary'>
+                          {message.role !== 'user' && (
+                            <MessageHeader>{message.nodeId}</MessageHeader>
+                          )}
+                          <Bubble
+                            align={message.role === 'user' ? 'end' : 'start'}
+                            variant={
+                              message.role === 'user' ? 'secondary' : 'ghost'
+                            }
+                          >
                             <BubbleContent>
                               <Markdown
                                 components={{
@@ -216,7 +253,7 @@ function WorkflowRunOutput({
                                     <p className='leading-6'>{children}</p>
                                   ),
                                   pre: ({ children }) => (
-                                    <pre className='bg-muted overflow-x-auto rounded-md p-3'>
+                                    <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
                                       {children}
                                     </pre>
                                   ),
@@ -242,8 +279,8 @@ function WorkflowRunOutput({
                   ))
                 )}
 
-                {run.finalState && (
-                  <MessageScrollerItem>
+                {!isChat && run.finalState && (
+                  <MessageScrollerItem messageId='final-state'>
                     <Marker variant='separator'>
                       <MarkerContent>Final state</MarkerContent>
                     </Marker>
@@ -259,19 +296,55 @@ function WorkflowRunOutput({
         </MessageScrollerProvider>
       </div>
 
-      <DrawerFooter className='flex-row justify-end'>
-        <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
-          <RotateCcwIcon data-icon='inline-start' />
-          Run again
-        </Button>
-        <Button variant='outline' disabled={!output} onClick={copyAll}>
-          <ClipboardIcon data-icon='inline-start' />
-          Copy all
-        </Button>
-        <Button type='button' onClick={onClose}>
-          Close
-        </Button>
-      </DrawerFooter>
+      {isChat ? (
+        <DrawerFooter>
+          <form className='w-full' onSubmit={sendMessage}>
+            <InputGroup className='h-auto'>
+              <InputGroupTextarea
+                aria-label='Message'
+                disabled={isRunning}
+                placeholder='What are we working on today?'
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+              />
+              <InputGroupAddon align='block-end' className='justify-between'>
+                <InputGroupText>
+                  Enter to send · Shift+Enter for new line
+                </InputGroupText>
+                <InputGroupButton
+                  disabled={!message.trim() || isRunning}
+                  size='icon-sm'
+                  type='submit'
+                  variant='default'
+                >
+                  <ArrowUpIcon />
+                  <span className='sr-only'>Send</span>
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+          </form>
+        </DrawerFooter>
+      ) : (
+        <DrawerFooter className='flex-row justify-end'>
+          <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+            <RotateCcwIcon data-icon='inline-start' />
+            Run again
+          </Button>
+          <Button variant='outline' disabled={!output} onClick={copyAll}>
+            <ClipboardIcon data-icon='inline-start' />
+            Copy all
+          </Button>
+          <Button type='button' onClick={onClose}>
+            Close
+          </Button>
+        </DrawerFooter>
+      )}
     </>
   );
 }

@@ -33,7 +33,7 @@ import {
   Settings2Icon,
   Undo2Icon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
 
@@ -270,6 +270,7 @@ function WorkflowEditor() {
   const [showRunOutput, setShowRunOutput] = useState(false);
   const [runView, setRunView] = useState<WorkflowRunView>(initialRunView);
   const [lastRunInput, setLastRunInput] = useState<Record<string, unknown>>();
+  const chatThreadId = useRef<string | undefined>(undefined);
   const [savedDocument, setSavedDocument] = useState(() =>
     JSON.stringify(toWorkflowDocument(nodes, edges, workflowSettings)),
   );
@@ -320,27 +321,33 @@ function WorkflowEditor() {
         if (!event.content) return;
         setRunView((current) => {
           const lastMessage = current.messages.at(-1);
-          const isSameStreamingMessage =
-            lastMessage?.nodeId === event.node && lastMessage.isStreaming;
-          const messages = isSameStreamingMessage
-            ? [
+          if (lastMessage?.nodeId === event.node && lastMessage.isStreaming) {
+            return {
+              ...current,
+              messages: [
                 ...current.messages.slice(0, -1),
                 {
                   ...lastMessage,
                   content: lastMessage.content + event.content,
                   isStreaming: !event.is_final,
                 },
-              ]
-            : [
-                ...current.messages,
-                {
-                  id: crypto.randomUUID(),
-                  nodeId: event.node,
-                  content: event.content,
-                  isStreaming: !event.is_final,
-                },
-              ];
-          return { ...current, messages };
+              ],
+            };
+          }
+
+          return {
+            ...current,
+            messages: [
+              ...current.messages,
+              {
+                id: crypto.randomUUID(),
+                nodeId: event.node,
+                content: event.content,
+                isStreaming: !event.is_final,
+                role: 'assistant',
+              },
+            ],
+          };
         });
         return;
       case 'done':
@@ -396,7 +403,9 @@ function WorkflowEditor() {
       runWorkflow(
         toWorkflowDsl(nodes, edges, workflowSettings),
         initialState,
-        crypto.randomUUID(),
+        workflowSettings.mode === 'chat'
+          ? chatThreadId.current
+          : crypto.randomUUID(),
         handleRunEvent,
       ),
     onSuccess: (result) => {
@@ -567,6 +576,12 @@ function WorkflowEditor() {
   };
 
   const startRun = () => {
+    if (workflowSettings.mode === 'chat') {
+      chatThreadId.current = crypto.randomUUID();
+      setRunView(initialRunView);
+      setRunPanelOpen(true);
+      return;
+    }
     if (
       workflowSettings.mode === 'task' &&
       workflowSettings.inputSchema.fields.length === 0
@@ -579,13 +594,41 @@ function WorkflowEditor() {
   };
 
   const startWorkflowRun = (initialState: Record<string, unknown>) => {
+    const inputContent =
+      typeof initialState.input === 'string'
+        ? initialState.input
+        : (JSON.stringify(initialState.input ?? '') ?? '');
+
     setLastRunInput(initialState);
-    setRunView({
-      status: 'running',
-      startedAt: Date.now(),
-      nodes: [],
-      messages: [],
-    });
+    setRunView((current) =>
+      workflowSettings.mode === 'chat'
+        ? {
+            ...current,
+            status: 'running',
+            startedAt: Date.now(),
+            endedAt: undefined,
+            activeNodeId: undefined,
+            finalState: undefined,
+            error: undefined,
+            nodes: [],
+            messages: [
+              ...current.messages,
+              {
+                id: crypto.randomUUID(),
+                nodeId: 'You',
+                content: inputContent,
+                isStreaming: false,
+                role: 'user',
+              },
+            ],
+          }
+        : {
+            status: 'running',
+            startedAt: Date.now(),
+            nodes: [],
+            messages: [],
+          },
+    );
     setRunPanelOpen(true);
     setShowRunOutput(true);
     runMutation.mutate(initialState);
@@ -627,7 +670,10 @@ function WorkflowEditor() {
                     updateWorkflowSettings({ mode: mode as WorkflowMode })
                   }
                 >
-                  <SelectTrigger id='workflow-mode' className='w-full'>
+                  <SelectTrigger
+                    id='workflow-mode'
+                    className='w-full border-none'
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

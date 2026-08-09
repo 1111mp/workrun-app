@@ -123,7 +123,16 @@ function WorkflowRunPanel({
       onOpenChange={onOpenChange}
     >
       <DrawerContent>
-        {showOutput ? (
+        {settings.mode === 'chat' ? (
+          <WorkflowRunOutput
+            run={run}
+            isRunning={isRunning}
+            isChat
+            onRunAgain={onRunAgain}
+            onSend={onRun}
+            onClose={() => onOpenChange(false)}
+          />
+        ) : showOutput ? (
           <WorkflowRunOutput
             run={run}
             isRunning={isRunning}

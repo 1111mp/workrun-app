@@ -59,6 +59,7 @@ export type WorkflowRunMessage = {
   nodeId: string;
   content: string;
   isStreaming: boolean;
+  role?: 'user' | 'assistant';
 };
 
 export type WorkflowRunNode = {
