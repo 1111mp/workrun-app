@@ -45,7 +45,8 @@
       "gemini": "API key for Gemini",
       "openAi": "API key for OpenAI",
       "anthropic": "API key for Anthropic",
-      "deepSeek": "API key for DeepSeek"
+      "deepSeek": "API key for DeepSeek",
+      "groq": "API key for Groq"
     },
 
     "about": {

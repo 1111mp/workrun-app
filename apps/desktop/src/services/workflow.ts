@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import type { Edge, Node } from '@xyflow/react';
 
 type WorkflowPlanEdge = {
@@ -18,6 +18,13 @@ export type WorkflowRunResult = {
   plan: WorkflowPlan;
   state: Record<string, unknown>;
 };
+
+/** Ordered runtime events emitted while a workflow is executing. */
+export type WorkflowRunEvent =
+  | { type: 'node_start'; node: string; step: number }
+  | { type: 'node_end'; node: string; step: number; duration_ms: number }
+  | { type: 'message'; node: string; content: string; is_final: boolean }
+  | { type: 'done'; state: Record<string, unknown>; total_steps: number };
 
 /**
  * Removes React Flow-only fields (position, selection, dimensions, etc.) so
@@ -48,10 +55,15 @@ export function runWorkflow(
   dsl: Workflow,
   initialState: Record<string, unknown> = {},
   threadId?: string,
+  onEvent?: (event: WorkflowRunEvent) => void,
 ) {
+  const channel = new Channel<WorkflowRunEvent>();
+  channel.onmessage = (event) => onEvent?.(event);
+
   return invoke<WorkflowRunResult>('workflow_run', {
     dsl,
     initialState,
     threadId,
+    onEvent: channel,
   });
 }

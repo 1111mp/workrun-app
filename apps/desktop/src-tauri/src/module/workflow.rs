@@ -7,8 +7,8 @@
 use crate::config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog};
 use adk_rust::{
     graph::{
-        AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError, Node as AdkGraphNode,
-        NodeOutput, START, State, StateGraph,
+        AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError,
+        NodeOutput, START, State, StateGraph, StreamEvent, StreamMode,
     },
     model::{
         GeminiModel,
@@ -22,6 +22,7 @@ use adk_rust::{
     server::RemoteA2aAgent,
 };
 use anyhow::{Result, anyhow, bail};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -92,11 +93,34 @@ pub struct CompiledWorkflow {
 }
 
 impl CompiledWorkflow {
-    pub async fn run(self, initial_state: State, thread_id: &str) -> Result<WorkflowRunResult> {
-        let state = self
-            .graph
-            .invoke(initial_state, ExecutionConfig::new(thread_id))
-            .await?;
+    /// Execute the graph while forwarding ordered node and model events to the
+    /// caller. The final `Done` stream event is retained as the command result.
+    pub async fn run_stream<F>(
+        self,
+        initial_state: State,
+        thread_id: &str,
+        mut on_event: F,
+    ) -> Result<WorkflowRunResult>
+    where
+        F: FnMut(StreamEvent),
+    {
+        let stream = self.graph.stream(
+            initial_state,
+            ExecutionConfig::new(thread_id),
+            StreamMode::Messages,
+        );
+        futures::pin_mut!(stream);
+        let mut final_state = None;
+
+        while let Some(event) = stream.next().await {
+            let event = event?;
+            if let StreamEvent::Done { state, .. } = &event {
+                final_state = Some(state.clone());
+            }
+            on_event(event);
+        }
+
+        let state = final_state.ok_or_else(|| anyhow!("workflow stream ended without a final state"))?;
         Ok(WorkflowRunResult { plan: self.plan, state })
     }
 
@@ -586,12 +610,18 @@ mod tests {
         .unwrap();
         let mut input = State::new();
         input.insert("approved".into(), json!(true));
+        let mut events = Vec::new();
         let result = compile(dsl, &Default::default())
             .unwrap()
-            .run(input, "test")
+            .run_stream(input, "test", |event| events.push(event))
             .await
             .unwrap();
         assert_eq!(result.state["workflow.last_node"], json!("check"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            StreamEvent::NodeStart { node, .. } if node == "check"
+        )));
+        assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
     }
 
     #[test]

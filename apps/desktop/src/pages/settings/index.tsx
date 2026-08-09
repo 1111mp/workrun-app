@@ -36,19 +36,33 @@ function SettingsPage() {
       app_log_max_size: config?.app_log_max_size ?? 128,
       app_log_max_count: config?.app_log_max_count ?? 8,
       // model
-      provider_credentials: config?.provider_credentials ?? [],
+      provider_credentials: config?.provider_credentials?.length
+        ? config.provider_credentials
+        : [
+            { provider: 'gemini', apiKey: '', baseUrl: '' },
+            { provider: 'open_ai', apiKey: '', baseUrl: '' },
+            // { provider: 'open_ai_strict', apiKey: '', baseUrl: '' },
+            { provider: 'anthropic', apiKey: '', baseUrl: '' },
+            { provider: 'deep_seek', apiKey: '', baseUrl: '' },
+            { provider: 'groq', apiKey: '', baseUrl: '' },
+            // { provider: 'ollama', apiKey: '', baseUrl: '' },
+          ],
     },
   });
 
-  const { watch } = form;
-
   useEffect(() => {
-    const subscription = watch(() => {
-      void form.handleSubmit(onSubmit)();
+    return form.subscribe({
+      formState: {
+        values: true,
+        isDirty: true,
+      },
+      callback: () => {
+        void form.handleSubmit(onSubmit, (errors) => {
+          console.error('Settings form validation failed:', errors);
+        })();
+      },
     });
-
-    return () => subscription.unsubscribe();
-  }, [watch, form]);
+  }, [form]);
 
   const onSubmit = useEffectEvent(async (values: SettingsForm) => {
     const settings: IWorkrunConfig = {

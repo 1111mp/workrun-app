@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -11,6 +11,7 @@ import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
+  Spinner,
 } from '@workspace/ui/components';
 import {
   Background,
@@ -21,8 +22,9 @@ import {
   type Node,
   type ReactFlowInstance,
 } from '@xyflow/react';
-import { Redo2Icon, Undo2Icon } from 'lucide-react';
+import { Play, Redo2Icon, Undo2Icon } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { useStore } from 'zustand';
 
 import {
@@ -37,6 +39,7 @@ import {
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowSidebar } from '@/components/workflow-sidebar';
 import { getModelCatalog } from '@/services/cmd';
+import { runWorkflow, toWorkflowDsl } from '@/services/workflow';
 import { useWorkflowStore } from '@/stores';
 
 const nodeTypes = {
@@ -189,10 +192,46 @@ function WorkflowEditor() {
 
   const [reactFlowInstance, setReactFlowInstance] =
     useState<ReactFlowInstance | null>(null);
+  const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
 
   const { data: modelCatalog } = useQuery({
     queryKey: ['modelCatalog'],
     queryFn: getModelCatalog,
+  });
+
+  const runMutation = useMutation({
+    mutationFn: () =>
+      runWorkflow(
+        toWorkflowDsl(nodes, edges),
+        {
+          input:
+            'Write a Python function that returns the factorial of a number.',
+        },
+        crypto.randomUUID(),
+        (event) => {
+          console.log('event: ', event);
+          if (event.type === 'node_start') {
+            setRunningNodeId(event.node);
+          }
+        },
+      ),
+    onSuccess: (result) => {
+      const lastNode = result.state['workflow.last_node'];
+      toast.success('Workflow completed', {
+        toasterId: 'global',
+        description:
+          typeof lastNode === 'string'
+            ? `Finished at node ${lastNode}.`
+            : undefined,
+      });
+    },
+    onError: (error) => {
+      toast.error('Workflow failed', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    },
+    onSettled: () => setRunningNodeId(null),
   });
 
   // Keyboard event handlers for modifier key and undo/redo
@@ -383,6 +422,26 @@ function WorkflowEditor() {
                   }}
                 >
                   <Redo2Icon />
+                </Button>
+              </div>
+            </Panel>
+            <Panel position='top-right'>
+              <div>
+                <Button
+                  variant='secondary'
+                  disabled={runMutation.isPending}
+                  onClick={() => runMutation.mutate()}
+                >
+                  {runMutation.isPending ? (
+                    <Spinner data-icon='inline-start' />
+                  ) : (
+                    <Play data-icon='inline-start' />
+                  )}
+                  {runMutation.isPending
+                    ? runningNodeId
+                      ? `Running ${runningNodeId}…`
+                      : 'Running…'
+                    : 'Run'}
                 </Button>
               </div>
             </Panel>

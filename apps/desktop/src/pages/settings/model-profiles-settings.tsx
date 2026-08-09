@@ -12,20 +12,20 @@ import {
   ItemTitle,
 } from '@workspace/ui/components';
 import { ChevronRightIcon } from 'lucide-react';
-import { useWatch, type UseFormReturn } from 'react-hook-form';
+import { type UseFormReturn, FieldArray } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
 import type { SettingsForm } from './settings-schema';
 
-const PROVIDER_SETTINGS = [
-  { key: 'gemini', providers: ['gemini'] },
-  { key: 'openAi', providers: ['open_ai', 'open_ai_strict'] },
-  { key: 'anthropic', providers: ['anthropic'] },
-  { key: 'deepSeek', providers: ['deep_seek'] },
-] as const satisfies ReadonlyArray<{
-  key: string;
-  providers: ReadonlyArray<ModelProvider>;
-}>;
+const PROVIDER_SETTING_KEY = {
+  gemini: 'gemini',
+  open_ai: 'openAi',
+  open_ai_strict: 'openAi',
+  anthropic: 'anthropic',
+  deep_seek: 'deepSeek',
+  groq: 'groq',
+  ollama: 'ollama',
+} as const satisfies Record<ModelProvider, string>;
 
 function ModelProfilesSettings({
   form,
@@ -33,10 +33,6 @@ function ModelProfilesSettings({
   form: UseFormReturn<SettingsForm>;
 }) {
   const { t } = useTranslation();
-  const profiles = useWatch({
-    control: form.control,
-    name: 'provider_credentials',
-  });
 
   return (
     <FieldSet className='gap-1'>
@@ -48,87 +44,49 @@ function ModelProfilesSettings({
       </FieldDescription>
       <div className='overflow-hidden rounded-xl'>
         <FieldGroup className='gap-0'>
-          {PROVIDER_SETTINGS.map(({ key, providers }) => (
-            <ProviderApiKeyField
-              key={key}
-              id={key}
-              form={form}
-              profiles={profiles}
-              providers={providers}
-              label={t(`settings.models.${key}`)}
-              // description={t('settings.models.modelCount', {
-              //   count: providers.length,
-              // })}
-            />
-          ))}
+          <FieldArray
+            control={form.control}
+            name='provider_credentials'
+            render={({ fields }) => (
+              <>
+                {fields.map((field, index) => (
+                  <Field key={field.id}>
+                    <FieldLabel htmlFor={`model-api-key-${field.provider}`}>
+                      <Item
+                        variant='muted'
+                        size='sm'
+                        className='hover:bg-muted rounded-none py-1.5'
+                      >
+                        <ItemContent>
+                          <ItemTitle>
+                            {t(
+                              `settings.models.${PROVIDER_SETTING_KEY[field.provider]}`,
+                            )}
+                          </ItemTitle>
+                          {/* <ItemDescription>{description}</ItemDescription> */}
+                        </ItemContent>
+                        <ItemActions>
+                          <Input
+                            id={`model-api-key-${field.provider}`}
+                            autoComplete='off'
+                            placeholder='请输入'
+                            className='text-muted-foreground border-none bg-transparent! pr-0 text-right outline-none focus-visible:border-none focus-visible:ring-0 disabled:opacity-100'
+                            {...form.register(
+                              `provider_credentials.${index}.apiKey`,
+                            )}
+                          />
+                          <ChevronRightIcon className='size-4' />
+                        </ItemActions>
+                      </Item>
+                    </FieldLabel>
+                  </Field>
+                ))}
+              </>
+            )}
+          />
         </FieldGroup>
       </div>
     </FieldSet>
-  );
-}
-
-function ProviderApiKeyField({
-  id,
-  form,
-  profiles,
-  providers,
-  label,
-  // description,
-}: {
-  id: string;
-  form: UseFormReturn<SettingsForm>;
-  profiles: SettingsForm['provider_credentials'];
-  providers: ReadonlyArray<ModelProvider>;
-  label: string;
-  // description: string;
-}) {
-  const apiKey =
-    profiles.find((profile) => providers.includes(profile.provider))?.apiKey ??
-    '';
-
-  return (
-    <Field>
-      <FieldLabel htmlFor={`model-api-key-${id}`}>
-        <Item
-          variant='muted'
-          size='sm'
-          className='hover:bg-muted rounded-none py-1.5'
-        >
-          <ItemContent>
-            <ItemTitle>{label}</ItemTitle>
-            {/* <ItemDescription>{description}</ItemDescription> */}
-          </ItemContent>
-          <ItemActions>
-            <Input
-              id={`model-api-key-${id}`}
-              // type='password'
-              value={apiKey}
-              autoComplete='off'
-              placeholder='请输入'
-              className='text-muted-foreground border-none bg-transparent! pr-0 text-right outline-none focus-visible:border-none focus-visible:ring-0 disabled:opacity-100'
-              onChange={(event) => {
-                const provider = providers[0];
-                const index = profiles.findIndex(
-                  (profile) => profile.provider === provider,
-                );
-                if (index >= 0) {
-                  form.setValue(
-                    `provider_credentials.${index}.apiKey`,
-                    event.target.value,
-                  );
-                } else {
-                  form.setValue('provider_credentials', [
-                    ...profiles,
-                    { provider, apiKey: event.target.value },
-                  ]);
-                }
-              }}
-            />
-            <ChevronRightIcon className='size-4' />
-          </ItemActions>
-        </Item>
-      </FieldLabel>
-    </Field>
   );
 }
 

@@ -360,6 +360,7 @@ function WorkflowNodeInspector({
                   ? 'A title for this layout container. Resize it directly on the canvas.'
                   : `A short name shown on the workflow canvas for this ${node.type} node.`
               }
+              disabled={node.type === 'start' || node.type === 'end'}
               value={getText(data, 'label')}
               onChange={(label) => updateData({ label })}
             />
@@ -412,15 +413,17 @@ function TextField({
   label,
   description,
   value,
-  onChange,
   type = 'text',
+  disabled = false,
+  onChange,
 }: {
   id: string;
   label: string;
   description?: string;
   value: string;
-  onChange: (value: string) => void;
   type?: 'text' | 'url';
+  disabled?: boolean;
+  onChange: (value: string) => void;
 }) {
   return (
     <Field>
@@ -430,6 +433,7 @@ function TextField({
         id={id}
         type={type}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
     </Field>
