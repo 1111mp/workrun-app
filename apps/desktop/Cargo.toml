@@ -5,17 +5,18 @@ members = ["src-tauri"]
 [workspace.dependencies]
 adk-rust = { version = "1.0.0" }
 anyhow = "1.0.104"
+bitflags = { version = "2.13.1" }
 chrono = "0.4.45"
 flexi_logger = "0.31.9"
 log = "0.4.33"
 parking_lot = { version = "0.12.5", features = ["hardware-lock-elision"] }
+semver = "1.0.28"
 serde = { version = "1.0.229" }
 serde_json = { version = "1.0.151" }
 serde_yaml_ng = { version = "0.10.0" }
 tauri = { version = "2.11.5" }
 thiserror = { version = "2.0.19" }
 tokio = { version = "1.53.1", features = ["full"] }
-bitflags = { version = "2.13.1" }
 
 deelevate = "0.2.0"
 

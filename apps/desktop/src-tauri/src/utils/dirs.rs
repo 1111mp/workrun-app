@@ -62,6 +62,21 @@ pub fn app_logs_dir() -> Result<PathBuf> {
     Ok(app_home_dir()?.join("logs"))
 }
 
+/// runtime dir
+pub fn runtime_dir() -> Result<PathBuf> {
+    Ok(app_home_dir()?.join("runtime"))
+}
+
+/// runtime uv install python dir
+pub fn uv_python_dir() -> Result<PathBuf> {
+    Ok(runtime_dir()?.join("python"))
+}
+
+/// runtime uv cache dir
+pub fn uv_cache_dir() -> Result<PathBuf> {
+    Ok(runtime_dir()?.join("uv-cache"))
+}
+
 pub fn get_encryption_key() -> Result<Vec<u8>> {
     let app_dir = app_home_dir()?;
     let key_path = app_dir.join(".encryption_key");

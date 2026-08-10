@@ -72,8 +72,8 @@ pub async fn delete_log() -> Result<()> {
 async fn ensure_directories() -> Result<()> {
     let directories = [
         ("app_home", dirs::app_home_dir()?),
-        // ("file_upload", dirs::file_upload_dir()?),
         ("app_logs", dirs::app_logs_dir()?),
+        ("app_runtime", dirs::runtime_dir()?),
     ];
 
     for (name, dir) in directories {

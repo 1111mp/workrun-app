@@ -86,6 +86,10 @@ pub fn run() {
             cmd::workflow::workflow_run,
             // Python runtime
             cmd::python_runtime::uv_version,
+            cmd::python_runtime::ensure_python,
+            cmd::python_runtime::ensure_venv,
+            cmd::python_runtime::sync_dependencies,
+            cmd::python_runtime::run_project_python,
             // system
             cmd::system::get_system_theme,
         ]);

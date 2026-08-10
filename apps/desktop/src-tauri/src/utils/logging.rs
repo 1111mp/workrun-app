@@ -23,6 +23,7 @@ pub enum Type {
     ProxyMode,
     Server,
     Workrun,
+    Runtime,
 }
 
 impl fmt::Display for Type {
@@ -47,6 +48,7 @@ impl fmt::Display for Type {
             Self::ProxyMode => write!(f, "[ProxMode]"),
             Self::Server => write!(f, "[Server]"),
             Self::Workrun => write!(f, "[Workrun]"),
+            Self::Runtime => write!(f, "[Runtime]"),
         }
     }
 }

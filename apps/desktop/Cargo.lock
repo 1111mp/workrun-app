@@ -8749,6 +8749,7 @@ dependencies = [
  "once_cell",
  "open",
  "parking_lot",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "serde_yaml_ng",
