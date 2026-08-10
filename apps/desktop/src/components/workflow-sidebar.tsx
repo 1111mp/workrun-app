@@ -194,9 +194,13 @@ function WorkflowSidebar({ onNodeDrop }: WorkflowSidebarProps) {
   return (
     <Sidebar variant='inset'>
       <SidebarHeader>
-        <div className='px-2 py-1'>
-          <p className='font-semibold'>Add node</p>
-          <p className='text-muted-foreground text-xs'>Drag onto the canvas</p>
+        <div data-tauri-drag-region className='px-2 py-1'>
+          <p data-tauri-drag-region className='font-semibold'>
+            Add node
+          </p>
+          <p data-tauri-drag-region className='text-muted-foreground text-xs'>
+            Drag onto the canvas
+          </p>
         </div>
       </SidebarHeader>
       <SidebarSeparator />

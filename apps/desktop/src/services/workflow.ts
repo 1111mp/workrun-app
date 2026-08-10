@@ -60,6 +60,17 @@ export type WorkflowRunMessage = {
   content: string;
   isStreaming: boolean;
   role?: 'user' | 'assistant';
+  /** Groups a chat message with the execution steps that produced it. */
+  turnId?: string;
+};
+
+export type WorkflowRunThought = {
+  id: string;
+  nodeId: string;
+  status: 'running' | 'completed' | 'failed';
+  durationMs?: number;
+  /** The chat turn this step belongs to. */
+  turnId?: string;
 };
 
 export type WorkflowRunNode = {
@@ -76,6 +87,7 @@ export type WorkflowRunView = {
   totalSteps?: number;
   nodes: WorkflowRunNode[];
   messages: WorkflowRunMessage[];
+  thoughts: WorkflowRunThought[];
   finalState?: Record<string, unknown>;
   error?: string;
 };

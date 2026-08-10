@@ -89,6 +89,7 @@ const initialRunView: WorkflowRunView = {
   status: 'idle',
   nodes: [],
   messages: [],
+  thoughts: [],
 };
 
 function runningNode(
@@ -119,6 +120,49 @@ function finishNode(
   }
 
   return [{ id: nodeId, status, durationMs }, ...nodes];
+}
+
+function startThought(
+  thoughts: WorkflowRunView['thoughts'],
+  nodeId: string,
+  turnId?: string,
+): WorkflowRunView['thoughts'] {
+  return [
+    ...thoughts,
+    {
+      id: crypto.randomUUID(),
+      nodeId,
+      status: 'running',
+      turnId,
+    },
+  ];
+}
+
+function finishThought(
+  thoughts: WorkflowRunView['thoughts'],
+  nodeId: string,
+  durationMs?: number,
+  status: 'completed' | 'failed' = 'completed',
+): WorkflowRunView['thoughts'] {
+  for (let index = thoughts.length - 1; index >= 0; index -= 1) {
+    const thought = thoughts[index];
+    if (thought.nodeId === nodeId && thought.status === 'running') {
+      return thoughts.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, status, durationMs } : item,
+      );
+    }
+  }
+
+  return thoughts;
+}
+
+function settleThoughts(
+  thoughts: WorkflowRunView['thoughts'],
+  status: 'completed' | 'failed' = 'completed',
+): WorkflowRunView['thoughts'] {
+  return thoughts.map((thought) =>
+    thought.status === 'running' ? { ...thought, status } : thought,
+  );
 }
 
 function createNodeData(type: WorkflowNodeType) {
@@ -271,6 +315,7 @@ function WorkflowEditor() {
   const [runView, setRunView] = useState<WorkflowRunView>(initialRunView);
   const [lastRunInput, setLastRunInput] = useState<Record<string, unknown>>();
   const chatThreadId = useRef<string | undefined>(undefined);
+  const chatTurnId = useRef<string | undefined>(undefined);
   const [savedDocument, setSavedDocument] = useState(() =>
     JSON.stringify(toWorkflowDocument(nodes, edges, workflowSettings)),
   );
@@ -300,6 +345,11 @@ function WorkflowEditor() {
           ...current,
           activeNodeId: event.node,
           nodes: runningNode(current.nodes, event.node),
+          thoughts: startThought(
+            current.thoughts,
+            event.node,
+            chatTurnId.current,
+          ),
         }));
         return;
       case 'node_end':
@@ -310,6 +360,11 @@ function WorkflowEditor() {
               ? undefined
               : current.activeNodeId,
           nodes: finishNode(current.nodes, event.node, event.duration_ms),
+          thoughts: finishThought(
+            current.thoughts,
+            event.node,
+            event.duration_ms,
+          ),
           messages: current.messages.map((message) =>
             message.nodeId === event.node
               ? { ...message, isStreaming: false }
@@ -330,6 +385,7 @@ function WorkflowEditor() {
                   ...lastMessage,
                   content: lastMessage.content + event.content,
                   isStreaming: !event.is_final,
+                  turnId: chatTurnId.current,
                 },
               ],
             };
@@ -345,6 +401,7 @@ function WorkflowEditor() {
                 content: event.content,
                 isStreaming: !event.is_final,
                 role: 'assistant',
+                turnId: chatTurnId.current,
               },
             ],
           };
@@ -358,6 +415,7 @@ function WorkflowEditor() {
           endedAt: Date.now(),
           totalSteps: event.total_steps,
           finalState: event.state,
+          thoughts: settleThoughts(current.thoughts),
           messages: current.messages.map((message) => ({
             ...message,
             isStreaming: false,
@@ -374,6 +432,9 @@ function WorkflowEditor() {
           nodes: event.node
             ? finishNode(current.nodes, event.node, undefined, 'failed')
             : current.nodes,
+          thoughts: event.node
+            ? finishThought(current.thoughts, event.node, undefined, 'failed')
+            : current.thoughts,
           messages: current.messages.map((message) => ({
             ...message,
             isStreaming: false,
@@ -387,6 +448,7 @@ function WorkflowEditor() {
           activeNodeId: undefined,
           endedAt: Date.now(),
           error: event.message,
+          thoughts: settleThoughts(current.thoughts, 'failed'),
           messages: current.messages.map((message) => ({
             ...message,
             isStreaming: false,
@@ -415,6 +477,7 @@ function WorkflowEditor() {
         activeNodeId: undefined,
         endedAt: current.endedAt ?? Date.now(),
         finalState: result.state,
+        thoughts: settleThoughts(current.thoughts),
         messages: current.messages.map((message) => ({
           ...message,
           isStreaming: false,
@@ -436,6 +499,7 @@ function WorkflowEditor() {
         activeNodeId: undefined,
         endedAt: Date.now(),
         error: error instanceof Error ? error.message : String(error),
+        thoughts: settleThoughts(current.thoughts, 'failed'),
         messages: current.messages.map((message) => ({
           ...message,
           isStreaming: false,
@@ -594,6 +658,9 @@ function WorkflowEditor() {
   };
 
   const startWorkflowRun = (initialState: Record<string, unknown>) => {
+    const turnId =
+      workflowSettings.mode === 'chat' ? crypto.randomUUID() : undefined;
+    chatTurnId.current = turnId;
     const inputContent =
       typeof initialState.input === 'string'
         ? initialState.input
@@ -619,6 +686,7 @@ function WorkflowEditor() {
                 content: inputContent,
                 isStreaming: false,
                 role: 'user',
+                turnId,
               },
             ],
           }
@@ -627,6 +695,7 @@ function WorkflowEditor() {
             startedAt: Date.now(),
             nodes: [],
             messages: [],
+            thoughts: [],
           },
     );
     setRunPanelOpen(true);
@@ -638,14 +707,23 @@ function WorkflowEditor() {
     <SidebarProvider className='flex size-full grow flex-row'>
       <WorkflowSidebar onNodeDrop={addPaletteNode} />
       <SidebarInset>
-        <header className='flex h-12 shrink-0 items-center gap-2 pr-4'>
-          <div className='flex flex-1 items-center gap-2 px-4'>
+        <header
+          data-tauri-drag-region
+          className='flex h-12 shrink-0 items-center gap-2 pr-4'
+        >
+          <div
+            data-tauri-drag-region
+            className='flex flex-1 items-center gap-2 px-4'
+          >
             <SidebarTrigger className='-ml-1' />
             <Separator
               orientation='vertical'
               className='my-auto mr-2 data-[orientation=vertical]:h-4'
             />
-            <FieldGroup className='flex-row items-center gap-2'>
+            <FieldGroup
+              data-tauri-drag-region
+              className='flex-row items-center gap-2'
+            >
               <Field className='w-52'>
                 <FieldLabel className='sr-only' htmlFor='workflow-name'>
                   Workflow name

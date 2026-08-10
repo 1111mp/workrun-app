@@ -5,6 +5,7 @@ export * from './breadcrumb';
 export * from './bubble';
 export * from './button';
 export * from './checkbox';
+export * from './collapsible';
 export * from './combobox';
 export * from './drawer';
 export * from './dropdown-menu';

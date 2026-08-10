@@ -5,6 +5,9 @@ import {
   Bubble,
   BubbleContent,
   Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   DrawerDescription,
   DrawerFooter,
   DrawerHeader,
@@ -21,6 +24,7 @@ import {
   InputGroupTextarea,
   Marker,
   MarkerContent,
+  MarkerIcon,
   Message,
   MessageContent,
   MessageHeader,
@@ -35,12 +39,14 @@ import {
 import {
   ArrowUpIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   CircleAlertIcon,
+  CircleIcon,
   ClipboardIcon,
   RotateCcwIcon,
   TerminalIcon,
 } from 'lucide-react';
-import { Children, type ReactNode, useState } from 'react';
+import { Children, Fragment, type ReactNode, useState } from 'react';
 import Markdown from 'react-markdown';
 
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
@@ -85,6 +91,54 @@ function codeText(children: ReactNode) {
     })
     .join('')
     .replace(/\n$/, '');
+}
+
+function ThinkingProcess({
+  thoughts,
+  isRunning,
+}: {
+  thoughts: WorkflowRunView['thoughts'];
+  isRunning: boolean;
+}) {
+  if (thoughts.length === 0 && !isRunning) return null;
+
+  const completed = thoughts.filter(
+    (thought) => thought.status === 'completed',
+  ).length;
+  const label = isRunning
+    ? completed > 0
+      ? `Thinking · ${completed} step${completed === 1 ? '' : 's'} complete`
+      : 'Thinking…'
+    : `Thought process · ${completed} step${completed === 1 ? '' : 's'}`;
+
+  return (
+    <div className='flex flex-col gap-2 py-1'>
+      <Marker variant='separator'>
+        <MarkerIcon>
+          {isRunning ? <Spinner /> : <CheckCircle2Icon />}
+        </MarkerIcon>
+        <MarkerContent>{label}</MarkerContent>
+      </Marker>
+      {thoughts.length > 0 && (
+        <div className='flex flex-col gap-1.5 px-3'>
+          {thoughts.map((thought) => (
+            <Marker key={thought.id}>
+              <MarkerIcon>
+                {thought.status === 'running' ? <Spinner /> : <CircleIcon />}
+              </MarkerIcon>
+              <MarkerContent>
+                {thought.status === 'running' ? 'Working in' : 'Finished'}{' '}
+                {thought.nodeId}
+                {thought.durationMs !== undefined
+                  ? ` · ${(thought.durationMs / 1000).toFixed(1)}s`
+                  : ''}
+              </MarkerContent>
+            </Marker>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function WorkflowRunOutput({
@@ -180,113 +234,136 @@ function WorkflowRunOutput({
                   </Empty>
                 ) : (
                   run.messages.map((message, index) => (
-                    <MessageScrollerItem
-                      key={message.id}
-                      messageId={message.id}
-                      scrollAnchor={
-                        isChat
-                          ? message.role === 'user'
-                          : index === run.messages.length - 1
-                      }
-                    >
-                      <Message
-                        align={message.role === 'user' ? 'end' : 'start'}
+                    <Fragment key={message.id}>
+                      <MessageScrollerItem
+                        messageId={message.id}
+                        scrollAnchor={
+                          isChat
+                            ? message.role === 'user'
+                            : index === run.messages.length - 1
+                        }
                       >
-                        <MessageContent>
-                          {message.role !== 'user' && (
-                            <MessageHeader>{message.nodeId}</MessageHeader>
-                          )}
-                          <Bubble
-                            align={message.role === 'user' ? 'end' : 'start'}
-                            variant={
-                              message.role === 'user' ? 'secondary' : 'ghost'
-                            }
-                          >
-                            <BubbleContent>
-                              <Markdown
-                                components={{
-                                  a: ({ children, ...props }) => (
-                                    <a
-                                      {...props}
-                                      className='text-primary underline underline-offset-3'
-                                      target='_blank'
-                                      rel='noreferrer'
-                                    >
-                                      {children}
-                                    </a>
-                                  ),
-                                  blockquote: ({ children }) => (
-                                    <blockquote className='text-muted-foreground border-border border-l pl-3'>
-                                      {children}
-                                    </blockquote>
-                                  ),
-                                  code: ({ children, className }) =>
-                                    className ? (
-                                      <WorkflowCodeBlock
-                                        className={className}
-                                        code={codeText(children)}
-                                      />
-                                    ) : (
-                                      <code className='bg-muted rounded px-1 py-0.5'>
+                        <Message
+                          align={message.role === 'user' ? 'end' : 'start'}
+                        >
+                          <MessageContent>
+                            {message.role !== 'user' && (
+                              <MessageHeader>{message.nodeId}</MessageHeader>
+                            )}
+                            <Bubble
+                              align={message.role === 'user' ? 'end' : 'start'}
+                              variant={
+                                message.role === 'user' ? 'secondary' : 'ghost'
+                              }
+                            >
+                              <BubbleContent>
+                                <Markdown
+                                  components={{
+                                    a: ({ children, ...props }) => (
+                                      <a
+                                        {...props}
+                                        className='text-primary underline underline-offset-3'
+                                        target='_blank'
+                                        rel='noreferrer'
+                                      >
                                         {children}
-                                      </code>
+                                      </a>
                                     ),
-                                  h1: ({ children }) => (
-                                    <h1 className='text-base font-semibold'>
-                                      {children}
-                                    </h1>
-                                  ),
-                                  h2: ({ children }) => (
-                                    <h2 className='text-sm font-semibold'>
-                                      {children}
-                                    </h2>
-                                  ),
-                                  li: ({ children }) => (
-                                    <li className='leading-6'>{children}</li>
-                                  ),
-                                  ol: ({ children }) => (
-                                    <ol className='list-decimal pl-5'>
-                                      {children}
-                                    </ol>
-                                  ),
-                                  p: ({ children }) => (
-                                    <p className='leading-6'>{children}</p>
-                                  ),
-                                  pre: ({ children }) => (
-                                    <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
-                                      {children}
-                                    </pre>
-                                  ),
-                                  ul: ({ children }) => (
-                                    <ul className='list-disc pl-5'>
-                                      {children}
-                                    </ul>
-                                  ),
-                                }}
-                              >
-                                {message.content}
-                              </Markdown>
-                            </BubbleContent>
-                          </Bubble>
-                          {message.isStreaming && (
-                            <span className='text-muted-foreground flex items-center gap-1 px-3 text-xs'>
-                              <Spinner /> Streaming
-                            </span>
-                          )}
-                        </MessageContent>
-                      </Message>
-                    </MessageScrollerItem>
+                                    blockquote: ({ children }) => (
+                                      <blockquote className='text-muted-foreground border-border border-l pl-3'>
+                                        {children}
+                                      </blockquote>
+                                    ),
+                                    code: ({ children, className }) =>
+                                      className ? (
+                                        <WorkflowCodeBlock
+                                          className={className}
+                                          code={codeText(children)}
+                                        />
+                                      ) : (
+                                        <code className='bg-muted rounded px-1 py-0.5'>
+                                          {children}
+                                        </code>
+                                      ),
+                                    h1: ({ children }) => (
+                                      <h1 className='text-base font-semibold'>
+                                        {children}
+                                      </h1>
+                                    ),
+                                    h2: ({ children }) => (
+                                      <h2 className='text-sm font-semibold'>
+                                        {children}
+                                      </h2>
+                                    ),
+                                    li: ({ children }) => (
+                                      <li className='leading-6'>{children}</li>
+                                    ),
+                                    ol: ({ children }) => (
+                                      <ol className='list-decimal pl-5'>
+                                        {children}
+                                      </ol>
+                                    ),
+                                    p: ({ children }) => (
+                                      <p className='leading-6'>{children}</p>
+                                    ),
+                                    pre: ({ children }) => (
+                                      <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
+                                        {children}
+                                      </pre>
+                                    ),
+                                    ul: ({ children }) => (
+                                      <ul className='list-disc pl-5'>
+                                        {children}
+                                      </ul>
+                                    ),
+                                  }}
+                                >
+                                  {message.content}
+                                </Markdown>
+                              </BubbleContent>
+                            </Bubble>
+                            {message.isStreaming && (
+                              <span className='text-muted-foreground flex items-center gap-1 px-3 text-xs'>
+                                <Spinner /> Streaming
+                              </span>
+                            )}
+                          </MessageContent>
+                        </Message>
+                      </MessageScrollerItem>
+                      {isChat && message.role === 'user' && (
+                        <MessageScrollerItem
+                          messageId={`${message.id}-thinking`}
+                        >
+                          <ThinkingProcess
+                            thoughts={run.thoughts.filter(
+                              (thought) => thought.turnId === message.turnId,
+                            )}
+                            isRunning={
+                              isRunning &&
+                              message.turnId === run.messages.at(-1)?.turnId
+                            }
+                          />
+                        </MessageScrollerItem>
+                      )}
+                    </Fragment>
                   ))
                 )}
 
                 {!isChat && run.finalState && (
                   <MessageScrollerItem messageId='final-state'>
-                    <Marker variant='separator'>
-                      <MarkerContent>Final state</MarkerContent>
-                    </Marker>
-                    <pre className='bg-muted mt-3 overflow-x-auto rounded-md p-3 text-xs'>
-                      {JSON.stringify(run.finalState, null, 2)}
-                    </pre>
+                    <Collapsible defaultOpen>
+                      <CollapsibleTrigger render={<Button variant='ghost' />}>
+                        <Marker>
+                          <MarkerContent>Final state</MarkerContent>
+                        </Marker>
+                        <ChevronDownIcon className='ml-auto group-data-panel-open/button:rotate-180' />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <pre className='bg-muted mt-3 overflow-x-auto rounded-md p-3 text-xs'>
+                          {JSON.stringify(run.finalState, null, 2)}
+                        </pre>
+                      </CollapsibleContent>
+                    </Collapsible>
                   </MessageScrollerItem>
                 )}
               </MessageScrollerContent>
