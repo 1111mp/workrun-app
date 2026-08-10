@@ -35,6 +35,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         // Ensure single instance operation
         .plugin(
@@ -83,6 +84,8 @@ pub fn run() {
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,
+            // Python runtime
+            cmd::python_runtime::uv_version,
             // system
             cmd::system::get_system_theme,
         ]);

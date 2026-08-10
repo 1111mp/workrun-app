@@ -10,6 +10,7 @@
     "ui:dev": "vite --config vite.config.ts",
     "ui:build": "tsc && vite build",
     "preview": "vite preview",
+    "prebuild": "node scripts/prebuild.mjs",
     "tauri": "tauri",
     "oxlint": "oxlint src scripts --type-aware",
     "oxlint:fix": "oxlint src scripts --fix",
@@ -54,6 +55,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "babel-plugin-react-compiler": "^1.0.0",
     "tailwindcss": "^4.3.3",
+    "tar": "^7.5.22",
     "vite": "^8.2.0",
     "vite-plugin-html": "^3.2.2"
   },

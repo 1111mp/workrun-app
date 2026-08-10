@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "io.github.1111mp.workrun",
   "build": {
-    "beforeDevCommand": "pnpm ui:dev",
+    "beforeDevCommand": "pnpm prebuild && pnpm ui:dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm ui:build",
+    "beforeBuildCommand": "pnpm prebuild && pnpm ui:build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -38,10 +38,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources",
-      "icons/icon.png"
-    ],
+    "resources": ["resources", "icons/icon.png"],
+    "externalBin": ["binaries/uv"],
     "publisher": "Workrun",
     "copyright": "MIT License",
     "licenseFile": "../LICENSE",
