@@ -63,6 +63,7 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
 tokio = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

@@ -1,0 +1,9 @@
+{
+  "executionEnvironments": [
+    {
+      "root": "packages/python-sdk",
+      "extraPaths": ["packages/python-sdk/src"],
+      "pythonVersion": "3.10"
+    }
+  ]
+}

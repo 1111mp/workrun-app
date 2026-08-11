@@ -344,6 +344,16 @@ impl PythonRuntime {
         script_path: &Path,
         args: &[String],
     ) -> Result<PythonExecutionResult> {
+        Self::run_python_with_env(environment, script_path, args, &[]).await
+    }
+
+    /// Run a Python script with extra environment variables supplied by the host.
+    pub async fn run_python_with_env(
+        environment: &ManagedVenv,
+        script_path: &Path,
+        args: &[String],
+        extra_env: &[(String, String)],
+    ) -> Result<PythonExecutionResult> {
         if !environment.executable_path.is_file() {
             bail!(
                 "project virtual environment Python does not exist: {}",
@@ -356,6 +366,7 @@ impl PythonRuntime {
             .current_dir(&environment.project_path)
             .arg(&script_path)
             .args(args)
+            .envs(extra_env.iter().map(|(key, value)| (key, value)))
             .output()
             .await
             .with_context(|| format!("failed to execute Python script {}", script_path.display()))?;

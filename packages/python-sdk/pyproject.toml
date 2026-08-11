@@ -1,0 +1,22 @@
+[project]
+name = "workrun-sdk"
+version = "0.1.0"
+description = "Python SDK for Workrun desktop IPC and user interactions"
+readme = "README.md"
+authors = [
+    { name = "The1111mp", email = "The1111mp@outlook.com" }
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.urls]
+Repository = "https://github.com/1111mp/workrun-app"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"

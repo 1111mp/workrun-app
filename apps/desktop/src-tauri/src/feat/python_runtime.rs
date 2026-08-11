@@ -1,4 +1,7 @@
-use crate::module::python_runtime::{DependencySyncResult, PythonExecutionResult, PythonRuntime};
+use crate::module::{
+    ipc::IpcServer,
+    python_runtime::{DependencySyncResult, PythonExecutionResult, PythonRuntime},
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -32,7 +35,20 @@ pub struct ProjectPythonRunResult {
 /// then run the requested script from that environment.
 pub async fn run_project_python(app: &AppHandle, request: RunProjectPythonRequest) -> Result<ProjectPythonRunResult> {
     let sync = PythonRuntime::sync_dependencies(app, &request.project_path, &request.python_version).await?;
-    let execution = PythonRuntime::run_python(&sync.environment, &request.script_path, &request.args).await?;
+    let ipc = IpcServer::global().create_session().await?;
+    let execution = PythonRuntime::run_python_with_env(
+        &sync.environment,
+        &request.script_path,
+        &request.args,
+        &[
+            ("WORKRUN_IPC_ENDPOINT".into(), ipc.endpoint.clone()),
+            ("WORKRUN_IPC_TOKEN".into(), ipc.token.clone()),
+            ("WORKRUN_RUN_ID".into(), ipc.id.clone()),
+        ],
+    )
+    .await;
+    ipc.close().await;
+    let execution = execution?;
 
     Ok(ProjectPythonRunResult { sync, execution })
 }

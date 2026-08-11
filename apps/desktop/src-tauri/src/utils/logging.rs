@@ -24,6 +24,7 @@ pub enum Type {
     Server,
     Workrun,
     Runtime,
+    IpcServer,
 }
 
 impl fmt::Display for Type {
@@ -49,6 +50,7 @@ impl fmt::Display for Type {
             Self::Server => write!(f, "[Server]"),
             Self::Workrun => write!(f, "[Workrun]"),
             Self::Runtime => write!(f, "[Runtime]"),
+            Self::IpcServer => write!(f, "[IpcServer]"),
         }
     }
 }
