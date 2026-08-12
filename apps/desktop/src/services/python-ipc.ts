@@ -13,16 +13,18 @@ export type PythonUiRequestEvent = {
   uiSchema: unknown;
   title: string | null;
   description: string | null;
+  submitLabel: string | null;
+  cancelLabel: string | null;
 };
 
 const IPC_MESSAGE = 'ipc-message';
 
-export function respondToPythonConfirm(
+export function respondToPythonUiRequest(
   request: Pick<PythonUiRequestEvent, 'runId' | 'requestId'>,
-  accepted: boolean,
+  data: unknown,
 ) {
   return invoke('python_ui_respond', {
-    request: { ...request, accepted },
+    request: { ...request, data },
   });
 }
 
@@ -40,6 +42,10 @@ export function onPythonUiRequest(
       title: typeof message.title === 'string' ? message.title : null,
       description:
         typeof message.description === 'string' ? message.description : null,
+      submitLabel:
+        typeof message.submitLabel === 'string' ? message.submitLabel : null,
+      cancelLabel:
+        typeof message.cancelLabel === 'string' ? message.cancelLabel : null,
     });
   });
 }

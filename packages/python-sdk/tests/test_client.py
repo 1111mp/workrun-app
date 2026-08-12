@@ -56,7 +56,12 @@ def test_request_interaction_returns_matching_response() -> None:
         )
 
         with WorkrunClient(str(endpoint), "test-token", "run-1") as client:
-            result = client.request_interaction(schema={"type": "object"}, title="Name")
+            result = client.request_interaction(
+                schema={"type": "object"},
+                title="Name",
+                submit_label="Save",
+                cancel_label="Back",
+            )
 
         thread.join(timeout=1)
         assert not thread.is_alive()
@@ -64,6 +69,8 @@ def test_request_interaction_returns_matching_response() -> None:
         assert received[0]["type"] == "hello"
         assert received[0]["token"] == "test-token"
         assert received[1]["type"] == "ui.request"
+        assert received[1]["submitLabel"] == "Save"
+        assert received[1]["cancelLabel"] == "Back"
 
 
 def test_request_interaction_raises_when_cancelled() -> None:

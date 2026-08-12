@@ -38,13 +38,17 @@ def form(
     ui_schema: JsonObject | None = None,
     title: str | None = None,
     description: str | None = None,
+    submit_label: str | None = None,
+    cancel_label: str | None = None,
 ) -> JsonValue:
-    """Display a JSON Schema form in Workrun and return its submitted data."""
+    """Display a JSON Schema form and return submitted data, or ``None`` on cancel."""
     return _get_client().request_interaction(
         schema=schema,
         ui_schema=ui_schema,
         title=title,
         description=description,
+        submit_label=submit_label,
+        cancel_label=cancel_label,
     )
 
 
@@ -58,15 +62,7 @@ def confirm(
     result = form(
         title=title,
         description=message,
-        schema={
-            "type": "object",
-            "properties": {
-                "confirmed": {
-                    "type": "boolean",
-                    "title": confirm_label,
-                }
-            },
-            "required": ["confirmed"],
-        },
+        schema={"type": "object"},
+        submit_label=confirm_label,
     )
-    return isinstance(result, dict) and result.get("confirmed") is True
+    return result is not None

@@ -113,8 +113,10 @@ class WorkrunClient:
         ui_schema: JsonObject | None = None,
         title: str | None = None,
         description: str | None = None,
+        submit_label: str | None = None,
+        cancel_label: str | None = None,
     ) -> JsonValue:
-        """Request a schema-driven form and wait for its result or cancellation."""
+        """Request a schema-driven form and return submitted data, or ``None`` on cancel."""
         self.connect()
         request_id = str(uuid4())
         future: Future[JsonValue] = Future()
@@ -130,6 +132,8 @@ class WorkrunClient:
                     "uiSchema": ui_schema or {},
                     "title": title,
                     "description": description,
+                    "submitLabel": submit_label,
+                    "cancelLabel": cancel_label,
                 }
             )
         except (OSError, ProtocolError) as error:

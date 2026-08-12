@@ -1,4 +1,5 @@
 import {
+  getTemplate,
   getUiOptions,
   type FieldTemplateProps,
   type FormContextType,
@@ -28,7 +29,7 @@ export default function FieldTemplate<
   rawErrors = [],
   // errors,
   help,
-  description,
+  description: _description,
   rawDescription,
   classNames,
   style,
@@ -46,28 +47,54 @@ export default function FieldTemplate<
 }: FieldTemplateProps<T, S, F>) {
   const hasError = rawErrors.length > 0;
   const uiOptions = getUiOptions(uiSchema);
-  const isCheckbox = uiOptions.widget === 'checkbox';
+
+  const WrapIfAdditionalTemplate = getTemplate<
+    'WrapIfAdditionalTemplate',
+    T,
+    S,
+    F
+  >('WrapIfAdditionalTemplate', registry, uiOptions);
 
   if (hidden) {
-    return <Field aria-invalid={hasError}>{children}</Field>;
+    return <Field data-invalid={hasError}>{children}</Field>;
   }
 
+  const isCheckbox = uiOptions.widget === 'checkbox';
+
   return (
-    <Field aria-invalid={hasError}>
-      {displayLabel && !isCheckbox && (
-        <FieldLabel htmlFor={id}>
-          {label}
-          {required && <span className='text-destructive'>*</span>}
-        </FieldLabel>
-      )}
-      {children}
-      {rawDescription && !isCheckbox && (
-        <FieldDescription>{rawDescription}</FieldDescription>
-      )}
-      {hasError && (
-        <FieldError errors={rawErrors.map((message) => ({ message }))} />
-      )}
-      {help}
-    </Field>
+    <WrapIfAdditionalTemplate
+      classNames={classNames}
+      style={style}
+      disabled={disabled}
+      id={id}
+      label={label}
+      displayLabel={displayLabel}
+      onKeyRename={onKeyRename}
+      onKeyRenameBlur={onKeyRenameBlur}
+      onRemoveProperty={onRemoveProperty}
+      rawDescription={rawDescription}
+      readonly={readonly}
+      required={required}
+      schema={schema}
+      uiSchema={uiSchema}
+      registry={registry}
+    >
+      <Field data-invalid={hasError}>
+        {displayLabel && !isCheckbox && (
+          <FieldLabel htmlFor={id}>
+            {label}
+            {required && <span className='text-destructive'>*</span>}
+          </FieldLabel>
+        )}
+        {children}
+        {displayLabel && rawDescription && !isCheckbox && (
+          <FieldDescription>{rawDescription}</FieldDescription>
+        )}
+        {hasError && (
+          <FieldError errors={rawErrors.map((message) => ({ message }))} />
+        )}
+        {help}
+      </Field>
+    </WrapIfAdditionalTemplate>
   );
 }

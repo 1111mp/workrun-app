@@ -178,6 +178,9 @@ importers:
       '@workspace/ui':
         specifier: workspace:*
         version: link:../ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
 
   packages/ui:
     dependencies:

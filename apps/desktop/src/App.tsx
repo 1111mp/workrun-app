@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { RouterProvider } from 'react-router';
 
 import { UpdateDialog } from '@/components';
-import { PythonConfirmDialog } from '@/components/python-confirm-dialog';
+import { PythonUiRequestDialog } from '@/components/python-ui-request-dialog';
 import { useTheme } from '@/hooks';
 import { router } from '@/routes';
 import {
@@ -34,7 +34,7 @@ function App() {
       </TooltipProvider>
       <Toaster id='global' position='top-center' richColors={true} />
       <UpdateDialog />
-      <PythonConfirmDialog
+      <PythonUiRequestDialog
         request={pythonUiRequest}
         onResolved={() => setPythonUiRequest(null)}
       />

@@ -57,8 +57,8 @@ export default function CheckBoxWidget<
   return (
     <Field
       orientation='horizontal'
-      aria-invalid={hasError}
-      aria-disabled={disabled || readonly || undefined}
+      data-invalid={hasError}
+      data-disabled={disabled || readonly || undefined}
     >
       <Checkbox
         id={id}

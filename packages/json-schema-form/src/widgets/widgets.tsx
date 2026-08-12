@@ -6,7 +6,11 @@ import type {
 } from '@rjsf/utils';
 
 import CheckboxWidget from '../checkbox-widget';
+import CheckboxesWidget from '../checkboxes-widget';
+import RadioWidget from '../radio-widget';
+import RangeWidget from '../range-widget';
 import SelectWidget from '../select-widget';
+import TextareaWidget from '../textarea-widget';
 
 export function generateWidgets<
   T = any,
@@ -15,7 +19,11 @@ export function generateWidgets<
 >(): RegistryWidgetsType<T, S, F> {
   return {
     CheckboxWidget,
+    CheckboxesWidget,
+    RadioWidget,
+    RangeWidget,
     SelectWidget,
+    TextareaWidget,
   };
 }
 

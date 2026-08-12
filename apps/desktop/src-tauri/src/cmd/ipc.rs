@@ -10,17 +10,17 @@ use serde_json::{Value, json};
 pub struct PythonUiResponseRequest {
     pub run_id: String,
     pub request_id: String,
-    pub accepted: bool,
+    pub data: Value,
 }
 
 /// Complete one pending Python UI interaction from the desktop frontend.
 #[tauri::command]
 pub async fn python_ui_respond(request: PythonUiResponseRequest) -> CmdResult {
-    let message = if request.accepted {
-        json!({ "id": request.request_id, "type": "ui.response", "data": { "confirmed": true } })
-    } else {
-        json!({ "id": request.request_id, "type": "ui.response", "data": { "confirmed": false } })
-    };
+    let message = json!({
+        "id": request.request_id,
+        "type": "ui.response",
+        "data": request.data,
+    });
     IpcServer::global()
         .send(&request.run_id, Value::from(message))
         .await

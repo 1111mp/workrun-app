@@ -6,6 +6,7 @@
 @custom-variant dark (&:is(.dark *));
 @source "../../../apps/desktop/src/**/*.{ts,tsx}";
 @source "../**/*.{ts,tsx}";
+@source "../../json-schema-form/src/**/*.{ts,tsx}";
 
 @theme inline {
   --font-heading: var(--font-sans);

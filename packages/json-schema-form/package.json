@@ -11,5 +11,8 @@
     "@rjsf/utils": "^6.7.1",
     "@rjsf/validator-ajv8": "^6.7.1",
     "@workspace/ui": "workspace:*"
+  },
+  "peerDependencies": {
+    "class-variance-authority": "^0.7.1"
   }
 }
