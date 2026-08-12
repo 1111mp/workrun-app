@@ -3,7 +3,9 @@ use anyhow::Result;
 // Common result type used by command functions
 pub type CmdResult<T = ()> = Result<T, String>;
 
+pub mod ipc;
 pub mod model;
+pub mod process_node;
 pub mod python_runtime;
 pub mod system;
 pub mod workflow;

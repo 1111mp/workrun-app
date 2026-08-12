@@ -7,8 +7,8 @@
 use crate::config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog};
 use adk_rust::{
     graph::{
-        AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError,
-        NodeOutput, START, State, StateGraph, StreamEvent, StreamMode,
+        AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError, NodeOutput, START, State,
+        StateGraph, StreamEvent, StreamMode,
     },
     model::{
         GeminiModel,
@@ -104,11 +104,9 @@ impl CompiledWorkflow {
     where
         F: FnMut(StreamEvent),
     {
-        let stream = self.graph.stream(
-            initial_state,
-            ExecutionConfig::new(thread_id),
-            StreamMode::Messages,
-        );
+        let stream = self
+            .graph
+            .stream(initial_state, ExecutionConfig::new(thread_id), StreamMode::Messages);
         futures::pin_mut!(stream);
         let mut final_state = None;
 

@@ -13,6 +13,10 @@ export const router = createMemoryRouter(
           lazy: () => import('@/pages/workflow'),
         },
         {
+          path: 'process-nodes',
+          lazy: () => import('@/pages/process-nodes'),
+        },
+        {
           path: 'settings',
           lazy: () => import('@/pages/settings'),
         },
@@ -25,6 +29,6 @@ export const router = createMemoryRouter(
     },
   ],
   {
-    initialEntries: ['/workflow'],
+    initialEntries: ['/process-nodes'],
   },
 );

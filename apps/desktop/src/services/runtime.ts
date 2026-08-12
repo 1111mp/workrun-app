@@ -35,7 +35,10 @@ export interface DependencySyncResult {
 
 /** Synchronize a uv project's locked dependencies into its local `.venv`. */
 export function syncDependencies(projectPath: string, version = '3.12') {
-  return invoke<DependencySyncResult>('sync_dependencies', { projectPath, version });
+  return invoke<DependencySyncResult>('sync_dependencies', {
+    projectPath,
+    version,
+  });
 }
 
 export interface PythonExecutionResult {

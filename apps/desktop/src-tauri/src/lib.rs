@@ -81,6 +81,11 @@ pub fn run() {
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,
             cmd::model::model_catalog_list,
+            cmd::ipc::python_ui_respond,
+            // statically provisioned Process Nodes
+            cmd::process_node::process_node_list,
+            cmd::process_node::process_node_inspect,
+            cmd::process_node::process_node_run,
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,

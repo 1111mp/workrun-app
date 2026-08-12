@@ -32,16 +32,12 @@ pub async fn workflow_run(
     let config = Config::workrun().await.latest_arc();
     let compiled = workflow::compile(dsl, &config).stringify_err()?;
     compiled
-        .run_stream(
-            state,
-            thread_id.as_deref().unwrap_or("workflow-run"),
-            |event| {
-                // The webview may go away while a workflow is still running.
-                // The workflow should complete cleanly even if it has nobody
-                // left to receive its progress events.
-                let _ = on_event.send(event);
-            },
-        )
+        .run_stream(state, thread_id.as_deref().unwrap_or("workflow-run"), |event| {
+            // The webview may go away while a workflow is still running.
+            // The workflow should complete cleanly even if it has nobody
+            // left to receive its progress events.
+            let _ = on_event.send(event);
+        })
         .await
         .stringify_err()
 }

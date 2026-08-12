@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 type IpcMessageEvent = {
@@ -15,6 +16,15 @@ export type PythonUiRequestEvent = {
 };
 
 const IPC_MESSAGE = 'ipc-message';
+
+export function respondToPythonConfirm(
+  request: Pick<PythonUiRequestEvent, 'runId' | 'requestId'>,
+  accepted: boolean,
+) {
+  return invoke('python_ui_respond', {
+    request: { ...request, accepted },
+  });
+}
 
 export function onPythonUiRequest(
   handler: (request: PythonUiRequestEvent) => void,

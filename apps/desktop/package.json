@@ -10,7 +10,7 @@
     "ui:dev": "vite --config vite.config.ts",
     "ui:build": "tsc && vite build",
     "preview": "vite preview",
-    "prebuild": "node scripts/prebuild.mjs",
+    "prebuild": "node scripts/prebuild.mjs && node scripts/build-python-sdk.mjs",
     "tauri": "tauri",
     "oxlint": "oxlint src scripts --type-aware",
     "oxlint:fix": "oxlint src scripts --fix",

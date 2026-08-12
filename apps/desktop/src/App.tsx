@@ -1,19 +1,25 @@
 import { Toaster, TooltipProvider } from '@workspace/ui/components';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { RouterProvider } from 'react-router';
 
 import { UpdateDialog } from '@/components';
+import { PythonConfirmDialog } from '@/components/python-confirm-dialog';
 import { useTheme } from '@/hooks';
 import { router } from '@/routes';
-import { onPythonUiRequest } from '@/services/python-ipc';
+import {
+  onPythonUiRequest,
+  type PythonUiRequestEvent,
+} from '@/services/python-ipc';
 
 function App() {
   useTheme();
+  const [pythonUiRequest, setPythonUiRequest] =
+    useState<PythonUiRequestEvent | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void onPythonUiRequest((request) => {
-      console.info('Received Python UI request:', request);
+      setPythonUiRequest(request);
     }).then((dispose) => {
       unlisten = dispose;
     });
@@ -28,6 +34,10 @@ function App() {
       </TooltipProvider>
       <Toaster id='global' position='top-center' richColors={true} />
       <UpdateDialog />
+      <PythonConfirmDialog
+        request={pythonUiRequest}
+        onResolved={() => setPythonUiRequest(null)}
+      />
     </>
   );
 }

@@ -67,6 +67,21 @@ pub fn runtime_dir() -> Result<PathBuf> {
     Ok(app_home_dir()?.join("runtime"))
 }
 
+/// Root directory for statically provisioned Process Node projects.
+///
+/// A Process Node is an independently managed uv project. The first release
+/// deliberately has no installer: projects are placed below this directory by
+/// hand (and will later be synchronized by the node source service).
+pub fn process_nodes_dir() -> Result<PathBuf> {
+    Ok(app_home_dir()?.join("process-nodes"))
+}
+
+/// Local cache of the Process Node catalog returned by the future source service.
+/// It is manually maintained during the static-development phase.
+pub fn process_node_catalog_path() -> Result<PathBuf> {
+    Ok(process_nodes_dir()?.join("catalog.json"))
+}
+
 /// runtime uv install python dir
 pub fn uv_python_dir() -> Result<PathBuf> {
     Ok(runtime_dir()?.join("python"))

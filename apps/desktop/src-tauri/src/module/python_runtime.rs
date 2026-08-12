@@ -8,12 +8,27 @@ use crate::utils::dirs;
 use anyhow::{Context, Result, bail};
 use semver::Version;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+};
+use tauri::{AppHandle, Manager as _, ipc::Channel};
 use tauri_plugin_shell::ShellExt;
+use tokio::io::AsyncReadExt;
 
 const PYTHON_INSTALL_DIR_ENV: &str = "UV_PYTHON_INSTALL_DIR";
 const UV_CACHE_DIR_ENV: &str = "UV_CACHE_DIR";
+const UV_FIND_LINKS_ENV: &str = "UV_FIND_LINKS";
+const SDK_MODE_ENV: &str = "WORKRUN_SDK_MODE";
+// Tauri copies the contents of `src-tauri/resources` directly below its
+// runtime resource directory, so omit the source directory name here.
+const SDK_WHEELS_DIR: &str = "python-wheels";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkrunSdkMode {
+    Bundled,
+    LocalEditable,
+}
 
 /// Stateless Python runtime operations backed by Workrun's bundled uv sidecar.
 pub struct PythonRuntime;
@@ -64,7 +79,90 @@ pub struct PythonExecutionResult {
     pub stderr: String,
 }
 
+/// One streamed chunk from a child Python process.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PythonOutputChunk {
+    pub stream: PythonOutputStream,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PythonOutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// Final metadata from a streamed Python execution. Output is sent over a
+/// Tauri IPC channel instead of being accumulated in the command response.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamingPythonExecutionResult {
+    pub script_path: PathBuf,
+    pub exit_code: Option<i32>,
+}
+
 impl PythonRuntime {
+    fn sdk_mode() -> Result<WorkrunSdkMode> {
+        match std::env::var(SDK_MODE_ENV).ok().as_deref() {
+            Some("bundled") => Ok(WorkrunSdkMode::Bundled),
+            Some("local") => Ok(WorkrunSdkMode::LocalEditable),
+            Some(mode) => bail!("{SDK_MODE_ENV} must be either \"bundled\" or \"local\", got {mode:?}"),
+            None if cfg!(debug_assertions) => Ok(WorkrunSdkMode::LocalEditable),
+            None => Ok(WorkrunSdkMode::Bundled),
+        }
+    }
+
+    fn sdk_wheels_dir(app: &AppHandle) -> Result<PathBuf> {
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .context("failed to resolve application resource directory")?;
+        let wheels_dir = resource_dir.join(SDK_WHEELS_DIR);
+        if wheels_dir.is_dir() {
+            return Ok(wheels_dir);
+        }
+
+        // `tauri dev` resolves its resource directory to `target/debug` but
+        // does not copy configured bundle resources there. Use the source
+        // resource directory in debug builds; packaged applications must only
+        // read the immutable resource directory above.
+        #[cfg(debug_assertions)]
+        {
+            let source_wheels_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join(SDK_WHEELS_DIR);
+            if source_wheels_dir.is_dir() {
+                return Ok(source_wheels_dir);
+            }
+            bail!(
+                "bundled Workrun Python SDK wheels are missing from {} or {}",
+                wheels_dir.display(),
+                source_wheels_dir.display()
+            );
+        }
+
+        #[cfg(not(debug_assertions))]
+        bail!(
+            "bundled Workrun Python SDK wheels are missing from {}",
+            wheels_dir.display()
+        );
+    }
+
+    fn local_sdk_project() -> Result<PathBuf> {
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packages/python-sdk");
+        let project = dunce::canonicalize(&project)
+            .with_context(|| format!("failed to resolve local Workrun Python SDK at {}", project.display()))?;
+        if !project.join("pyproject.toml").is_file() {
+            bail!(
+                "local Workrun Python SDK is missing pyproject.toml: {}",
+                project.display()
+            );
+        }
+        Ok(project)
+    }
+
     fn validate_version_request(version: &str) -> Result<&str> {
         let version = version.trim();
         let component_count = version.split('.').count();
@@ -101,6 +199,51 @@ impl PythonRuntime {
                     .env(PYTHON_INSTALL_DIR_ENV, &python_dir)
                     .env(UV_CACHE_DIR_ENV, &cache_dir)
             })
+    }
+
+    async fn install_local_sdk(app: &AppHandle, environment: &ManagedVenv) -> Result<()> {
+        let sdk_project = Self::local_sdk_project()?;
+        let output = Self::uv_command(app)?
+            .arg("pip")
+            .arg("install")
+            .arg("--python")
+            .arg(&environment.executable_path)
+            .arg("--editable")
+            .arg(&sdk_project)
+            .current_dir(&environment.project_path)
+            .output()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to install local Workrun Python SDK into {}",
+                    environment.environment_path.display()
+                )
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("failed to install local Workrun Python SDK: {stderr}");
+        }
+        Ok(())
+    }
+
+    async fn project_has_workrun_sdk(app: &AppHandle, environment: &ManagedVenv) -> Result<bool> {
+        let output = Self::uv_command(app)?
+            .arg("pip")
+            .arg("show")
+            .arg("--python")
+            .arg(&environment.executable_path)
+            .arg("workrun-sdk")
+            .current_dir(&environment.project_path)
+            .output()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to inspect Python dependencies in {}",
+                    environment.environment_path.display()
+                )
+            })?;
+        Ok(output.status.success())
     }
 
     fn venv_python_path(venv_dir: &Path) -> PathBuf {
@@ -246,12 +389,45 @@ impl PythonRuntime {
 
         let python = Self::ensure_python(app, requested_version).await?;
         let environment_path = project_path.join(".venv");
+        let executable_path = Self::venv_python_path(&environment_path);
 
-        let output = Self::uv_command(app)?
+        // `uv venv <path>` refuses to reuse an existing environment. Reuse it
+        // when it is healthy and is backed by the requested interpreter; this
+        // is the normal path for every run after the first one.
+        if executable_path.is_file() {
+            let output = app
+                .shell()
+                .command(&executable_path)
+                .arg("--version")
+                .output()
+                .await
+                .with_context(|| format!("failed to inspect Python at {}", executable_path.display()))?;
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let version = if version.is_empty() {
+                String::from_utf8_lossy(&output.stderr).trim().to_string()
+            } else {
+                version
+            };
+
+            if output.status.success() && version == python.version {
+                return Ok(ManagedVenv {
+                    project_path,
+                    environment_path,
+                    executable_path,
+                    python,
+                });
+            }
+        }
+
+        let mut command = Self::uv_command(app)?
             .arg("venv")
             .arg(&environment_path)
             .arg("--python")
-            .arg(&python.executable_path)
+            .arg(&python.executable_path);
+        if environment_path.exists() {
+            command = command.arg("--clear");
+        }
+        let output = command
             .output()
             .await
             .with_context(|| format!("failed to create virtual environment in {}", project_path.display()))?;
@@ -264,7 +440,6 @@ impl PythonRuntime {
             );
         }
 
-        let executable_path = Self::venv_python_path(&environment_path);
         if !executable_path.is_file() {
             bail!(
                 "uv created a virtual environment without a Python executable at {}",
@@ -303,6 +478,8 @@ impl PythonRuntime {
         let lockfile_path = project_path.join("uv.lock");
         let used_existing_lockfile = lockfile_path.is_file();
         let environment = Self::ensure_venv(app, &project_path, requested_version).await?;
+        let sdk_mode = Self::sdk_mode()?;
+        let sdk_wheels_dir = Self::sdk_wheels_dir(app)?;
 
         let output = Self::uv_command(app)?
             .arg("sync")
@@ -310,6 +487,7 @@ impl PythonRuntime {
             .arg(&project_path)
             .arg("--python")
             .arg(&environment.executable_path)
+            .env(UV_FIND_LINKS_ENV, &sdk_wheels_dir)
             .current_dir(&project_path)
             .output()
             .await
@@ -325,6 +503,10 @@ impl PythonRuntime {
                 "uv sync completed without creating a lockfile at {}",
                 lockfile_path.display()
             );
+        }
+
+        if sdk_mode == WorkrunSdkMode::LocalEditable && Self::project_has_workrun_sdk(app, &environment).await? {
+            Self::install_local_sdk(app, &environment).await?;
         }
 
         Ok(DependencySyncResult {
@@ -377,6 +559,74 @@ impl PythonRuntime {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
+    }
+
+    /// Run a Python script and forward stdout/stderr to the frontend as bounded
+    /// chunks. Both pipes are consumed concurrently so one full OS pipe cannot
+    /// block the child process while the other stream is being read.
+    pub async fn run_python_streaming_with_env(
+        environment: &ManagedVenv,
+        script_path: &Path,
+        args: &[String],
+        extra_env: &[(String, String)],
+        output: &Channel<PythonOutputChunk>,
+    ) -> Result<StreamingPythonExecutionResult> {
+        if !environment.executable_path.is_file() {
+            bail!(
+                "project virtual environment Python does not exist: {}",
+                environment.executable_path.display()
+            );
+        }
+
+        let script_path = Self::resolve_project_file(&environment.project_path, script_path, "Python script")?;
+        let mut child = tokio::process::Command::new(&environment.executable_path)
+            .current_dir(&environment.project_path)
+            .arg(&script_path)
+            .args(args)
+            .envs(extra_env.iter().map(|(key, value)| (key, value)))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("failed to execute Python script {}", script_path.display()))?;
+        let stdout = child.stdout.take().context("Python process stdout was not captured")?;
+        let stderr = child.stderr.take().context("Python process stderr was not captured")?;
+
+        let (status, stdout_result, stderr_result) = tokio::join!(
+            child.wait(),
+            forward_output(stdout, PythonOutputStream::Stdout, output),
+            forward_output(stderr, PythonOutputStream::Stderr, output),
+        );
+        let status =
+            status.with_context(|| format!("failed while executing Python script {}", script_path.display()))?;
+        stdout_result?;
+        stderr_result?;
+
+        Ok(StreamingPythonExecutionResult {
+            script_path,
+            exit_code: status.code(),
+        })
+    }
+}
+
+async fn forward_output<R>(mut reader: R, stream: PythonOutputStream, output: &Channel<PythonOutputChunk>) -> Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .context("failed to read Python process output")?;
+        if read == 0 {
+            return Ok(());
+        }
+        output
+            .send(PythonOutputChunk {
+                stream,
+                data: String::from_utf8_lossy(&buffer[..read]).into_owned(),
+            })
+            .context("failed to send Python process output to the frontend")?;
     }
 }
 

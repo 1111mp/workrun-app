@@ -22,6 +22,9 @@ use uuid::Uuid;
 const IPC_EVENT_MESSAGE: &str = "ipc-message";
 const MAX_MESSAGE_SIZE: usize = 1_048_576;
 
+#[cfg(unix)]
+type IpcWriter = Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>;
+
 /// A capability-scoped connection credential for one locally launched client.
 #[derive(Debug, Clone)]
 pub struct IpcSession {
@@ -29,11 +32,15 @@ pub struct IpcSession {
     pub token: String,
     pub endpoint: String,
     sessions: Arc<Mutex<HashMap<String, String>>>,
+    #[cfg(unix)]
+    connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
 }
 
 impl IpcSession {
     pub async fn close(self) {
         self.sessions.lock().await.remove(&self.id);
+        #[cfg(unix)]
+        self.connections.lock().await.remove(&self.id);
     }
 }
 
@@ -49,6 +56,8 @@ struct IpcMessageEvent {
 pub struct IpcServer {
     endpoint: OnceLock<String>,
     sessions: Arc<Mutex<HashMap<String, String>>>,
+    #[cfg(unix)]
+    connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
     started: AtomicBool,
     start_lock: Mutex<()>,
 }
@@ -60,6 +69,8 @@ impl IpcServer {
         Self {
             endpoint: OnceLock::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(unix)]
+            connections: Arc::new(Mutex::new(HashMap::new())),
             started: AtomicBool::new(false),
             start_lock: Mutex::new(()),
         }
@@ -88,6 +99,7 @@ impl IpcServer {
             .set(path.to_string_lossy().into_owned())
             .expect("IPC endpoint must only be initialized once");
         let sessions = Arc::clone(&self.sessions);
+        let connections = Arc::clone(&self.connections);
 
         logging!(info, Type::IpcServer, "Listening on {}", path.display());
 
@@ -101,8 +113,9 @@ impl IpcServer {
                     },
                 };
                 let sessions = Arc::clone(&sessions);
+                let connections = Arc::clone(&connections);
                 tokio::spawn(async move {
-                    if let Err(error) = handle_connection(stream, sessions).await {
+                    if let Err(error) = handle_connection(stream, sessions, connections).await {
                         logging!(warn, Type::IpcServer, "Client connection closed: {error}");
                     }
                 });
@@ -138,7 +151,27 @@ impl IpcServer {
             token,
             endpoint,
             sessions: Arc::clone(&self.sessions),
+            #[cfg(unix)]
+            connections: Arc::clone(&self.connections),
         })
+    }
+
+    #[cfg(unix)]
+    pub async fn send(&self, session_id: &str, message: Value) -> Result<()> {
+        let connection = self
+            .connections
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no active IPC connection for run {session_id}"))?;
+        let mut writer = connection.lock().await;
+        send_message(&mut *writer, &message).await
+    }
+
+    #[cfg(not(unix))]
+    pub async fn send(&self, _session_id: &str, _message: Value) -> Result<()> {
+        bail!("Windows named-pipe IPC is not available yet")
     }
 }
 
@@ -146,6 +179,7 @@ impl IpcServer {
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
     sessions: Arc<Mutex<HashMap<String, String>>>,
+    connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
 ) -> Result<()> {
     let app_handle = handle::Handle::app_handle();
     let hello = receive_message(&mut stream).await?;
@@ -164,7 +198,13 @@ async fn handle_connection(
         bail!("IPC hello did not match an active session");
     }
 
-    while let Ok(message) = receive_message(&mut stream).await {
+    let (mut reader, writer) = stream.into_split();
+    connections
+        .lock()
+        .await
+        .insert(session_id.clone(), Arc::new(Mutex::new(writer)));
+
+    while let Ok(message) = receive_message(&mut reader).await {
         app_handle
             .emit(
                 IPC_EVENT_MESSAGE,
@@ -175,11 +215,15 @@ async fn handle_connection(
             )
             .context("failed to emit IPC message")?;
     }
+    connections.lock().await.remove(&session_id);
     Ok(())
 }
 
 #[cfg(unix)]
-async fn receive_message(stream: &mut tokio::net::UnixStream) -> Result<Value> {
+async fn receive_message<R>(stream: &mut R) -> Result<Value>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
     use tokio::io::AsyncReadExt as _;
 
     let size = stream.read_u32().await? as usize;
@@ -189,6 +233,23 @@ async fn receive_message(stream: &mut tokio::net::UnixStream) -> Result<Value> {
     let mut payload = vec![0_u8; size];
     stream.read_exact(&mut payload).await?;
     serde_json::from_slice(&payload).context("IPC peer sent invalid JSON")
+}
+
+#[cfg(unix)]
+async fn send_message<W>(stream: &mut W, message: &Value) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt as _;
+
+    let payload = serde_json::to_vec(message).context("IPC message is not JSON serializable")?;
+    if payload.len() > MAX_MESSAGE_SIZE {
+        bail!("IPC message exceeds {MAX_MESSAGE_SIZE} bytes");
+    }
+    stream.write_u32(payload.len() as u32).await?;
+    stream.write_all(&payload).await?;
+    stream.flush().await?;
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -8,3 +8,6 @@
 
 # Downloaded by apps/desktop/scripts/prebuild.mjs for the current build target.
 /binaries/
+
+# Generated into the Tauri resource bundle by the Desktop prebuild step.
+/resources/python-wheels/
