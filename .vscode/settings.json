@@ -28,5 +28,7 @@
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
   },
   "rust-analyzer.linkedProjects": ["apps/desktop/Cargo.toml"],
-  "python.analysis.extraPaths": ["${workspaceFolder}/packages/python-sdk/src"]
+  "python.defaultInterpreterPath": "${workspaceFolder}/packages/python-sdk/.venv/bin/python",
+  // "python.analysis.extraPaths": ["${workspaceFolder}/packages/python-sdk/src"],
+  "python-envs.defaultEnvManager": "ms-python.python:system"
 }

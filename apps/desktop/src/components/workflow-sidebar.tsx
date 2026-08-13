@@ -192,16 +192,12 @@ function WorkflowSidebar({ onNodeDrop }: WorkflowSidebarProps) {
   const DragIcon = dragging?.item.icon;
 
   return (
-    <Sidebar variant='inset'>
-      <SidebarHeader>
-        <div data-tauri-drag-region className='px-2 py-1'>
-          <p data-tauri-drag-region className='font-semibold'>
-            Add node
-          </p>
-          <p data-tauri-drag-region className='text-muted-foreground text-xs'>
-            Drag onto the canvas
-          </p>
-        </div>
+    <Sidebar variant='floating' className='absolute h-full!'>
+      <SidebarHeader className='gap-0 px-3 py-2.5'>
+        <p className='text-sm font-medium tracking-tight'>Node palette</p>
+        <p className='text-muted-foreground mt-0.5 text-xs'>
+          Drag nodes onto the canvas
+        </p>
       </SidebarHeader>
       <SidebarSeparator />
       <SidebarContent>

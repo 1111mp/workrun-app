@@ -1,4 +1,6 @@
 {
+  "venvPath": "packages/python-sdk",
+  "venv": ".venv",
   "executionEnvironments": [
     {
       "root": "packages/python-sdk",

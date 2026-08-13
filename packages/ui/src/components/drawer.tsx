@@ -252,16 +252,19 @@ function DrawerContent({
           style={(state) => {
             const resolvedStyle =
               typeof style === 'function' ? style(state) : style;
+            const {
+              transition: resolvedTransition,
+              transitionDuration: _resolvedTransitionDuration,
+              ...restStyle
+            } = resolvedStyle ?? {};
             return {
-              ...resolvedStyle,
+              ...restStyle,
               maxWidth:
                 swipeAxis === 'x' && hasHorizontalSnapPoints
                   ? 'calc(100vw - 2rem)'
                   : resolvedStyle?.maxWidth,
-              transitionDuration:
-                horizontalDragWidth !== undefined
-                  ? '0ms'
-                  : resolvedStyle?.transitionDuration,
+              transition:
+                horizontalDragWidth !== undefined ? 'none' : resolvedTransition,
               width: width ?? resolvedStyle?.width,
             };
           }}

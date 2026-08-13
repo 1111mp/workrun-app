@@ -297,6 +297,59 @@ impl PythonRuntime {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// Initialize a standalone application project with Workrun's bundled uv.
+    pub async fn init_application_project(app: &AppHandle, project_path: &Path) -> Result<()> {
+        let output = Self::uv_command(app)?
+            .arg("init")
+            .arg("--app")
+            .arg("--no-package")
+            .arg("--no-readme")
+            .arg("--no-workspace")
+            .arg("--python")
+            .arg("3.12")
+            .current_dir(project_path)
+            .output()
+            .await
+            .with_context(|| format!("failed to initialize uv project {}", project_path.display()))?;
+        if !output.status.success() {
+            bail!(
+                "uv failed to initialize project {}: {}",
+                project_path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Add the bundled Workrun Python SDK as a project dependency without creating an environment.
+    pub async fn add_workrun_sdk_dependency(app: &AppHandle, project_path: &Path) -> Result<()> {
+        let sdk_wheels_dir = Self::sdk_wheels_dir(app)?;
+        let output = Self::uv_command(app)?
+            .arg("add")
+            .arg("--no-sync")
+            .arg("workrun-sdk")
+            .env(UV_FIND_LINKS_ENV, &sdk_wheels_dir)
+            .current_dir(project_path)
+            .output()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to add Workrun Python SDK dependency to {}",
+                    project_path.display()
+                )
+            })?;
+        if !output.status.success() {
+            bail!(
+                "uv failed to add Workrun Python SDK dependency to {}: {}",
+                project_path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(())
+    }
+
     /// Ensure that the requested Python version is installed in Workrun-managed
     /// storage, then return the interpreter path and its self-reported version.
     pub async fn ensure_python(app: &AppHandle, requested_version: &str) -> Result<ManagedPython> {

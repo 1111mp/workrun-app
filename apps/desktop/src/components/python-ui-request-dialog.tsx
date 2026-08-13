@@ -33,6 +33,9 @@ function PythonUiRequestDialog({
   onResolved,
 }: PythonUiRequestDialogProps) {
   const [responding, setResponding] = useState(false);
+  const [liveValidationRequestId, setLiveValidationRequestId] = useState<
+    string | null
+  >(null);
 
   const respond = async (data: unknown) => {
     if (!request || responding) return;
@@ -50,6 +53,7 @@ function PythonUiRequestDialog({
   if (!request || !isSchema(request.schema)) return null;
 
   const formId = `python-ui-request-${request.requestId}`;
+  const shouldLiveValidate = liveValidationRequestId === request.requestId;
 
   return (
     <AlertDialog open={true}>
@@ -68,7 +72,7 @@ function PythonUiRequestDialog({
           id={formId}
           noHtml5Validate
           key={request.requestId}
-          liveValidate='onChange'
+          liveValidate={shouldLiveValidate ? 'onChange' : false}
           schema={request.schema}
           uiSchema={
             isSchema(request.uiSchema) ? (request.uiSchema as UiSchema) : {}
@@ -76,6 +80,7 @@ function PythonUiRequestDialog({
           validator={validator}
           disabled={responding}
           showErrorList={false}
+          onError={() => setLiveValidationRequestId(request.requestId)}
           onSubmit={({ formData }) => void respond(formData ?? {})}
         >
           <></>

@@ -1,17 +1,16 @@
-//! Catalog and local-installation state for Python Process Nodes.
+//! Catalog and local-project state for Python Process Nodes.
 //!
-//! The catalog is the source of truth for nodes that can be installed. It is
-//! manually maintained at `<app-data>/process-nodes/catalog.json` for now and
-//! will later be cached from the Process Node source service. A project at
-//! `<app-data>/process-nodes/<id>` only represents the local installation of a
-//! catalog node; project directories are never used to discover the catalog.
+//! The catalog is the source of truth for local Process Node metadata and is
+//! stored at `<app-data>/process-nodes/catalog.json`. Each catalog entry owns
+//! one uv project at `<app-data>/process-nodes/<id>`.
 
 use crate::{
     feat::{ProjectPythonStreamRunResult, RunProjectPythonRequest, run_project_python_streaming},
-    module::python_runtime::PythonOutputChunk,
+    module::python_runtime::{PythonOutputChunk, PythonRuntime},
     utils::dirs,
 };
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,12 +41,43 @@ pub struct ProcessNodeDefinition {
     #[serde(default)]
     pub description: String,
     pub version: String,
+    /// UTC timestamp (RFC 3339) when this definition was created.
+    #[serde(default)]
+    pub created_at: String,
+    /// UTC timestamp (RFC 3339) when this definition was last updated.
+    #[serde(default)]
+    pub updated_at: String,
     /// Project-relative Python script that implements the JSON Lines protocol.
     pub entry: PathBuf,
     #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
     #[serde(default)]
     pub outputs: BTreeMap<String, Value>,
+}
+
+/// Metadata collected when a local Process Node project is first created.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProcessNodeRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProcessNodeCreateStage {
+    CreatingProject,
+    AddingSdkDependency,
+    InitializingEnvironment,
+    SavingApp,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessNodeCreateProgress {
+    pub stage: ProcessNodeCreateStage,
 }
 
 /// Whether a catalog node has a local project directory.
@@ -107,6 +137,97 @@ impl ProcessNodeRegistry {
         Ok(Self::with_installation(definition).await)
     }
 
+    /// Open an installed Process Node project in the system file manager.
+    pub async fn open_project(id: &str) -> Result<()> {
+        let node = Self::inspect(id).await?;
+        if !matches!(node.install_status, ProcessNodeInstallStatus::Installed) {
+            bail!("Process Node project is not available: {id}");
+        }
+        open::that(&node.project_path)
+            .with_context(|| format!("failed to open Process Node project {}", node.project_path.display()))
+    }
+
+    /// Create a local uv project and register it in the catalog.
+    pub async fn create(
+        app: &AppHandle,
+        request: CreateProcessNodeRequest,
+        progress: Channel<ProcessNodeCreateProgress>,
+    ) -> Result<ProcessNode> {
+        if request.name.trim().is_empty() {
+            bail!("Process Node name must not be empty");
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let definition = ProcessNodeDefinition {
+            id: Uuid::now_v7().to_string(),
+            name: request.name.trim().to_string(),
+            description: request.description.trim().to_string(),
+            version: "0.1.0".to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+            entry: PathBuf::from("main.py"),
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+        };
+        let project_path = Self::root_dir()?.join(&definition.id);
+        let _ = progress.send(ProcessNodeCreateProgress {
+            stage: ProcessNodeCreateStage::CreatingProject,
+        });
+        tokio::fs::create_dir_all(&project_path)
+            .await
+            .with_context(|| format!("failed to create Process Node project {}", project_path.display()))?;
+
+        let result = async {
+            PythonRuntime::init_application_project(app, &project_path).await?;
+            let _ = progress.send(ProcessNodeCreateProgress {
+                stage: ProcessNodeCreateStage::AddingSdkDependency,
+            });
+            PythonRuntime::add_workrun_sdk_dependency(app, &project_path).await?;
+            let _ = progress.send(ProcessNodeCreateProgress {
+                stage: ProcessNodeCreateStage::InitializingEnvironment,
+            });
+            PythonRuntime::sync_dependencies(app, &project_path, "3.12").await?;
+            let _ = progress.send(ProcessNodeCreateProgress {
+                stage: ProcessNodeCreateStage::SavingApp,
+            });
+            tokio::fs::write(
+                project_path.join(&definition.entry),
+                "\"\"\"Process Node entrypoint.\n\nImplement this script to perform the node's work. Its stdout is shown in Workrun.\n\"\"\"\n\n\ndef main() -> None:\n    print(\"Process Node is ready. Edit main.py to implement it.\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+            )
+            .await?;
+            let mut catalog = Self::read_catalog().await?;
+            catalog.nodes.push(definition.clone());
+            Self::write_catalog(&catalog).await
+        }
+        .await;
+
+        if let Err(error) = result {
+            let _ = tokio::fs::remove_dir_all(&project_path).await;
+            return Err(error).with_context(|| "failed to initialize Process Node project");
+        }
+        let node = Self::with_installation(definition).await;
+        let _ = progress.send(ProcessNodeCreateProgress {
+            stage: ProcessNodeCreateStage::Completed,
+        });
+        Ok(node)
+    }
+
+    /// Persist editable catalog metadata for an existing local Process Node.
+    pub async fn update(mut definition: ProcessNodeDefinition) -> Result<ProcessNode> {
+        let mut catalog = Self::read_catalog().await?;
+        let node = catalog
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == definition.id)
+            .ok_or_else(|| anyhow::anyhow!("Process Node is not in the catalog: {}", definition.id))?;
+        definition.created_at = node.created_at.clone();
+        definition.updated_at = Utc::now().to_rfc3339();
+        validate_definition(&definition)?;
+        *node = definition.clone();
+        Self::write_catalog(&catalog).await?;
+        Ok(Self::with_installation(definition).await)
+    }
+
     /// Synchronize and execute an installed Process Node through Workrun's
     /// managed Python runtime. The project path and entrypoint always come
     /// from the trusted catalog, never from the IPC caller.
@@ -148,6 +269,19 @@ impl ProcessNodeRegistry {
             .with_context(|| format!("invalid Process Node catalog {}", catalog_path.display()))?;
         validate_catalog(&catalog)?;
         Ok(catalog)
+    }
+
+    async fn write_catalog(catalog: &ProcessNodeCatalog) -> Result<()> {
+        validate_catalog(catalog)?;
+        let catalog_path = Self::catalog_path()?;
+        let parent = catalog_path
+            .parent()
+            .context("Process Node catalog has no parent directory")?;
+        tokio::fs::create_dir_all(parent).await?;
+        let contents = serde_json::to_vec_pretty(catalog).context("failed to serialize Process Node catalog")?;
+        tokio::fs::write(&catalog_path, contents)
+            .await
+            .with_context(|| format!("failed to write Process Node catalog {}", catalog_path.display()))
     }
 
     async fn with_installation(definition: ProcessNodeDefinition) -> ProcessNode {
@@ -275,6 +409,8 @@ mod tests {
             name: "Web Search".into(),
             description: "Search the web".into(),
             version: "0.1.0".into(),
+            created_at: "2026-01-01T00:00:00+00:00".into(),
+            updated_at: "2026-01-01T00:00:00+00:00".into(),
             entry: "main.py".into(),
             inputs: BTreeMap::from([("query".into(), serde_json::json!({ "type": "string" }))]),
             outputs: BTreeMap::new(),

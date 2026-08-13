@@ -85,6 +85,9 @@ pub fn run() {
             // statically provisioned Process Nodes
             cmd::process_node::process_node_list,
             cmd::process_node::process_node_inspect,
+            cmd::process_node::process_node_open_project,
+            cmd::process_node::process_node_create,
+            cmd::process_node::process_node_update,
             cmd::process_node::process_node_run,
             // workflow
             cmd::workflow::workflow_compile,

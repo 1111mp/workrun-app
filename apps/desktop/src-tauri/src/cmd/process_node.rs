@@ -2,7 +2,10 @@ use crate::{
     cmd::{CmdResult, StringifyErr},
     feat::ProjectPythonStreamRunResult,
     module::{
-        process_node::{ProcessNode, ProcessNodeRegistry},
+        process_node::{
+            CreateProcessNodeRequest, ProcessNode, ProcessNodeCreateProgress, ProcessNodeDefinition,
+            ProcessNodeRegistry,
+        },
         python_runtime::PythonOutputChunk,
     },
 };
@@ -18,6 +21,27 @@ pub async fn process_node_list() -> CmdResult<Vec<ProcessNode>> {
 #[tauri::command]
 pub async fn process_node_inspect(id: String) -> CmdResult<ProcessNode> {
     ProcessNodeRegistry::inspect(&id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn process_node_open_project(id: String) -> CmdResult<()> {
+    ProcessNodeRegistry::open_project(&id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn process_node_create(
+    app: AppHandle,
+    request: CreateProcessNodeRequest,
+    progress: Channel<ProcessNodeCreateProgress>,
+) -> CmdResult<ProcessNode> {
+    ProcessNodeRegistry::create(&app, request, progress)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn process_node_update(definition: ProcessNodeDefinition) -> CmdResult<ProcessNode> {
+    ProcessNodeRegistry::update(definition).await.stringify_err()
 }
 
 /// Synchronize dependencies and run an installed Process Node's catalog entrypoint.

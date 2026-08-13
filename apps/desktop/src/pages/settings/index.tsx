@@ -19,7 +19,7 @@ function SettingsPage() {
   const config = useWorkrunStore((s) => s.config);
   const updateConfig = useWorkrunStore((s) => s.updateConfig);
 
-  const { i18n, t } = useTranslation();
+  const { i18n } = useTranslation();
 
   const form = useForm<SettingsForm>({
     resolver: zodResolver(formSchema),
@@ -95,16 +95,10 @@ function SettingsPage() {
   });
 
   return (
-    <div className='h-dvh w-full overflow-y-auto'>
-      <header
-        data-tauri-drag-region={OS_PLATFORM !== 'win32'}
-        className='bg-background/80 sticky top-0 z-20 flex h-14 w-full shrink-0 items-center justify-center gap-2 px-4 backdrop-blur-xl transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12'
-      >
-        {t('settings.title')}
-      </header>
+    <div className='size-full overflow-y-auto'>
       <div
         className={cn(
-          'mx-auto max-w-2xl px-4',
+          'mx-auto max-w-2xl px-4 pt-6',
           OS_PLATFORM === 'darwin' && 'min-h-full',
         )}
       >

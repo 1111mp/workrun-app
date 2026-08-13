@@ -704,26 +704,17 @@ function WorkflowEditor() {
   };
 
   return (
-    <SidebarProvider className='flex size-full grow flex-row'>
+    <SidebarProvider className='relative flex size-full min-h-0! grow flex-row'>
       <WorkflowSidebar onNodeDrop={addPaletteNode} />
       <SidebarInset>
-        <header
-          data-tauri-drag-region
-          className='flex h-12 shrink-0 items-center gap-2 pr-4'
-        >
-          <div
-            data-tauri-drag-region
-            className='flex flex-1 items-center gap-2 px-4'
-          >
+        <header className='flex h-10 shrink-0 items-center gap-2 pt-1 pr-4'>
+          <div className='flex flex-1 items-center gap-2 px-4'>
             <SidebarTrigger className='-ml-1' />
             <Separator
               orientation='vertical'
               className='my-auto mr-2 data-[orientation=vertical]:h-4'
             />
-            <FieldGroup
-              data-tauri-drag-region
-              className='flex-row items-center gap-2'
-            >
+            <FieldGroup className='flex-row items-center gap-2'>
               <Field className='w-52'>
                 <FieldLabel className='sr-only' htmlFor='workflow-name'>
                   Workflow name
