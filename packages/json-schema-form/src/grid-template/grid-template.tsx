@@ -1,15 +1,36 @@
 import type { GridTemplateProps } from '@rjsf/utils';
 import { cn } from '@workspace/ui/lib/utils';
+import type { CSSProperties } from 'react';
 
-/** Renders a `GridTemplate` for mui, which is expecting the column sizing information coming in via the
- * extra props provided by the caller, which are spread directly on the `Grid2`.
- *
- * @param props - The GridTemplateProps, including the extra props containing the mui grid positioning details
- */
-export default function GridTemplate(props: GridTemplateProps) {
-  const { children, column: _column, className, ...rest } = props;
+type WorkrunGridTemplateProps = GridTemplateProps & {
+  columns?: number;
+  span?: number;
+};
+
+/** Renders RJSF layout-grid rows and columns with CSS Grid. */
+export default function GridTemplate({
+  children,
+  column,
+  className,
+  columns,
+  span,
+  style,
+  ...rest
+}: WorkrunGridTemplateProps) {
+  const gridStyle: CSSProperties = {
+    ...style,
+    ...(columns && !column
+      ? { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }
+      : {}),
+    ...(column && span ? { gridColumn: `span ${span} / span ${span}` } : {}),
+  };
+
   return (
-    <div className={cn('grid gap-2', className)} {...rest}>
+    <div
+      className={cn(column ? 'min-w-0' : 'grid gap-2', className)}
+      style={gridStyle}
+      {...rest}
+    >
       {children}
     </div>
   );

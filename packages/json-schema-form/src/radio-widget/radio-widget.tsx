@@ -33,6 +33,7 @@ export default function RadioWidget<
   required,
   disabled,
   readonly,
+  rawErrors = [],
   onChange,
   onBlur,
   onFocus,
@@ -72,6 +73,7 @@ export default function RadioWidget<
     );
 
   const inline = Boolean(options?.inline);
+  const hasError = rawErrors.length > 0;
 
   return (
     <RadioGroup
@@ -98,6 +100,7 @@ export default function RadioWidget<
             <div key={key} className='flex items-center gap-2'>
               <RadioGroupItem
                 id={key}
+                aria-invalid={hasError}
                 data-checked={checked}
                 disabled={itemDisabled}
                 value={enumOptionValueEncoder(

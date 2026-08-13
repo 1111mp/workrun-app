@@ -1,5 +1,5 @@
 import type { RJSFSchema, UiSchema } from '@rjsf/utils';
-import validator from '@rjsf/validator-ajv8';
+import { customizeValidator } from '@rjsf/validator-ajv8';
 import Form from '@workspace/json-schema-form';
 import {
   AlertDialog,
@@ -12,7 +12,10 @@ import {
   AlertDialogTitle,
   Spinner,
 } from '@workspace/ui/components';
+import ajvErrors from 'ajv-errors';
 import { useState } from 'react';
+
+const validator = customizeValidator({ extenderFn: ajvErrors });
 
 import {
   respondToPythonUiRequest,
@@ -50,7 +53,7 @@ function PythonUiRequestDialog({
 
   return (
     <AlertDialog open={true}>
-      <AlertDialogContent>
+      <AlertDialogContent className='max-w-lg!'>
         <AlertDialogHeader>
           <AlertDialogTitle>
             {request.title ?? 'Input required'}
@@ -62,15 +65,16 @@ function PythonUiRequestDialog({
           ) : null}
         </AlertDialogHeader>
         <Form
-          key={request.requestId}
           id={formId}
+          noHtml5Validate
+          key={request.requestId}
+          liveValidate='onChange'
           schema={request.schema}
           uiSchema={
             isSchema(request.uiSchema) ? (request.uiSchema as UiSchema) : {}
           }
           validator={validator}
           disabled={responding}
-          noHtml5Validate
           showErrorList={false}
           onSubmit={({ formData }) => void respond(formData ?? {})}
         >
