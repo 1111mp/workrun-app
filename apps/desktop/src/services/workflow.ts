@@ -75,8 +75,16 @@ export type WorkflowRunThought = {
 
 export type WorkflowRunNode = {
   id: string;
+  name?: string;
   status: 'running' | 'completed' | 'failed';
   durationMs?: number;
+};
+
+export type WorkflowProcessLog = {
+  nodeId: string;
+  name: string;
+  stdout: string;
+  stderr: string;
 };
 
 export type WorkflowRunView = {
@@ -88,6 +96,7 @@ export type WorkflowRunView = {
   nodes: WorkflowRunNode[];
   messages: WorkflowRunMessage[];
   thoughts: WorkflowRunThought[];
+  processLogs: WorkflowProcessLog[];
   finalState?: Record<string, unknown>;
   error?: string;
 };
@@ -184,6 +193,7 @@ export function runWorkflow(
   threadId?: string,
   onEvent?: (event: WorkflowRunEvent) => void,
 ) {
+  console.log('dsl', dsl);
   const channel = new Channel<WorkflowRunEvent>();
   channel.onmessage = (event) => onEvent?.(event);
 

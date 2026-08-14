@@ -5,6 +5,7 @@ type WorkflowBaseNode = {
 type WorkflowNodeType =
   | 'agent'
   | 'remote_agent'
+  | 'process'
   | 'start'
   | 'end'
   | 'if_else'
@@ -55,6 +56,17 @@ type WorkflowRemoteAgentNodeData = {
 type WorkflowRemoteAgentNode = WorkflowBaseNode & {
   type: 'remote_agent';
   data: WorkflowRemoteAgentNodeData;
+};
+
+// ---------- Process Node ----------
+type WorkflowProcessNodeData = {
+  name: string;
+  processNodeId: string;
+  description: string;
+};
+type WorkflowProcessNode = WorkflowBaseNode & {
+  type: 'process';
+  data: WorkflowProcessNodeData;
 };
 
 // ---------- Start Node ----------
@@ -130,6 +142,7 @@ type WorkflowNode =
   // basic nodes
   | WorkflowAgentNode
   | WorkflowRemoteAgentNode
+  | WorkflowProcessNode
   // control nodes
   | WorkflowStartNode
   | WorkflowEndNode

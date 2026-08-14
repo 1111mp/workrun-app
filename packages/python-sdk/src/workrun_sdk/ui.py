@@ -70,10 +70,13 @@ def text(
     schema: JsonObject = {"type": "string", "title": label}
     if description is not None:
         schema["description"] = description
-    ui_schema: JsonObject = _ui_schema(
-        widget="textarea" if multiline else None,
-        options=ui_options,
-    ) or {}
+    ui_schema: JsonObject = (
+        _ui_schema(
+            widget="textarea" if multiline else None,
+            options=ui_options,
+        )
+        or {}
+    )
     if placeholder is not None:
         ui_schema["ui:placeholder"] = placeholder
     return Field(schema=schema, ui_schema=ui_schema or None, required=required)
@@ -139,7 +142,9 @@ def boolean(
     schema: JsonObject = {"type": "boolean", "title": label}
     if description is not None:
         schema["description"] = description
-    return Field(schema=schema, ui_schema=_ui_schema(options=ui_options), required=required)
+    return Field(
+        schema=schema, ui_schema=_ui_schema(options=ui_options), required=required
+    )
 
 
 def form(

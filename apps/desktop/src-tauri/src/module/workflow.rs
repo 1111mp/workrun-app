@@ -4,11 +4,14 @@
 //! runtime model.  The only execution data is a node's `id`, `type`, `data`,
 //! and the edge endpoint/handle information.
 
-use crate::config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog};
+use crate::{
+    config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog},
+    module::process_node::ProcessNodeRegistry,
+};
 use adk_rust::{
     graph::{
-        AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError, NodeOutput, START, State,
-        StateGraph, StreamEvent, StreamMode,
+        AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError, Node, NodeContext, NodeOutput,
+        START, State, StateGraph, StreamEvent, StreamMode,
     },
     model::{
         GeminiModel,
@@ -29,6 +32,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+use tauri::ipc::Channel;
 
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 
@@ -128,7 +132,11 @@ impl CompiledWorkflow {
 }
 
 /// Compile a React Flow document into an executable ADK `StateGraph`.
-pub fn compile(dsl: WorkflowDsl, config: &IWorkrun) -> Result<CompiledWorkflow> {
+pub fn compile(
+    dsl: WorkflowDsl,
+    config: &IWorkrun,
+    on_event: Option<Channel<StreamEvent>>,
+) -> Result<CompiledWorkflow> {
     let nodes: HashMap<_, _> = dsl.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
     if nodes.len() != dsl.nodes.len() {
         bail!("workflow contains duplicate node ids");
@@ -145,7 +153,7 @@ pub fn compile(dsl: WorkflowDsl, config: &IWorkrun) -> Result<CompiledWorkflow> 
     for node in &dsl.nodes {
         if !matches!(
             node.kind.as_str(),
-            "start" | "end" | "agent" | "remote_agent" | "if_else" | "switch" | "group"
+            "start" | "end" | "agent" | "remote_agent" | "process" | "if_else" | "switch" | "group"
         ) {
             bail!("node `{}` has unsupported type `{}`", node.id, node.kind);
         }
@@ -185,6 +193,7 @@ pub fn compile(dsl: WorkflowDsl, config: &IWorkrun) -> Result<CompiledWorkflow> 
             // the remote call a real graph execution step, not a side effect
             // performed by the Tauri command.
             "remote_agent" => graph.add_node(remote_a2a_graph_node(node)?),
+            "process" => add_process_node(graph, node, on_event.clone()),
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
             "agent" => add_local_agent_node(graph, node, config)?,
@@ -241,7 +250,83 @@ pub fn compile(dsl: WorkflowDsl, config: &IWorkrun) -> Result<CompiledWorkflow> 
 }
 
 fn is_executable(node: &WorkflowNode) -> bool {
-    matches!(node.kind.as_str(), "agent" | "remote_agent" | "if_else" | "switch")
+    matches!(
+        node.kind.as_str(),
+        "agent" | "remote_agent" | "process" | "if_else" | "switch"
+    )
+}
+
+fn add_process_node(graph: StateGraph, node: &WorkflowNode, on_event: Option<Channel<StreamEvent>>) -> StateGraph {
+    graph.add_node(ProcessWorkflowNode {
+        id: node.id.clone(),
+        process_node_id: string_data(node, "processNodeId").unwrap_or_default(),
+        name: string_data(node, "name").unwrap_or_else(|| node.id.clone()),
+        on_event,
+    })
+}
+
+struct ProcessWorkflowNode {
+    id: String,
+    process_node_id: String,
+    name: String,
+    on_event: Option<Channel<StreamEvent>>,
+}
+
+#[async_trait::async_trait]
+impl Node for ProcessWorkflowNode {
+    fn name(&self) -> &str {
+        &self.id
+    }
+
+    async fn execute(&self, context: &NodeContext) -> adk_rust::graph::Result<NodeOutput> {
+        if self.process_node_id.trim().is_empty() {
+            return Err(graph_node_error(&self.id, "process node needs data.processNodeId"));
+        }
+        let input = serde_json::to_value(&context.state).map_err(|error| graph_node_error(&self.id, error))?;
+        let output_node_id = self.id.clone();
+        let name = self.name.clone();
+        let on_event = self.on_event.clone();
+        let run = ProcessNodeRegistry::run_for_workflow(
+            &self.process_node_id,
+            &input,
+            Arc::new(move |chunk| {
+                if let Some(on_event) = &on_event {
+                    let _ = on_event.send(StreamEvent::custom(
+                        &output_node_id,
+                        "process.output",
+                        json!({ "name": name, "stream": chunk.stream, "data": chunk.data }),
+                    ));
+                }
+            }),
+        )
+        .await
+        .map_err(|error| graph_node_error(&self.id, error))?;
+        let event = json!({
+            "nodeId": self.id,
+            "type": "process",
+            "processNodeId": self.process_node_id,
+            "processName": run.definition.name,
+            "stdout": run.stdout,
+            "stderr": run.stderr,
+            "exitCode": run.execution.exit_code,
+            "result": run.result,
+        });
+        let mut output = NodeOutput::new()
+            .with_update("workflow.last_node", json!(self.id))
+            .with_update("workflow.node", event.clone())
+            .with_update("workflow.trace", event);
+        for (key, value) in run.result.as_object().expect("validated Process Node result") {
+            output = output.with_update(key, value.clone());
+        }
+        Ok(output)
+    }
+
+    fn execute_stream<'a>(
+        &'a self,
+        _context: &'a NodeContext,
+    ) -> std::pin::Pin<Box<dyn futures::Stream<Item = adk_rust::graph::Result<StreamEvent>> + Send + 'a>> {
+        Box::pin(futures::stream::empty())
+    }
 }
 
 fn add_control_node(graph: StateGraph, node: &WorkflowNode) -> StateGraph {
@@ -609,7 +694,7 @@ mod tests {
         let mut input = State::new();
         input.insert("approved".into(), json!(true));
         let mut events = Vec::new();
-        let result = compile(dsl, &Default::default())
+        let result = compile(dsl, &Default::default(), None)
             .unwrap()
             .run_stream(input, "test", |event| events.push(event))
             .await
@@ -636,7 +721,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let compiled = compile(dsl, &Default::default()).unwrap();
+        let compiled = compile(dsl, &Default::default(), None).unwrap();
         assert_eq!(compiled.plan().executable_nodes, vec!["remote"]);
     }
 }

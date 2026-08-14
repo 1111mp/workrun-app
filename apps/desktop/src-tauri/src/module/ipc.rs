@@ -16,7 +16,7 @@ use std::{
     },
 };
 use tauri::Emitter as _;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
 const IPC_EVENT_MESSAGE: &str = "ipc-message";
@@ -26,14 +26,21 @@ const MAX_MESSAGE_SIZE: usize = 1_048_576;
 type IpcWriter = Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>;
 
 /// A capability-scoped connection credential for one locally launched client.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct IpcSession {
     pub id: String,
     pub token: String,
     pub endpoint: String,
-    sessions: Arc<Mutex<HashMap<String, String>>>,
+    receiver: mpsc::Receiver<Value>,
+    sessions: Arc<Mutex<HashMap<String, IpcSessionEntry>>>,
     #[cfg(unix)]
     connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
+}
+
+#[derive(Debug)]
+struct IpcSessionEntry {
+    token: String,
+    messages: mpsc::Sender<Value>,
 }
 
 impl IpcSession {
@@ -41,6 +48,10 @@ impl IpcSession {
         self.sessions.lock().await.remove(&self.id);
         #[cfg(unix)]
         self.connections.lock().await.remove(&self.id);
+    }
+
+    pub fn try_receive(&mut self) -> Option<Value> {
+        self.receiver.try_recv().ok()
     }
 }
 
@@ -55,7 +66,7 @@ struct IpcMessageEvent {
 /// Cross-process local transport owned by the desktop application lifecycle.
 pub struct IpcServer {
     endpoint: OnceLock<String>,
-    sessions: Arc<Mutex<HashMap<String, String>>>,
+    sessions: Arc<Mutex<HashMap<String, IpcSessionEntry>>>,
     #[cfg(unix)]
     connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
     started: AtomicBool,
@@ -139,7 +150,14 @@ impl IpcServer {
         }
         let id = Uuid::new_v4().to_string();
         let token = Uuid::new_v4().to_string();
-        self.sessions.lock().await.insert(id.clone(), token.clone());
+        let (messages, receiver) = mpsc::channel(16);
+        self.sessions.lock().await.insert(
+            id.clone(),
+            IpcSessionEntry {
+                token: token.clone(),
+                messages,
+            },
+        );
         let endpoint = self
             .endpoint
             .get()
@@ -150,6 +168,7 @@ impl IpcServer {
             id,
             token,
             endpoint,
+            receiver,
             sessions: Arc::clone(&self.sessions),
             #[cfg(unix)]
             connections: Arc::clone(&self.connections),
@@ -178,7 +197,7 @@ impl IpcServer {
 #[cfg(unix)]
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
-    sessions: Arc<Mutex<HashMap<String, String>>>,
+    sessions: Arc<Mutex<HashMap<String, IpcSessionEntry>>>,
     connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
 ) -> Result<()> {
     let app_handle = handle::Handle::app_handle();
@@ -189,14 +208,13 @@ async fn handle_connection(
         bail!("first IPC message must be hello");
     }
 
-    let valid_session = sessions
+    let message_sender = sessions
         .lock()
         .await
         .get(&session_id)
-        .is_some_and(|expected_token| expected_token == &token);
-    if !valid_session {
-        bail!("IPC hello did not match an active session");
-    }
+        .filter(|entry| entry.token == token)
+        .map(|entry| entry.messages.clone())
+        .ok_or_else(|| anyhow::anyhow!("IPC hello did not match an active session"))?;
 
     let (mut reader, writer) = stream.into_split();
     connections
@@ -205,6 +223,18 @@ async fn handle_connection(
         .insert(session_id.clone(), Arc::new(Mutex::new(writer)));
 
     while let Ok(message) = receive_message(&mut reader).await {
+        // A run owner can await structured messages (such as process.result)
+        // while the webview continues to receive the same event for UI work.
+        let _ = message_sender.try_send(message.clone());
+        if message.get("type").and_then(Value::as_str) == Some("process.result") {
+            let id = required_string(&message, "id")?;
+            IpcServer::global()
+                .send(
+                    &session_id,
+                    serde_json::json!({ "id": id, "type": "process.result.accepted" }),
+                )
+                .await?;
+        }
         app_handle
             .emit(
                 IPC_EVENT_MESSAGE,

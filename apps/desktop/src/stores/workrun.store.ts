@@ -4,11 +4,17 @@ import { persist, type PersistStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 
 import { applyPendingTheme } from '@/lib/utils';
-import { getWorkrunConfig, patchWorkrunConfig } from '@/services/cmd';
+import {
+  getSystemTheme,
+  getWorkrunConfig,
+  patchWorkrunConfig,
+} from '@/services/cmd';
 
 type WorkrunState = {
   config?: IWorkrunConfig;
+  resolvedTheme?: AppBaseTheme;
   updateConfig: (patch: Partial<IWorkrunConfig>) => Promise<void>;
+  setResolvedTheme: (theme: AppBaseTheme) => void;
   updateTheme: (theme: AppTheme) => Promise<void>;
 };
 
@@ -17,59 +23,69 @@ let updateConfigPromiseResolver:
   | ((value: void | PromiseLike<void>) => void)
   | null = null;
 
-const storage: PersistStorage<Pick<WorkrunState, 'config'>> = {
-  getItem: async (_name) => {
-    const config = await getWorkrunConfig();
+const storage: PersistStorage<Pick<WorkrunState, 'config' | 'resolvedTheme'>> =
+  {
+    getItem: async (_name) => {
+      const config = await getWorkrunConfig();
+      const resolvedTheme =
+        config.theme === 'system' ? await getSystemTheme() : config.theme;
 
-    previousConfig = structuredClone(config);
-
-    // if (config.locale) {
-    //   void i18n.changeLanguage(config.locale);
-    // }
-
-    return {
-      state: {
-        config,
-      },
-      version: 0,
-    };
-  },
-  setItem: async (_name, value) => {
-    const config = value.state.config;
-    if (!config) return;
-
-    if (!previousConfig) {
       previousConfig = structuredClone(config);
-      return;
-    }
-    const patch = createConfigPatch(previousConfig, config);
-    if (Object.keys(patch).length === 0) {
-      return;
-    }
 
-    await patchWorkrunConfig(patch);
+      // if (config.locale) {
+      //   void i18n.changeLanguage(config.locale);
+      // }
 
-    previousConfig = structuredClone(config);
+      return {
+        state: {
+          config,
+          resolvedTheme,
+        },
+        version: 0,
+      };
+    },
+    setItem: async (_name, value) => {
+      const config = value.state.config;
+      if (!config) return;
 
-    updateConfigPromiseResolver?.();
+      if (!previousConfig) {
+        previousConfig = structuredClone(config);
+        return;
+      }
+      const patch = createConfigPatch(previousConfig, config);
+      if (Object.keys(patch).length === 0) {
+        return;
+      }
 
-    updateConfigPromiseResolver = null;
-  },
-  removeItem: noop,
-};
+      await patchWorkrunConfig(patch);
+
+      previousConfig = structuredClone(config);
+
+      updateConfigPromiseResolver?.();
+
+      updateConfigPromiseResolver = null;
+    },
+    removeItem: noop,
+  };
 
 export const useWorkrunStore = create<WorkrunState>()(
   persist(
-    immer((set) => ({
+    immer((set, get) => ({
       config: undefined,
+      resolvedTheme: undefined,
 
       updateConfig: async (patch) => {
+        const resolvedTheme =
+          patch.theme === 'system' ? await getSystemTheme() : patch.theme;
         set((state) => {
           if (!state.config) {
             return;
           }
 
           Object.assign(state.config, patch);
+          if (resolvedTheme) {
+            state.resolvedTheme = resolvedTheme;
+          }
         });
 
         await new Promise<void>((resolve) => {
@@ -77,13 +93,14 @@ export const useWorkrunStore = create<WorkrunState>()(
         });
       },
 
-      updateTheme: async (theme) => {
+      setResolvedTheme: (theme) => {
         set((state) => {
-          if (state.config) {
-            state.config.theme = theme;
-          }
+          state.resolvedTheme = theme;
         });
+      },
 
+      updateTheme: async (theme) => {
+        await get().updateConfig({ theme });
         await applyPendingTheme(theme);
       },
     })),

@@ -56,6 +56,7 @@ pub async fn run_project_python(app: &AppHandle, request: RunProjectPythonReques
             ("WORKRUN_IPC_TOKEN".into(), ipc.token.clone()),
             ("WORKRUN_RUN_ID".into(), ipc.id.clone()),
         ],
+        None,
     )
     .await;
     ipc.close().await;

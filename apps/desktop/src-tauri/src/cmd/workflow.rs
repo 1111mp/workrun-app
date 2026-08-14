@@ -13,7 +13,7 @@ use tauri::ipc::Channel;
 pub async fn workflow_compile(dsl: Value) -> CmdResult<WorkflowPlan> {
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
     let config = Config::workrun().await.latest_arc();
-    let compiled = workflow::compile(dsl, &config).stringify_err()?;
+    let compiled = workflow::compile(dsl, &config, None).stringify_err()?;
     Ok(compiled.plan().clone())
 }
 
@@ -30,7 +30,7 @@ pub async fn workflow_run(
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
     let state: State = serde_json::from_value(initial_state).stringify_err()?;
     let config = Config::workrun().await.latest_arc();
-    let compiled = workflow::compile(dsl, &config).stringify_err()?;
+    let compiled = workflow::compile(dsl, &config, Some(on_event.clone())).stringify_err()?;
     compiled
         .run_stream(state, thread_id.as_deref().unwrap_or("workflow-run"), |event| {
             // The webview may go away while a workflow is still running.

@@ -5,8 +5,12 @@
 //! one uv project at `<app-data>/process-nodes/<id>`.
 
 use crate::{
+    core::handle,
     feat::{ProjectPythonStreamRunResult, RunProjectPythonRequest, run_project_python_streaming},
-    module::python_runtime::{PythonOutputChunk, PythonRuntime},
+    module::{
+        ipc::IpcServer,
+        python_runtime::{PythonOutputChunk, PythonOutputStream, PythonRuntime, StreamingPythonExecutionResult},
+    },
     utils::dirs,
 };
 use anyhow::{Context, Result, bail};
@@ -17,6 +21,7 @@ use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 use tauri::{AppHandle, ipc::Channel};
 use uuid::Uuid;
@@ -47,7 +52,7 @@ pub struct ProcessNodeDefinition {
     /// UTC timestamp (RFC 3339) when this definition was last updated.
     #[serde(default)]
     pub updated_at: String,
-    /// Project-relative Python script that implements the JSON Lines protocol.
+    /// Project-relative Python script that implements the Process Node work.
     pub entry: PathBuf,
     #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
@@ -101,6 +106,16 @@ pub struct ProcessNode {
     pub install_status: ProcessNodeInstallStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_error: Option<String>,
+}
+
+/// Result produced when a Process Node is executed inside a workflow. Logs are
+/// intentionally separate from the structured result sent over local IPC.
+pub struct WorkflowProcessNodeRun {
+    pub definition: ProcessNodeDefinition,
+    pub execution: StreamingPythonExecutionResult,
+    pub stdout: String,
+    pub stderr: String,
+    pub result: Value,
 }
 
 /// Stateless access to the source-owned catalog and the local installation cache.
@@ -192,7 +207,7 @@ impl ProcessNodeRegistry {
             });
             tokio::fs::write(
                 project_path.join(&definition.entry),
-                "\"\"\"Process Node entrypoint.\n\nImplement this script to perform the node's work. Its stdout is shown in Workrun.\n\"\"\"\n\n\ndef main() -> None:\n    print(\"Process Node is ready. Edit main.py to implement it.\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+                "\"\"\"Process Node entrypoint.\n\nWhen run by a workflow, Workrun provides the complete workflow state as JSON on stdin. Use process.result({...}) once to return structured data; stdout and stderr remain available for logs.\n\"\"\"\n\nimport json\nimport sys\n\nfrom workrun_sdk import process\n\n\ndef main() -> None:\n    raw_input = sys.stdin.read()\n    state = json.loads(raw_input) if raw_input else {}\n    print(f\"Process Node received {len(state)} state fields\")\n    process.result({\"processed\": True})\n\n\nif __name__ == \"__main__\":\n    main()\n",
             )
             .await?;
             let mut catalog = Self::read_catalog().await?;
@@ -255,6 +270,81 @@ impl ProcessNodeRegistry {
         .await
     }
 
+    pub async fn run_for_workflow(
+        id: &str,
+        input: &Value,
+        on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
+    ) -> Result<WorkflowProcessNodeRun> {
+        let node = Self::inspect(id).await?;
+        if !matches!(node.install_status, ProcessNodeInstallStatus::Installed) {
+            bail!("Process Node is not installed: {id}");
+        }
+
+        let python_version = project_python_version(&node.project_path).await?;
+        let app = handle::Handle::app_handle();
+        let sync = PythonRuntime::sync_dependencies(app, &node.project_path, &python_version).await?;
+        let mut ipc = IpcServer::global().create_session().await?;
+        let input = serde_json::to_vec(input).context("failed to serialize workflow state for Process Node")?;
+        let logs = Arc::new(Mutex::new((String::new(), String::new())));
+        let captured_logs = Arc::clone(&logs);
+        let execution = PythonRuntime::run_python_streaming_with_env_and_stdin(
+            &sync.environment,
+            &node.definition.entry,
+            &[],
+            &[
+                ("WORKRUN_IPC_ENDPOINT".into(), ipc.endpoint.clone()),
+                ("WORKRUN_IPC_TOKEN".into(), ipc.token.clone()),
+                ("WORKRUN_RUN_ID".into(), ipc.id.clone()),
+            ],
+            Some(&input),
+            Arc::new(move |chunk| {
+                let mut logs = captured_logs.lock().expect("Process Node log lock poisoned");
+                let target = match chunk.stream {
+                    PythonOutputStream::Stdout => &mut logs.0,
+                    PythonOutputStream::Stderr => &mut logs.1,
+                };
+                append_output(target, &chunk.data);
+                on_output(chunk);
+            }),
+        )
+        .await;
+
+        let result = if execution.as_ref().is_ok_and(|run| run.exit_code == Some(0)) {
+            std::iter::from_fn(|| ipc.try_receive())
+                .find(|message| message.get("type").and_then(Value::as_str) == Some("process.result"))
+                .and_then(|message| message.get("data").cloned())
+                .filter(Value::is_object)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Process Node `{}` exited without process.result({{...}})",
+                        node.definition.name
+                    )
+                })
+        } else {
+            Ok(Value::Null)
+        };
+        ipc.close().await;
+        let execution = execution?;
+        let (stdout, stderr) = std::mem::take(&mut *logs.lock().expect("Process Node log lock poisoned"));
+        if execution.exit_code != Some(0) {
+            bail!(
+                "Process Node `{}` exited with code {}\n{}",
+                node.definition.name,
+                execution
+                    .exit_code
+                    .map_or_else(|| "unknown".into(), |code| code.to_string()),
+                stderr
+            );
+        }
+        Ok(WorkflowProcessNodeRun {
+            definition: node.definition,
+            execution,
+            stdout,
+            stderr,
+            result: result?,
+        })
+    }
+
     async fn read_catalog() -> Result<ProcessNodeCatalog> {
         let catalog_path = Self::catalog_path()?;
         let bytes = match tokio::fs::read(&catalog_path).await {
@@ -304,6 +394,16 @@ impl ProcessNodeRegistry {
             install_status,
             install_error,
         }
+    }
+}
+
+const MAX_WORKFLOW_LOG_CHARS: usize = 200_000;
+
+fn append_output(current: &mut String, chunk: &str) {
+    current.push_str(chunk);
+    if current.len() > MAX_WORKFLOW_LOG_CHARS {
+        let keep_from = current.len() - MAX_WORKFLOW_LOG_CHARS;
+        current.replace_range(..keep_from, "[Earlier output truncated]\n");
     }
 }
 

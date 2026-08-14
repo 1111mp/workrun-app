@@ -1,3 +1,4 @@
+import { LazyLog } from '@melloware/react-logviewer';
 import {
   Alert,
   AlertDescription,
@@ -82,6 +83,10 @@ function durationLabel(run: WorkflowRunView) {
   return `${((end - run.startedAt) / 1000).toFixed(1)}s`;
 }
 
+function nodeDisplayName(run: WorkflowRunView, nodeId: string) {
+  return run.nodes.find((node) => node.id === nodeId)?.name ?? nodeId;
+}
+
 function codeText(children: ReactNode) {
   return Children.toArray(children)
     .map((child) => {
@@ -96,9 +101,11 @@ function codeText(children: ReactNode) {
 function ThinkingProcess({
   thoughts,
   isRunning,
+  nodeName,
 }: {
   thoughts: WorkflowRunView['thoughts'];
   isRunning: boolean;
+  nodeName: (nodeId: string) => string;
 }) {
   if (thoughts.length === 0 && !isRunning) return null;
 
@@ -128,7 +135,7 @@ function ThinkingProcess({
               </MarkerIcon>
               <MarkerContent>
                 {thought.status === 'running' ? 'Working in' : 'Finished'}{' '}
-                {thought.nodeId}
+                {nodeName(thought.nodeId)}
                 {thought.durationMs !== undefined
                   ? ` · ${(thought.durationMs / 1000).toFixed(1)}s`
                   : ''}
@@ -152,6 +159,7 @@ function WorkflowRunOutput({
   const [message, setMessage] = useState('');
   const duration = durationLabel(run);
   const output = run.messages.map((message) => message.content).join('\n\n');
+  const displayNodeName = (nodeId: string) => nodeDisplayName(run, nodeId);
 
   const copyAll = async () => {
     if (!output) return;
@@ -172,7 +180,7 @@ function WorkflowRunOutput({
         <DrawerTitle>{isChat ? 'Chat' : 'Run output'}</DrawerTitle>
         <DrawerDescription>
           {statusLabel(run.status)}
-          {run.activeNodeId ? ` · ${run.activeNodeId}` : ''}
+          {run.activeNodeId ? ` · ${displayNodeName(run.activeNodeId)}` : ''}
           {duration ? ` · ${duration}` : ''}
         </DrawerDescription>
       </DrawerHeader>
@@ -187,7 +195,7 @@ function WorkflowRunOutput({
                   : node.status === 'failed'
                     ? 'Failed'
                     : 'Finished'}{' '}
-                {node.id}
+                {node.name ?? node.id}
                 {node.durationMs !== undefined ? ` (${node.durationMs}ms)` : ''}
               </span>
             ))}
@@ -200,6 +208,42 @@ function WorkflowRunOutput({
             <AlertTitle>Workflow failed</AlertTitle>
             <AlertDescription>{run.error}</AlertDescription>
           </Alert>
+        )}
+
+        {run.processLogs.length > 0 && (
+          <div className='space-y-2 px-4 py-2'>
+            {run.processLogs.map((log) => (
+              <Collapsible key={log.nodeId}>
+                <CollapsibleTrigger
+                  render={
+                    <Button variant='ghost' className='w-full justify-start' />
+                  }
+                >
+                  <TerminalIcon />
+                  {log.name} logs
+                  <ChevronDownIcon className='ml-auto group-data-panel-open/button:rotate-180' />
+                </CollapsibleTrigger>
+                <CollapsibleContent className='bg-muted h-52 overflow-hidden rounded-md'>
+                  <LazyLog
+                    text={`${log.stdout}${log.stderr ? `${log.stdout ? '\n' : ''}stderr\n${log.stderr}` : ''}`}
+                    follow
+                    selectableLines
+                    wrapLines
+                    enableLineNumbers
+                    rowHeight={20}
+                    style={{
+                      backgroundColor: 'transparent',
+                      color: 'var(--foreground)',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.75rem',
+                      lineHeight: '1.25rem',
+                      padding: '0.75rem',
+                    }}
+                  />
+                </CollapsibleContent>
+              </Collapsible>
+            ))}
+          </div>
         )}
 
         <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
@@ -248,7 +292,9 @@ function WorkflowRunOutput({
                         >
                           <MessageContent>
                             {message.role !== 'user' && (
-                              <MessageHeader>{message.nodeId}</MessageHeader>
+                              <MessageHeader>
+                                {displayNodeName(message.nodeId)}
+                              </MessageHeader>
                             )}
                             <Bubble
                               align={message.role === 'user' ? 'end' : 'start'}
@@ -342,6 +388,7 @@ function WorkflowRunOutput({
                               isRunning &&
                               message.turnId === run.messages.at(-1)?.turnId
                             }
+                            nodeName={displayNodeName}
                           />
                         </MessageScrollerItem>
                       )}
@@ -351,7 +398,7 @@ function WorkflowRunOutput({
 
                 {!isChat && run.finalState && (
                   <MessageScrollerItem messageId='final-state'>
-                    <Collapsible defaultOpen>
+                    <Collapsible defaultOpen={false}>
                       <CollapsibleTrigger render={<Button variant='ghost' />}>
                         <Marker>
                           <MarkerContent>Final state</MarkerContent>

@@ -77,7 +77,7 @@ export default function RadioWidget<
 
   return (
     <RadioGroup
-      defaultValue={value?.toString()}
+      value={value?.toString() ?? null}
       required={required}
       disabled={disabled || readonly}
       orientation={inline ? 'horizontal' : 'vertical'}

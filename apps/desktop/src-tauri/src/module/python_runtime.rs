@@ -11,10 +11,11 @@ use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
+    sync::Arc,
 };
 use tauri::{AppHandle, Manager as _, ipc::Channel};
 use tauri_plugin_shell::ShellExt;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const PYTHON_INSTALL_DIR_ENV: &str = "UV_PYTHON_INSTALL_DIR";
 const UV_CACHE_DIR_ENV: &str = "UV_CACHE_DIR";
@@ -579,7 +580,7 @@ impl PythonRuntime {
         script_path: &Path,
         args: &[String],
     ) -> Result<PythonExecutionResult> {
-        Self::run_python_with_env(environment, script_path, args, &[]).await
+        Self::run_python_with_env(environment, script_path, args, &[], None).await
     }
 
     /// Run a Python script with extra environment variables supplied by the host.
@@ -588,6 +589,7 @@ impl PythonRuntime {
         script_path: &Path,
         args: &[String],
         extra_env: &[(String, String)],
+        stdin: Option<&[u8]>,
     ) -> Result<PythonExecutionResult> {
         if !environment.executable_path.is_file() {
             bail!(
@@ -597,14 +599,29 @@ impl PythonRuntime {
         }
 
         let script_path = Self::resolve_project_file(&environment.project_path, script_path, "Python script")?;
-        let output = tokio::process::Command::new(&environment.executable_path)
+        let mut command = tokio::process::Command::new(&environment.executable_path);
+        command
             .current_dir(&environment.project_path)
             .arg(&script_path)
             .args(args)
             .envs(extra_env.iter().map(|(key, value)| (key, value)))
-            .output()
-            .await
+            .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
             .with_context(|| format!("failed to execute Python script {}", script_path.display()))?;
+        if let Some(input) = stdin {
+            let mut child_stdin = child.stdin.take().context("Python process stdin was not captured")?;
+            child_stdin
+                .write_all(input)
+                .await
+                .context("failed to write Python process stdin")?;
+        }
+        let output = child
+            .wait_with_output()
+            .await
+            .with_context(|| format!("failed while executing Python script {}", script_path.display()))?;
 
         Ok(PythonExecutionResult {
             script_path,
@@ -624,6 +641,30 @@ impl PythonRuntime {
         extra_env: &[(String, String)],
         output: &Channel<PythonOutputChunk>,
     ) -> Result<StreamingPythonExecutionResult> {
+        let output = output.clone();
+        Self::run_python_streaming_with_env_and_stdin(
+            environment,
+            script_path,
+            args,
+            extra_env,
+            None,
+            Arc::new(move |chunk| {
+                let _ = output.send(chunk);
+            }),
+        )
+        .await
+    }
+
+    /// Run a Python script while forwarding bounded output chunks to a local
+    /// consumer. Optional stdin is written without buffering process output.
+    pub async fn run_python_streaming_with_env_and_stdin(
+        environment: &ManagedVenv,
+        script_path: &Path,
+        args: &[String],
+        extra_env: &[(String, String)],
+        stdin: Option<&[u8]>,
+        on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
+    ) -> Result<StreamingPythonExecutionResult> {
         if !environment.executable_path.is_file() {
             bail!(
                 "project virtual environment Python does not exist: {}",
@@ -637,22 +678,40 @@ impl PythonRuntime {
             .arg(&script_path)
             .args(args)
             .envs(extra_env.iter().map(|(key, value)| (key, value)))
+            .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("failed to execute Python script {}", script_path.display()))?;
         let stdout = child.stdout.take().context("Python process stdout was not captured")?;
         let stderr = child.stderr.take().context("Python process stderr was not captured")?;
+        let child_stdin = if stdin.is_some() {
+            Some(child.stdin.take().context("Python process stdin was not captured")?)
+        } else {
+            None
+        };
+        let stdin = stdin.map(Vec::from);
+        let stdin_writer = async {
+            if let (Some(input), Some(mut writer)) = (stdin, child_stdin) {
+                writer
+                    .write_all(&input)
+                    .await
+                    .context("failed to write Python process stdin")?;
+            }
+            Ok::<(), anyhow::Error>(())
+        };
 
-        let (status, stdout_result, stderr_result) = tokio::join!(
+        let (status, stdin_result, stdout_result, stderr_result) = tokio::join!(
             child.wait(),
-            forward_output(stdout, PythonOutputStream::Stdout, output),
-            forward_output(stderr, PythonOutputStream::Stderr, output),
+            stdin_writer,
+            forward_output(stdout, PythonOutputStream::Stdout, Arc::clone(&on_output)),
+            forward_output(stderr, PythonOutputStream::Stderr, on_output),
         );
         let status =
             status.with_context(|| format!("failed while executing Python script {}", script_path.display()))?;
         stdout_result?;
         stderr_result?;
+        stdin_result?;
 
         Ok(StreamingPythonExecutionResult {
             script_path,
@@ -661,7 +720,11 @@ impl PythonRuntime {
     }
 }
 
-async fn forward_output<R>(mut reader: R, stream: PythonOutputStream, output: &Channel<PythonOutputChunk>) -> Result<()>
+async fn forward_output<R>(
+    mut reader: R,
+    stream: PythonOutputStream,
+    on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
+) -> Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -674,12 +737,10 @@ where
         if read == 0 {
             return Ok(());
         }
-        output
-            .send(PythonOutputChunk {
-                stream,
-                data: String::from_utf8_lossy(&buffer[..read]).into_owned(),
-            })
-            .context("failed to send Python process output to the frontend")?;
+        on_output(PythonOutputChunk {
+            stream,
+            data: String::from_utf8_lossy(&buffer[..read]).into_owned(),
+        });
     }
 }
 

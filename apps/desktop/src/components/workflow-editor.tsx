@@ -42,6 +42,7 @@ import {
   EndNode,
   GroupNode,
   IfElseNode,
+  ProcessNode,
   RemoteAgentNode,
   StartNode,
   SwitchNode,
@@ -60,12 +61,13 @@ import {
   type WorkflowRunEvent,
   type WorkflowRunView,
 } from '@/services/workflow';
-import { useWorkflowStore } from '@/stores';
+import { useWorkflowStore, useWorkrunStore } from '@/stores';
 
 const nodeTypes = {
   // basic nodes
   agent: AgentNode,
   remote_agent: RemoteAgentNode,
+  process: ProcessNode,
   // controls
   start: StartNode,
   end: EndNode,
@@ -90,11 +92,22 @@ const initialRunView: WorkflowRunView = {
   nodes: [],
   messages: [],
   thoughts: [],
+  processLogs: [],
 };
+
+const MAX_PROCESS_LOG_CHARS = 200_000;
+
+function appendProcessLog(current: string, chunk: string) {
+  const next = current + chunk;
+  return next.length <= MAX_PROCESS_LOG_CHARS
+    ? next
+    : `[Earlier output truncated]\n${next.slice(-MAX_PROCESS_LOG_CHARS)}`;
+}
 
 function runningNode(
   nodes: WorkflowRunView['nodes'],
   nodeId: string,
+  name: string,
 ): WorkflowRunView['nodes'] {
   const existing = nodes.find((node) => node.id === nodeId);
   if (existing) {
@@ -103,7 +116,7 @@ function runningNode(
     );
   }
 
-  return [...nodes, { id: nodeId, status: 'running' }];
+  return [...nodes, { id: nodeId, name, status: 'running' }];
 }
 
 function finishNode(
@@ -165,6 +178,15 @@ function settleThoughts(
   );
 }
 
+function nodeDisplayName(nodes: Node[], nodeId: string) {
+  const data = nodes.find((node) => node.id === nodeId)?.data;
+  if (!data) return nodeId;
+  if (typeof data.name === 'string' && data.name.trim()) return data.name;
+  return typeof data.label === 'string' && data.label.trim()
+    ? data.label
+    : nodeId;
+}
+
 function createNodeData(type: WorkflowNodeType) {
   switch (type) {
     case 'agent':
@@ -179,6 +201,12 @@ function createNodeData(type: WorkflowNodeType) {
         name: 'New remote agent',
         url: 'https://',
         description: 'Describe this remote agent',
+      };
+    case 'process':
+      return {
+        name: 'New app',
+        processNodeId: '',
+        description: 'Select an app to run in this workflow',
       };
     case 'if_else':
       return {
@@ -279,6 +307,7 @@ function getAbsolutePosition(node: Node, nodes: Node[]) {
 function WorkflowEditor() {
   const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
+  const colorMode = useWorkrunStore((state) => state.resolvedTheme);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
   const workflowSettings = useWorkflowStore((state) => state.settings);
   const canUndo = useStore(
@@ -339,12 +368,13 @@ function WorkflowEditor() {
 
   const handleRunEvent = (event: WorkflowRunEvent) => {
     switch (event.type) {
-      case 'node_start':
+      case 'node_start': {
+        const name = nodeDisplayName(nodes, event.node);
         setRunningNodeId(event.node);
         setRunView((current) => ({
           ...current,
           activeNodeId: event.node,
-          nodes: runningNode(current.nodes, event.node),
+          nodes: runningNode(current.nodes, event.node, name),
           thoughts: startThought(
             current.thoughts,
             event.node,
@@ -352,6 +382,7 @@ function WorkflowEditor() {
           ),
         }));
         return;
+      }
       case 'node_end':
         setRunView((current) => ({
           ...current,
@@ -406,6 +437,49 @@ function WorkflowEditor() {
             ],
           };
         });
+        return;
+      case 'custom':
+        if (
+          event.event_type !== 'process.output' ||
+          typeof event.data !== 'object' ||
+          event.data === null
+        ) {
+          return;
+        }
+        {
+          const stream = (event.data as Record<string, unknown>).stream;
+          const data = (event.data as Record<string, unknown>).data;
+          const name = (event.data as Record<string, unknown>).name;
+          if (
+            (stream !== 'stdout' && stream !== 'stderr') ||
+            typeof data !== 'string'
+          ) {
+            return;
+          }
+          setRunView((current) => {
+            const existing = current.processLogs.find(
+              (log) => log.nodeId === event.node,
+            );
+            const log = existing ?? {
+              nodeId: event.node,
+              name: typeof name === 'string' ? name : event.node,
+              stdout: '',
+              stderr: '',
+            };
+            const updated = {
+              ...log,
+              [stream]: appendProcessLog(log[stream], data),
+            };
+            return {
+              ...current,
+              processLogs: existing
+                ? current.processLogs.map((item) =>
+                    item.nodeId === event.node ? updated : item,
+                  )
+                : [...current.processLogs, updated],
+            };
+          });
+        }
         return;
       case 'done':
         setRunView((current) => ({
@@ -696,6 +770,7 @@ function WorkflowEditor() {
             nodes: [],
             messages: [],
             thoughts: [],
+            processLogs: [],
           },
     );
     setRunPanelOpen(true);
@@ -775,7 +850,7 @@ function WorkflowEditor() {
         </header>
         <div className='flex flex-1'>
           <ReactFlow
-            colorMode='dark'
+            colorMode={colorMode}
             fitView
             nodes={nodes}
             edges={edges}

@@ -16,6 +16,7 @@ import {
   GitBranchIcon,
   Globe2Icon,
   Layers3Icon,
+  TerminalIcon,
   SplitIcon,
   type LucideIcon,
 } from 'lucide-react';
@@ -50,6 +51,13 @@ const nodeGroups: {
         description: 'Call an agent over the network',
         icon: Globe2Icon,
         iconClassName: 'text-sky-500',
+      },
+      {
+        type: 'process',
+        label: 'App',
+        description: 'Run a local Process Node app',
+        icon: TerminalIcon,
+        iconClassName: 'text-lime-500',
       },
     ],
   },

@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   Button,
   Drawer,
@@ -22,6 +23,8 @@ import {
 import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 
+import { listProcessNodes } from '@/services/process-node';
+
 type WorkflowNodeInspectorProps = {
   node: Node | null;
   onClose: () => void;
@@ -32,6 +35,7 @@ type WorkflowNodeInspectorProps = {
 const nodeTitles: Record<string, string> = {
   agent: 'Agent',
   remote_agent: 'Remote Agent',
+  process: 'App',
   if_else: 'If / Else',
   switch: 'Switch',
   group: 'Group',
@@ -98,6 +102,11 @@ function WorkflowNodeInspector({
   const data = node?.data ?? {};
   const title = node ? (nodeTitles[node.type ?? ''] ?? 'Node') : 'Node';
   const profilesByProvider = groupModelProfiles(modelProfiles);
+  const processNodes = useQuery({
+    queryKey: ['processNodes'],
+    queryFn: listProcessNodes,
+    enabled: node?.type === 'process',
+  });
 
   const updateData = (patch: Record<string, unknown>) => {
     if (node) {
@@ -202,6 +211,83 @@ function WorkflowNodeInspector({
             />
           </FieldGroup>
         );
+      case 'process': {
+        const selectedId = getText(data, 'processNodeId');
+        const selectedApp = processNodes.data?.find(
+          (processNode) => processNode.definition.id === selectedId,
+        );
+        return (
+          <FieldGroup>
+            <TextField
+              id='process-name'
+              label='Name'
+              description='A short name shown on the workflow canvas.'
+              value={getText(data, 'name')}
+              onChange={(name) => updateData({ name })}
+            />
+            <Field>
+              <Label htmlFor='process-node'>App</Label>
+              <FieldDescription>
+                The selected local app receives the complete workflow state as
+                JSON on stdin and returns its result with{' '}
+                <code>process.result()</code>.
+              </FieldDescription>
+              <Select
+                value={selectedId}
+                onValueChange={(processNodeId) => {
+                  const app = processNodes.data?.find(
+                    (processNode) =>
+                      processNode.definition.id === processNodeId,
+                  );
+                  updateData({
+                    processNodeId,
+                    ...(app && {
+                      // name: app.definition.name,
+                      description: app.definition.description,
+                    }),
+                  });
+                }}
+              >
+                <SelectTrigger id='process-node' className='w-full'>
+                  <span className='flex flex-1 truncate text-left'>
+                    {selectedApp?.definition.name ??
+                      (processNodes.isLoading
+                        ? 'Loading apps…'
+                        : 'Select an installed app')}
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  {processNodes.data
+                    ?.filter(
+                      (processNode) =>
+                        processNode.installStatus === 'installed',
+                    )
+                    .map((processNode) => (
+                      <SelectItem
+                        key={processNode.definition.id}
+                        value={processNode.definition.id}
+                      >
+                        {processNode.definition.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              {selectedId && !selectedApp ? (
+                <FieldDescription className='text-destructive'>
+                  The selected app is unavailable. Choose another installed app.
+                </FieldDescription>
+              ) : null}
+            </Field>
+            <TextareaField
+              id='process-description'
+              label='Description'
+              description='Explain what this app does in the workflow.'
+              value={getText(data, 'description')}
+              onChange={(description) => updateData({ description })}
+            />
+          </FieldGroup>
+        );
+      }
       case 'if_else':
         return (
           <FieldGroup>
