@@ -474,16 +474,24 @@ fn add_local_agent_node(
     let instruction = string_data(node, "instruction").unwrap_or_default();
     let profile_id =
         string_data(node, "modelProfileId").ok_or_else(|| anyhow!("agent node `{id}` needs data.modelProfileId"))?;
+    let temperature = number_data(node, "temperature", 0.0, 2.0)?;
+    let top_p = number_data(node, "topP", 0.0, 1.0)?;
     let model = model_catalog()
         .into_iter()
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("agent node `{id}` references unknown model `{profile_id}`"))?;
     let label = format!("{}/{}", model.id, model.model);
-    let agent = LlmAgentBuilder::new(id.clone())
+    let mut agent = LlmAgentBuilder::new(id.clone())
         .description(description)
         .instruction(instruction)
-        .model(create_model(&model, config)?)
-        .build()?;
+        .model(create_model(&model, config)?);
+    if let Some(temperature) = temperature {
+        agent = agent.temperature(temperature);
+    }
+    if let Some(top_p) = top_p {
+        agent = agent.top_p(top_p);
+    }
+    let agent = agent.build()?;
     Ok(graph.add_node(StreamingAgentNode::new(
         AdkAgentNode::new(Arc::new(agent)).with_input_mapper(state_as_agent_input),
         id,
@@ -708,6 +716,22 @@ fn graph_node_error(node: &str, error: impl std::fmt::Display) -> GraphError {
 
 fn string_data(node: &WorkflowNode, key: &str) -> Option<String> {
     node.data.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+}
+
+fn number_data(node: &WorkflowNode, key: &str, min: f32, max: f32) -> Result<Option<f32>> {
+    let Some(value) = node.data.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_f64()
+        .ok_or_else(|| anyhow!("agent node `{}` field `{key}` must be a number", node.id))?;
+    if !value.is_finite() || value < min as f64 || value > max as f64 {
+        bail!("agent node `{}` field `{key}` must be between {min} and {max}", node.id);
+    }
+    Ok(Some(value as f32))
 }
 
 fn validate_edges(
@@ -1175,6 +1199,24 @@ mod tests {
         let state = State::from_iter([("profile".into(), json!({"gender": "male"}))]);
 
         assert!(condition.matches(&state));
+    }
+
+    #[test]
+    fn validates_agent_generation_parameters() {
+        let node = WorkflowNode {
+            id: "agent".into(),
+            kind: "agent".into(),
+            data: json!({"temperature": 0.7, "topP": 0.9}),
+        };
+
+        assert_eq!(number_data(&node, "temperature", 0.0, 2.0).unwrap(), Some(0.7));
+        assert_eq!(number_data(&node, "topP", 0.0, 1.0).unwrap(), Some(0.9));
+
+        let invalid = WorkflowNode {
+            data: json!({"topP": 1.1}),
+            ..node
+        };
+        assert!(number_data(&invalid, "topP", 0.0, 1.0).is_err());
     }
 
     #[tokio::test]

@@ -41,6 +41,8 @@ type WorkflowAgentNodeData = {
   modelProfileId: string;
   description: string;
   instruction: string;
+  temperature?: number;
+  topP?: number;
 };
 type WorkflowAgentNode = WorkflowBaseNode & {
   type: 'agent';

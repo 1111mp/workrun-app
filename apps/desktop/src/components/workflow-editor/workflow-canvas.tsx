@@ -44,6 +44,8 @@ function createNodeData(type: WorkflowNodeType) {
         modelProfileId: '',
         description: 'Describe this agent’s responsibility',
         instruction: '',
+        temperature: undefined,
+        topP: undefined,
       };
     case 'remote_agent':
       return {

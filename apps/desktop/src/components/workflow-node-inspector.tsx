@@ -67,6 +67,17 @@ function getText(data: Record<string, unknown>, key: string) {
   return typeof value === 'string' ? value : '';
 }
 
+function getNumber(data: Record<string, unknown>, key: string) {
+  const value = data[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : '';
+}
+
+function optionalNumber(value: string) {
+  if (value === '') return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
 function getIfElseBranch(
   data: Record<string, unknown>,
   branch: 'true' | 'false',
@@ -223,6 +234,45 @@ function WorkflowNodeInspector({
               onChange={(instruction) => updateData({ instruction })}
               className='min-h-36 font-mono text-xs'
             />
+            <FieldGroup className='grid grid-cols-2 gap-3'>
+              <Field>
+                <Label htmlFor='agent-temperature'>Temperature</Label>
+                <FieldDescription>
+                  Controls variation (0–2). Leave empty for the model default.
+                </FieldDescription>
+                <Input
+                  id='agent-temperature'
+                  type='number'
+                  min='0'
+                  max='2'
+                  step='0.1'
+                  value={getNumber(data, 'temperature')}
+                  onChange={(event) =>
+                    updateData({
+                      temperature: optionalNumber(event.target.value),
+                    })
+                  }
+                />
+              </Field>
+              <Field>
+                <Label htmlFor='agent-top-p'>Top P</Label>
+                <FieldDescription>
+                  Controls token diversity (0–1). Leave empty for the model
+                  default.
+                </FieldDescription>
+                <Input
+                  id='agent-top-p'
+                  type='number'
+                  min='0'
+                  max='1'
+                  step='0.05'
+                  value={getNumber(data, 'topP')}
+                  onChange={(event) =>
+                    updateData({ topP: optionalNumber(event.target.value) })
+                  }
+                />
+              </Field>
+            </FieldGroup>
           </FieldGroup>
         );
       case 'remote_agent':
