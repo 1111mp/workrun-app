@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
-from typing import TypeAlias, cast
+from typing import BinaryIO, TypeAlias, cast
 
 MAX_MESSAGE_SIZE = 1_048_576
 JsonValue: TypeAlias = (
@@ -17,7 +17,10 @@ class ProtocolError(RuntimeError):
     """Raised when a peer sends an invalid or unsupported IPC message."""
 
 
-def send_message(connection: socket.socket, message: JsonObject) -> None:
+IpcConnection: TypeAlias = socket.socket | BinaryIO
+
+
+def send_message(connection: IpcConnection, message: JsonObject) -> None:
     """Write one UTF-8 JSON message with a four-byte big-endian length prefix."""
     try:
         payload = json.dumps(
@@ -32,10 +35,10 @@ def send_message(connection: socket.socket, message: JsonObject) -> None:
     if len(payload) > MAX_MESSAGE_SIZE:
         raise ProtocolError(f"IPC message exceeds {MAX_MESSAGE_SIZE} bytes")
 
-    connection.sendall(len(payload).to_bytes(4, byteorder="big") + payload)
+    _send_all(connection, len(payload).to_bytes(4, byteorder="big") + payload)
 
 
-def receive_message(connection: socket.socket) -> JsonObject:
+def receive_message(connection: IpcConnection) -> JsonObject:
     """Read exactly one length-prefixed JSON object from a local IPC socket."""
     header = _receive_exactly(connection, 4)
     size = int.from_bytes(header, byteorder="big")
@@ -58,13 +61,31 @@ def receive_message(connection: socket.socket) -> JsonObject:
     return cast(JsonObject, message)
 
 
-def _receive_exactly(connection: socket.socket, size: int) -> bytes:
+def _receive_exactly(connection: IpcConnection, size: int) -> bytes:
     chunks: list[bytes] = []
     remaining = size
     while remaining:
-        chunk = connection.recv(remaining)
+        chunk = (
+            connection.recv(remaining)
+            if isinstance(connection, socket.socket)
+            else connection.read(remaining)
+        )
         if not chunk:
             raise ProtocolError("IPC connection closed before the message was complete")
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
+
+
+def _send_all(connection: IpcConnection, payload: bytes) -> None:
+    if isinstance(connection, socket.socket):
+        connection.sendall(payload)
+        return
+
+    offset = 0
+    while offset < len(payload):
+        written = connection.write(payload[offset:])
+        if written == 0:
+            raise ProtocolError("IPC connection closed before the message was sent")
+        offset += written
+    connection.flush()

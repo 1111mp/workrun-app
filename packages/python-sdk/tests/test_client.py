@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+import workrun_sdk._client as client_module
 from workrun_sdk._client import (
     ENDPOINT_ENV,
     RUN_ID_ENV,
@@ -14,6 +15,7 @@ from workrun_sdk._client import (
     InteractionCancelled,
     WorkrunClient,
     WorkrunConnectionError,
+    _open_windows_named_pipe,  # pyright: ignore[reportPrivateUsage]
 )
 from workrun_sdk._protocol import (
     JsonObject,
@@ -143,6 +145,57 @@ def test_from_environment_requires_all_rust_ipc_credentials(
     monkeypatch.setenv(RUN_ID_ENV, "run-1")
     client = WorkrunClient.from_environment()
     assert isinstance(client, WorkrunClient)
+
+
+def test_open_windows_named_pipe_retries_when_all_instances_are_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PipeBusyError(OSError):
+        winerror: int = 231
+
+    connection = object()
+    attempts = 0
+    sleeps: list[float] = []
+
+    def open_pipe(*_: object, **kwargs: object) -> object:
+        nonlocal attempts
+        assert kwargs == {"buffering": 0}
+        attempts += 1
+        if attempts == 1:
+            raise PipeBusyError()
+        return connection
+
+    monkeypatch.setattr(client_module, "open", open_pipe, raising=False)
+    monkeypatch.setattr(client_module, "sleep", sleeps.append)
+
+    assert _open_windows_named_pipe(r"\\.\pipe\workrun") is connection
+    assert attempts == 2
+    assert sleeps == [0.05]
+
+
+def test_open_windows_named_pipe_stops_after_maximum_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PipeBusyError(OSError):
+        winerror: int = 231
+
+    attempts = 0
+    sleeps: list[float] = []
+
+    def open_pipe(*_: object, **kwargs: object) -> object:
+        nonlocal attempts
+        assert kwargs == {"buffering": 0}
+        attempts += 1
+        raise PipeBusyError()
+
+    monkeypatch.setattr(client_module, "open", open_pipe, raising=False)
+    monkeypatch.setattr(client_module, "sleep", sleeps.append)
+
+    with pytest.raises(PipeBusyError):
+        _ = _open_windows_named_pipe(r"\\.\pipe\workrun")
+
+    assert attempts == 5
+    assert sleeps == [0.05, 0.5, 1.0, 2.0]
 
 
 def test_send_message_rejects_non_finite_json_numbers() -> None:

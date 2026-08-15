@@ -6,7 +6,8 @@ import os
 import socket
 from concurrent.futures import Future
 from threading import Lock, Thread
-from typing import final
+from time import sleep
+from typing import BinaryIO, final
 from uuid import uuid4
 
 from ._protocol import (
@@ -20,6 +21,9 @@ from ._protocol import (
 ENDPOINT_ENV = "WORKRUN_IPC_ENDPOINT"
 TOKEN_ENV = "WORKRUN_IPC_TOKEN"
 RUN_ID_ENV = "WORKRUN_RUN_ID"
+WINDOWS_ERROR_PIPE_BUSY = 231
+WINDOWS_PIPE_CONNECT_RETRY_DELAYS_SECONDS = (0.05, 0.5, 1.0, 2.0)
+WINDOWS_PIPE_CONNECT_MAX_ATTEMPTS = len(WINDOWS_PIPE_CONNECT_RETRY_DELAYS_SECONDS) + 1
 
 
 class WorkrunConnectionError(RuntimeError):
@@ -30,6 +34,22 @@ class InteractionCancelled(RuntimeError):
     """Raised when a pending UI interaction is cancelled by the host or user."""
 
 
+def _open_windows_named_pipe(endpoint: str) -> BinaryIO:
+    """Open a named pipe, retrying a bounded number of times while it is busy."""
+    for attempt in range(WINDOWS_PIPE_CONNECT_MAX_ATTEMPTS):
+        try:
+            return open(endpoint, "r+b", buffering=0)
+        except OSError as error:
+            if (
+                getattr(error, "winerror", None) != WINDOWS_ERROR_PIPE_BUSY
+                or attempt == WINDOWS_PIPE_CONNECT_MAX_ATTEMPTS - 1
+            ):
+                raise
+            sleep(WINDOWS_PIPE_CONNECT_RETRY_DELAYS_SECONDS[attempt])
+
+    raise AssertionError("Windows named-pipe retry loop must return or raise")
+
+
 @final
 class WorkrunClient:
     """One serial connection to the desktop host for a single script run."""
@@ -38,7 +58,7 @@ class WorkrunClient:
         self._endpoint = endpoint
         self._token = token
         self._run_id = run_id
-        self._connection: socket.socket | None = None
+        self._connection: socket.socket | BinaryIO | None = None
         self._connection_lock = Lock()
         self._send_lock = Lock()
         self._pending_lock = Lock()
@@ -60,14 +80,14 @@ class WorkrunClient:
         with self._connection_lock:
             if self._connection is not None:
                 return
-            if os.name == "nt":
-                raise WorkrunConnectionError(
-                    "Windows named-pipe transport is not available in this SDK version"
-                )
-
-            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection: socket.socket | BinaryIO | None = None
             try:
-                connection.connect(self._endpoint)
+                if os.name == "nt":
+                    connection = _open_windows_named_pipe(self._endpoint)
+                else:
+                    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                if isinstance(connection, socket.socket):
+                    connection.connect(self._endpoint)
                 send_message(
                     connection,
                     {
@@ -78,11 +98,13 @@ class WorkrunClient:
                     },
                 )
             except (OSError, ProtocolError) as error:
-                connection.close()
+                if connection is not None:
+                    connection.close()
                 raise WorkrunConnectionError(
                     f"failed to connect to Workrun IPC endpoint: {self._endpoint}"
                 ) from error
 
+            assert connection is not None
             self._connection = connection
             self._reader_thread = Thread(
                 target=self._read_messages,
@@ -170,7 +192,7 @@ class WorkrunClient:
                 )
             send_message(connection, message)
 
-    def _read_messages(self, connection: socket.socket) -> None:
+    def _read_messages(self, connection: socket.socket | BinaryIO) -> None:
         """The sole socket reader; dispatches every response by request ID."""
         while True:
             try:
@@ -210,7 +232,7 @@ class WorkrunClient:
 
     def _connection_lost(
         self,
-        connection: socket.socket,
+        connection: socket.socket | BinaryIO,
         error: Exception | None = None,
     ) -> None:
         """Clear only the failed connection, preserving a later reconnect."""
@@ -219,7 +241,9 @@ class WorkrunClient:
                 return
             self._connection = None
         connection.close()
-        self._fail_pending(error or WorkrunConnectionError("Workrun IPC connection was lost"))
+        self._fail_pending(
+            error or WorkrunConnectionError("Workrun IPC connection was lost")
+        )
 
     def _fail_pending(self, error: Exception) -> None:
         with self._pending_lock:

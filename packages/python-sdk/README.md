@@ -1,9 +1,8 @@
 ## Workrun Python SDK
 
 This package provides the Python-facing API for scripts launched by Workrun.
-The current transport is a local Unix domain socket on macOS/Linux. Windows
-named-pipe support requires matching desktop-host support and is not available
-yet.
+It uses a local Unix domain socket on macOS/Linux and a Windows named pipe on
+Windows.
 
 The first API is a schema-driven interaction module, allowing Python code to
 request a form from the Workrun UI and receive JSON-compatible form data.
@@ -56,6 +55,4 @@ rows; fields within a row receive equal width. For advanced validation, nested
 data, arrays, or custom RJSF UI options, use `form()` with JSON Schema.
 
 Workrun injects `WORKRUN_IPC_ENDPOINT`, `WORKRUN_IPC_TOKEN`, and
-`WORKRUN_RUN_ID` into scripts it launches. The current implementation supports
-Unix domain sockets; Windows named-pipe support will be added with the desktop
-host implementation.
+`WORKRUN_RUN_ID` into scripts it launches.
