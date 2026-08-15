@@ -9,6 +9,7 @@ pub mod process_node;
 pub mod python_runtime;
 pub mod system;
 pub mod workflow;
+pub mod workflow_catalog;
 pub mod workrun;
 
 #[allow(unused)]

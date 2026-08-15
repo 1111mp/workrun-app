@@ -118,6 +118,7 @@ function nodeDisplayName(nodes: Node[], nodeId: string) {
 }
 
 function useWorkflowRun(
+  workflowId: string,
   nodes: Node[],
   edges: Edge[],
   settings: WorkflowSettings,
@@ -423,7 +424,7 @@ function useWorkflowRun(
   const runMutation = useMutation({
     mutationFn: (initialState: Record<string, unknown>) =>
       runWorkflow(
-        toWorkflowDsl(nodes, edges, settings),
+        toWorkflowDsl(workflowId, nodes, edges, settings),
         initialState,
         settings.mode === 'chat' ? chatThreadId.current : crypto.randomUUID(),
         handleRunEvent,

@@ -25,7 +25,7 @@ import { toast } from 'sonner';
 import { useUpdaterStore } from '@/stores';
 
 const navigation = [
-  { to: '/workflow', labelKey: 'navigation.workflow', icon: WorkflowIcon },
+  { to: '/workflows', labelKey: 'navigation.workflow', icon: WorkflowIcon },
   {
     to: '/apps',
     labelKey: 'navigation.apps',

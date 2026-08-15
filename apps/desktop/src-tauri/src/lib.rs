@@ -94,6 +94,10 @@ pub fn run() {
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,
             cmd::workflow::workflow_resolve_tool_approval,
+            cmd::workflow_catalog::workflow_catalog_list,
+            cmd::workflow_catalog::workflow_catalog_create,
+            cmd::workflow_catalog::workflow_catalog_inspect,
+            cmd::workflow_catalog::workflow_catalog_update,
             // Python runtime
             cmd::python_runtime::uv_version,
             cmd::python_runtime::ensure_python,

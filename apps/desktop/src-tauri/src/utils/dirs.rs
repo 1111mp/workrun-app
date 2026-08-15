@@ -79,6 +79,11 @@ pub fn process_node_catalog_path() -> Result<PathBuf> {
     Ok(process_nodes_dir()?.join("catalog.json"))
 }
 
+/// Local workflow catalog managed from the Workflows page.
+pub fn workflow_catalog_path() -> Result<PathBuf> {
+    Ok(app_home_dir()?.join("workflow.json"))
+}
+
 /// runtime uv install python dir
 pub fn uv_python_dir() -> Result<PathBuf> {
     Ok(runtime_dir()?.join("python"))

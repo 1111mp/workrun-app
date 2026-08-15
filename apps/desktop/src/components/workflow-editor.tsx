@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,8 +24,14 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '@workspace/ui/components';
-import { SaveIcon, Settings2Icon, ShieldAlertIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import {
+  ArrowLeftIcon,
+  SaveIcon,
+  Settings2Icon,
+  ShieldAlertIcon,
+} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
@@ -33,9 +39,11 @@ import { WorkflowRunPanel } from '@/components/workflow-run-panel';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { getModelCatalog } from '@/services/cmd';
 import {
-  loadWorkflowDocument,
-  saveWorkflowDocument,
+  createWorkflow,
+  createWorkflowDocument,
   toWorkflowDocument,
+  updateWorkflow,
+  type StoredWorkflow,
 } from '@/services/workflow';
 import { useWorkflowStore } from '@/stores';
 
@@ -47,7 +55,16 @@ const WORKFLOW_MODE = [
   { value: 'chat', label: 'Chat' },
 ];
 
-function WorkflowEditor() {
+type WorkflowEditorProps = {
+  workflow?: StoredWorkflow;
+};
+
+function WorkflowEditor({ workflow }: WorkflowEditorProps) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const draftId = useRef(crypto.randomUUID());
+  const [draftDocument] = useState(() => createWorkflowDocument());
+  const initialDocument = workflow?.document ?? draftDocument;
   const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
@@ -60,7 +77,7 @@ function WorkflowEditor() {
   const clearSelection = useWorkflowStore((state) => state.clearSelection);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [savedDocument, setSavedDocument] = useState(() =>
-    JSON.stringify(toWorkflowDocument(nodes, edges, workflowSettings)),
+    workflow ? JSON.stringify(workflow.document) : '',
   );
 
   const workflowDocument = toWorkflowDocument(nodes, edges, workflowSettings);
@@ -71,14 +88,18 @@ function WorkflowEditor() {
     queryKey: ['modelCatalog'],
     queryFn: getModelCatalog,
   });
-  const workflowRun = useWorkflowRun(nodes, edges, workflowSettings);
+  const workflowRun = useWorkflowRun(
+    workflow?.id ?? draftId.current,
+    nodes,
+    edges,
+    workflowSettings,
+  );
 
   useEffect(() => {
-    const saved = loadWorkflowDocument();
-    if (!saved) return;
-    replaceWorkflow(saved);
-    setSavedDocument(JSON.stringify(saved));
-  }, [replaceWorkflow]);
+    useWorkflowStore.temporal.getState().clear();
+    replaceWorkflow(initialDocument);
+    setSavedDocument(workflow ? JSON.stringify(initialDocument) : '');
+  }, [initialDocument, replaceWorkflow, workflow]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -108,11 +129,19 @@ function WorkflowEditor() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const saveWorkflow = () => {
+  const saveWorkflow = async () => {
     try {
-      saveWorkflowDocument(workflowDocument);
+      const saved = workflow
+        ? await updateWorkflow(workflow.id, workflowDocument)
+        : await createWorkflow(workflowDocument);
       setSavedDocument(workflowDocumentSnapshot);
-      toast.success('Workflow saved', { toasterId: 'global' });
+      void queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      toast.success(workflow ? 'Workflow saved' : 'Workflow created', {
+        toasterId: 'global',
+      });
+      if (!workflow) {
+        navigate(`/workflows/${saved.id}`, { replace: true });
+      }
     } catch (error) {
       toast.error('Workflow could not be saved', {
         toasterId: 'global',
@@ -130,6 +159,15 @@ function WorkflowEditor() {
         header={
           <header className='flex h-10 shrink-0 items-center gap-2 pt-1 pr-4'>
             <div className='flex flex-1 items-center gap-2 px-4'>
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                aria-label='Back to workflows'
+                nativeButton={false}
+                render={<Link to='/workflows' />}
+              >
+                <ArrowLeftIcon />
+              </Button>
               <SidebarTrigger className='-ml-1' />
               <Separator
                 orientation='vertical'
@@ -188,9 +226,13 @@ function WorkflowEditor() {
                 <Settings2Icon data-icon='inline-start' />
                 More settings
               </Button>
-              <Button size='sm' disabled={!isDirty} onClick={saveWorkflow}>
+              <Button
+                size='sm'
+                disabled={Boolean(workflow) && !isDirty}
+                onClick={() => void saveWorkflow()}
+              >
                 <SaveIcon data-icon='inline-start' />
-                Save
+                {workflow ? 'Save' : 'Create workflow'}
               </Button>
             </div>
           </header>

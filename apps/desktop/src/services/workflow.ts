@@ -9,6 +9,13 @@ export type WorkflowDocument = {
   settings: WorkflowSettings;
 };
 
+export type StoredWorkflow = {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  document: WorkflowDocument;
+};
+
 type WorkflowPlanEdge = {
   source: string;
   target: string;
@@ -117,12 +124,13 @@ export type WorkflowRunView = {
  * the desktop command receives a stable workflow runtime DSL.
  */
 export function toWorkflowDsl(
+  id: string,
   nodes: Node[],
   edges: Edge[],
   settings: WorkflowSettings,
 ): Workflow {
   return {
-    id: 'workflow',
+    id,
     name: settings.name,
     description: settings.description || undefined,
     mode: settings.mode,
@@ -164,7 +172,29 @@ export function toWorkflowDocument(
   };
 }
 
-export function loadWorkflowDocument(): WorkflowDocument | null {
+export function createWorkflowDocument(
+  name = 'Untitled workflow',
+): WorkflowDocument {
+  return {
+    nodes: [
+      {
+        id: 'start-node-default',
+        type: 'start',
+        position: { x: 100, y: 200 },
+        data: { label: 'Start' },
+      },
+    ],
+    edges: [],
+    settings: {
+      name,
+      description: '',
+      mode: 'task',
+      inputSchema: { fields: [] },
+    },
+  };
+}
+
+export function loadLegacyWorkflowDocument(): WorkflowDocument | null {
   try {
     const saved = window.localStorage.getItem(workflowDocumentStorageKey);
     if (!saved) return null;
@@ -187,11 +217,24 @@ export function loadWorkflowDocument(): WorkflowDocument | null {
   }
 }
 
-export function saveWorkflowDocument(document: WorkflowDocument) {
-  window.localStorage.setItem(
-    workflowDocumentStorageKey,
-    JSON.stringify(document),
-  );
+export function clearLegacyWorkflowDocument() {
+  window.localStorage.removeItem(workflowDocumentStorageKey);
+}
+
+export function listWorkflows() {
+  return invoke<StoredWorkflow[]>('workflow_catalog_list');
+}
+
+export function createWorkflow(document: WorkflowDocument) {
+  return invoke<StoredWorkflow>('workflow_catalog_create', { document });
+}
+
+export function inspectWorkflow(id: string) {
+  return invoke<StoredWorkflow>('workflow_catalog_inspect', { id });
+}
+
+export function updateWorkflow(id: string, document: WorkflowDocument) {
+  return invoke<StoredWorkflow>('workflow_catalog_update', { id, document });
 }
 
 export function compileWorkflow(dsl: Workflow) {

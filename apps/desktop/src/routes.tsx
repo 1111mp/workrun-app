@@ -1,4 +1,4 @@
-import { createMemoryRouter } from 'react-router';
+import { createMemoryRouter, Navigate } from 'react-router';
 
 import { HomePage } from '@/pages/home';
 
@@ -10,6 +10,18 @@ export const router = createMemoryRouter(
       children: [
         {
           path: 'workflow',
+          Component: () => <Navigate to='/workflows' replace />,
+        },
+        {
+          path: 'workflows',
+          lazy: () => import('@/pages/workflows'),
+        },
+        {
+          path: 'workflows/new',
+          lazy: () => import('@/pages/workflows/new'),
+        },
+        {
+          path: 'workflows/:id',
           lazy: () => import('@/pages/workflow'),
         },
         {
@@ -37,6 +49,6 @@ export const router = createMemoryRouter(
     },
   ],
   {
-    initialEntries: ['/workflow'],
+    initialEntries: ['/workflows'],
   },
 );
