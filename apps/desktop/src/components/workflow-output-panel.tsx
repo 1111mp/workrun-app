@@ -669,29 +669,30 @@ function WorkflowRunOutput({
                       );
                     })
                 )}
+                {!isChat && run.finalState && (
+                  <MessageScrollerItem messageId='final-state'>
+                    <Collapsible className='border-border border-t pt-2'>
+                      <CollapsibleTrigger
+                        render={<Button variant='ghost' className='w-fit' />}
+                      >
+                        <Marker>
+                          <MarkerContent>Final state</MarkerContent>
+                        </Marker>
+                        <ChevronDownIcon className='group-data-panel-open/button:rotate-180' />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <pre className='bg-muted mt-3 max-h-96 overflow-auto rounded-md p-3 text-xs'>
+                          {JSON.stringify(run.finalState, null, 2)}
+                        </pre>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </MessageScrollerItem>
+                )}
               </MessageScrollerContent>
             </MessageScrollerViewport>
             <MessageScrollerButton />
           </MessageScroller>
         </MessageScrollerProvider>
-
-        {!isChat && run.finalState && (
-          <Collapsible className='border-border border-t px-4 py-2'>
-            <CollapsibleTrigger
-              render={<Button variant='ghost' className='w-full' />}
-            >
-              <Marker>
-                <MarkerContent>Final state</MarkerContent>
-              </Marker>
-              <ChevronDownIcon className='ml-auto group-data-panel-open/button:rotate-180' />
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <pre className='bg-muted mt-3 max-h-52 overflow-auto rounded-md p-3 text-xs'>
-                {JSON.stringify(run.finalState, null, 2)}
-              </pre>
-            </CollapsibleContent>
-          </Collapsible>
-        )}
       </div>
 
       {isChat ? (

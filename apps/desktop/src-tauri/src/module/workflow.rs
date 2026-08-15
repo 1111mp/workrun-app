@@ -31,6 +31,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 use tauri::ipc::Channel;
 
@@ -113,13 +114,14 @@ impl CompiledWorkflow {
             .stream(initial_state, ExecutionConfig::new(thread_id), StreamMode::Messages);
         futures::pin_mut!(stream);
         let mut final_state = None;
+        let mut node_started_at = HashMap::new();
 
         while let Some(event) = stream.next().await {
             let event = event?;
             if let StreamEvent::Done { state, .. } = &event {
                 final_state = Some(state.clone());
             }
-            on_event(event);
+            on_event(with_measured_node_duration(event, &mut node_started_at));
         }
 
         let state = final_state.ok_or_else(|| anyhow!("workflow stream ended without a final state"))?;
@@ -128,6 +130,27 @@ impl CompiledWorkflow {
 
     pub fn plan(&self) -> &WorkflowPlan {
         &self.plan
+    }
+}
+
+fn with_measured_node_duration(event: StreamEvent, node_started_at: &mut HashMap<String, Instant>) -> StreamEvent {
+    match event {
+        StreamEvent::NodeStart { node, step } => {
+            node_started_at.insert(node.clone(), Instant::now());
+            StreamEvent::node_start(&node, step)
+        },
+        StreamEvent::NodeEnd {
+            node,
+            step,
+            duration_ms,
+        } => {
+            let duration_ms = node_started_at
+                .remove(&node)
+                .map(|started_at| started_at.elapsed().as_millis() as u64)
+                .unwrap_or(duration_ms);
+            StreamEvent::node_end(&node, step, duration_ms)
+        },
+        _ => event,
     }
 }
 
@@ -1053,6 +1076,22 @@ fn switch_route(cases: &[SwitchCase], state: &State) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{thread, time::Duration};
+
+    #[test]
+    fn measures_node_duration_from_stream_events() {
+        let mut node_started_at = HashMap::new();
+        let started = with_measured_node_duration(StreamEvent::node_start("node", 0), &mut node_started_at);
+        assert!(matches!(started, StreamEvent::NodeStart { .. }));
+
+        thread::sleep(Duration::from_millis(2));
+
+        let ended = with_measured_node_duration(StreamEvent::node_end("node", 0, 0), &mut node_started_at);
+        assert!(matches!(
+            ended,
+            StreamEvent::NodeEnd { duration_ms, .. } if duration_ms >= 1
+        ));
+    }
 
     #[tokio::test]
     async fn compiles_and_runs_an_if_else_branch() {
