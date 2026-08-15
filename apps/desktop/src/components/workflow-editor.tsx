@@ -93,6 +93,7 @@ const initialRunView: WorkflowRunView = {
   messages: [],
   thoughts: [],
   processLogs: [],
+  execution: [],
 };
 
 const MAX_PROCESS_LOG_CHARS = 200_000;
@@ -102,6 +103,16 @@ function appendProcessLog(current: string, chunk: string) {
   return next.length <= MAX_PROCESS_LOG_CHARS
     ? next
     : `[Earlier output truncated]\n${next.slice(-MAX_PROCESS_LOG_CHARS)}`;
+}
+
+function latestExecutionIndex(
+  execution: WorkflowRunView['execution'],
+  nodeId: string,
+) {
+  return execution.reduce(
+    (lastIndex, entry, index) => (entry.nodeId === nodeId ? index : lastIndex),
+    -1,
+  );
 }
 
 function runningNode(
@@ -211,7 +222,10 @@ function createNodeData(type: WorkflowNodeType) {
     case 'if_else':
       return {
         label: 'If / Else',
-        selector: { field: 'approved' },
+        conditions: {
+          true: { label: 'True', condition: '' },
+          false: { label: 'False', condition: '' },
+        },
       };
     case 'switch':
       return {
@@ -375,6 +389,16 @@ function WorkflowEditor() {
           ...current,
           activeNodeId: event.node,
           nodes: runningNode(current.nodes, event.node, name),
+          execution: [
+            ...current.execution,
+            {
+              nodeId: event.node,
+              type:
+                nodes.find((node) => node.id === event.node)?.type ?? 'node',
+              status: 'running',
+              turnId: chatTurnId.current,
+            },
+          ],
           thoughts: startThought(
             current.thoughts,
             event.node,
@@ -384,27 +408,82 @@ function WorkflowEditor() {
         return;
       }
       case 'node_end':
-        setRunView((current) => ({
-          ...current,
-          activeNodeId:
-            current.activeNodeId === event.node
-              ? undefined
-              : current.activeNodeId,
-          nodes: finishNode(current.nodes, event.node, event.duration_ms),
-          thoughts: finishThought(
-            current.thoughts,
+        setRunView((current) => {
+          const entryIndex = latestExecutionIndex(
+            current.execution,
             event.node,
-            event.duration_ms,
-          ),
-          messages: current.messages.map((message) =>
-            message.nodeId === event.node
-              ? { ...message, isStreaming: false }
-              : message,
-          ),
-        }));
+          );
+
+          return {
+            ...current,
+            activeNodeId:
+              current.activeNodeId === event.node
+                ? undefined
+                : current.activeNodeId,
+            nodes: finishNode(current.nodes, event.node, event.duration_ms),
+            execution: current.execution.map((entry, index) =>
+              index === entryIndex
+                ? {
+                    ...entry,
+                    status: 'completed',
+                    durationMs: event.duration_ms,
+                  }
+                : entry,
+            ),
+            thoughts: finishThought(
+              current.thoughts,
+              event.node,
+              event.duration_ms,
+            ),
+            messages: current.messages.map((message) =>
+              message.nodeId === event.node
+                ? { ...message, isStreaming: false }
+                : message,
+            ),
+          };
+        });
         return;
       case 'message':
         if (!event.content) return;
+        if (workflowSettings.mode !== 'chat') {
+          setRunView((current) => {
+            const entryIndex = current.execution.reduce(
+              (lastIndex, entry, index) =>
+                entry.nodeId === event.node ? index : lastIndex,
+              -1,
+            );
+            if (entryIndex === -1) return current;
+
+            const entry = current.execution[entryIndex];
+            const messages = Array.isArray(entry.messages)
+              ? [...entry.messages]
+              : [];
+            const lastMessage = messages.at(-1);
+            if (
+              typeof lastMessage === 'object' &&
+              lastMessage !== null &&
+              typeof (lastMessage as Record<string, unknown>).content ===
+                'string'
+            ) {
+              messages[messages.length - 1] = {
+                ...(lastMessage as Record<string, unknown>),
+                content:
+                  (lastMessage as Record<string, string>).content +
+                  event.content,
+              };
+            } else {
+              messages.push({ role: 'assistant', content: event.content });
+            }
+
+            return {
+              ...current,
+              execution: current.execution.map((item, index) =>
+                index === entryIndex ? { ...item, messages } : item,
+              ),
+            };
+          });
+          return;
+        }
         setRunView((current) => {
           const lastMessage = current.messages.at(-1);
           if (lastMessage?.nodeId === event.node && lastMessage.isStreaming) {
@@ -439,13 +518,39 @@ function WorkflowEditor() {
         });
         return;
       case 'custom':
-        if (
-          event.event_type !== 'process.output' ||
-          typeof event.data !== 'object' ||
-          event.data === null
-        ) {
+        if (typeof event.data !== 'object' || event.data === null) {
           return;
         }
+        if (event.event_type === 'workflow.node_result') {
+          const result = event.data as Record<string, unknown>;
+          setRunView((current) => {
+            const entryIndex = latestExecutionIndex(
+              current.execution,
+              event.node,
+            );
+
+            return {
+              ...current,
+              execution: current.execution.map((entry, index) =>
+                index === entryIndex
+                  ? {
+                      ...entry,
+                      ...result,
+                      // Tokens already rendered from the stream are the source
+                      // of truth. The completion payload is for metadata/state,
+                      // and must not replace a smoothly growing response.
+                      ...(Array.isArray(entry.messages) &&
+                      entry.messages.length > 0
+                        ? { messages: entry.messages }
+                        : {}),
+                    }
+                  : entry,
+              ),
+            };
+          });
+          return;
+        }
+        if (event.event_type !== 'process.output') return;
         {
           const stream = (event.data as Record<string, unknown>).stream;
           const data = (event.data as Record<string, unknown>).data;
@@ -457,6 +562,10 @@ function WorkflowEditor() {
             return;
           }
           setRunView((current) => {
+            const entryIndex = latestExecutionIndex(
+              current.execution,
+              event.node,
+            );
             const existing = current.processLogs.find(
               (log) => log.nodeId === event.node,
             );
@@ -472,6 +581,17 @@ function WorkflowEditor() {
             };
             return {
               ...current,
+              execution: current.execution.map((entry, index) =>
+                index === entryIndex
+                  ? {
+                      ...entry,
+                      [stream]: appendProcessLog(
+                        String(entry[stream] ?? ''),
+                        data,
+                      ),
+                    }
+                  : entry,
+              ),
               processLogs: existing
                 ? current.processLogs.map((item) =>
                     item.nodeId === event.node ? updated : item,
@@ -752,6 +872,7 @@ function WorkflowEditor() {
             finalState: undefined,
             error: undefined,
             nodes: [],
+            execution: [],
             messages: [
               ...current.messages,
               {
@@ -771,6 +892,7 @@ function WorkflowEditor() {
             messages: [],
             thoughts: [],
             processLogs: [],
+            execution: [],
           },
     );
     setRunPanelOpen(true);

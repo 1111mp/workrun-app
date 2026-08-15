@@ -48,8 +48,6 @@ function PythonUiRequestDialog({
     }
   };
 
-  console.log('request', request);
-
   if (!request || !isSchema(request.schema)) return null;
 
   const formId = `python-ui-request-${request.requestId}`;

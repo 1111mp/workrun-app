@@ -51,7 +51,10 @@ import { Children, Fragment, type ReactNode, useState } from 'react';
 import Markdown from 'react-markdown';
 
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
-import type { WorkflowRunView } from '@/services/workflow';
+import type {
+  WorkflowRunExecution,
+  WorkflowRunView,
+} from '@/services/workflow';
 
 type WorkflowOutputPanelProps = {
   run: WorkflowRunView;
@@ -85,6 +88,130 @@ function durationLabel(run: WorkflowRunView) {
 
 function nodeDisplayName(run: WorkflowRunView, nodeId: string) {
   return run.nodes.find((node) => node.id === nodeId)?.name ?? nodeId;
+}
+
+type WorkflowTraceEntry = {
+  nodeId: string;
+  type: string;
+  durationMs?: number;
+  status?: WorkflowRunExecution['status'];
+  [key: string]: unknown;
+};
+
+function workflowTrace(
+  finalState: WorkflowRunView['finalState'],
+): WorkflowTraceEntry[] {
+  const trace = finalState?.['workflow.trace'];
+  if (!Array.isArray(trace)) return [];
+
+  return trace.filter(
+    (entry): entry is WorkflowTraceEntry =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as Record<string, unknown>).nodeId === 'string' &&
+      typeof (entry as Record<string, unknown>).type === 'string',
+  );
+}
+
+function processLog(entry: WorkflowTraceEntry) {
+  if (entry.type !== 'process') return '';
+  const stdout = typeof entry.stdout === 'string' ? entry.stdout : '';
+  const stderr = typeof entry.stderr === 'string' ? entry.stderr : '';
+  return [stdout && `stdout\n${stdout}`, stderr && `stderr\n${stderr}`]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function TraceResult({
+  entry,
+  showAgentResponse = true,
+}: {
+  entry: WorkflowTraceEntry;
+  showAgentResponse?: boolean;
+}) {
+  if (entry.type === 'if_else') {
+    const result =
+      typeof entry.result === 'object' && entry.result !== null
+        ? (entry.result as Record<string, unknown>)
+        : undefined;
+    const route = result?.route;
+    const label = typeof result?.label === 'string' ? result.label : undefined;
+    const condition =
+      typeof result?.condition === 'string' ? result.condition : undefined;
+    const text =
+      entry.status === 'running'
+        ? 'Evaluating conditions…'
+        : route === 'true'
+          ? `Matched condition: ${label ?? 'True'}${condition ? ` (${condition})` : ''}.`
+          : route === 'false'
+            ? `Matched condition: ${label ?? 'False'}${condition ? ` (${condition})` : ''}.`
+            : 'No condition matched; this path ended.';
+
+    return <p className='text-muted-foreground mt-2 text-sm'>{text}</p>;
+  }
+
+  if (entry.type === 'agent' || entry.type === 'remote_agent') {
+    if (!showAgentResponse) {
+      return (
+        <p className='text-muted-foreground mt-2 text-sm'>
+          {entry.status === 'running'
+            ? 'Generating response…'
+            : 'Response ready.'}
+        </p>
+      );
+    }
+
+    const messages = Array.isArray(entry.messages)
+      ? entry.messages.filter(
+          (message): message is Record<string, unknown> =>
+            typeof message === 'object' && message !== null,
+        )
+      : [];
+    const responses = messages
+      .map((message) => message.content)
+      .filter((content): content is string => typeof content === 'string');
+
+    return responses.length > 0 ? (
+      <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
+        {responses.map((response, index) => (
+          <div key={index} className='text-sm leading-6'>
+            <Markdown>{response}</Markdown>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p className='text-muted-foreground mt-2 text-sm'>
+        {entry.status === 'running'
+          ? 'Waiting for a response…'
+          : 'Completed without a text response.'}
+      </p>
+    );
+  }
+
+  if (entry.type === 'process') {
+    return entry.result === undefined ? (
+      <p className='text-muted-foreground mt-2 text-sm'>
+        {entry.status === 'running'
+          ? 'Running process…'
+          : 'Completed without a structured result.'}
+      </p>
+    ) : (
+      <div className='mt-2'>
+        <p className='text-muted-foreground text-sm'>
+          Returned a structured result.
+        </p>
+        <pre className='bg-muted mt-2 overflow-x-auto rounded-md p-3 text-xs'>
+          {JSON.stringify(entry.result, null, 2)}
+        </pre>
+      </div>
+    );
+  }
+
+  return (
+    <p className='text-muted-foreground mt-2 text-sm'>
+      {entry.status === 'running' ? 'Running…' : 'Completed.'}
+    </p>
+  );
 }
 
 function codeText(children: ReactNode) {
@@ -160,6 +287,13 @@ function WorkflowRunOutput({
   const duration = durationLabel(run);
   const output = run.messages.map((message) => message.content).join('\n\n');
   const displayNodeName = (nodeId: string) => nodeDisplayName(run, nodeId);
+  const execution: WorkflowRunExecution[] =
+    run.execution.length > 0
+      ? run.execution
+      : workflowTrace(run.finalState).map<WorkflowRunExecution>((entry) => ({
+          ...entry,
+          status: 'completed',
+        }));
 
   const copyAll = async () => {
     if (!output) return;
@@ -186,19 +320,10 @@ function WorkflowRunOutput({
       </DrawerHeader>
 
       <div className='flex min-h-0 flex-1 flex-col'>
-        {!isChat && run.nodes.length > 0 && (
-          <div className='text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 px-4 py-2 text-xs'>
-            {run.nodes.map((node) => (
-              <span key={node.id}>
-                {node.status === 'running'
-                  ? 'Running'
-                  : node.status === 'failed'
-                    ? 'Failed'
-                    : 'Finished'}{' '}
-                {node.name ?? node.id}
-                {node.durationMs !== undefined ? ` (${node.durationMs}ms)` : ''}
-              </span>
-            ))}
+        {!isChat && isRunning && (
+          <div className='text-muted-foreground flex items-center gap-2 px-4 py-2 text-sm'>
+            <Spinner className='size-3.5' />
+            Running workflow…
           </div>
         )}
 
@@ -210,47 +335,103 @@ function WorkflowRunOutput({
           </Alert>
         )}
 
-        {run.processLogs.length > 0 && (
-          <div className='space-y-2 px-4 py-2'>
-            {run.processLogs.map((log) => (
-              <Collapsible key={log.nodeId}>
-                <CollapsibleTrigger
-                  render={
-                    <Button variant='ghost' className='w-full justify-start' />
-                  }
-                >
-                  <TerminalIcon />
-                  {log.name} logs
-                  <ChevronDownIcon className='ml-auto group-data-panel-open/button:rotate-180' />
-                </CollapsibleTrigger>
-                <CollapsibleContent className='bg-muted h-52 overflow-hidden rounded-md'>
-                  <LazyLog
-                    text={`${log.stdout}${log.stderr ? `${log.stdout ? '\n' : ''}stderr\n${log.stderr}` : ''}`}
-                    follow
-                    selectableLines
-                    wrapLines
-                    enableLineNumbers
-                    rowHeight={20}
-                    style={{
-                      backgroundColor: 'transparent',
-                      color: 'var(--foreground)',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '0.75rem',
-                      lineHeight: '1.25rem',
-                      padding: '0.75rem',
-                    }}
-                  />
-                </CollapsibleContent>
-              </Collapsible>
-            ))}
-          </div>
-        )}
-
         <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 p-4'>
-                {run.messages.length === 0 ? (
+                {!isChat && execution.length > 0 && (
+                  <MessageScrollerItem messageId='execution-start'>
+                    <div>
+                      <Marker variant='separator'>
+                        <MarkerIcon>
+                          <CheckCircle2Icon />
+                        </MarkerIcon>
+                        <MarkerContent>1. Start</MarkerContent>
+                      </Marker>
+                      <p className='text-muted-foreground mt-2 text-sm'>
+                        Workflow started.
+                      </p>
+                    </div>
+                  </MessageScrollerItem>
+                )}
+                {!isChat &&
+                  execution.map((entry, index) => {
+                    const log = processLog(entry);
+                    const durationMs = entry.durationMs;
+
+                    return (
+                      <MessageScrollerItem
+                        key={`${entry.nodeId}-${index}`}
+                        messageId={`execution-${entry.nodeId}-${index}`}
+                      >
+                        <Marker variant='separator'>
+                          <MarkerIcon>
+                            <CheckCircle2Icon />
+                          </MarkerIcon>
+                          <MarkerContent>
+                            {index + 2}. {displayNodeName(entry.nodeId)} ·{' '}
+                            {entry.type}
+                            {durationMs !== undefined
+                              ? ` · ${durationMs}ms`
+                              : ''}
+                          </MarkerContent>
+                        </Marker>
+                        <TraceResult entry={entry} />
+                        {log && (
+                          <div className='mt-3'>
+                            <p className='text-muted-foreground mb-1 text-xs font-medium'>
+                              Process output
+                            </p>
+                            <div className='bg-muted h-52 overflow-hidden rounded-md'>
+                              <LazyLog
+                                text={log}
+                                selectableLines
+                                wrapLines
+                                enableLineNumbers
+                                rowHeight={20}
+                                style={{
+                                  backgroundColor: 'transparent',
+                                  color: 'var(--foreground)',
+                                  fontFamily: 'var(--font-mono)',
+                                  fontSize: '0.75rem',
+                                  lineHeight: '1.25rem',
+                                  padding: '0.75rem',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </MessageScrollerItem>
+                    );
+                  })}
+                {!isChat && isRunning && (
+                  <MessageScrollerItem messageId='execution-thinking'>
+                    <ThinkingProcess
+                      thoughts={run.thoughts}
+                      isRunning={isRunning}
+                      nodeName={displayNodeName}
+                    />
+                  </MessageScrollerItem>
+                )}
+                {!isChat &&
+                  run.status === 'completed' &&
+                  execution.length > 0 && (
+                    <MessageScrollerItem messageId='execution-end'>
+                      <Marker variant='separator'>
+                        <MarkerIcon>
+                          <CheckCircle2Icon />
+                        </MarkerIcon>
+                        <MarkerContent>
+                          {execution.length + 2}. End
+                        </MarkerContent>
+                      </Marker>
+                      <p className='text-muted-foreground mt-2 text-sm'>
+                        Workflow completed.
+                      </p>
+                    </MessageScrollerItem>
+                  )}
+                {run.messages.length === 0 &&
+                (isChat || (isRunning && run.thoughts.length === 0)) ? (
                   <Empty className='border-0'>
                     <EmptyHeader>
                       <EmptyMedia variant='icon'>
@@ -277,147 +458,219 @@ function WorkflowRunOutput({
                     </EmptyHeader>
                   </Empty>
                 ) : (
-                  run.messages.map((message, index) => (
-                    <Fragment key={message.id}>
-                      <MessageScrollerItem
-                        messageId={message.id}
-                        scrollAnchor={
-                          isChat
-                            ? message.role === 'user'
-                            : index === run.messages.length - 1
-                        }
-                      >
-                        <Message
-                          align={message.role === 'user' ? 'end' : 'start'}
-                        >
-                          <MessageContent>
-                            {message.role !== 'user' && (
-                              <MessageHeader>
-                                {displayNodeName(message.nodeId)}
-                              </MessageHeader>
-                            )}
-                            <Bubble
-                              align={message.role === 'user' ? 'end' : 'start'}
-                              variant={
-                                message.role === 'user' ? 'secondary' : 'ghost'
-                              }
-                            >
-                              <BubbleContent>
-                                <Markdown
-                                  components={{
-                                    a: ({ children, ...props }) => (
-                                      <a
-                                        {...props}
-                                        className='text-primary underline underline-offset-3'
-                                        target='_blank'
-                                        rel='noreferrer'
-                                      >
-                                        {children}
-                                      </a>
-                                    ),
-                                    blockquote: ({ children }) => (
-                                      <blockquote className='text-muted-foreground border-border border-l pl-3'>
-                                        {children}
-                                      </blockquote>
-                                    ),
-                                    code: ({ children, className }) =>
-                                      className ? (
-                                        <WorkflowCodeBlock
-                                          className={className}
-                                          code={codeText(children)}
-                                        />
-                                      ) : (
-                                        <code className='bg-muted rounded px-1 py-0.5'>
-                                          {children}
-                                        </code>
-                                      ),
-                                    h1: ({ children }) => (
-                                      <h1 className='text-base font-semibold'>
-                                        {children}
-                                      </h1>
-                                    ),
-                                    h2: ({ children }) => (
-                                      <h2 className='text-sm font-semibold'>
-                                        {children}
-                                      </h2>
-                                    ),
-                                    li: ({ children }) => (
-                                      <li className='leading-6'>{children}</li>
-                                    ),
-                                    ol: ({ children }) => (
-                                      <ol className='list-decimal pl-5'>
-                                        {children}
-                                      </ol>
-                                    ),
-                                    p: ({ children }) => (
-                                      <p className='leading-6'>{children}</p>
-                                    ),
-                                    pre: ({ children }) => (
-                                      <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
-                                        {children}
-                                      </pre>
-                                    ),
-                                    ul: ({ children }) => (
-                                      <ul className='list-disc pl-5'>
-                                        {children}
-                                      </ul>
-                                    ),
-                                  }}
-                                >
-                                  {message.content}
-                                </Markdown>
-                              </BubbleContent>
-                            </Bubble>
-                            {message.isStreaming && (
-                              <span className='text-muted-foreground flex items-center gap-1 px-3 text-xs'>
-                                <Spinner /> Streaming
-                              </span>
-                            )}
-                          </MessageContent>
-                        </Message>
-                      </MessageScrollerItem>
-                      {isChat && message.role === 'user' && (
-                        <MessageScrollerItem
-                          messageId={`${message.id}-thinking`}
-                        >
-                          <ThinkingProcess
-                            thoughts={run.thoughts.filter(
-                              (thought) => thought.turnId === message.turnId,
-                            )}
-                            isRunning={
-                              isRunning &&
-                              message.turnId === run.messages.at(-1)?.turnId
-                            }
-                            nodeName={displayNodeName}
-                          />
-                        </MessageScrollerItem>
-                      )}
-                    </Fragment>
-                  ))
-                )}
+                  run.messages
+                    .filter(() => isChat)
+                    .map((message) => {
+                      const turnExecution = execution.filter(
+                        (entry) => entry.turnId === message.turnId,
+                      );
+                      const isCurrentTurn =
+                        isRunning &&
+                        message.turnId === run.messages.at(-1)?.turnId;
 
-                {!isChat && run.finalState && (
-                  <MessageScrollerItem messageId='final-state'>
-                    <Collapsible defaultOpen={false}>
-                      <CollapsibleTrigger render={<Button variant='ghost' />}>
-                        <Marker>
-                          <MarkerContent>Final state</MarkerContent>
-                        </Marker>
-                        <ChevronDownIcon className='ml-auto group-data-panel-open/button:rotate-180' />
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <pre className='bg-muted mt-3 overflow-x-auto rounded-md p-3 text-xs'>
-                          {JSON.stringify(run.finalState, null, 2)}
-                        </pre>
-                      </CollapsibleContent>
-                    </Collapsible>
-                  </MessageScrollerItem>
+                      return (
+                        <Fragment key={message.id}>
+                          <MessageScrollerItem
+                            messageId={message.id}
+                            scrollAnchor={message.role === 'user'}
+                          >
+                            <Message
+                              align={message.role === 'user' ? 'end' : 'start'}
+                            >
+                              <MessageContent>
+                                {message.role !== 'user' && (
+                                  <MessageHeader>
+                                    {displayNodeName(message.nodeId)}
+                                  </MessageHeader>
+                                )}
+                                <Bubble
+                                  align={
+                                    message.role === 'user' ? 'end' : 'start'
+                                  }
+                                  variant={
+                                    message.role === 'user'
+                                      ? 'secondary'
+                                      : 'ghost'
+                                  }
+                                >
+                                  <BubbleContent>
+                                    <Markdown
+                                      components={{
+                                        a: ({ children, ...props }) => (
+                                          <a
+                                            {...props}
+                                            className='text-primary underline underline-offset-3'
+                                            target='_blank'
+                                            rel='noreferrer'
+                                          >
+                                            {children}
+                                          </a>
+                                        ),
+                                        blockquote: ({ children }) => (
+                                          <blockquote className='text-muted-foreground border-border border-l pl-3'>
+                                            {children}
+                                          </blockquote>
+                                        ),
+                                        code: ({ children, className }) =>
+                                          className ? (
+                                            <WorkflowCodeBlock
+                                              className={className}
+                                              code={codeText(children)}
+                                            />
+                                          ) : (
+                                            <code className='bg-muted rounded px-1 py-0.5'>
+                                              {children}
+                                            </code>
+                                          ),
+                                        h1: ({ children }) => (
+                                          <h1 className='text-base font-semibold'>
+                                            {children}
+                                          </h1>
+                                        ),
+                                        h2: ({ children }) => (
+                                          <h2 className='text-sm font-semibold'>
+                                            {children}
+                                          </h2>
+                                        ),
+                                        li: ({ children }) => (
+                                          <li className='leading-6'>
+                                            {children}
+                                          </li>
+                                        ),
+                                        ol: ({ children }) => (
+                                          <ol className='list-decimal pl-5'>
+                                            {children}
+                                          </ol>
+                                        ),
+                                        p: ({ children }) => (
+                                          <p className='leading-6'>
+                                            {children}
+                                          </p>
+                                        ),
+                                        pre: ({ children }) => (
+                                          <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
+                                            {children}
+                                          </pre>
+                                        ),
+                                        ul: ({ children }) => (
+                                          <ul className='list-disc pl-5'>
+                                            {children}
+                                          </ul>
+                                        ),
+                                      }}
+                                    >
+                                      {message.content}
+                                    </Markdown>
+                                  </BubbleContent>
+                                </Bubble>
+                                {message.isStreaming && (
+                                  <span className='text-muted-foreground flex items-center gap-1 px-3 text-xs'>
+                                    <Spinner /> Streaming
+                                  </span>
+                                )}
+                              </MessageContent>
+                            </Message>
+                          </MessageScrollerItem>
+                          {message.role === 'user' &&
+                            turnExecution.map((entry, index) => {
+                              const log = processLog(entry);
+
+                              return (
+                                <MessageScrollerItem
+                                  key={`${entry.nodeId}-${index}`}
+                                  messageId={`chat-${message.id}-execution-${index}`}
+                                >
+                                  <Marker variant='separator'>
+                                    <MarkerIcon>
+                                      {entry.status === 'running' ? (
+                                        <Spinner />
+                                      ) : entry.status === 'failed' ? (
+                                        <CircleAlertIcon />
+                                      ) : (
+                                        <CheckCircle2Icon />
+                                      )}
+                                    </MarkerIcon>
+                                    <MarkerContent>
+                                      {displayNodeName(entry.nodeId)} ·{' '}
+                                      {entry.type}
+                                      {entry.durationMs !== undefined
+                                        ? ` · ${entry.durationMs}ms`
+                                        : ''}
+                                    </MarkerContent>
+                                  </Marker>
+                                  <TraceResult
+                                    entry={entry}
+                                    showAgentResponse={false}
+                                  />
+                                  {log && (
+                                    <div className='mt-3'>
+                                      <p className='text-muted-foreground mb-1 text-xs font-medium'>
+                                        Process output
+                                      </p>
+                                      <div className='bg-muted h-52 overflow-hidden rounded-md'>
+                                        <LazyLog
+                                          text={log}
+                                          selectableLines
+                                          wrapLines
+                                          enableLineNumbers
+                                          rowHeight={20}
+                                          style={{
+                                            backgroundColor: 'transparent',
+                                            color: 'var(--foreground)',
+                                            fontFamily: 'var(--font-mono)',
+                                            fontSize: '0.75rem',
+                                            lineHeight: '1.25rem',
+                                            padding: '0.75rem',
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+                                </MessageScrollerItem>
+                              );
+                            })}
+                          {message.role === 'user' &&
+                            turnExecution.length === 0 && (
+                              <MessageScrollerItem
+                                messageId={`${message.id}-thinking`}
+                              >
+                                <ThinkingProcess
+                                  thoughts={run.thoughts.filter(
+                                    (thought) =>
+                                      thought.turnId === message.turnId,
+                                  )}
+                                  isRunning={isCurrentTurn}
+                                  nodeName={displayNodeName}
+                                />
+                              </MessageScrollerItem>
+                            )}
+                        </Fragment>
+                      );
+                    })
                 )}
               </MessageScrollerContent>
             </MessageScrollerViewport>
             <MessageScrollerButton />
           </MessageScroller>
         </MessageScrollerProvider>
+
+        {!isChat && run.finalState && (
+          <Collapsible className='border-border border-t px-4 py-2'>
+            <CollapsibleTrigger
+              render={<Button variant='ghost' className='w-full' />}
+            >
+              <Marker>
+                <MarkerContent>Final state</MarkerContent>
+              </Marker>
+              <ChevronDownIcon className='ml-auto group-data-panel-open/button:rotate-180' />
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre className='bg-muted mt-3 max-h-52 overflow-auto rounded-md p-3 text-xs'>
+                {JSON.stringify(run.finalState, null, 2)}
+              </pre>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
       </div>
 
       {isChat ? (

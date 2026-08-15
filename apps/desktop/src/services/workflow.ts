@@ -87,6 +87,16 @@ export type WorkflowProcessLog = {
   stderr: string;
 };
 
+export type WorkflowRunExecution = {
+  nodeId: string;
+  type: string;
+  status: 'running' | 'completed' | 'failed';
+  durationMs?: number;
+  /** The chat turn this execution belongs to. */
+  turnId?: string;
+  [key: string]: unknown;
+};
+
 export type WorkflowRunView = {
   status: WorkflowRunStatus;
   startedAt?: number;
@@ -97,6 +107,7 @@ export type WorkflowRunView = {
   messages: WorkflowRunMessage[];
   thoughts: WorkflowRunThought[];
   processLogs: WorkflowProcessLog[];
+  execution: WorkflowRunExecution[];
   finalState?: Record<string, unknown>;
   error?: string;
 };
@@ -193,7 +204,6 @@ export function runWorkflow(
   threadId?: string,
   onEvent?: (event: WorkflowRunEvent) => void,
 ) {
-  console.log('dsl', dsl);
   const channel = new Channel<WorkflowRunEvent>();
   channel.onmessage = (event) => onEvent?.(event);
 

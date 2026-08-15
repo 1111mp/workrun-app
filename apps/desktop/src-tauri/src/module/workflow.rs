@@ -21,7 +21,7 @@ use adk_rust::{
         ollama::{OllamaConfig, OllamaModel},
         openai::{OpenAIClient, OpenAIConfig},
     },
-    prelude::{Content, Llm, LlmAgentBuilder},
+    prelude::{Content, Event, Llm, LlmAgentBuilder},
     server::RemoteA2aAgent,
 };
 use anyhow::{Result, anyhow, bail};
@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use tauri::ipc::Channel;
 
@@ -192,11 +192,12 @@ pub fn compile(
             // A2A is a first-class ADK Agent. Wrapping it in AgentNode makes
             // the remote call a real graph execution step, not a side effect
             // performed by the Tauri command.
-            "remote_agent" => graph.add_node(remote_a2a_graph_node(node)?),
+            "remote_agent" => graph.add_node(remote_a2a_graph_node(node, on_event.clone())?),
             "process" => add_process_node(graph, node, on_event.clone()),
+            "if_else" => add_if_else_control_node(graph, node, on_event.clone())?,
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
-            "agent" => add_local_agent_node(graph, node, config)?,
+            "agent" => add_local_agent_node(graph, node, config, on_event.clone())?,
             _ => add_control_node(graph, node),
         };
     }
@@ -311,6 +312,9 @@ impl Node for ProcessWorkflowNode {
             "exitCode": run.execution.exit_code,
             "result": run.result,
         });
+        if let Some(on_event) = &self.on_event {
+            let _ = on_event.send(StreamEvent::custom(&self.id, "workflow.node_result", event.clone()));
+        }
         let mut output = NodeOutput::new()
             .with_update("workflow.last_node", json!(self.id))
             .with_update("workflow.node", event.clone())
@@ -347,7 +351,51 @@ fn add_control_node(graph: StateGraph, node: &WorkflowNode) -> StateGraph {
     })
 }
 
-fn add_local_agent_node(graph: StateGraph, node: &WorkflowNode, config: &IWorkrun) -> Result<StateGraph> {
+fn add_if_else_control_node(
+    graph: StateGraph,
+    node: &WorkflowNode,
+    on_event: Option<Channel<StreamEvent>>,
+) -> Result<StateGraph> {
+    let id = node.id.clone();
+    let data = node.data.clone();
+    let conditions = if_else_conditions(node)?;
+    Ok(graph.add_node_fn(&id.clone(), move |context| {
+        let id = id.clone();
+        let data = data.clone();
+        let route = if_else_route(&conditions, &context.state);
+        let condition = data
+            .pointer(&format!("/conditions/{route}/condition"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let label = data
+            .pointer(&format!("/conditions/{route}/label"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let on_event = on_event.clone();
+        async move {
+            let event = json!({
+                "nodeId": id,
+                "type": "if_else",
+                "data": data,
+                "result": { "route": route, "label": label, "condition": condition },
+            });
+            if let Some(on_event) = on_event {
+                let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+            }
+            Ok(NodeOutput::new()
+                .with_update("workflow.last_node", json!(id))
+                .with_update("workflow.node", event.clone())
+                .with_update("workflow.trace", event))
+        }
+    }))
+}
+
+fn add_local_agent_node(
+    graph: StateGraph,
+    node: &WorkflowNode,
+    config: &IWorkrun,
+    on_event: Option<Channel<StreamEvent>>,
+) -> Result<StateGraph> {
     let id = node.id.clone();
     let description = string_data(node, "description").unwrap_or_default();
     let instruction = string_data(node, "instruction").unwrap_or_default();
@@ -363,11 +411,13 @@ fn add_local_agent_node(graph: StateGraph, node: &WorkflowNode, config: &IWorkru
         .instruction(instruction)
         .model(create_model(&model, config)?)
         .build()?;
-    Ok(graph.add_node(
-        AdkAgentNode::new(Arc::new(agent))
-            .with_input_mapper(state_as_agent_input)
-            .with_output_mapper(move |events| agent_output_updates(events, &id, "agent", &label)),
-    ))
+    Ok(graph.add_node(StreamingAgentNode::new(
+        AdkAgentNode::new(Arc::new(agent)).with_input_mapper(state_as_agent_input),
+        id,
+        "agent",
+        label,
+        on_event,
+    )))
 }
 
 fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
@@ -400,7 +450,7 @@ fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Ll
     })
 }
 
-fn remote_a2a_graph_node(node: &WorkflowNode) -> Result<AdkAgentNode> {
+fn remote_a2a_graph_node(node: &WorkflowNode, on_event: Option<Channel<StreamEvent>>) -> Result<StreamingAgentNode> {
     let url = string_data(node, "url")
         .filter(|url| !url.trim().is_empty())
         .ok_or_else(|| anyhow!("remote_agent node `{}` needs data.url", node.id))?;
@@ -411,9 +461,121 @@ fn remote_a2a_graph_node(node: &WorkflowNode) -> Result<AdkAgentNode> {
         .build()
         .map_err(|error| anyhow!("remote_agent node `{}` is invalid: {error}", node.id))?;
     let id = node.id.clone();
-    Ok(AdkAgentNode::new(Arc::new(remote))
-        .with_input_mapper(state_as_agent_input)
-        .with_output_mapper(move |events| agent_output_updates(events, &id, "remote_agent", &url)))
+    Ok(StreamingAgentNode::new(
+        AdkAgentNode::new(Arc::new(remote)).with_input_mapper(state_as_agent_input),
+        id,
+        "remote_agent",
+        url,
+        on_event,
+    ))
+}
+
+/// `adk-graph` calls `execute_stream` to emit tokens, then calls `execute` a
+/// second time to obtain state updates. Its built-in `AgentNode` starts a new
+/// model request in both methods. Cache the events from the first request so
+/// the second call can derive the state from exactly the text the user saw.
+struct StreamingAgentNode {
+    id: String,
+    inner: AdkAgentNode,
+    kind: String,
+    endpoint_or_model: String,
+    on_event: Option<Channel<StreamEvent>>,
+    streamed_events: Mutex<HashMap<(String, usize), Vec<Value>>>,
+}
+
+impl StreamingAgentNode {
+    fn new(
+        inner: AdkAgentNode,
+        id: String,
+        kind: impl Into<String>,
+        endpoint_or_model: impl Into<String>,
+        on_event: Option<Channel<StreamEvent>>,
+    ) -> Self {
+        Self {
+            id,
+            inner,
+            kind: kind.into(),
+            endpoint_or_model: endpoint_or_model.into(),
+            on_event,
+            streamed_events: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn cache_key(context: &NodeContext) -> (String, usize) {
+        (context.config.thread_id.clone(), context.step)
+    }
+
+    fn store_streamed_events(&self, key: (String, usize), events: Vec<Value>) -> adk_rust::graph::Result<()> {
+        let mut cache = self
+            .streamed_events
+            .lock()
+            .map_err(|_| graph_node_error(&self.id, "agent event cache is unavailable"))?;
+        cache.insert(key, events);
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl Node for StreamingAgentNode {
+    fn name(&self) -> &str {
+        &self.id
+    }
+
+    async fn execute(&self, context: &NodeContext) -> adk_rust::graph::Result<NodeOutput> {
+        let key = Self::cache_key(context);
+        let events = self
+            .streamed_events
+            .lock()
+            .map_err(|_| graph_node_error(&self.id, "agent event cache is unavailable"))?
+            .remove(&key)
+            .ok_or_else(|| graph_node_error(&self.id, "streamed agent events are unavailable"))?
+            .into_iter()
+            .map(|event| serde_json::from_value::<Event>(event).map_err(|error| graph_node_error(&self.id, error)))
+            .collect::<adk_rust::graph::Result<Vec<_>>>()?;
+
+        Ok(NodeOutput::new().with_updates(agent_output_updates(
+            &events,
+            &self.id,
+            &self.kind,
+            &self.endpoint_or_model,
+            self.on_event.as_ref(),
+        )))
+    }
+
+    fn execute_stream<'a>(
+        &'a self,
+        context: &'a NodeContext,
+    ) -> std::pin::Pin<Box<dyn futures::Stream<Item = adk_rust::graph::Result<StreamEvent>> + Send + 'a>> {
+        let key = Self::cache_key(context);
+        let stream = self.inner.execute_stream(context);
+        let node = self;
+
+        Box::pin(async_stream::stream! {
+            futures::pin_mut!(stream);
+            let mut events = Vec::new();
+
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(event) => {
+                        if let StreamEvent::Custom { event_type, data, .. } = &event
+                            && event_type == "agent_event"
+                        {
+                            events.push(data.clone());
+                        }
+                        yield Ok(event);
+                    }
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
+                }
+            }
+
+            if let Err(error) = node.store_streamed_events(key, events) {
+                yield Err(error);
+            }
+        })
+    }
 }
 
 fn state_as_agent_input(state: &State) -> Content {
@@ -428,6 +590,7 @@ fn agent_output_updates(
     node_id: &str,
     kind: &str,
     endpoint_or_model: &str,
+    on_event: Option<&Channel<StreamEvent>>,
 ) -> HashMap<String, Value> {
     let messages = events
         .iter()
@@ -449,6 +612,9 @@ fn agent_output_updates(
         "endpointOrModel": endpoint_or_model,
         "messages": messages,
     });
+    if let Some(on_event) = on_event {
+        let _ = on_event.send(StreamEvent::custom(node_id, "workflow.node_result", event.clone()));
+    }
     let mut updates = HashMap::from([
         ("workflow.last_node".to_string(), json!(node_id)),
         ("workflow.node".to_string(), event.clone()),
@@ -539,17 +705,11 @@ fn add_if_else_edges(
     end_ids: &HashSet<String>,
     plan: &mut Vec<PlanEdge>,
 ) -> Result<()> {
-    let field = selector_field(node)?;
     let targets = routes_from_edges(outgoing, end_ids, |edge| edge.source_handle.clone().unwrap())?;
     let true_target = targets.get("true").cloned().unwrap_or(EdgeTarget::End);
     let false_target = targets.get("false").cloned().unwrap_or(EdgeTarget::End);
-    let router: RouterFn = Arc::new(move |state: &State| {
-        if state.get(&field).and_then(Value::as_bool).unwrap_or(false) {
-            "true".into()
-        } else {
-            "false".into()
-        }
-    });
+    let conditions = if_else_conditions(node)?;
+    let router: RouterFn = Arc::new(move |state: &State| if_else_route(&conditions, state));
     graph.edges.push(Edge::Conditional {
         source: node.id.clone(),
         router,
@@ -656,6 +816,162 @@ fn selector_field(node: &WorkflowNode) -> Result<String> {
         .ok_or_else(|| anyhow!("{} node `{}` needs data.selector.field", node.kind, node.id))
 }
 
+struct IfElseConditions {
+    true_condition: Condition,
+    false_condition: Condition,
+}
+
+fn if_else_route(conditions: &IfElseConditions, state: &State) -> String {
+    if conditions.true_condition.matches(state) {
+        "true".into()
+    } else if conditions.false_condition.matches(state) {
+        "false".into()
+    } else {
+        END.into()
+    }
+}
+
+#[derive(Clone)]
+struct Condition {
+    field: String,
+    operator: Option<ConditionOperator>,
+    expected: Option<Value>,
+}
+
+#[derive(Clone, Copy)]
+enum ConditionOperator {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+}
+
+impl Condition {
+    fn matches(&self, state: &State) -> bool {
+        let value = state_value(state, &self.field);
+        let Some(operator) = self.operator else {
+            return value.is_some_and(is_truthy);
+        };
+        let Some(expected) = self.expected.as_ref() else {
+            return false;
+        };
+        let Some(value) = value else {
+            return false;
+        };
+
+        match operator {
+            ConditionOperator::Equal => value == expected,
+            ConditionOperator::NotEqual => value != expected,
+            ConditionOperator::GreaterThan => compare_values(value, expected).is_some_and(|order| order.is_gt()),
+            ConditionOperator::GreaterThanOrEqual => compare_values(value, expected).is_some_and(|order| order.is_ge()),
+            ConditionOperator::LessThan => compare_values(value, expected).is_some_and(|order| order.is_lt()),
+            ConditionOperator::LessThanOrEqual => compare_values(value, expected).is_some_and(|order| order.is_le()),
+        }
+    }
+}
+
+fn if_else_conditions(node: &WorkflowNode) -> Result<IfElseConditions> {
+    let conditions = node
+        .data
+        .get("conditions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("if_else node `{}` has invalid data.conditions", node.id))?;
+    let get_condition = |branch: &str| {
+        conditions
+            .get(branch)
+            .ok_or_else(|| anyhow!("if_else node `{}` needs data.conditions.{branch}", node.id))
+            .and_then(|condition| {
+                condition
+                    .get("condition")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("if_else node `{}` needs data.conditions.{branch}.condition", node.id))
+            })
+            .and_then(parse_condition)
+    };
+    Ok(IfElseConditions {
+        true_condition: get_condition("true")?,
+        false_condition: get_condition("false")?,
+    })
+}
+
+fn parse_condition(expression: &str) -> Result<Condition> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        bail!("condition cannot be empty");
+    }
+    for (token, operator) in [
+        ("==", ConditionOperator::Equal),
+        ("!=", ConditionOperator::NotEqual),
+        (">=", ConditionOperator::GreaterThanOrEqual),
+        ("<=", ConditionOperator::LessThanOrEqual),
+        (">", ConditionOperator::GreaterThan),
+        ("<", ConditionOperator::LessThan),
+    ] {
+        if let Some((field, expected)) = expression.split_once(token) {
+            let field = parse_condition_field(field)?;
+            let expected = expected.trim();
+            if expected.is_empty() {
+                bail!("condition `{expression}` needs a value after `{token}`");
+            }
+            let expected = serde_json::from_str(expected).unwrap_or_else(|_| Value::String(expected.to_string()));
+            return Ok(Condition {
+                field,
+                operator: Some(operator),
+                expected: Some(expected),
+            });
+        }
+    }
+    Ok(Condition {
+        field: parse_condition_field(expression)?,
+        operator: None,
+        expected: None,
+    })
+}
+
+fn parse_condition_field(field: &str) -> Result<String> {
+    let field = field.trim();
+    if field.is_empty()
+        || !field.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+    {
+        bail!("condition `{field}` needs a state field such as `approved` or `review.score`");
+    }
+    Ok(field.to_string())
+}
+
+fn state_value<'a>(state: &'a State, field: &str) -> Option<&'a Value> {
+    let mut value = state.get(field.split('.').next()?)?;
+    for segment in field.split('.').skip(1) {
+        value = value.get(segment)?;
+    }
+    Some(value)
+}
+
+fn is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Null => false,
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => left.as_f64()?.partial_cmp(&right.as_f64()?),
+        (Value::String(left), Value::String(right)) => Some(left.cmp(right)),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct SwitchCase {
     id: String,
@@ -680,10 +996,10 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn compiles_and_runs_a_boolean_branch() {
+    async fn compiles_and_runs_an_if_else_branch() {
         let dsl: WorkflowDsl = serde_json::from_value(json!({
             "id": "approval", "nodes": [
-                {"id":"start","type":"start"}, {"id":"check","type":"if_else","data":{"selector":{"field":"approved"}}},
+                {"id":"start","type":"start"}, {"id":"check","type":"if_else","data":{"conditions":{"true":{"label":"True","condition":"approved == true"},"false":{"label":"False","condition":"approved == false"}}}},
                 {"id":"end","type":"end"}
             ], "edges": [
                 {"source":"start","target":"check"}, {"source":"check","target":"end","sourceHandle":"true"},
@@ -700,11 +1016,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.state["workflow.last_node"], json!("check"));
+        assert_eq!(result.state["workflow.trace"][0]["result"]["route"], json!("true"));
         assert!(events.iter().any(|event| matches!(
             event,
             StreamEvent::NodeStart { node, .. } if node == "check"
         )));
         assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
+    }
+
+    #[test]
+    fn evaluates_independent_if_else_conditions() {
+        let conditions = if_else_conditions(&WorkflowNode {
+            id: "check".into(),
+            kind: "if_else".into(),
+            data: json!({
+                "conditions": {
+                    "true": {"label": "Pass", "condition": "review.score >= 80"},
+                    "false": {"label": "Fail", "condition": "review.score < 80"}
+                }
+            }),
+        })
+        .unwrap();
+        let state = State::from_iter([("review".into(), json!({"score": 80}))]);
+
+        assert!(conditions.true_condition.matches(&state));
+        assert!(!conditions.false_condition.matches(&state));
     }
 
     #[test]

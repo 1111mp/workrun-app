@@ -8,7 +8,8 @@ function IfElseNode({
   selected,
 }: NodeProps<Node<WorkflowIfElseNodeData>>) {
   const label = data.label || 'If / Else';
-  const field = data.selector?.field || 'Configure boolean state field';
+  const trueBranch = data.conditions?.true;
+  const falseBranch = data.conditions?.false;
 
   return (
     <div
@@ -32,35 +33,50 @@ function IfElseNode({
           {label}
         </p>
       </div>
-      <p className='bg-background/50 text-muted-foreground mt-2 truncate rounded px-2 py-1.5 font-mono text-xs'>
-        state.{field}
-      </p>
       <div className='mt-3 space-y-2 border-t border-amber-500/20 pt-2 text-xs font-medium'>
-        <div className='flex items-center justify-between text-emerald-600 dark:text-emerald-400'>
-          <span>True</span>
-          <span>→</span>
+        <div className='relative min-h-11 pr-5 text-emerald-600 dark:text-emerald-400'>
+          <p className='truncate'>{trueBranch?.label || 'True'}</p>
+          <p
+            className={cn(
+              'mt-0.5 truncate font-mono text-[11px]',
+              trueBranch?.condition
+                ? 'text-muted-foreground'
+                : 'text-muted-foreground/60',
+            )}
+          >
+            {trueBranch?.condition || 'When condition is true'}
+          </p>
+          <Handle
+            id='true'
+            type='source'
+            position={Position.Right}
+            isConnectable={isConnectable}
+            style={{ top: '50%' }}
+            className='bg-background! size-3! border-2! border-emerald-500!'
+          />
         </div>
-        <div className='flex items-center justify-between text-rose-600 dark:text-rose-400'>
-          <span>False</span>
-          <span>→</span>
+        <div className='relative min-h-11 pr-5 text-rose-600 dark:text-rose-400'>
+          <p className='truncate'>{falseBranch?.label || 'False'}</p>
+          <p
+            className={cn(
+              'mt-0.5 truncate font-mono text-[11px]',
+              falseBranch?.condition
+                ? 'text-muted-foreground'
+                : 'text-muted-foreground/60',
+            )}
+          >
+            {falseBranch?.condition || 'When condition is false'}
+          </p>
+          <Handle
+            id='false'
+            type='source'
+            position={Position.Right}
+            isConnectable={isConnectable}
+            style={{ top: '50%' }}
+            className='bg-background! size-3! border-2! border-rose-500!'
+          />
         </div>
       </div>
-      <Handle
-        id='true'
-        type='source'
-        position={Position.Right}
-        isConnectable={isConnectable}
-        style={{ top: 89 }}
-        className='bg-background! size-3! border-2! border-emerald-500!'
-      />
-      <Handle
-        id='false'
-        type='source'
-        position={Position.Right}
-        isConnectable={isConnectable}
-        style={{ top: 115 }}
-        className='bg-background! size-3! border-2! border-rose-500!'
-      />
     </div>
   );
 }

@@ -96,10 +96,18 @@ type WorkflowRouteSelector = {
 };
 
 // ---------- If/Else Node ----------
+type WorkflowIfElseBranch = {
+  label: string;
+  condition: string;
+};
+
 type WorkflowIfElseNodeData = {
   label?: string;
-  /** State field that contains the boolean used by `Router::by_bool`. */
-  selector: WorkflowRouteSelector;
+  /** Conditions evaluated independently for the two outgoing branches. */
+  conditions: {
+    true: WorkflowIfElseBranch;
+    false: WorkflowIfElseBranch;
+  };
 };
 type WorkflowIfElseNode = WorkflowBaseNode & {
   type: 'if_else';

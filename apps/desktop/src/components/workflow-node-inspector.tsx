@@ -77,6 +77,32 @@ function getRouteField(data: Record<string, unknown>) {
   return typeof field === 'string' ? field : '';
 }
 
+function getIfElseBranch(
+  data: Record<string, unknown>,
+  branch: 'true' | 'false',
+): WorkflowIfElseBranch {
+  const conditions = data.conditions;
+  if (typeof conditions !== 'object' || conditions === null) {
+    return { label: branch === 'true' ? 'True' : 'False', condition: '' };
+  }
+
+  const value = (conditions as Record<string, unknown>)[branch];
+  if (typeof value !== 'object' || value === null) {
+    return { label: branch === 'true' ? 'True' : 'False', condition: '' };
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    label:
+      typeof record.label === 'string'
+        ? record.label
+        : branch === 'true'
+          ? 'True'
+          : 'False',
+    condition: typeof record.condition === 'string' ? record.condition : '',
+  };
+}
+
 function getSwitchCases(data: Record<string, unknown>): WorkflowSwitchCase[] {
   const cases = data.cases;
   if (!Array.isArray(cases)) {
@@ -298,13 +324,51 @@ function WorkflowNodeInspector({
               value={getText(data, 'label')}
               onChange={(label) => updateData({ label })}
             />
-            <TextField
-              id='if-else-state-field'
-              label='Boolean state field'
-              description='The state field to evaluate. A true value follows the True branch; false follows the False branch.'
-              value={getRouteField(data)}
-              onChange={(field) => updateData({ selector: { field } })}
-            />
+            {(['true', 'false'] as const).map((branch) => {
+              const current = getIfElseBranch(data, branch);
+              const other = getIfElseBranch(
+                data,
+                branch === 'true' ? 'false' : 'true',
+              );
+              const isTrueBranch = branch === 'true';
+
+              return (
+                <FieldGroup key={branch}>
+                  <TextField
+                    id={`if-else-${branch}-label`}
+                    label={`${isTrueBranch ? 'True' : 'False'} label`}
+                    value={current.label}
+                    onChange={(label) =>
+                      updateData({
+                        conditions: {
+                          [branch]: { ...current, label },
+                          [isTrueBranch ? 'false' : 'true']: other,
+                        },
+                      })
+                    }
+                  />
+                  <TextareaField
+                    id={`if-else-${branch}-condition`}
+                    label={`${isTrueBranch ? 'True' : 'False'} condition`}
+                    placeholder={
+                      isTrueBranch
+                        ? 'When condition is true'
+                        : 'When condition is false'
+                    }
+                    description='For example: score >= 80 or approved == true.'
+                    value={current.condition}
+                    onChange={(condition) =>
+                      updateData({
+                        conditions: {
+                          [branch]: { ...current, condition },
+                          [isTrueBranch ? 'false' : 'true']: other,
+                        },
+                      })
+                    }
+                  />
+                </FieldGroup>
+              );
+            })}
           </FieldGroup>
         );
       case 'switch': {
@@ -500,6 +564,7 @@ function TextField({
   description,
   value,
   type = 'text',
+  placeholder,
   disabled = false,
   onChange,
 }: {
@@ -508,6 +573,7 @@ function TextField({
   description?: string;
   value: string;
   type?: 'text' | 'url';
+  placeholder?: string;
   disabled?: boolean;
   onChange: (value: string) => void;
 }) {
@@ -519,6 +585,7 @@ function TextField({
         id={id}
         type={type}
         value={value}
+        placeholder={placeholder}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -533,6 +600,7 @@ function TextareaField({
   value,
   onChange,
   className,
+  placeholder,
 }: {
   id: string;
   label: string;
@@ -540,6 +608,7 @@ function TextareaField({
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  placeholder?: string;
 }) {
   return (
     <Field>
@@ -548,6 +617,7 @@ function TextareaField({
       <Textarea
         id={id}
         value={value}
+        placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
         className={className}
       />

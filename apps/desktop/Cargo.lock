@@ -8733,6 +8733,7 @@ dependencies = [
  "adk-rust",
  "aes-gcm",
  "anyhow",
+ "async-stream",
  "async-trait",
  "base64 0.23.1",
  "bitflags 2.13.1",
