@@ -150,6 +150,27 @@ function TraceResult({
     return <p className='text-muted-foreground mt-2 text-sm'>{text}</p>;
   }
 
+  if (entry.type === 'switch') {
+    const result =
+      typeof entry.result === 'object' && entry.result !== null
+        ? (entry.result as Record<string, unknown>)
+        : undefined;
+    const route = result?.route;
+    const label = typeof result?.label === 'string' ? result.label : undefined;
+    const condition =
+      typeof result?.condition === 'string' ? result.condition : undefined;
+    const text =
+      entry.status === 'running'
+        ? 'Evaluating cases…'
+        : route === 'default'
+          ? `No case condition matched; using default branch: ${label ?? 'Default'}.`
+          : typeof route === 'string' && route.startsWith('case:')
+            ? `Matched case: ${label ?? 'Untitled case'}${condition ? ` (${condition})` : ''}.`
+            : 'No case condition matched; using the default branch.';
+
+    return <p className='text-muted-foreground mt-2 text-sm'>{text}</p>;
+  }
+
   if (entry.type === 'agent' || entry.type === 'remote_agent') {
     if (!showAgentResponse) {
       return (

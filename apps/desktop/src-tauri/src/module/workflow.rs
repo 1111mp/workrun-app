@@ -195,6 +195,7 @@ pub fn compile(
             "remote_agent" => graph.add_node(remote_a2a_graph_node(node, on_event.clone())?),
             "process" => add_process_node(graph, node, on_event.clone()),
             "if_else" => add_if_else_control_node(graph, node, on_event.clone())?,
+            "switch" => add_switch_control_node(graph, node, on_event.clone())?,
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
             "agent" => add_local_agent_node(graph, node, config, on_event.clone())?,
@@ -376,6 +377,55 @@ fn add_if_else_control_node(
             let event = json!({
                 "nodeId": id,
                 "type": "if_else",
+                "data": data,
+                "result": { "route": route, "label": label, "condition": condition },
+            });
+            if let Some(on_event) = on_event {
+                let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+            }
+            Ok(NodeOutput::new()
+                .with_update("workflow.last_node", json!(id))
+                .with_update("workflow.node", event.clone())
+                .with_update("workflow.trace", event))
+        }
+    }))
+}
+
+fn add_switch_control_node(
+    graph: StateGraph,
+    node: &WorkflowNode,
+    on_event: Option<Channel<StreamEvent>>,
+) -> Result<StateGraph> {
+    let id = node.id.clone();
+    let data = node.data.clone();
+    let cases = switch_cases(node)?;
+    Ok(graph.add_node_fn(&id.clone(), move |context| {
+        let id = id.clone();
+        let data = data.clone();
+        let route = switch_route(&cases, &context.state);
+        let branch = if route == "default" {
+            data.get("defaultCase")
+        } else {
+            let case_id = route.strip_prefix("case:").expect("switch route is valid");
+            data.get("cases").and_then(Value::as_array).and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("id").and_then(Value::as_str) == Some(case_id))
+            })
+        };
+        let label = branch
+            .and_then(|branch| branch.get("label"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let condition = branch
+            .and_then(|branch| branch.get("condition"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let on_event = on_event.clone();
+        async move {
+            let event = json!({
+                "nodeId": id,
+                "type": "switch",
                 "data": data,
                 "result": { "route": route, "label": label, "condition": condition },
             });
@@ -735,22 +785,11 @@ fn add_switch_edges(
     end_ids: &HashSet<String>,
     plan: &mut Vec<PlanEdge>,
 ) -> Result<()> {
-    let field = selector_field(node)?;
     let cases = switch_cases(node)?;
     let mut targets = HashMap::new();
     for edge in outgoing {
         let handle = edge.source_handle.as_deref().expect("validated source handle");
-        let route = if handle == "default" {
-            "default".to_string()
-        } else {
-            let id = handle.strip_prefix("case:").expect("validated case handle");
-            cases
-                .iter()
-                .find(|case| case.id == id)
-                .expect("validated case")
-                .value
-                .clone()
-        };
+        let route = handle.to_string();
         let target = graph_target(&edge.target, end_ids);
         targets.insert(route.clone(), target.clone());
         plan.push(PlanEdge {
@@ -759,19 +798,7 @@ fn add_switch_edges(
             route: Some(route),
         });
     }
-    let known = targets
-        .keys()
-        .filter(|key| key.as_str() != "default")
-        .cloned()
-        .collect::<HashSet<_>>();
-    let router: RouterFn = Arc::new(move |state: &State| {
-        let value = state.get(&field).and_then(Value::as_str).unwrap_or_default();
-        if known.contains(value) {
-            value.to_string()
-        } else {
-            "default".to_string()
-        }
-    });
+    let router: RouterFn = Arc::new(move |state: &State| switch_route(&cases, state));
     graph.edges.push(Edge::Conditional {
         source: node.id.clone(),
         router,
@@ -805,15 +832,6 @@ fn graph_target(id: &str, end_ids: &HashSet<String>) -> EdgeTarget {
 
 fn display_target(target: EdgeTarget) -> String {
     target.node_name().unwrap_or(END).to_string()
-}
-
-fn selector_field(node: &WorkflowNode) -> Result<String> {
-    node.data
-        .pointer("/selector/field")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("{} node `{}` needs data.selector.field", node.kind, node.id))
 }
 
 struct IfElseConditions {
@@ -915,7 +933,13 @@ fn parse_condition(expression: &str) -> Result<Condition> {
             if expected.is_empty() {
                 bail!("condition `{expression}` needs a value after `{token}`");
             }
-            let expected = serde_json::from_str(expected).unwrap_or_else(|_| Value::String(expected.to_string()));
+            let expected = expected
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+                .map(|value| Value::String(value.to_string()))
+                .unwrap_or_else(|| {
+                    serde_json::from_str(expected).unwrap_or_else(|_| Value::String(expected.to_string()))
+                });
             return Ok(Condition {
                 field,
                 operator: Some(operator),
@@ -973,22 +997,57 @@ fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
 }
 
 #[derive(Debug, Deserialize)]
+struct SwitchCaseInput {
+    id: String,
+    condition: Option<String>,
+    value: Option<String>,
+}
+
 struct SwitchCase {
     id: String,
-    value: String,
+    condition: Condition,
 }
 
 fn switch_cases(node: &WorkflowNode) -> Result<Vec<SwitchCase>> {
-    let cases: Vec<SwitchCase> = serde_json::from_value(node.data.get("cases").cloned().unwrap_or_else(|| json!([])))
-        .map_err(|_| anyhow!("switch node `{}` has invalid data.cases", node.id))?;
+    let cases: Vec<SwitchCaseInput> =
+        serde_json::from_value(node.data.get("cases").cloned().unwrap_or_else(|| json!([])))
+            .map_err(|_| anyhow!("switch node `{}` has invalid data.cases", node.id))?;
     let mut ids = HashSet::new();
-    let mut values = HashSet::new();
     for case in &cases {
-        if case.id.is_empty() || case.value.is_empty() || !ids.insert(&case.id) || !values.insert(&case.value) {
-            bail!("switch node `{}` has duplicate or empty case ids/values", node.id);
+        if case.id.is_empty() || !ids.insert(&case.id) {
+            bail!("switch node `{}` has duplicate or empty case ids", node.id);
         }
     }
-    Ok(cases)
+    let legacy_selector = node
+        .data
+        .pointer("/selector/field")
+        .and_then(Value::as_str)
+        .filter(|field| !field.trim().is_empty());
+    cases
+        .into_iter()
+        .map(|case| {
+            let expression = match case.condition {
+                Some(condition) => condition,
+                None => {
+                    let field = legacy_selector
+                        .ok_or_else(|| anyhow!("switch node `{}` needs data.cases[].condition", node.id))?;
+                    let value = case
+                        .value
+                        .ok_or_else(|| anyhow!("switch node `{}` needs data.cases[].condition", node.id))?;
+                    format!("{field} == {}", json!(value))
+                },
+            };
+            parse_condition(&expression).map(|condition| SwitchCase { id: case.id, condition })
+        })
+        .collect()
+}
+
+fn switch_route(cases: &[SwitchCase], state: &State) -> String {
+    cases
+        .iter()
+        .find(|case| case.condition.matches(state))
+        .map(|case| format!("case:{}", case.id))
+        .unwrap_or_else(|| "default".to_string())
 }
 
 #[cfg(test)]
@@ -1041,6 +1100,78 @@ mod tests {
 
         assert!(conditions.true_condition.matches(&state));
         assert!(!conditions.false_condition.matches(&state));
+    }
+
+    #[test]
+    fn evaluates_switch_cases_in_order_then_uses_default() {
+        let cases = switch_cases(&WorkflowNode {
+            id: "route".into(),
+            kind: "switch".into(),
+            data: json!({
+                "cases": [
+                    {"id": "high", "label": "High", "condition": "score >= 80"},
+                    {"id": "passing", "label": "Passing", "condition": "score >= 60"}
+                ]
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(
+            switch_route(&cases, &State::from_iter([("score".into(), json!(90))])),
+            "case:high",
+        );
+        assert_eq!(
+            switch_route(&cases, &State::from_iter([("score".into(), json!(70))])),
+            "case:passing",
+        );
+        assert_eq!(
+            switch_route(&cases, &State::from_iter([("score".into(), json!(50))])),
+            "default",
+        );
+    }
+
+    #[test]
+    fn parses_single_quoted_string_condition_values() {
+        let condition = parse_condition("profile.gender == 'male'").unwrap();
+        let state = State::from_iter([("profile".into(), json!({"gender": "male"}))]);
+
+        assert!(condition.matches(&state));
+    }
+
+    #[tokio::test]
+    async fn records_the_matched_switch_case_in_the_workflow_trace() {
+        let dsl: WorkflowDsl = serde_json::from_value(json!({
+            "id": "routing", "nodes": [
+                {"id": "start", "type": "start"},
+                {"id": "route", "type": "switch", "data": {
+                    "cases": [{"id": "adult", "label": "Adult", "condition": "age >= 18"}],
+                    "defaultCase": {"label": "Minor", "condition": ""}
+                }},
+                {"id": "end", "type": "end"}
+            ], "edges": [
+                {"source": "start", "target": "route"},
+                {"source": "route", "target": "end", "sourceHandle": "case:adult"},
+                {"source": "route", "target": "end", "sourceHandle": "default"}
+            ]
+        }))
+        .unwrap();
+        let state = State::from_iter([("age".into(), json!(20))]);
+        let result = compile(dsl, &Default::default(), None)
+            .unwrap()
+            .run_stream(state, "test", |_| {})
+            .await
+            .unwrap();
+
+        assert_eq!(result.state["workflow.trace"][0]["type"], json!("switch"));
+        assert_eq!(
+            result.state["workflow.trace"][0]["result"]["route"],
+            json!("case:adult")
+        );
+        assert_eq!(result.state["workflow.trace"][0]["result"]["label"], json!("Adult"));
+        assert_eq!(
+            result.state["workflow.trace"][0]["result"]["condition"],
+            json!("age >= 18"),
+        );
     }
 
     #[test]

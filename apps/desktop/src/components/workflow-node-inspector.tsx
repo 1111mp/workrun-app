@@ -67,16 +67,6 @@ function getText(data: Record<string, unknown>, key: string) {
   return typeof value === 'string' ? value : '';
 }
 
-function getRouteField(data: Record<string, unknown>) {
-  const selector = data.selector;
-  if (typeof selector !== 'object' || selector === null) {
-    return '';
-  }
-
-  const field = (selector as Record<string, unknown>).field;
-  return typeof field === 'string' ? field : '';
-}
-
 function getIfElseBranch(
   data: Record<string, unknown>,
   branch: 'true' | 'false',
@@ -109,14 +99,39 @@ function getSwitchCases(data: Record<string, unknown>): WorkflowSwitchCase[] {
     return [];
   }
 
-  return cases.filter(
-    (switchCase): switchCase is WorkflowSwitchCase =>
-      typeof switchCase === 'object' &&
-      switchCase !== null &&
-      typeof switchCase.id === 'string' &&
-      typeof switchCase.value === 'string' &&
-      typeof switchCase.label === 'string',
-  );
+  return cases.flatMap((switchCase) => {
+    if (typeof switchCase !== 'object' || switchCase === null) {
+      return [];
+    }
+
+    const record = switchCase as Record<string, unknown>;
+    if (typeof record.id !== 'string' || typeof record.label !== 'string') {
+      return [];
+    }
+
+    return [
+      {
+        id: record.id,
+        label: record.label,
+        condition: typeof record.condition === 'string' ? record.condition : '',
+      },
+    ];
+  });
+}
+
+function getSwitchDefault(
+  data: Record<string, unknown>,
+): WorkflowSwitchDefault {
+  const value = data.defaultCase;
+  if (typeof value !== 'object' || value === null) {
+    return { label: getText(data, 'defaultLabel') || 'Default', condition: '' };
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    label: typeof record.label === 'string' ? record.label : 'Default',
+    condition: typeof record.condition === 'string' ? record.condition : '',
+  };
 }
 
 function WorkflowNodeInspector({
@@ -373,6 +388,7 @@ function WorkflowNodeInspector({
         );
       case 'switch': {
         const cases = getSwitchCases(data);
+        const defaultCase = getSwitchDefault(data);
 
         return (
           <FieldGroup>
@@ -382,13 +398,6 @@ function WorkflowNodeInspector({
               description='A short name shown on the workflow canvas.'
               value={getText(data, 'label')}
               onChange={(label) => updateData({ label })}
-            />
-            <TextField
-              id='switch-state-field'
-              label='Route state field'
-              description='The state field whose value is matched against the route values below.'
-              value={getRouteField(data)}
-              onChange={(field) => updateData({ selector: { field } })}
             />
             <Field>
               <div className='flex items-center justify-between gap-2'>
@@ -403,8 +412,8 @@ function WorkflowNodeInspector({
                         ...cases,
                         {
                           id: crypto.randomUUID(),
-                          value: `case_${cases.length + 1}`,
                           label: `Case ${cases.length + 1}`,
+                          condition: '',
                         },
                       ],
                     })
@@ -415,85 +424,86 @@ function WorkflowNodeInspector({
                 </Button>
               </div>
               <FieldDescription>
-                Each route value is matched exactly. The display label only
-                names the branch on the canvas and does not affect routing.
+                Cases are evaluated from top to bottom. The first matching
+                condition determines the outgoing branch.
               </FieldDescription>
-              <div className='space-y-2'>
+              <FieldGroup className='gap-3'>
                 {cases.map((switchCase, index) => (
-                  <div key={switchCase.id} className='flex items-center gap-2'>
-                    <div className='min-w-0 flex-1 space-y-1'>
-                      <Label
-                        className='text-xs'
-                        htmlFor={`switch-case-${switchCase.id}-value`}
-                      >
-                        Route value
-                      </Label>
-                      <Input
-                        id={`switch-case-${switchCase.id}-value`}
-                        aria-label={`Case ${index + 1} route value`}
-                        placeholder='e.g. approved'
-                        value={switchCase.value}
-                        onChange={(event) =>
+                  <Field key={switchCase.id}>
+                    <div className='flex items-center justify-between gap-2'>
+                      <Label>Case {index + 1}</Label>
+                      <Button
+                        type='button'
+                        size='icon-sm'
+                        variant='destructive'
+                        aria-label={`Remove case ${index + 1}`}
+                        onClick={() =>
                           updateData({
-                            cases: cases.map((item) =>
-                              item.id === switchCase.id
-                                ? { ...item, value: event.target.value }
-                                : item,
+                            cases: cases.filter(
+                              (item) => item.id !== switchCase.id,
                             ),
                           })
                         }
-                      />
-                    </div>
-                    <div className='min-w-0 flex-1 space-y-1'>
-                      <Label
-                        className='text-xs'
-                        htmlFor={`switch-case-${switchCase.id}-label`}
                       >
-                        Display label
-                      </Label>
-                      <Input
-                        id={`switch-case-${switchCase.id}-label`}
-                        aria-label={`Case ${index + 1} label`}
-                        placeholder='e.g. Approved'
-                        value={switchCase.label}
-                        onChange={(event) =>
-                          updateData({
-                            cases: cases.map((item) =>
-                              item.id === switchCase.id
-                                ? { ...item, label: event.target.value }
-                                : item,
-                            ),
-                          })
-                        }
-                      />
+                        <Trash2Icon aria-hidden='true' />
+                      </Button>
                     </div>
-                    <Button
-                      type='button'
-                      size='icon-sm'
-                      variant='destructive'
-                      className='mb-1 self-end'
-                      aria-label={`Remove ${switchCase.label}`}
-                      onClick={() =>
+                    <TextField
+                      id={`switch-case-${switchCase.id}-label`}
+                      label='Label'
+                      value={switchCase.label}
+                      placeholder={`Case ${index + 1}`}
+                      onChange={(label) =>
                         updateData({
-                          cases: cases.filter(
-                            (item) => item.id !== switchCase.id,
+                          cases: cases.map((item) =>
+                            item.id === switchCase.id
+                              ? { ...item, label }
+                              : item,
                           ),
                         })
                       }
-                    >
-                      <Trash2Icon aria-hidden='true' />
-                    </Button>
-                  </div>
+                    />
+                    <TextareaField
+                      id={`switch-case-${switchCase.id}-condition`}
+                      label='Condition'
+                      value={switchCase.condition}
+                      placeholder={`When condition ${index + 1} is met`}
+                      onChange={(condition) =>
+                        updateData({
+                          cases: cases.map((item) =>
+                            item.id === switchCase.id
+                              ? { ...item, condition }
+                              : item,
+                          ),
+                        })
+                      }
+                    />
+                  </Field>
                 ))}
-              </div>
+              </FieldGroup>
             </Field>
-            <TextField
-              id='switch-default-label'
-              label='Default branch label'
-              description='The name shown for the fallback branch used when no case matches.'
-              value={getText(data, 'defaultLabel')}
-              onChange={(defaultLabel) => updateData({ defaultLabel })}
-            />
+            <Field>
+              <Label>Default</Label>
+              <FieldDescription>
+                Used when no case condition matches.
+              </FieldDescription>
+              <TextField
+                disabled
+                id='switch-default-label'
+                label='Label'
+                value={defaultCase.label}
+                placeholder='Default'
+                onChange={() => undefined}
+              />
+              <TextareaField
+                disabled
+                id='switch-default-condition'
+                label='Condition'
+                value={defaultCase.condition}
+                placeholder='Other cases'
+                onChange={() => undefined}
+              />
+            </Field>
           </FieldGroup>
         );
       }
@@ -601,6 +611,7 @@ function TextareaField({
   onChange,
   className,
   placeholder,
+  disabled = false,
 }: {
   id: string;
   label: string;
@@ -609,6 +620,7 @@ function TextareaField({
   onChange: (value: string) => void;
   className?: string;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
     <Field>
@@ -618,6 +630,7 @@ function TextareaField({
         id={id}
         value={value}
         placeholder={placeholder}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         className={className}
       />

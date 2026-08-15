@@ -87,14 +87,6 @@ type WorkflowEndNode = WorkflowBaseNode & {
   data: WorkflowEndNodeData;
 };
 
-/**
- * A state field consumed by an adk-graph router. The compiler turns this into
- * `Router::by_bool(field)` or `Router::by_field(field)` where possible.
- */
-type WorkflowRouteSelector = {
-  field: string;
-};
-
 // ---------- If/Else Node ----------
 type WorkflowIfElseBranch = {
   label: string;
@@ -118,18 +110,22 @@ type WorkflowIfElseNode = WorkflowBaseNode & {
 type WorkflowSwitchCase = {
   /** Stable identifier used as the React Flow source handle ID. */
   id: string;
-  /** Value returned by the router; this is the key used by adk-graph. */
-  value: string;
-  /** Human-readable branch name. Changing it must not change routing. */
+  /** Human-readable branch name shown on the canvas. */
   label: string;
+  /** Expression evaluated against workflow state for this branch. */
+  condition: string;
+};
+type WorkflowSwitchDefault = {
+  /** Human-readable fallback branch name shown on the canvas. */
+  label: string;
+  /** Description of the unmatched cases; this is not evaluated. */
+  condition: string;
 };
 type WorkflowSwitchNodeData = {
   label?: string;
-  /** State field that contains the routing value. */
-  selector: WorkflowRouteSelector;
   cases: WorkflowSwitchCase[];
-  /** Display name for the fallback branch, routed with the `default` key. */
-  defaultLabel?: string;
+  /** Fallback branch used when no case condition matches. */
+  defaultCase: WorkflowSwitchDefault;
 };
 type WorkflowSwitchNode = WorkflowBaseNode & {
   type: 'switch';

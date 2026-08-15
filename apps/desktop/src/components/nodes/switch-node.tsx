@@ -3,8 +3,8 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { SplitIcon } from 'lucide-react';
 
 const fallbackCases: WorkflowSwitchCase[] = [
-  { id: 'case-1', value: 'case_1', label: 'Case 1' },
-  { id: 'case-2', value: 'case_2', label: 'Case 2' },
+  { id: 'case-1', label: 'Case 1', condition: '' },
+  { id: 'case-2', label: 'Case 2', condition: '' },
 ];
 
 function SwitchNode({
@@ -13,10 +13,8 @@ function SwitchNode({
   selected,
 }: NodeProps<Node<WorkflowSwitchNodeData>>) {
   const label = data.label || 'Switch';
-  const field = data.selector?.field || 'Configure route state field';
   const cases = data.cases?.length ? data.cases : fallbackCases;
-  const defaultLabel = data.defaultLabel || 'Default';
-  const defaultHandleTop = 89 + cases.length * 26;
+  const defaultCase = data.defaultCase ?? { label: 'Default', condition: '' };
 
   return (
     <div
@@ -40,24 +38,30 @@ function SwitchNode({
           {label}
         </p>
       </div>
-      <p className='bg-background/50 text-muted-foreground mt-2 truncate rounded px-2 py-1.5 font-mono text-xs'>
-        state.{field}
-      </p>
       <div className='mt-3 space-y-2 border-t border-cyan-500/20 pt-2 text-xs font-medium'>
         {cases.map((switchCase) => (
           <div
             key={switchCase.id}
-            className='flex items-center justify-between text-cyan-700 dark:text-cyan-300'
+            className='relative min-h-11 pr-5 text-cyan-700 dark:text-cyan-300'
           >
-            <span className='truncate'>
-              {switchCase.label} ({switchCase.value})
-            </span>
-            <span>→</span>
+            <p className='truncate'>{switchCase.label || 'Untitled case'}</p>
+            <p
+              className={cn(
+                'mt-0.5 truncate font-mono text-[11px]',
+                switchCase.condition
+                  ? 'text-muted-foreground'
+                  : 'text-muted-foreground/60',
+              )}
+            >
+              {switchCase.condition || 'When condition is met'}
+            </p>
           </div>
         ))}
-        <div className='text-muted-foreground flex items-center justify-between'>
-          <span>{defaultLabel}</span>
-          <span>→</span>
+        <div className='text-muted-foreground relative min-h-11 pr-5'>
+          <p className='truncate'>{defaultCase.label || 'Default'}</p>
+          <p className='text-muted-foreground/60 mt-0.5 truncate font-mono text-[11px]'>
+            {defaultCase.condition || 'Other cases'}
+          </p>
         </div>
       </div>
       {cases.map((switchCase, index) => (
@@ -67,7 +71,7 @@ function SwitchNode({
           type='source'
           position={Position.Right}
           isConnectable={isConnectable}
-          style={{ top: 89 + index * 26 }}
+          style={{ top: 75 + index * 52 }}
           className='bg-background! size-3! border-2! border-cyan-500!'
         />
       ))}
@@ -76,7 +80,7 @@ function SwitchNode({
         type='source'
         position={Position.Right}
         isConnectable={isConnectable}
-        style={{ top: defaultHandleTop }}
+        style={{ top: 75 + cases.length * 52 }}
         className='bg-background! border-muted-foreground! size-3! border-2!'
       />
     </div>

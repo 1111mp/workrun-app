@@ -118,7 +118,7 @@ function WorkflowRunPanel({
     <Drawer
       open={open}
       defaultHorizontalSnapPoint='31rem'
-      horizontalSnapPoints={['31rem', '48rem', '64rem']}
+      horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
       swipeDirection='right'
       onOpenChange={onOpenChange}
     >

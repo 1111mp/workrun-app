@@ -33,7 +33,7 @@ import {
   Settings2Icon,
   Undo2Icon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
 
@@ -230,12 +230,11 @@ function createNodeData(type: WorkflowNodeType) {
     case 'switch':
       return {
         label: 'Switch',
-        selector: { field: 'route' },
         cases: [
-          { id: 'case-1', value: 'case_1', label: 'Case 1' },
-          { id: 'case-2', value: 'case_2', label: 'Case 2' },
+          { id: 'case-1', label: 'Case 1', condition: '' },
+          { id: 'case-2', label: 'Case 2', condition: '' },
         ],
-        defaultLabel: 'Default',
+        defaultCase: { label: 'Default', condition: '' },
       };
     case 'start':
       return { label: 'Start' };
@@ -742,6 +741,28 @@ function WorkflowEditor() {
   }, []);
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const displayEdges = useMemo(
+    () =>
+      edges.map((edge) => ({
+        ...edge,
+        interactionWidth: edge.interactionWidth ?? 24,
+        style: {
+          stroke: 'var(--muted-foreground)',
+          strokeWidth: 1,
+          ...edge.style,
+          ...(edge.selected
+            ? {
+                stroke: 'var(--primary)',
+                strokeWidth: 2,
+              }
+            : {}),
+          ...(edge.source === selectedNodeId || edge.target === selectedNodeId
+            ? { strokeDasharray: '5 5' }
+            : {}),
+        },
+      })),
+    [edges, selectedNodeId],
+  );
 
   const addPaletteNode = (type: WorkflowNodeType, x: number, y: number) => {
     if (!reactFlowInstance) {
@@ -975,7 +996,7 @@ function WorkflowEditor() {
             colorMode={colorMode}
             fitView
             nodes={nodes}
-            edges={edges}
+            edges={displayEdges}
             nodeTypes={nodeTypes}
             onInit={setReactFlowInstance}
             onConnect={addConnection}
