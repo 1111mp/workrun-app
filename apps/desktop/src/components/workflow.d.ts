@@ -43,6 +43,9 @@ type WorkflowAgentNodeData = {
   instruction: string;
   temperature?: number;
   topP?: number;
+  toolIds?: string[];
+  maxToolCalls?: number;
+  toolTimeoutSeconds?: number;
 };
 type WorkflowAgentNode = WorkflowBaseNode & {
   type: 'agent';

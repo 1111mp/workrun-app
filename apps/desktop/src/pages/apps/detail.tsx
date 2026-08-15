@@ -10,13 +10,23 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   Field,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
   Input,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Spinner,
+  Switch,
   Textarea,
 } from '@workspace/ui/components';
 import {
@@ -25,7 +35,9 @@ import {
   CopyIcon,
   FolderCodeIcon,
   FolderOpenIcon,
+  PlusIcon,
   SaveIcon,
+  Trash2Icon,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -63,6 +75,224 @@ function parseSchemas(value: string, label: string) {
     throw new Error(`${label} must be a JSON object.`);
   }
   return parsed as Record<string, unknown>;
+}
+
+type ContractField = {
+  key: string;
+  type: string;
+  description: string;
+  required: boolean;
+  schema: Record<string, unknown>;
+};
+
+const contractTypes = [
+  'string',
+  'number',
+  'integer',
+  'boolean',
+  'object',
+  'array',
+];
+
+const toolExecutionPolicies = [
+  { value: 'ask_every_time', label: 'Ask every time' },
+  { value: 'auto', label: 'Run automatically' },
+];
+
+function contractFields(value: string): ContractField[] | undefined {
+  try {
+    const schemas = parseSchemas(value, 'Data contract');
+    return Object.entries(schemas).flatMap(([key, value]) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value))
+        return [];
+      const schema = value as Record<string, unknown>;
+      const type = typeof schema.type === 'string' ? schema.type : 'string';
+      return [
+        {
+          key,
+          type: contractTypes.includes(type) ? type : 'string',
+          description:
+            typeof schema.description === 'string' ? schema.description : '',
+          required: schema['x-workrun-optional'] !== true,
+          schema,
+        },
+      ];
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function serializeContractFields(fields: ContractField[]) {
+  return JSON.stringify(
+    Object.fromEntries(
+      fields.map(({ key, type, description, required, schema }) => {
+        const next: Record<string, unknown> = { ...schema, type };
+        if (description) next.description = description;
+        else delete next.description;
+        if (required) delete next['x-workrun-optional'];
+        else next['x-workrun-optional'] = true;
+        return [key, next];
+      }),
+    ),
+    null,
+    2,
+  );
+}
+
+function ContractEditor({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const fields = contractFields(value);
+  const updateFields = (next: ContractField[]) =>
+    onChange(serializeContractFields(next));
+
+  if (!fields) {
+    return (
+      <Field data-invalid>
+        <FieldLabel>{label}</FieldLabel>
+        <FieldError>
+          Fix the JSON below before using the field editor.
+        </FieldError>
+        <Textarea
+          className='min-h-44 font-mono text-xs'
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </Field>
+    );
+  }
+
+  const updateField = (index: number, patch: Partial<ContractField>) =>
+    updateFields(
+      fields.map((field, current) =>
+        current === index ? { ...field, ...patch } : field,
+      ),
+    );
+  const addField = () => {
+    const base = label === 'Inputs' ? 'input' : 'output';
+    let index = fields.length + 1;
+    let key = `${base}_${index}`;
+    while (fields.some((field) => field.key === key)) {
+      index += 1;
+      key = `${base}_${index}`;
+    }
+    updateFields([
+      ...fields,
+      { key, type: 'string', description: '', required: true, schema: {} },
+    ]);
+  };
+
+  return (
+    <Field>
+      <FieldLabel>{label}</FieldLabel>
+      <FieldDescription>
+        Define the values this App {label === 'Inputs' ? 'accepts' : 'returns'}.
+      </FieldDescription>
+      <div className='flex flex-col gap-3'>
+        {fields.map((field, index) => (
+          <div
+            key={`${field.key}-${index}`}
+            className='bg-muted/40 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_auto_auto] sm:items-end'
+          >
+            <Field>
+              <FieldLabel>Field</FieldLabel>
+              <Input
+                value={field.key}
+                onChange={(event) =>
+                  updateField(index, { key: event.target.value })
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Type</FieldLabel>
+              <Select
+                value={field.type}
+                onValueChange={(type) => {
+                  if (type !== null) updateField(index, { type });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {contractTypes.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {type}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel>Description</FieldLabel>
+              <Input
+                value={field.description}
+                onChange={(event) =>
+                  updateField(index, { description: event.target.value })
+                }
+                placeholder='Optional help for the Agent'
+              />
+            </Field>
+            <Field className='w-fit'>
+              <FieldLabel>Required</FieldLabel>
+              <Switch
+                checked={field.required}
+                onCheckedChange={(required) => updateField(index, { required })}
+              />
+            </Field>
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              aria-label={`Remove ${field.key}`}
+              onClick={() =>
+                updateFields(fields.filter((_, current) => current !== index))
+              }
+            >
+              <Trash2Icon />
+            </Button>
+          </div>
+        ))}
+        <Button
+          type='button'
+          variant='outline'
+          className='w-fit'
+          onClick={addField}
+        >
+          <PlusIcon data-icon='inline-start' />
+          Add {label === 'Inputs' ? 'input' : 'output'}
+        </Button>
+      </div>
+      <Collapsible className='rounded-md border'>
+        <CollapsibleTrigger
+          render={
+            <Button
+              type='button'
+              variant='ghost'
+              className='w-full justify-start'
+            />
+          }
+        >
+          Advanced JSON Schema
+        </CollapsibleTrigger>
+        <CollapsibleContent className='border-t p-3'>
+          <Textarea
+            className='min-h-44 font-mono text-xs'
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </CollapsibleContent>
+      </Collapsible>
+    </Field>
+  );
 }
 
 function ProcessNodeDetailPage() {
@@ -148,10 +378,10 @@ function ProcessNodeDetailPage() {
             </Button>
             <div>
               <h1 className='text-lg font-semibold tracking-tight'>
-                Process Node details
+                App details
               </h1>
               <p className='text-muted-foreground text-sm'>
-                Manage the metadata used by this local project.
+                Configure this App’s identity, runtime, and data contract.
               </p>
             </div>
           </div>
@@ -207,6 +437,36 @@ function ProcessNodeDetailPage() {
                   placeholder='What does this node do?'
                 />
               </Field>
+              {draft.kind === 'tool' ? (
+                <Field>
+                  <FieldLabel>Tool execution</FieldLabel>
+                  <FieldDescription>
+                    Choose whether an Agent must ask before each call.
+                  </FieldDescription>
+                  <Select
+                    items={toolExecutionPolicies}
+                    value={draft.toolExecutionPolicy}
+                    onValueChange={(toolExecutionPolicy) => {
+                      if (toolExecutionPolicy !== null) {
+                        update('toolExecutionPolicy', toolExecutionPolicy);
+                      }
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {toolExecutionPolicies.map((policy) => (
+                          <SelectItem key={policy.value} value={policy.value}>
+                            {policy.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              ) : null}
             </FieldGroup>
           </CardContent>
         </Card>
@@ -274,30 +534,16 @@ function ProcessNodeDetailPage() {
           </CardHeader>
           <CardContent>
             <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor='process-node-inputs'>Inputs</FieldLabel>
-                <Textarea
-                  id='process-node-inputs'
-                  className='min-h-44 font-mono text-xs'
-                  value={draft.inputs}
-                  onChange={(event) => update('inputs', event.target.value)}
-                />
-                <FieldDescription>
-                  Map each input name to a JSON Schema object.
-                </FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor='process-node-outputs'>Outputs</FieldLabel>
-                <Textarea
-                  id='process-node-outputs'
-                  className='min-h-44 font-mono text-xs'
-                  value={draft.outputs}
-                  onChange={(event) => update('outputs', event.target.value)}
-                />
-                <FieldDescription>
-                  Map each output name to a JSON Schema object.
-                </FieldDescription>
-              </Field>
+              <ContractEditor
+                label='Inputs'
+                value={draft.inputs}
+                onChange={(value) => update('inputs', value)}
+              />
+              <ContractEditor
+                label='Outputs'
+                value={draft.outputs}
+                onChange={(value) => update('outputs', value)}
+              />
             </FieldGroup>
           </CardContent>
         </Card>

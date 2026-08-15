@@ -1,5 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
   Button,
   Field,
   FieldGroup,
@@ -15,7 +24,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '@workspace/ui/components';
-import { SaveIcon, Settings2Icon } from 'lucide-react';
+import { SaveIcon, Settings2Icon, ShieldAlertIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -213,6 +222,42 @@ function WorkflowEditor() {
             }
           }}
         />
+        <AlertDialog open={Boolean(workflowRun.toolApproval)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogMedia>
+                <ShieldAlertIcon />
+              </AlertDialogMedia>
+              <AlertDialogTitle>
+                Allow {String(workflowRun.toolApproval?.name ?? 'Tool')} to run?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {typeof workflowRun.toolApproval?.description === 'string'
+                  ? workflowRun.toolApproval.description
+                  : 'The Agent requested a Tool App execution.'}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <pre className='bg-muted max-h-64 overflow-auto rounded-md p-3 text-xs'>
+              {JSON.stringify(workflowRun.toolApproval?.input ?? {}, null, 2)}
+            </pre>
+            <AlertDialogFooter>
+              <AlertDialogCancel
+                onClick={() =>
+                  void workflowRun.resolvePendingToolApproval(false)
+                }
+              >
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() =>
+                  void workflowRun.resolvePendingToolApproval(true)
+                }
+              >
+                Run tool
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </WorkflowCanvas>
     </SidebarProvider>
   );

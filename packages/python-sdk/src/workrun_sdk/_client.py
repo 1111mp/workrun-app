@@ -221,7 +221,7 @@ class WorkrunClient:
                         message.get("reason") or "interaction was cancelled"
                     )
                 )
-            elif message_type == "process.result.accepted":
+            elif message_type in {"process.result.accepted", "tool.result.accepted"}:
                 future.set_result(None)
             else:
                 future.set_exception(

@@ -1,8 +1,9 @@
 """Python SDK for communicating with a Workrun desktop host."""
 
-from ._client import InteractionCancelled, WorkrunConnectionError
-from .ui import boolean, choice, collect, confirm, form, number, shutdown, text
 from . import process
+from ._client import InteractionCancelled, WorkrunConnectionError
+from .tool import tool
+from .ui import boolean, choice, collect, confirm, form, number, shutdown, text
 
 __all__ = [
     "InteractionCancelled",
@@ -13,7 +14,8 @@ __all__ = [
     "confirm",
     "form",
     "number",
+    "process",
     "shutdown",
     "text",
-    "process",
+    "tool",
 ]

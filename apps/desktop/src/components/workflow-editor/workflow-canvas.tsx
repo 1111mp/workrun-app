@@ -46,6 +46,9 @@ function createNodeData(type: WorkflowNodeType) {
         instruction: '',
         temperature: undefined,
         topP: undefined,
+        toolIds: [],
+        maxToolCalls: 8,
+        toolTimeoutSeconds: 60,
       };
     case 'remote_agent':
       return {

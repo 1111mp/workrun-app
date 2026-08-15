@@ -1,6 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   Button,
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
   Drawer,
   DrawerContent,
   DrawerDescription,
@@ -19,11 +28,12 @@ import {
   SelectTrigger,
   SelectValue,
   Textarea,
+  useComboboxAnchor,
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 
-import { listProcessNodes } from '@/services/process-node';
+import { listProcessNodes, listProcessTools } from '@/services/process-node';
 
 type WorkflowNodeInspectorProps = {
   node: Node | null;
@@ -76,6 +86,13 @@ function optionalNumber(value: string) {
   if (value === '') return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function getStringArray(data: Record<string, unknown>, key: string) {
+  const value = data[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 }
 
 function getIfElseBranch(
@@ -158,6 +175,11 @@ function WorkflowNodeInspector({
     queryKey: ['processNodes'],
     queryFn: listProcessNodes,
     enabled: node?.type === 'process',
+  });
+  const processTools = useQuery({
+    queryKey: ['processTools'],
+    queryFn: listProcessTools,
+    enabled: node?.type === 'agent',
   });
 
   const updateData = (patch: Record<string, unknown>) => {
@@ -273,6 +295,59 @@ function WorkflowNodeInspector({
                 />
               </Field>
             </FieldGroup>
+            <Field>
+              <Label>Tools</Label>
+              <FieldDescription>
+                Let this agent call selected Tool Apps when their structured
+                input is needed.
+              </FieldDescription>
+              <ToolCombobox
+                tools={processTools.data ?? []}
+                selectedIds={getStringArray(data, 'toolIds')}
+                isLoading={processTools.isLoading}
+                onChange={(toolIds) => updateData({ toolIds })}
+              />
+            </Field>
+            <FieldGroup className='grid grid-cols-2 gap-3'>
+              <Field>
+                <Label htmlFor='agent-max-tool-calls'>Call limit</Label>
+                <FieldDescription>
+                  Maximum Tool App calls in one Agent run.
+                </FieldDescription>
+                <Input
+                  id='agent-max-tool-calls'
+                  type='number'
+                  min='1'
+                  max='50'
+                  step='1'
+                  value={getNumber(data, 'maxToolCalls') || 8}
+                  onChange={(event) =>
+                    updateData({
+                      maxToolCalls: optionalNumber(event.target.value),
+                    })
+                  }
+                />
+              </Field>
+              <Field>
+                <Label htmlFor='agent-tool-timeout'>Tool timeout</Label>
+                <FieldDescription>
+                  Seconds allowed for each Tool App call.
+                </FieldDescription>
+                <Input
+                  id='agent-tool-timeout'
+                  type='number'
+                  min='1'
+                  max='600'
+                  step='1'
+                  value={getNumber(data, 'toolTimeoutSeconds') || 60}
+                  onChange={(event) =>
+                    updateData({
+                      toolTimeoutSeconds: optionalNumber(event.target.value),
+                    })
+                  }
+                />
+              </Field>
+            </FieldGroup>
           </FieldGroup>
         );
       case 'remote_agent':
@@ -305,7 +380,9 @@ function WorkflowNodeInspector({
       case 'process': {
         const selectedId = getText(data, 'processNodeId');
         const selectedApp = processNodes.data?.find(
-          (processNode) => processNode.definition.id === selectedId,
+          (processNode) =>
+            processNode.definition.kind === 'workflow' &&
+            processNode.definition.id === selectedId,
         );
         return (
           <FieldGroup>
@@ -328,6 +405,7 @@ function WorkflowNodeInspector({
                 onValueChange={(processNodeId) => {
                   const app = processNodes.data?.find(
                     (processNode) =>
+                      processNode.definition.kind === 'workflow' &&
                       processNode.definition.id === processNodeId,
                   );
                   updateData({
@@ -351,7 +429,8 @@ function WorkflowNodeInspector({
                   {processNodes.data
                     ?.filter(
                       (processNode) =>
-                        processNode.installStatus === 'installed',
+                        processNode.installStatus === 'installed' &&
+                        processNode.definition.kind === 'workflow',
                     )
                     .map((processNode) => (
                       <SelectItem
@@ -615,6 +694,66 @@ function WorkflowNodeInspector({
         </div>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+function ToolCombobox({
+  tools,
+  selectedIds,
+  isLoading = false,
+  onChange,
+}: {
+  tools: Awaited<ReturnType<typeof listProcessTools>>;
+  selectedIds: string[];
+  isLoading?: boolean;
+  onChange: (toolIds: string[]) => void;
+}) {
+  const anchor = useComboboxAnchor();
+
+  const selectedTools = tools.filter((tool) =>
+    selectedIds.includes(tool.processNodeId),
+  );
+
+  return (
+    <Combobox
+      items={tools}
+      multiple
+      value={selectedTools}
+      disabled={isLoading}
+      onValueChange={(selected) =>
+        onChange(selected.map((tool) => tool.processNodeId))
+      }
+      itemToStringValue={(tool) => `${tool.displayName} ${tool.description}`}
+    >
+      <ComboboxChips ref={anchor}>
+        <ComboboxValue>
+          {selectedTools.map((tool) => (
+            <ComboboxChip key={tool.processNodeId}>
+              {tool.displayName}
+            </ComboboxChip>
+          ))}
+        </ComboboxValue>
+        <ComboboxChipsInput
+          disabled={isLoading}
+          placeholder={isLoading ? 'Loading Tool Apps…' : 'Search Tool Apps…'}
+        />
+      </ComboboxChips>
+      <ComboboxContent anchor={anchor}>
+        <ComboboxEmpty>No Tool Apps found.</ComboboxEmpty>
+        <ComboboxList>
+          {(tool) => (
+            <ComboboxItem key={tool.processNodeId} value={tool}>
+              <span className='flex min-w-0 flex-col'>
+                <span className='truncate'>{tool.displayName}</span>
+                <span className='text-muted-foreground truncate text-xs'>
+                  {tool.description}
+                </span>
+              </span>
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   );
 }
 

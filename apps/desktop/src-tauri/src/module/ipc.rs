@@ -310,13 +310,17 @@ where
         // A run owner can await structured messages (such as process.result)
         // while the webview continues to receive the same event for UI work.
         let _ = message_sender.try_send(message.clone());
-        if message.get("type").and_then(Value::as_str) == Some("process.result") {
+        if matches!(
+            message.get("type").and_then(Value::as_str),
+            Some("process.result") | Some("tool.result")
+        ) {
             let id = required_string(&message, "id")?;
+            let accepted_type = format!(
+                "{}.accepted",
+                message.get("type").and_then(Value::as_str).expect("matched type")
+            );
             IpcServer::global()
-                .send(
-                    &session_id,
-                    serde_json::json!({ "id": id, "type": "process.result.accepted" }),
-                )
+                .send(&session_id, serde_json::json!({ "id": id, "type": accepted_type }))
                 .await?;
         }
         app_handle

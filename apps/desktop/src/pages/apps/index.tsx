@@ -173,6 +173,9 @@ function AppItem({
         <div className='text-muted-foreground flex items-center gap-2 text-xs'>
           <BoxIcon />
           <span>v{definition.version}</span>
+          <Badge variant='outline'>
+            {definition.kind === 'tool' ? 'Tool App' : 'Workflow App'}
+          </Badge>
           <span>{inputCount} inputs</span>
           <span>{outputCount} outputs</span>
         </div>
@@ -224,7 +227,8 @@ function AppItem({
             Output
           </Button>
         ) : null}
-        {node.installStatus === 'installed' ? (
+        {node.installStatus === 'installed' &&
+        definition.kind === 'workflow' ? (
           <Button
             size='sm'
             className='min-w-24'

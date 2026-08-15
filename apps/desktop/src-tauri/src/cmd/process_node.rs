@@ -17,6 +17,12 @@ pub async fn process_node_list() -> CmdResult<Vec<ProcessNode>> {
     ProcessNodeRegistry::list().await.stringify_err()
 }
 
+/// List Tool Apps available for attachment to an Agent node.
+#[tauri::command]
+pub async fn process_node_tool_list() -> CmdResult<Vec<crate::module::process_node::ProcessToolDefinition>> {
+    ProcessNodeRegistry::list_tools().await.stringify_err()
+}
+
 /// Read one catalog Process Node by id and its local installation state.
 #[tauri::command]
 pub async fn process_node_inspect(id: String) -> CmdResult<ProcessNode> {

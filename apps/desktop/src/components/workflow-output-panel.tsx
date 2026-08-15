@@ -122,6 +122,56 @@ function processLog(entry: WorkflowTraceEntry) {
     .join('\n\n');
 }
 
+function ToolCalls({ calls }: { calls: unknown[] }) {
+  if (calls.length === 0) return null;
+
+  return (
+    <Collapsible className='mt-3 rounded-md border'>
+      <CollapsibleTrigger
+        render={<Button variant='ghost' className='w-full justify-between' />}
+      >
+        <span className='text-sm'>
+          Tool call{calls.length === 1 ? '' : 's'} · {calls.length}
+        </span>
+        <ChevronDownIcon className='group-data-panel-open/button:rotate-180' />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='flex flex-col gap-3 border-t p-3'>
+        {calls.map((call, index) => {
+          const record =
+            typeof call === 'object' && call !== null
+              ? (call as Record<string, unknown>)
+              : {};
+          const name =
+            typeof record.name === 'string'
+              ? record.name
+              : typeof record.tool === 'string'
+                ? record.tool
+                : 'Tool';
+          return (
+            <div key={index} className='flex flex-col gap-2'>
+              <p className='text-sm font-medium'>{name}</p>
+              <ToolCallValue label='Input' value={record.input} />
+              <ToolCallValue label='Result' value={record.result} />
+            </div>
+          );
+        })}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function ToolCallValue({ label, value }: { label: string; value: unknown }) {
+  if (value === undefined) return null;
+  return (
+    <div>
+      <p className='text-muted-foreground text-xs font-medium'>{label}</p>
+      <pre className='bg-muted mt-1 overflow-x-auto rounded-md p-2 text-xs'>
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
 function TraceResult({
   entry,
   showAgentResponse = true,
@@ -172,13 +222,17 @@ function TraceResult({
   }
 
   if (entry.type === 'agent' || entry.type === 'remote_agent') {
+    const toolCalls = Array.isArray(entry.toolCalls) ? entry.toolCalls : [];
     if (!showAgentResponse) {
       return (
-        <p className='text-muted-foreground mt-2 text-sm'>
-          {entry.status === 'running'
-            ? 'Generating response…'
-            : 'Response ready.'}
-        </p>
+        <>
+          <p className='text-muted-foreground mt-2 text-sm'>
+            {entry.status === 'running'
+              ? 'Generating response…'
+              : 'Response ready.'}
+          </p>
+          <ToolCalls calls={toolCalls} />
+        </>
       );
     }
 
@@ -192,20 +246,25 @@ function TraceResult({
       .map((message) => message.content)
       .filter((content): content is string => typeof content === 'string');
 
-    return responses.length > 0 ? (
-      <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
-        {responses.map((response, index) => (
-          <div key={index} className='text-sm leading-6'>
-            <Markdown>{response}</Markdown>
+    return (
+      <>
+        <ToolCalls calls={toolCalls} />
+        {responses.length > 0 ? (
+          <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
+            {responses.map((response, index) => (
+              <div key={index} className='text-sm leading-6'>
+                <Markdown>{response}</Markdown>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-    ) : (
-      <p className='text-muted-foreground mt-2 text-sm'>
-        {entry.status === 'running'
-          ? 'Waiting for a response…'
-          : 'Completed without a text response.'}
-      </p>
+        ) : (
+          <p className='text-muted-foreground mt-2 text-sm'>
+            {entry.status === 'running'
+              ? 'Waiting for a response…'
+              : 'Completed without a text response.'}
+          </p>
+        )}
+      </>
     );
   }
 

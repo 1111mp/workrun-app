@@ -9,10 +9,16 @@ import {
   CardHeader,
   CardTitle,
   Field,
+  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
   Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Spinner,
   Textarea,
 } from '@workspace/ui/components';
@@ -31,6 +37,7 @@ import {
 const createAppSchema = z.object({
   name: z.string().trim().min(1, 'Enter a name.'),
   description: z.string(),
+  kind: z.enum(['workflow', 'tool']),
 });
 
 type CreateProcessNodeForm = z.infer<typeof createAppSchema>;
@@ -43,13 +50,18 @@ const createStageLabels: Record<ProcessNodeCreateStage, string> = {
   completed: 'App created',
 };
 
+const appKinds = [
+  { value: 'workflow', label: 'Workflow App' },
+  { value: 'tool', label: 'Tool App' },
+];
+
 function CreateProcessNodePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createStage, setCreateStage] = useState<ProcessNodeCreateStage>();
   const form = useForm<CreateProcessNodeForm>({
     resolver: zodResolver(createAppSchema),
-    defaultValues: { name: '', description: '' },
+    defaultValues: { name: '', description: '', kind: 'workflow' },
   });
 
   const create = useMutation({
@@ -141,6 +153,35 @@ function CreateProcessNodePage() {
                       {fieldState.invalid ? (
                         <FieldError errors={[fieldState.error]} />
                       ) : null}
+                    </Field>
+                  )}
+                />
+                <Controller
+                  name='kind'
+                  control={form.control}
+                  render={({ field }) => (
+                    <Field>
+                      <FieldLabel htmlFor='app-kind'>App type</FieldLabel>
+                      <FieldDescription>
+                        Workflow Apps run as canvas nodes; Tool Apps are called
+                        by Agents with structured arguments.
+                      </FieldDescription>
+                      <Select
+                        items={appKinds}
+                        value={field.value}
+                        onValueChange={field.onChange}
+                      >
+                        <SelectTrigger id='app-kind'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {appKinds.map((kind) => (
+                            <SelectItem key={kind.value} value={kind.value}>
+                              {kind.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </Field>
                   )}
                 />

@@ -26,6 +26,26 @@ use std::{
 use tauri::{AppHandle, ipc::Channel};
 use uuid::Uuid;
 
+/// How an App is invoked by Workrun.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessNodeKind {
+    /// A deterministic workflow step placed directly on the canvas.
+    #[default]
+    Workflow,
+    /// A callable function made available to selected Agent nodes.
+    Tool,
+}
+
+/// Whether each Agent invocation needs an explicit user confirmation.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionPolicy {
+    #[default]
+    AskEveryTime,
+    Auto,
+}
+
 /// The full set of Process Nodes available from the current source.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +75,10 @@ pub struct ProcessNodeDefinition {
     /// Project-relative Python script that implements the Process Node work.
     pub entry: PathBuf,
     #[serde(default)]
+    pub kind: ProcessNodeKind,
+    #[serde(default)]
+    pub tool_execution_policy: ToolExecutionPolicy,
+    #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
     #[serde(default)]
     pub outputs: BTreeMap<String, Value>,
@@ -67,6 +91,8 @@ pub struct CreateProcessNodeRequest {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub kind: ProcessNodeKind,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -118,6 +144,19 @@ pub struct WorkflowProcessNodeRun {
     pub result: Value,
 }
 
+/// Metadata required to expose a Tool App to an LLM agent.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessToolDefinition {
+    pub process_node_id: String,
+    pub display_name: String,
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub output_schema: Value,
+    pub execution_policy: ToolExecutionPolicy,
+}
+
 /// Stateless access to the source-owned catalog and the local installation cache.
 pub struct ProcessNodeRegistry;
 
@@ -152,6 +191,34 @@ impl ProcessNodeRegistry {
         Ok(Self::with_installation(definition).await)
     }
 
+    /// List the App definitions that can be attached to an Agent as tools.
+    pub async fn list_tools() -> Result<Vec<ProcessToolDefinition>> {
+        let catalog = Self::read_catalog().await?;
+        catalog
+            .nodes
+            .into_iter()
+            .filter(|node| node.kind == ProcessNodeKind::Tool)
+            .map(process_tool_definition)
+            .collect()
+    }
+
+    /// Resolve selected Tool Apps before an Agent is constructed.
+    pub async fn tools(ids: &[String]) -> Result<Vec<ProcessToolDefinition>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tools = Self::list_tools().await?;
+        ids.iter()
+            .map(|id| {
+                tools
+                    .iter()
+                    .find(|tool| tool.process_node_id == *id)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Tool App is not in the catalog: {id}"))
+            })
+            .collect()
+    }
+
     /// Open an installed Process Node project in the system file manager.
     pub async fn open_project(id: &str) -> Result<()> {
         let node = Self::inspect(id).await?;
@@ -181,6 +248,8 @@ impl ProcessNodeRegistry {
             created_at: now.clone(),
             updated_at: now,
             entry: PathBuf::from("main.py"),
+            kind: request.kind,
+            tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
             inputs: BTreeMap::new(),
             outputs: BTreeMap::new(),
         };
@@ -205,11 +274,7 @@ impl ProcessNodeRegistry {
             let _ = progress.send(ProcessNodeCreateProgress {
                 stage: ProcessNodeCreateStage::SavingApp,
             });
-            tokio::fs::write(
-                project_path.join(&definition.entry),
-                "\"\"\"Process Node entrypoint.\n\nWhen run by a workflow, Workrun provides the complete workflow state as JSON on stdin. Use process.result({...}) once to return structured data; stdout and stderr remain available for logs.\n\"\"\"\n\nimport json\nimport sys\n\nfrom workrun_sdk import process\n\n\ndef main() -> None:\n    raw_input = sys.stdin.read()\n    state = json.loads(raw_input) if raw_input else {}\n    print(f\"Process Node received {len(state)} state fields\")\n    process.result({\"processed\": True})\n\n\nif __name__ == \"__main__\":\n    main()\n",
-            )
-            .await?;
+            tokio::fs::write(project_path.join(&definition.entry), starter_script(definition.kind)).await?;
             let mut catalog = Self::read_catalog().await?;
             catalog.nodes.push(definition.clone());
             Self::write_catalog(&catalog).await
@@ -275,6 +340,30 @@ impl ProcessNodeRegistry {
         input: &Value,
         on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
     ) -> Result<WorkflowProcessNodeRun> {
+        if Self::inspect(id).await?.definition.kind != ProcessNodeKind::Workflow {
+            bail!("Tool App `{id}` cannot run as a workflow node");
+        }
+        Self::run_with_input(id, input, "process.result", on_output).await
+    }
+
+    /// Invoke a Tool App with the JSON object generated by an Agent.
+    pub async fn run_for_tool(
+        id: &str,
+        input: &Value,
+        on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
+    ) -> Result<WorkflowProcessNodeRun> {
+        if Self::inspect(id).await?.definition.kind != ProcessNodeKind::Tool {
+            bail!("Workflow App `{id}` cannot run as an Agent tool");
+        }
+        Self::run_with_input(id, input, "tool.result", on_output).await
+    }
+
+    async fn run_with_input(
+        id: &str,
+        input: &Value,
+        result_type: &str,
+        on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
+    ) -> Result<WorkflowProcessNodeRun> {
         let node = Self::inspect(id).await?;
         if !matches!(node.install_status, ProcessNodeInstallStatus::Installed) {
             bail!("Process Node is not installed: {id}");
@@ -284,7 +373,7 @@ impl ProcessNodeRegistry {
         let app = handle::Handle::app_handle();
         let sync = PythonRuntime::sync_dependencies(app, &node.project_path, &python_version).await?;
         let mut ipc = IpcServer::global().create_session().await?;
-        let input = serde_json::to_vec(input).context("failed to serialize workflow state for Process Node")?;
+        let input = serde_json::to_vec(input).context("failed to serialize input for Process Node")?;
         let logs = Arc::new(Mutex::new((String::new(), String::new())));
         let captured_logs = Arc::clone(&logs);
         let execution = PythonRuntime::run_python_streaming_with_env_and_stdin(
@@ -311,13 +400,13 @@ impl ProcessNodeRegistry {
 
         let result = if execution.as_ref().is_ok_and(|run| run.exit_code == Some(0)) {
             std::iter::from_fn(|| ipc.try_receive())
-                .find(|message| message.get("type").and_then(Value::as_str) == Some("process.result"))
+                .find(|message| message.get("type").and_then(Value::as_str) == Some(result_type))
                 .and_then(|message| message.get("data").cloned())
                 .filter(Value::is_object)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Process Node `{}` exited without process.result({{...}})",
-                        node.definition.name
+                        "Process Node `{}` exited without {result_type}({{...}})",
+                        node.definition.name,
                     )
                 })
         } else {
@@ -499,6 +588,80 @@ fn validate_schemas(kind: &str, schemas: &BTreeMap<String, Value>) -> Result<()>
     Ok(())
 }
 
+fn process_tool_definition(node: ProcessNodeDefinition) -> Result<ProcessToolDefinition> {
+    if node.inputs.is_empty() {
+        bail!("Tool App `{}` must define at least one input schema", node.name);
+    }
+    if node.outputs.is_empty() {
+        bail!("Tool App `{}` must define at least one output schema", node.name);
+    }
+    let input_schema = object_schema(&node.inputs);
+    let output_schema = object_schema(&node.outputs);
+    jsonschema::validator_for(&input_schema)
+        .with_context(|| format!("Tool App `{}` has an invalid input schema", node.name))?;
+    jsonschema::validator_for(&output_schema)
+        .with_context(|| format!("Tool App `{}` has an invalid output schema", node.name))?;
+    Ok(ProcessToolDefinition {
+        display_name: node.name.clone(),
+        name: format!("process_{}", node.id.replace('-', "_")),
+        description: if node.description.trim().is_empty() {
+            node.name.clone()
+        } else {
+            format!("{}: {}", node.name, node.description)
+        },
+        process_node_id: node.id,
+        input_schema,
+        output_schema,
+        execution_policy: node.tool_execution_policy,
+    })
+}
+
+fn object_schema(properties: &BTreeMap<String, Value>) -> Value {
+    let required = properties
+        .iter()
+        .filter_map(|(name, schema)| (!is_optional_field(schema)).then_some(name))
+        .collect::<Vec<_>>();
+    let properties = properties
+        .iter()
+        .map(|(name, schema)| (name.clone(), without_workrun_schema_extensions(schema)))
+        .collect::<serde_json::Map<String, Value>>();
+    serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": false,
+    })
+}
+
+/// Field-level `required` is not part of JSON Schema. Keep App definitions
+/// compact by accepting this Workrun extension and compile it into the parent
+/// object's standard `required` list before passing the schema to an Agent.
+fn is_optional_field(schema: &Value) -> bool {
+    schema
+        .get("x-workrun-optional")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn without_workrun_schema_extensions(schema: &Value) -> Value {
+    let mut schema = schema.clone();
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("x-workrun-optional");
+    }
+    schema
+}
+
+fn starter_script(kind: ProcessNodeKind) -> &'static str {
+    match kind {
+        ProcessNodeKind::Workflow => {
+            "\"\"\"Workflow App entrypoint.\n\nWorkrun provides the workflow state as JSON on stdin. Use process.result({...}) once to return structured data; stdout and stderr remain available for logs.\n\"\"\"\n\nimport json\nimport sys\n\nfrom workrun_sdk import process\n\n\ndef main() -> None:\n    raw_input = sys.stdin.read()\n    state = json.loads(raw_input) if raw_input else {}\n    print(f\"Workflow App received {len(state)} state fields\")\n    process.result({\"processed\": True})\n\n\nif __name__ == \"__main__\":\n    main()\n"
+        },
+        ProcessNodeKind::Tool => {
+            "\"\"\"Tool App entrypoint.\n\nWorkrun validates the Agent arguments against this App's input fields, then invokes the decorated function. Return a JSON object that matches the configured output fields.\n\"\"\"\n\nfrom workrun_sdk.tool import tool\n\n\n@tool(\n    name=\"process_data\",\n    description=\"Process the arguments supplied by the Agent.\",\n)\ndef process_data(**arguments: object) -> dict[str, object]:\n    print(f\"Tool App received {len(arguments)} arguments\")\n    return {\"processed\": True}\n"
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +675,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00+00:00".into(),
             updated_at: "2026-01-01T00:00:00+00:00".into(),
             entry: "main.py".into(),
+            kind: ProcessNodeKind::Workflow,
+            tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
             inputs: BTreeMap::from([("query".into(), serde_json::json!({ "type": "string" }))]),
             outputs: BTreeMap::new(),
         }
@@ -530,6 +695,56 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn tool_definition_requires_input_and_output_schemas() {
+        let mut tool = definition();
+        tool.kind = ProcessNodeKind::Tool;
+        tool.outputs = BTreeMap::from([("result".into(), serde_json::json!({ "type": "string" }))]);
+
+        let tool_definition = process_tool_definition(tool).unwrap();
+        assert_eq!(tool_definition.name, "process_019b812d_4958_7d37_8a45_47e1e20a4744");
+        assert_eq!(tool_definition.input_schema["required"], serde_json::json!(["query"]));
+
+        let mut invalid = definition();
+        invalid.kind = ProcessNodeKind::Tool;
+        assert!(process_tool_definition(invalid).is_err());
+    }
+
+    #[test]
+    fn tool_schema_allows_fields_marked_optional() {
+        let mut tool = definition();
+        tool.kind = ProcessNodeKind::Tool;
+        tool.inputs.insert(
+            "locale".into(),
+            serde_json::json!({ "type": "string", "x-workrun-optional": true }),
+        );
+        tool.outputs = BTreeMap::from([
+            ("temperatureC".into(), serde_json::json!({ "type": "number" })),
+            (
+                "observationId".into(),
+                serde_json::json!({ "type": "string", "x-workrun-optional": true }),
+            ),
+        ]);
+
+        let tool = process_tool_definition(tool).unwrap();
+        assert_eq!(tool.input_schema["required"], serde_json::json!(["query"]));
+        assert_eq!(tool.output_schema["required"], serde_json::json!(["temperatureC"]));
+        assert!(
+            tool.input_schema["properties"]["locale"]
+                .get("x-workrun-optional")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn legacy_catalog_entries_default_to_workflow_apps() {
+        let mut value = serde_json::to_value(definition()).unwrap();
+        value.as_object_mut().unwrap().remove("kind");
+
+        let parsed: ProcessNodeDefinition = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.kind, ProcessNodeKind::Workflow);
     }
 
     #[tokio::test]

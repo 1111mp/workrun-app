@@ -3,6 +3,8 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import type { DependencySyncResult } from '@/services/runtime';
 
 export type ProcessNodeInstallStatus = 'notInstalled' | 'installed' | 'invalid';
+export type ProcessNodeKind = 'workflow' | 'tool';
+export type ToolExecutionPolicy = 'ask_every_time' | 'auto';
 
 export type ProcessNodeDefinition = {
   id: string;
@@ -12,6 +14,8 @@ export type ProcessNodeDefinition = {
   createdAt: string;
   updatedAt: string;
   entry: string;
+  kind: ProcessNodeKind;
+  toolExecutionPolicy: ToolExecutionPolicy;
   inputs: Record<string, unknown>;
   outputs: Record<string, unknown>;
 };
@@ -23,9 +27,19 @@ export type ProcessNode = {
   installError?: string;
 };
 
+export type ProcessToolDefinition = {
+  processNodeId: string;
+  displayName: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  executionPolicy: ToolExecutionPolicy;
+};
+
 export type CreateProcessNodeRequest = Pick<
   ProcessNodeDefinition,
-  'name' | 'description'
+  'name' | 'description' | 'kind'
 >;
 
 export type ProcessNodeCreateStage =
@@ -56,6 +70,10 @@ export type ProcessNodeRunResult = {
 
 export function listProcessNodes() {
   return invoke<ProcessNode[]>('process_node_list');
+}
+
+export function listProcessTools() {
+  return invoke<ProcessToolDefinition[]>('process_node_tool_list');
 }
 
 export function inspectProcessNode(id: string) {

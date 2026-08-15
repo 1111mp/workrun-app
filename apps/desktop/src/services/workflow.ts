@@ -214,3 +214,7 @@ export function runWorkflow(
     onEvent: channel,
   });
 }
+
+export function resolveToolApproval(requestId: string, approved: boolean) {
+  return invoke('workflow_resolve_tool_approval', { requestId, approved });
+}

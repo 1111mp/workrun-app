@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import {
+  resolveToolApproval,
   runWorkflow,
   toWorkflowDsl,
   type WorkflowRunEvent,
@@ -126,6 +127,7 @@ function useWorkflowRun(
   const [showRunOutput, setShowRunOutput] = useState(false);
   const [runView, setRunView] = useState<WorkflowRunView>(initialRunView);
   const [lastRunInput, setLastRunInput] = useState<Record<string, unknown>>();
+  const [toolApproval, setToolApproval] = useState<Record<string, unknown>>();
   const chatThreadId = useRef<string | undefined>(undefined);
   const chatTurnId = useRef<string | undefined>(undefined);
 
@@ -263,6 +265,33 @@ function useWorkflowRun(
         return;
       case 'custom':
         if (typeof event.data !== 'object' || event.data === null) return;
+        if (event.event_type === 'agent.tool_approval_required') {
+          setToolApproval(event.data as Record<string, unknown>);
+          return;
+        }
+        if (event.event_type === 'agent.tool_result') {
+          const toolCall = event.data as Record<string, unknown>;
+          setRunView((current) => {
+            const entryIndex = latestExecutionIndex(
+              current.execution,
+              event.node,
+            );
+            if (entryIndex === -1) return current;
+            const entry = current.execution[entryIndex];
+            const toolCalls = Array.isArray(entry.toolCalls)
+              ? entry.toolCalls
+              : [];
+            return {
+              ...current,
+              execution: current.execution.map((item, index) =>
+                index === entryIndex
+                  ? { ...item, toolCalls: [...toolCalls, toolCall] }
+                  : item,
+              ),
+            };
+          });
+          return;
+        }
         if (event.event_type === 'workflow.node_result') {
           const result = event.data as Record<string, unknown>;
           setRunView((current) => {
@@ -504,6 +533,13 @@ function useWorkflowRun(
     setRunPanelOpen(true);
   };
 
+  const resolvePendingToolApproval = async (approved: boolean) => {
+    const requestId = toolApproval?.requestId;
+    if (typeof requestId !== 'string') return;
+    setToolApproval(undefined);
+    await resolveToolApproval(requestId, approved);
+  };
+
   return {
     isRunning: runMutation.isPending,
     lastRunInput,
@@ -514,6 +550,8 @@ function useWorkflowRun(
     startRun,
     startWorkflowRun,
     runningNodeId,
+    toolApproval,
+    resolvePendingToolApproval,
   };
 }
 

@@ -84,6 +84,7 @@ pub fn run() {
             cmd::ipc::python_ui_respond,
             // statically provisioned Process Nodes
             cmd::process_node::process_node_list,
+            cmd::process_node::process_node_tool_list,
             cmd::process_node::process_node_inspect,
             cmd::process_node::process_node_open_project,
             cmd::process_node::process_node_create,
@@ -92,6 +93,7 @@ pub fn run() {
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,
+            cmd::workflow::workflow_resolve_tool_approval,
             // Python runtime
             cmd::python_runtime::uv_version,
             cmd::python_runtime::ensure_python,

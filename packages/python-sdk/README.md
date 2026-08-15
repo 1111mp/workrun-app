@@ -56,3 +56,36 @@ data, arrays, or custom RJSF UI options, use `form()` with JSON Schema.
 
 Workrun injects `WORKRUN_IPC_ENDPOINT`, `WORKRUN_IPC_TOKEN`, and
 `WORKRUN_RUN_ID` into scripts it launches.
+
+### Tool Apps
+
+For a Tool App, define one function with `@tool`. Workrun passes the Agent's
+validated arguments as JSON on standard input, invokes the function with
+keyword arguments, and sends its returned object back to the Agent.
+
+```python
+from workrun_sdk.tool import tool
+
+
+@tool(
+    name="lookup_customer",
+    description="Query a customer by email.",
+)
+def lookup_customer(email: str) -> dict[str, object]:
+    return {"customer": {"email": email, "plan": "pro"}}
+```
+
+The Tool App's input and output fields configured in Workrun remain the
+runtime schemas. `name` and `description` are registered by the SDK so the same
+definition can later be exported through an MCP-compatible catalog.
+The function must return a JSON object. `tool.result({...})` remains available
+for Tool Apps that need manual control of their entrypoint.
+
+By default, every configured input or output field is required. To make a
+field optional in an App's data contract, add the Workrun schema extension:
+
+```json
+{
+  "locale": { "type": "string", "x-workrun-optional": true }
+}
+```

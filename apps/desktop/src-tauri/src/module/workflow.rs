@@ -6,7 +6,7 @@
 
 use crate::{
     config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog},
-    module::process_node::ProcessNodeRegistry,
+    module::process_node::{ProcessNodeRegistry, ProcessToolDefinition, ToolExecutionPolicy},
 };
 use adk_rust::{
     graph::{
@@ -21,7 +21,7 @@ use adk_rust::{
         ollama::{OllamaConfig, OllamaModel},
         openai::{OpenAIClient, OpenAIConfig},
     },
-    prelude::{Content, Event, Llm, LlmAgentBuilder},
+    prelude::{Content, Event, Llm, LlmAgentBuilder, Tool, ToolContext},
     server::RemoteA2aAgent,
 };
 use anyhow::{Result, anyhow, bail};
@@ -30,12 +30,34 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Instant,
 };
 use tauri::ipc::Channel;
+use tokio::sync::oneshot;
 
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
+
+static TOOL_APPROVALS: OnceLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> = OnceLock::new();
+
+fn tool_approvals() -> &'static Mutex<HashMap<String, oneshot::Sender<bool>>> {
+    TOOL_APPROVALS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub async fn resolve_tool_approval(request_id: &str, approved: bool) -> Result<()> {
+    let sender = tool_approvals()
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(request_id));
+    let Some(sender) = sender else {
+        bail!("Tool approval request is no longer pending")
+    };
+    let _ = sender.send(approved);
+    Ok(())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,7 +177,7 @@ fn with_measured_node_duration(event: StreamEvent, node_started_at: &mut HashMap
 }
 
 /// Compile a React Flow document into an executable ADK `StateGraph`.
-pub fn compile(
+pub async fn compile(
     dsl: WorkflowDsl,
     config: &IWorkrun,
     on_event: Option<Channel<StreamEvent>>,
@@ -221,7 +243,7 @@ pub fn compile(
             "switch" => add_switch_control_node(graph, node, on_event.clone())?,
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
-            "agent" => add_local_agent_node(graph, node, config, on_event.clone())?,
+            "agent" => add_local_agent_node(graph, node, config, on_event.clone()).await?,
             _ => add_control_node(graph, node),
         };
     }
@@ -463,7 +485,7 @@ fn add_switch_control_node(
     }))
 }
 
-fn add_local_agent_node(
+async fn add_local_agent_node(
     graph: StateGraph,
     node: &WorkflowNode,
     config: &IWorkrun,
@@ -476,6 +498,10 @@ fn add_local_agent_node(
         string_data(node, "modelProfileId").ok_or_else(|| anyhow!("agent node `{id}` needs data.modelProfileId"))?;
     let temperature = number_data(node, "temperature", 0.0, 2.0)?;
     let top_p = number_data(node, "topP", 0.0, 1.0)?;
+    let tool_ids = string_array_data(node, "toolIds")?;
+    let max_tool_calls = integer_data(node, "maxToolCalls", 8, 1, 50)?;
+    let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
+    let tools = ProcessNodeRegistry::tools(&tool_ids).await?;
     let model = model_catalog()
         .into_iter()
         .find(|model| model.id == profile_id)
@@ -491,6 +517,19 @@ fn add_local_agent_node(
     if let Some(top_p) = top_p {
         agent = agent.top_p(top_p);
     }
+    let tool_calls = Arc::new(AtomicU32::new(0));
+    let tool_trace = Arc::new(Mutex::new(Vec::new()));
+    for tool in tools {
+        agent = agent.tool(Arc::new(ProcessTool::new(
+            tool,
+            id.clone(),
+            on_event.clone(),
+            Arc::clone(&tool_calls),
+            Arc::clone(&tool_trace),
+            max_tool_calls,
+            tool_timeout_seconds.into(),
+        )));
+    }
     let agent = agent.build()?;
     Ok(graph.add_node(StreamingAgentNode::new(
         AdkAgentNode::new(Arc::new(agent)).with_input_mapper(state_as_agent_input),
@@ -498,7 +537,155 @@ fn add_local_agent_node(
         "agent",
         label,
         on_event,
+        Some(tool_trace),
     )))
+}
+
+struct ProcessTool {
+    definition: ProcessToolDefinition,
+    agent_node_id: String,
+    on_event: Option<Channel<StreamEvent>>,
+    tool_calls: Arc<AtomicU32>,
+    tool_trace: Arc<Mutex<Vec<Value>>>,
+    max_tool_calls: u32,
+    timeout_seconds: u64,
+}
+
+impl ProcessTool {
+    fn new(
+        definition: ProcessToolDefinition,
+        agent_node_id: String,
+        on_event: Option<Channel<StreamEvent>>,
+        tool_calls: Arc<AtomicU32>,
+        tool_trace: Arc<Mutex<Vec<Value>>>,
+        max_tool_calls: u32,
+        timeout_seconds: u64,
+    ) -> Self {
+        Self {
+            definition,
+            agent_node_id,
+            on_event,
+            tool_calls,
+            tool_trace,
+            max_tool_calls,
+            timeout_seconds,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for ProcessTool {
+    fn name(&self) -> &str {
+        &self.definition.name
+    }
+
+    fn description(&self) -> &str {
+        &self.definition.description
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(self.definition.input_schema.clone())
+    }
+
+    fn response_schema(&self) -> Option<Value> {
+        Some(self.definition.output_schema.clone())
+    }
+
+    async fn execute(&self, _context: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+        if self.tool_calls.fetch_add(1, Ordering::Relaxed) >= self.max_tool_calls {
+            return Err(adk_rust::AdkError::tool(format!(
+                "Agent reached its {} tool-call limit",
+                self.max_tool_calls
+            )));
+        }
+        validate_tool_value(&self.definition.input_schema, &args, "input")?;
+        if self.definition.execution_policy == ToolExecutionPolicy::AskEveryTime {
+            let request_id = uuid::Uuid::now_v7().to_string();
+            let (sender, receiver) = oneshot::channel();
+            tool_approvals()
+                .lock()
+                .map_err(|_| adk_rust::AdkError::tool("Tool approval registry is unavailable"))?
+                .insert(request_id.clone(), sender);
+            if let Some(on_event) = &self.on_event {
+                let _ = on_event.send(StreamEvent::custom(
+                    &self.agent_node_id,
+                    "agent.tool_approval_required",
+                    json!({
+                        "requestId": request_id,
+                        "tool": self.name(),
+                        "name": self.definition.display_name,
+                        "description": self.definition.description,
+                        "input": args,
+                    }),
+                ));
+            }
+            let approved = tokio::time::timeout(std::time::Duration::from_secs(300), receiver)
+                .await
+                .ok()
+                .and_then(|value| value.ok())
+                .unwrap_or(false);
+            tool_approvals()
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.remove(&request_id));
+            if !approved {
+                return Err(adk_rust::AdkError::tool("Tool denied by user"));
+            }
+        }
+        if let Some(on_event) = &self.on_event {
+            let _ = on_event.send(StreamEvent::custom(
+                &self.agent_node_id,
+                "agent.tool_call",
+                json!({
+                    "tool": self.name(),
+                    "name": self.definition.display_name,
+                    "input": args,
+                }),
+            ));
+        }
+        let node_id = self.agent_node_id.clone();
+        let name = self.definition.name.clone();
+        let on_event = self.on_event.clone();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(self.timeout_seconds),
+            ProcessNodeRegistry::run_for_tool(
+                &self.definition.process_node_id,
+                &args,
+                Arc::new(move |chunk| {
+                    if let Some(on_event) = &on_event {
+                        let _ = on_event.send(StreamEvent::custom(
+                            &node_id,
+                            "agent.tool_output",
+                            json!({ "tool": name, "stream": chunk.stream, "data": chunk.data }),
+                        ));
+                    }
+                }),
+            ),
+        )
+        .await
+        .map_err(|_| {
+            adk_rust::AdkError::tool(format!(
+                "Tool `{}` timed out after {} seconds",
+                self.name(),
+                self.timeout_seconds
+            ))
+        })?
+        .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+        validate_tool_value(&self.definition.output_schema, &result.result, "output")?;
+        let trace = json!({
+            "tool": self.name(),
+            "name": self.definition.display_name,
+            "input": args,
+            "result": result.result,
+        });
+        if let Ok(mut tool_trace) = self.tool_trace.lock() {
+            tool_trace.push(trace.clone());
+        }
+        if let Some(on_event) = &self.on_event {
+            let _ = on_event.send(StreamEvent::custom(&self.agent_node_id, "agent.tool_result", trace));
+        }
+        Ok(result.result)
+    }
 }
 
 fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
@@ -548,6 +735,7 @@ fn remote_a2a_graph_node(node: &WorkflowNode, on_event: Option<Channel<StreamEve
         "remote_agent",
         url,
         on_event,
+        None,
     ))
 }
 
@@ -562,6 +750,7 @@ struct StreamingAgentNode {
     endpoint_or_model: String,
     on_event: Option<Channel<StreamEvent>>,
     streamed_events: Mutex<HashMap<(String, usize), Vec<Value>>>,
+    tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
 }
 
 impl StreamingAgentNode {
@@ -571,6 +760,7 @@ impl StreamingAgentNode {
         kind: impl Into<String>,
         endpoint_or_model: impl Into<String>,
         on_event: Option<Channel<StreamEvent>>,
+        tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
     ) -> Self {
         Self {
             id,
@@ -579,6 +769,7 @@ impl StreamingAgentNode {
             endpoint_or_model: endpoint_or_model.into(),
             on_event,
             streamed_events: Mutex::new(HashMap::new()),
+            tool_trace,
         }
     }
 
@@ -614,12 +805,18 @@ impl Node for StreamingAgentNode {
             .map(|event| serde_json::from_value::<Event>(event).map_err(|error| graph_node_error(&self.id, error)))
             .collect::<adk_rust::graph::Result<Vec<_>>>()?;
 
+        let tool_calls = self
+            .tool_trace
+            .as_ref()
+            .and_then(|tool_trace| tool_trace.lock().ok().map(|tool_trace| tool_trace.clone()))
+            .unwrap_or_default();
         Ok(NodeOutput::new().with_updates(agent_output_updates(
             &events,
             &self.id,
             &self.kind,
             &self.endpoint_or_model,
             self.on_event.as_ref(),
+            &tool_calls,
         )))
     }
 
@@ -672,6 +869,7 @@ fn agent_output_updates(
     kind: &str,
     endpoint_or_model: &str,
     on_event: Option<&Channel<StreamEvent>>,
+    tool_calls: &[Value],
 ) -> HashMap<String, Value> {
     let messages = events
         .iter()
@@ -687,12 +885,15 @@ fn agent_output_updates(
         .filter(|text| !text.is_empty())
         .map(|content| json!({ "role": "assistant", "content": content }))
         .collect::<Vec<_>>();
-    let event = json!({
+    let mut event = json!({
         "nodeId": node_id,
         "type": kind,
         "endpointOrModel": endpoint_or_model,
         "messages": messages,
     });
+    if !tool_calls.is_empty() {
+        event["toolCalls"] = Value::Array(tool_calls.to_vec());
+    }
     if let Some(on_event) = on_event {
         let _ = on_event.send(StreamEvent::custom(node_id, "workflow.node_result", event.clone()));
     }
@@ -732,6 +933,51 @@ fn number_data(node: &WorkflowNode, key: &str, min: f32, max: f32) -> Result<Opt
         bail!("agent node `{}` field `{key}` must be between {min} and {max}", node.id);
     }
     Ok(Some(value as f32))
+}
+
+fn string_array_data(node: &WorkflowNode, key: &str) -> Result<Vec<String>> {
+    let Some(value) = node.data.get(key) else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| anyhow!("agent node `{}` field `{key}` must be an array", node.id))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| anyhow!("agent node `{}` field `{key}` must contain non-empty strings", node.id))
+        })
+        .collect()
+}
+
+fn integer_data(node: &WorkflowNode, key: &str, default: u32, min: u32, max: u32) -> Result<u32> {
+    let Some(value) = node.data.get(key) else {
+        return Ok(default);
+    };
+    let value = value
+        .as_u64()
+        .filter(|value| *value <= u32::MAX as u64)
+        .map(|value| value as u32)
+        .ok_or_else(|| anyhow!("agent node `{}` field `{key}` must be an integer", node.id))?;
+    if value < min || value > max {
+        bail!("agent node `{}` field `{key}` must be between {min} and {max}", node.id);
+    }
+    Ok(value)
+}
+
+fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::Result<()> {
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|error| adk_rust::AdkError::tool(format!("Tool {kind} schema is invalid: {error}")))?;
+    if let Some(error) = validator.iter_errors(value).next() {
+        return Err(adk_rust::AdkError::tool(format!(
+            "Tool {kind} does not match its schema: {error}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_edges(
@@ -1133,6 +1379,7 @@ mod tests {
         input.insert("approved".into(), json!(true));
         let mut events = Vec::new();
         let result = compile(dsl, &Default::default(), None)
+            .await
             .unwrap()
             .run_stream(input, "test", |event| events.push(event))
             .await
@@ -1219,6 +1466,56 @@ mod tests {
         assert!(number_data(&invalid, "topP", 0.0, 1.0).is_err());
     }
 
+    #[test]
+    fn validates_tool_arguments_against_json_schema() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": false,
+        });
+
+        assert!(validate_tool_value(&schema, &json!({"query": "weather"}), "input").is_ok());
+        assert!(validate_tool_value(&schema, &json!({"query": 1}), "input").is_err());
+    }
+
+    #[tokio::test]
+    async fn resolves_one_time_tool_approval() {
+        let request_id = uuid::Uuid::now_v7().to_string();
+        let (sender, receiver) = oneshot::channel();
+        tool_approvals()
+            .lock()
+            .unwrap()
+            .insert(request_id.clone(), sender);
+
+        resolve_tool_approval(&request_id, true).await.unwrap();
+
+        assert!(receiver.await.unwrap());
+        assert!(resolve_tool_approval(&request_id, false).await.is_err());
+    }
+
+    #[test]
+    fn records_tool_calls_in_the_agent_trace() {
+        let tool_calls = vec![json!({
+            "tool": "uppercase",
+            "name": "Uppercase text",
+            "input": {"text": "hello"},
+            "result": {"uppercase": "HELLO"},
+        })];
+
+        let updates = agent_output_updates(&[], "agent", "agent", "model", None, &tool_calls);
+
+        assert_eq!(
+            updates["workflow.trace"]["toolCalls"],
+            json!([{
+                "tool": "uppercase",
+                "name": "Uppercase text",
+                "input": {"text": "hello"},
+                "result": {"uppercase": "HELLO"},
+            }]),
+        );
+    }
+
     #[tokio::test]
     async fn records_the_matched_switch_case_in_the_workflow_trace() {
         let dsl: WorkflowDsl = serde_json::from_value(json!({
@@ -1238,6 +1535,7 @@ mod tests {
         .unwrap();
         let state = State::from_iter([("age".into(), json!(20))]);
         let result = compile(dsl, &Default::default(), None)
+            .await
             .unwrap()
             .run_stream(state, "test", |_| {})
             .await
@@ -1255,8 +1553,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compiles_remote_a2a_agent_as_a_graph_node() {
+    #[tokio::test]
+    async fn compiles_remote_a2a_agent_as_a_graph_node() {
         let dsl: WorkflowDsl = serde_json::from_value(json!({
             "nodes": [
                 {"id":"start","type":"start"},
@@ -1269,7 +1567,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let compiled = compile(dsl, &Default::default(), None).unwrap();
+        let compiled = compile(dsl, &Default::default(), None).await.unwrap();
         assert_eq!(compiled.plan().executable_nodes, vec!["remote"]);
     }
 }
