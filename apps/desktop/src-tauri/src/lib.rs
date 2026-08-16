@@ -87,6 +87,7 @@ pub fn run() {
             cmd::mcp_server::mcp_server_delete,
             cmd::mcp_server::mcp_server_start,
             cmd::mcp_server::mcp_server_stop,
+            cmd::mcp_server::mcp_server_authorize,
             cmd::tool_registry::tool_list,
             cmd::ipc::python_ui_respond,
             // statically provisioned Process Nodes

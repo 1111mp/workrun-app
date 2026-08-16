@@ -9,7 +9,12 @@ export type McpServerStatus =
   | 'FailedToStart';
 
 export type McpServerTransport = 'stdio' | 'streamable_http';
-export type McpServerAuth = 'none' | 'bearer';
+export type McpServerAuth = 'none' | 'bearer' | 'oauth';
+export type McpServerAuthorizationStatus =
+  | 'not_required'
+  | 'authorization_required'
+  | 'authorizing'
+  | 'authorized';
 
 export type McpServerDefinition = {
   id: string;
@@ -20,10 +25,10 @@ export type McpServerDefinition = {
   args: string[];
   url: string;
   auth: McpServerAuth;
-  bearerToken?: string;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
+  authorizationStatus: McpServerAuthorizationStatus;
 };
 
 export type McpServer = {
@@ -78,4 +83,8 @@ export function startMcpServer(id: string) {
 
 export function stopMcpServer(id: string) {
   return invoke<McpServer>('mcp_server_stop', { id });
+}
+
+export function authorizeMcpServer(id: string) {
+  return invoke('mcp_server_authorize', { id });
 }

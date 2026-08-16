@@ -1,7 +1,7 @@
 //! Persistent configuration and lifecycle management for local stdio MCP servers.
 
 use crate::{
-    config::{deserialize_encrypted, serialize_encrypted},
+    config::{deserialize_encrypted, serialize_encrypted, with_encryption},
     module::{
         process_node::ToolExecutionPolicy,
         tool_registry::{ToolDefinition, ToolRiskLevel, ToolSource},
@@ -17,12 +17,41 @@ use adk_rust::{
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use rmcp::transport::auth::{AuthError, AuthorizationManager, CredentialStore, StoredCredentials};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex, OnceLock},
 };
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use url::Url;
 use uuid::Uuid;
+
+#[derive(Clone)]
+struct OAuthCredentialStore(Arc<tokio::sync::RwLock<Option<StoredCredentials>>>);
+
+impl OAuthCredentialStore {
+    fn from_credentials(credentials: StoredCredentials) -> Self {
+        Self(Arc::new(tokio::sync::RwLock::new(Some(credentials))))
+    }
+}
+
+#[async_trait::async_trait]
+impl CredentialStore for OAuthCredentialStore {
+    async fn load(&self) -> std::result::Result<Option<StoredCredentials>, AuthError> {
+        Ok(self.0.read().await.clone())
+    }
+
+    async fn save(&self, credentials: StoredCredentials) -> std::result::Result<(), AuthError> {
+        *self.0.write().await = Some(credentials);
+        Ok(())
+    }
+
+    async fn clear(&self) -> std::result::Result<(), AuthError> {
+        *self.0.write().await = None;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +83,13 @@ pub struct McpServerDefinition {
         deserialize_with = "deserialize_encrypted"
     )]
     pub bearer_token: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_encrypted",
+        deserialize_with = "deserialize_encrypted"
+    )]
+    pub oauth_credentials: Option<StoredCredentials>,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -68,6 +104,18 @@ pub enum McpServerAuth {
     #[default]
     None,
     Bearer,
+    #[serde(rename = "oauth", alias = "o_auth")]
+    OAuth,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerAuthorizationStatus {
+    #[default]
+    NotRequired,
+    AuthorizationRequired,
+    Authorizing,
+    Authorized,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -122,8 +170,7 @@ struct McpServerFrontendDefinition<'a> {
     args: &'a [String],
     url: &'a str,
     auth: McpServerAuth,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bearer_token: Option<&'a str>,
+    authorization_status: McpServerAuthorizationStatus,
     enabled: bool,
     created_at: &'a str,
     updated_at: &'a str,
@@ -142,7 +189,21 @@ where
         args: &definition.args,
         url: &definition.url,
         auth: definition.auth,
-        bearer_token: definition.bearer_token.as_deref(),
+        authorization_status: if definition.transport != McpServerTransport::StreamableHttp
+            || definition.auth != McpServerAuth::OAuth
+        {
+            McpServerAuthorizationStatus::NotRequired
+        } else if oauth_pending()
+            .lock()
+            .ok()
+            .is_some_and(|pending| pending.contains(&definition.id))
+        {
+            McpServerAuthorizationStatus::Authorizing
+        } else if definition.oauth_credentials.is_some() {
+            McpServerAuthorizationStatus::Authorized
+        } else {
+            McpServerAuthorizationStatus::AuthorizationRequired
+        },
         enabled: definition.enabled,
         created_at: &definition.created_at,
         updated_at: &definition.updated_at,
@@ -156,9 +217,14 @@ enum McpRuntime {
 }
 
 static RUNTIMES: OnceLock<Mutex<HashMap<String, Arc<McpRuntime>>>> = OnceLock::new();
+static OAUTH_PENDING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn runtimes() -> &'static Mutex<HashMap<String, Arc<McpRuntime>>> {
     RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn oauth_pending() -> &'static Mutex<HashSet<String>> {
+    OAUTH_PENDING.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 pub struct McpServerRegistry;
@@ -188,6 +254,7 @@ impl McpServerRegistry {
             url: request.url.trim().to_string(),
             auth: request.auth,
             bearer_token: request.bearer_token.filter(|token| !token.trim().is_empty()),
+            oauth_credentials: None,
             enabled: request.enabled,
             created_at: now.clone(),
             updated_at: now,
@@ -215,6 +282,15 @@ impl McpServerRegistry {
         // supply a replacement.
         if definition.auth == McpServerAuth::Bearer && definition.bearer_token.is_none() {
             definition.bearer_token = existing.bearer_token.clone();
+        }
+        if definition.auth == McpServerAuth::OAuth && definition.oauth_credentials.is_none() {
+            definition.oauth_credentials = existing.oauth_credentials.clone();
+        }
+        if definition.auth != McpServerAuth::Bearer {
+            definition.bearer_token = None;
+        }
+        if definition.auth != McpServerAuth::OAuth {
+            definition.oauth_credentials = None;
         }
         definition.created_at = existing.created_at.clone();
         definition.updated_at = Utc::now().to_rfc3339();
@@ -258,6 +334,78 @@ impl McpServerRegistry {
             status: ServerStatus::Stopped,
             definition,
         })
+    }
+
+    /// Starts the OAuth authorization-code flow for a remote MCP server. The
+    /// callback listener is local-only and accepts exactly one redirect.
+    pub async fn authorize(id: &str) -> Result<()> {
+        let definition = Self::definition(id).await?;
+        if definition.transport != McpServerTransport::StreamableHttp || definition.auth != McpServerAuth::OAuth {
+            bail!("MCP Server `{}` does not use OAuth", definition.name);
+        }
+        if !oauth_pending()
+            .lock()
+            .map_err(|_| anyhow::anyhow!("OAuth authorization registry is unavailable"))?
+            .insert(definition.id.clone())
+        {
+            bail!("OAuth authorization is already in progress for `{}`", definition.name);
+        }
+
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) => {
+                let _ = oauth_pending().lock().map(|mut pending| pending.remove(&definition.id));
+                return Err(error).context("failed to start the local OAuth callback listener");
+            },
+        };
+        let redirect_uri = format!("http://{}/oauth/callback", listener.local_addr()?);
+        let manager = AuthorizationManager::new(&definition.url)
+            .await
+            .map_err(|error| anyhow::anyhow!("OAuth setup failed: {error}"))?;
+        let store = OAuthCredentialStore(Arc::new(tokio::sync::RwLock::new(None)));
+        let mut manager = manager;
+        manager.set_credential_store(store.clone());
+        let metadata = manager
+            .discover_metadata()
+            .await
+            .map_err(|error| anyhow::anyhow!("OAuth metadata discovery failed: {error}"))?;
+        manager.set_metadata(metadata);
+        let session =
+            rmcp::transport::auth::AuthorizationSession::new(manager, &[], &redirect_uri, Some("Workrun"), None)
+                .await
+                .map_err(|error| anyhow::anyhow!("OAuth authorization setup failed: {error}"))?;
+        let authorization_url = session.get_authorization_url().to_string();
+        open::that(&authorization_url).context("failed to open the OAuth authorization page")?;
+
+        tokio::spawn(async move {
+            let outcome = async {
+                let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(300), listener.accept())
+                    .await
+                    .context("OAuth authorization timed out")??;
+                let mut request = vec![0; 8192];
+                let count = stream.read(&mut request).await?;
+                let request = std::str::from_utf8(&request[..count]).context("OAuth callback is not valid UTF-8")?;
+                let target = request.split_whitespace().nth(1).context("OAuth callback request is invalid")?;
+                let callback = Url::parse(&format!("http://localhost{target}"))?;
+                let code = callback.query_pairs().find(|(key, _)| key == "code").map(|(_, value)| value.into_owned());
+                let state = callback.query_pairs().find(|(key, _)| key == "state").map(|(_, value)| value.into_owned());
+                let result = match (code, state) {
+                    (Some(code), Some(state)) => session.handle_callback(&code, &state).await.map_err(|error| anyhow::anyhow!("OAuth authorization failed: {error}")),
+                    _ => bail!("OAuth authorization was denied or returned an invalid callback"),
+                };
+                let response = if result.is_ok() { "Authorization complete. You can return to Workrun." } else { "Authorization failed. You can close this page and try again in Workrun." };
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).as_bytes()).await?;
+                result?;
+                let credentials = store.load().await.map_err(|error| anyhow::anyhow!("OAuth credential storage failed: {error}"))?
+                    .context("OAuth authorization did not return credentials")?;
+                Self::store_oauth_credentials(&definition.id, credentials).await
+            }.await;
+            if let Err(error) = outcome {
+                log::warn!("OAuth authorization for MCP Server {} failed: {error:#}", definition.id);
+            }
+            let _ = oauth_pending().lock().map(|mut pending| pending.remove(&definition.id));
+        });
+        Ok(())
     }
 
     /// Gracefully stop every local MCP server owned by this application.
@@ -367,6 +515,9 @@ impl McpServerRegistry {
                             || anyhow::anyhow!("MCP Server `{}` needs a Bearer Token", definition.name),
                         )?))
                     },
+                    McpServerAuth::OAuth => {
+                        builder.with_auth(McpAuth::bearer(Self::oauth_access_token(definition).await?))
+                    },
                 };
                 let toolset = match tokio::time::timeout(std::time::Duration::from_secs(30), builder.connect()).await {
                     Ok(Ok(toolset)) => toolset,
@@ -453,9 +604,24 @@ impl McpServerRegistry {
                 return Err(error).with_context(|| format!("failed to read MCP Server catalog {}", path.display()));
             },
         };
-        let catalog =
-            serde_json::from_slice(&bytes).with_context(|| format!("invalid MCP Server catalog {}", path.display()))?;
+        let encrypted = with_encryption(|| async { serde_json::from_slice::<McpServerCatalog>(&bytes) }).await;
+        let (catalog, migrated_from_plaintext) = match encrypted {
+            Ok(catalog) => (catalog, false),
+            Err(encrypted_error) => {
+                let catalog = serde_json::from_slice::<McpServerCatalog>(&bytes).with_context(|| {
+                    format!(
+                        "invalid MCP Server catalog {} (encrypted read also failed: {encrypted_error})",
+                        path.display()
+                    )
+                })?;
+                (catalog, true)
+            },
+        };
         validate_catalog(&catalog)?;
+        if migrated_from_plaintext {
+            log::warn!("Migrating plaintext MCP Server credentials to encrypted storage");
+            Self::write_catalog(&catalog).await?;
+        }
         Ok(catalog)
     }
 
@@ -464,9 +630,56 @@ impl McpServerRegistry {
         let path = dirs::mcp_server_catalog_path()?;
         let parent = path.parent().context("MCP Server catalog has no parent directory")?;
         tokio::fs::create_dir_all(parent).await?;
-        tokio::fs::write(&path, serde_json::to_vec_pretty(catalog)?)
+        let bytes = with_encryption(|| async { serde_json::to_vec_pretty(catalog) }).await?;
+        tokio::fs::write(&path, bytes)
             .await
             .with_context(|| format!("failed to write MCP Server catalog {}", path.display()))
+    }
+
+    async fn store_oauth_credentials(id: &str, credentials: StoredCredentials) -> Result<()> {
+        let mut catalog = Self::read_catalog().await?;
+        let definition = catalog
+            .servers
+            .iter_mut()
+            .find(|server| server.id == id)
+            .ok_or_else(|| anyhow::anyhow!("MCP Server is not in the catalog: {id}"))?;
+        definition.oauth_credentials = Some(credentials);
+        definition.updated_at = Utc::now().to_rfc3339();
+        Self::stop_runtime(id).await?;
+        Self::write_catalog(&catalog).await
+    }
+
+    async fn oauth_access_token(definition: &McpServerDefinition) -> Result<String> {
+        let credentials = definition
+            .oauth_credentials
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("MCP Server `{}` needs OAuth authorization", definition.name))?;
+        let mut manager = AuthorizationManager::new(&definition.url)
+            .await
+            .map_err(|error| anyhow::anyhow!("OAuth setup failed: {error}"))?;
+        let store = OAuthCredentialStore::from_credentials(credentials.clone());
+        manager.set_credential_store(store.clone());
+        if !manager
+            .initialize_from_store()
+            .await
+            .map_err(|error| anyhow::anyhow!("OAuth credential restoration failed: {error}"))?
+        {
+            bail!("MCP Server `{}` needs OAuth authorization", definition.name);
+        }
+        let access_token = manager
+            .get_access_token()
+            .await
+            .map_err(|error| anyhow::anyhow!("OAuth token refresh failed: {error}"))?;
+        if let Some(refreshed) = store
+            .load()
+            .await
+            .map_err(|error| anyhow::anyhow!("OAuth credential storage failed: {error}"))?
+        {
+            if refreshed.token_received_at != credentials.token_received_at {
+                Self::store_oauth_credentials(&definition.id, refreshed).await?;
+            }
+        }
+        Ok(access_token)
     }
 }
 
@@ -586,6 +799,7 @@ mod tests {
             url: String::new(),
             auth: McpServerAuth::None,
             bearer_token: None,
+            oauth_credentials: None,
             enabled: true,
             created_at: String::new(),
             updated_at: String::new(),
@@ -605,6 +819,19 @@ mod tests {
         server.args.clear();
         server.url = "https://example.com/mcp".into();
         assert!(validate_definition(&server).is_ok());
+    }
+
+    #[test]
+    fn serializes_oauth_auth_with_a_stable_wire_value() {
+        assert_eq!(serde_json::to_string(&McpServerAuth::OAuth).unwrap(), "\"oauth\"");
+        assert_eq!(
+            serde_json::from_str::<McpServerAuth>("\"oauth\"").unwrap(),
+            McpServerAuth::OAuth
+        );
+        assert_eq!(
+            serde_json::from_str::<McpServerAuth>("\"o_auth\"").unwrap(),
+            McpServerAuth::OAuth
+        );
     }
 
     #[test]
@@ -645,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn returns_the_bearer_token_to_the_frontend() {
+    fn does_not_return_the_bearer_token_to_the_frontend() {
         let mut definition = definition();
         definition.bearer_token = Some("secret-token".into());
         let server = McpServer {
@@ -653,9 +880,10 @@ mod tests {
             status: ServerStatus::Stopped,
         };
 
-        assert_eq!(
-            serde_json::to_value(server).unwrap()["definition"]["bearerToken"],
-            "secret-token"
+        assert!(
+            serde_json::to_value(server).unwrap()["definition"]
+                .get("bearerToken")
+                .is_none()
         );
     }
 }

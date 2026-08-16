@@ -32,3 +32,8 @@ pub async fn mcp_server_start(id: String) -> CmdResult<McpServer> {
 pub async fn mcp_server_stop(id: String) -> CmdResult<McpServer> {
     McpServerRegistry::stop(&id).await.stringify_err()
 }
+
+#[tauri::command]
+pub async fn mcp_server_authorize(id: String) -> CmdResult {
+    McpServerRegistry::authorize(&id).await.stringify_err()
+}

@@ -39,6 +39,7 @@ log = { workspace = true }
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
 open = "5.4.1"
 parking_lot = { workspace = true }
+rmcp = { version = "1.6.0", features = ["auth", "client", "transport-streamable-http-client-reqwest"] }
 rustls = { version = "0.23.43", default-features = false, features = ["aws_lc_rs", "std"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -67,6 +68,7 @@ tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+url = "2.5.8"
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

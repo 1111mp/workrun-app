@@ -26,6 +26,7 @@ import {
   EmptyMedia,
   EmptyTitle,
   Field,
+  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
@@ -36,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
   Spinner,
+  Switch,
   Textarea,
 } from '@workspace/ui/components';
 import {
@@ -56,6 +58,7 @@ import { toast } from 'sonner';
 
 import {
   createMcpServer,
+  authorizeMcpServer,
   deleteMcpServer,
   listMcpServers,
   startMcpServer,
@@ -131,6 +134,12 @@ function McpServersPage() {
   const servers = useQuery({
     queryKey: ['mcp-servers'],
     queryFn: listMcpServers,
+    refetchInterval: (query) =>
+      query.state.data?.some(
+        (server) => server.definition.authorizationStatus === 'authorizing',
+      )
+        ? 2_000
+        : false,
   });
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deleting, setDeleting] = useState<McpServerDefinition | null>(null);
@@ -170,6 +179,15 @@ function McpServersPage() {
         description: error instanceof Error ? error.message : String(error),
       }),
     onSettled: () => void refresh(),
+  });
+  const authorize = useMutation({
+    mutationFn: authorizeMcpServer,
+    onSuccess: () => {
+      toast.info('Authorization opened in your browser.');
+      void refresh();
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : String(error)),
   });
   const remove = useMutation({
     mutationFn: deleteMcpServer,
@@ -332,6 +350,26 @@ function McpServersPage() {
                         )}
                         {isRunning ? 'Stop' : 'Start'}
                       </Button>
+                      {server.definition.auth === 'oauth' ? (
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          disabled={
+                            authorize.isPending ||
+                            server.definition.authorizationStatus ===
+                              'authorizing'
+                          }
+                          onClick={() => authorize.mutate(server.definition.id)}
+                        >
+                          {authorize.isPending ? (
+                            <Spinner data-icon='inline-start' />
+                          ) : null}
+                          {server.definition.authorizationStatus ===
+                          'authorized'
+                            ? 'Reauthorize'
+                            : 'Authorize'}
+                        </Button>
+                      ) : null}
                       <Button
                         variant='ghost'
                         size='sm'
@@ -563,7 +601,7 @@ function McpServerDialog({
                     onValueChange={(auth) =>
                       setFormDraft({
                         ...formDraft,
-                        auth: auth as 'none' | 'bearer',
+                        auth: auth as 'none' | 'bearer' | 'oauth',
                       })
                     }
                   >
@@ -571,12 +609,15 @@ function McpServerDialog({
                       <SelectValue>
                         {formDraft.auth === 'bearer'
                           ? 'Bearer Token'
-                          : 'No authentication'}
+                          : formDraft.auth === 'oauth'
+                            ? 'OAuth'
+                            : 'No authentication'}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value='none'>No authentication</SelectItem>
                       <SelectItem value='bearer'>Bearer Token</SelectItem>
+                      <SelectItem value='oauth'>OAuth</SelectItem>
                     </SelectContent>
                   </Select>
                 </Field>
@@ -598,13 +639,33 @@ function McpServerDialog({
                       }
                     />
                     <FieldDescription>
-                      Stored encrypted and returned to this desktop app when
-                      editing.
+                      Stored encrypted. Leave this field empty to retain the
+                      saved token.
                     </FieldDescription>
                   </Field>
+                ) : formDraft.auth === 'oauth' ? (
+                  <FieldDescription>
+                    Save the server, then authorize it in your browser. Workrun
+                    stores the resulting credentials encrypted.
+                  </FieldDescription>
                 ) : null}
               </>
             )}
+            <Field orientation='horizontal'>
+              <Switch
+                id='mcp-server-enabled'
+                checked={formDraft.enabled}
+                onCheckedChange={(enabled) =>
+                  setFormDraft({ ...formDraft, enabled })
+                }
+              />
+              <FieldContent>
+                <FieldLabel htmlFor='mcp-server-enabled'>Enabled</FieldLabel>
+                <FieldDescription>
+                  Disabled servers cannot be started or used by workflows.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
           </FieldGroup>
         ) : null}
         <DialogFooter>

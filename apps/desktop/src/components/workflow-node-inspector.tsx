@@ -36,7 +36,7 @@ import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 
 import { listProcessNodes } from '@/services/process-node';
-import { listTools } from '@/services/tool';
+import { listTools, type ToolDefinition } from '@/services/tool';
 
 type WorkflowNodeInspectorProps = {
   node: Node | null;
@@ -712,7 +712,14 @@ function ToolCombobox({
   onChange: (toolIds: string[]) => void;
 }) {
   const anchor = useComboboxAnchor();
-  const selectedTools = tools.filter((tool) => selectedIds.includes(tool.id));
+  const unavailableSelectedTools = selectedIds
+    .filter((id) => !tools.some((tool) => tool.id === id))
+    .map(unavailableTool);
+  const selectedTools = [
+    ...tools.filter((tool) => selectedIds.includes(tool.id)),
+    ...unavailableSelectedTools,
+  ];
+  const allTools = [...tools, ...unavailableSelectedTools];
   const toolApps = tools.filter((tool) => tool.source === 'process');
   const mcpToolGroups = new Map<string, typeof tools>();
   for (const tool of tools.filter((tool) => tool.source === 'mcp')) {
@@ -724,7 +731,7 @@ function ToolCombobox({
 
   return (
     <Combobox
-      items={tools}
+      items={allTools}
       multiple
       value={selectedTools}
       disabled={isLoading}
@@ -755,6 +762,14 @@ function ToolCombobox({
               ))}
             </ComboboxGroup>
           ) : null}
+          {unavailableSelectedTools.length ? (
+            <ComboboxGroup>
+              <ComboboxLabel>Unavailable selections</ComboboxLabel>
+              {unavailableSelectedTools.map((tool) => (
+                <ToolComboboxItem key={tool.id} tool={tool} unavailable />
+              ))}
+            </ComboboxGroup>
+          ) : null}
           {Array.from(mcpToolGroups.entries()).map(
             ([serverId, serverTools]) => (
               <ComboboxGroup key={serverId}>
@@ -775,11 +790,13 @@ function ToolCombobox({
 
 function ToolComboboxItem({
   tool,
+  unavailable = false,
 }: {
   tool: Awaited<ReturnType<typeof listTools>>[number];
+  unavailable?: boolean;
 }) {
   return (
-    <ComboboxItem value={tool}>
+    <ComboboxItem value={tool} disabled={unavailable}>
       <span className='flex min-w-0 flex-col'>
         <span className='truncate'>{tool.displayName}</span>
         <span className='text-muted-foreground truncate text-xs'>
@@ -788,6 +805,26 @@ function ToolComboboxItem({
       </span>
     </ComboboxItem>
   );
+}
+
+function unavailableTool(id: string): ToolDefinition {
+  const [, serverId, toolName] = id.split(':');
+  return {
+    id,
+    source: 'mcp',
+    sourceId: serverId,
+    sourceName: 'Stopped MCP server',
+    displayName: `${toolName || id} (unavailable)`,
+    name: toolName || id,
+    description:
+      'This tool is selected but its MCP server is not currently running.',
+    version: 'mcp',
+    inputSchema: {},
+    outputSchema: {},
+    riskLevel: 'low',
+    permissions: [],
+    executionPolicy: 'ask_every_time',
+  };
 }
 
 function TextField({
