@@ -96,16 +96,18 @@ function WorkflowSettingsPanel({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className='w-full gap-0 sm:max-w-md'>
-        <SheetHeader>
-          <SheetTitle>More settings</SheetTitle>
-          <SheetDescription>
+      <SheetContent className='w-full gap-0 sm:max-w-xl'>
+        <SheetHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>
+          <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[16px_16px]' />
+          <SheetTitle className='relative text-lg'>More settings</SheetTitle>
+          <SheetDescription className='relative mt-1 leading-5'>
             Define a description and the parameters each run accepts.
           </SheetDescription>
         </SheetHeader>
-        <div className='min-h-0 flex-1 overflow-y-auto px-4 py-4'>
-          <FieldGroup>
-            <Field>
+        <div className='min-h-0 flex-1 overflow-y-auto px-5 py-6'>
+          <FieldGroup className='gap-7'>
+            <FieldSet className='bg-card gap-4 rounded-xl border p-4 shadow-xs'>
+              <FieldLegend>Workflow details</FieldLegend>
               <FieldLabel htmlFor='workflow-description'>
                 Description
               </FieldLabel>
@@ -119,8 +121,8 @@ function WorkflowSettingsPanel({
                   onSettingsChange({ description: event.target.value })
                 }
               />
-            </Field>
-            <FieldSet>
+            </FieldSet>
+            <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
                 <FieldLegend>Run inputs</FieldLegend>
                 <Button
@@ -140,11 +142,11 @@ function WorkflowSettingsPanel({
                 message; the <code>input</code> key is reserved for that
                 message.
               </FieldDescription>
-              <FieldGroup className='gap-4'>
+              <FieldGroup className='gap-5'>
                 {settings.inputSchema.fields.map((input) => (
                   <FieldSet
                     key={input.id}
-                    className='gap-4 rounded-lg border p-3'
+                    className='bg-background gap-5 rounded-xl border p-4 shadow-xs'
                   >
                     <div className='flex items-center justify-between gap-2'>
                       <FieldLegend variant='label'>
@@ -161,32 +163,38 @@ function WorkflowSettingsPanel({
                       </Button>
                     </div>
                     <FieldGroup className='gap-4'>
-                      <Field>
-                        <FieldLabel
-                          htmlFor={`workflow-input-label-${input.id}`}
-                        >
-                          Label
-                        </FieldLabel>
-                        <Input
-                          id={`workflow-input-label-${input.id}`}
-                          value={input.label}
-                          onChange={(event) =>
-                            updateInput(input.id, { label: event.target.value })
-                          }
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor={`workflow-input-key-${input.id}`}>
-                          Key
-                        </FieldLabel>
-                        <Input
-                          id={`workflow-input-key-${input.id}`}
-                          value={input.key}
-                          onChange={(event) =>
-                            updateInput(input.id, { key: event.target.value })
-                          }
-                        />
-                      </Field>
+                      <FieldGroup className='grid gap-4 sm:grid-cols-2'>
+                        <Field>
+                          <FieldLabel
+                            htmlFor={`workflow-input-label-${input.id}`}
+                          >
+                            Label
+                          </FieldLabel>
+                          <Input
+                            id={`workflow-input-label-${input.id}`}
+                            value={input.label}
+                            onChange={(event) =>
+                              updateInput(input.id, {
+                                label: event.target.value,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel
+                            htmlFor={`workflow-input-key-${input.id}`}
+                          >
+                            Key
+                          </FieldLabel>
+                          <Input
+                            id={`workflow-input-key-${input.id}`}
+                            value={input.key}
+                            onChange={(event) =>
+                              updateInput(input.id, { key: event.target.value })
+                            }
+                          />
+                        </Field>
+                      </FieldGroup>
                       <Field>
                         <FieldLabel htmlFor={`workflow-input-type-${input.id}`}>
                           Type
@@ -233,7 +241,10 @@ function WorkflowSettingsPanel({
                           }
                         />
                       </Field>
-                      <Field orientation='horizontal'>
+                      <Field
+                        orientation='horizontal'
+                        className='bg-muted/20 rounded-lg border p-3'
+                      >
                         <Switch
                           id={`workflow-input-required-${input.id}`}
                           checked={input.required}

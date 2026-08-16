@@ -41,7 +41,6 @@ import {
   SearchIcon,
   TerminalIcon,
   WrenchIcon,
-  WorkflowIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -200,9 +199,9 @@ function AppItem({
             {isToolApp ? (
               <WrenchIcon data-icon='inline-start' />
             ) : (
-              <WorkflowIcon data-icon='inline-start' />
+              <BoxIcon data-icon='inline-start' />
             )}
-            {isToolApp ? 'Tool App' : 'Workflow App'}
+            {isToolApp ? 'Tool App' : 'App'}
           </Badge>
           <span>{inputCount} inputs</span>
           <span>{outputCount} outputs</span>

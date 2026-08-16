@@ -36,12 +36,10 @@ function ModelProfilesSettings({
 
   return (
     <FieldSet className='gap-1'>
-      <FieldLegend className='text-muted-foreground pl-3'>
+      <FieldLegend className='text-muted-foreground'>
         {t('settings.models.title')}
       </FieldLegend>
-      <FieldDescription className='pl-3'>
-        {t('settings.models.description')}
-      </FieldDescription>
+      <FieldDescription>{t('settings.models.description')}</FieldDescription>
       <div className='overflow-hidden rounded-xl'>
         <FieldGroup className='gap-0'>
           <FieldArray
@@ -68,8 +66,9 @@ function ModelProfilesSettings({
                         <ItemActions>
                           <Input
                             id={`model-api-key-${field.provider}`}
+                            type='password'
                             autoComplete='off'
-                            placeholder='请输入'
+                            placeholder={t('settings.models.apiKeyPlaceholder')}
                             className='text-muted-foreground border-none bg-transparent! pr-0 text-right outline-none focus-visible:border-none focus-visible:ring-0 disabled:opacity-100'
                             {...form.register(
                               `provider_credentials.${index}.apiKey`,

@@ -29,7 +29,7 @@ function AboutSettings() {
 
   return (
     <FieldSet>
-      <FieldLegend className='text-muted-foreground pl-3'>
+      <FieldLegend className='text-muted-foreground'>
         {t('settings.about.title')}
       </FieldLegend>
       <div className='overflow-hidden rounded-xl'>

@@ -30,6 +30,8 @@ import {
   FieldDescription,
   FieldGroup,
   FieldLabel,
+  FieldLegend,
+  FieldSet,
   Input,
   Select,
   SelectContent,
@@ -50,6 +52,7 @@ import {
   PencilIcon,
   PlusIcon,
   RadioTowerIcon,
+  ShieldCheckIcon,
   TerminalIcon,
   Trash2Icon,
 } from 'lucide-react';
@@ -57,8 +60,8 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import {
-  createMcpServer,
   authorizeMcpServer,
+  createMcpServer,
   deleteMcpServer,
   listMcpServers,
   startMcpServer,
@@ -201,8 +204,8 @@ function McpServersPage() {
   return (
     <div className='size-full overflow-y-auto'>
       <div className='mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8'>
-        <section className='via-card relative overflow-hidden rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-500/[0.12] to-violet-500/[0.10] shadow-sm dark:border-sky-400/15'>
-          <div className='pointer-events-none absolute inset-0 [background-image:linear-gradient(to_right,hsl(214_90%_60%_/_0.14)_1px,transparent_1px),linear-gradient(to_bottom,hsl(214_90%_60%_/_0.14)_1px,transparent_1px)] [background-size:28px_28px]' />
+        <section className='via-card relative overflow-hidden rounded-2xl border border-sky-200/70 bg-linear-to-br from-sky-500/12 to-violet-500/10 shadow-sm dark:border-sky-400/15'>
+          <div className='pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,hsl(214_90%_60%/0.14)_1px,transparent_1px),linear-gradient(to_bottom,hsl(214_90%_60%/0.14)_1px,transparent_1px)] [background-size:28px_28px]' />
           <div className='relative flex flex-col gap-6 p-5 sm:p-7 lg:flex-row lg:items-end lg:justify-between'>
             <div className='max-w-xl'>
               <div className='text-muted-foreground mb-3 flex items-center gap-2 text-xs font-medium tracking-[0.16em] uppercase'>
@@ -394,7 +397,7 @@ function McpServersPage() {
             })}
           </div>
         ) : !servers.isLoading ? (
-          <Empty className='via-card border border-dashed border-sky-200/70 bg-gradient-to-br from-sky-500/[0.06] to-violet-500/[0.05] py-14 dark:border-sky-400/15'>
+          <Empty className='via-card border border-dashed border-sky-200/70 bg-linear-to-br from-sky-500/6 to-violet-500/5 py-14 dark:border-sky-400/15'>
             <EmptyHeader>
               <EmptyMedia variant='icon' className='rounded-xl'>
                 <CpuIcon />
@@ -475,198 +478,291 @@ function McpServerDialog({
   const isOpen = formDraft !== null;
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            {formDraft?.id ? 'Edit MCP server' : 'Add MCP server'}
-          </DialogTitle>
-          <DialogDescription>
-            Local servers run on this device. Remote servers connect to an MCP
-            endpoint.
-          </DialogDescription>
+      <DialogContent className='max-w-3xl! gap-0 overflow-hidden p-0'>
+        <DialogHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/12 to-violet-500/10 px-6 py-6 pr-14'>
+          <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.16)_1px,transparent_1px)] bg-size-[14px_14px] opacity-70' />
+          <div className='relative flex items-start gap-3'>
+            <div className='bg-background/70 flex size-10 shrink-0 items-center justify-center rounded-xl border border-sky-500/20 text-sky-700 shadow-sm dark:text-sky-300'>
+              {formDraft?.transport === 'streamable_http' ? (
+                <CloudIcon className='size-5' />
+              ) : (
+                <TerminalIcon className='size-5' />
+              )}
+            </div>
+            <div className='min-w-0'>
+              <DialogTitle className='text-lg'>
+                {formDraft?.id ? 'Edit MCP server' : 'Connect an MCP server'}
+              </DialogTitle>
+              <DialogDescription className='mt-1 max-w-xl leading-5'>
+                {formDraft?.id
+                  ? 'Update the connection details and availability for this server.'
+                  : 'Add a local process or a remote Streamable HTTP endpoint to your tool registry.'}
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
         {formDraft ? (
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor='mcp-server-name'>Name</FieldLabel>
-              <Input
-                id='mcp-server-name'
-                placeholder='e.g. GitHub MCP'
-                value={formDraft.name}
-                onChange={(event) =>
-                  setFormDraft({ ...formDraft, name: event.target.value })
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor='mcp-server-description'>
-                Description
-              </FieldLabel>
-              <Input
-                id='mcp-server-description'
-                placeholder='e.g. Search and manage GitHub repositories'
-                value={formDraft.description}
-                onChange={(event) =>
-                  setFormDraft({
-                    ...formDraft,
-                    description: event.target.value,
-                  })
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor='mcp-server-location'>
-                MCP Server type
-              </FieldLabel>
-              <Select
-                value={
-                  formDraft.transport === 'streamable_http'
-                    ? 'Remote MCP Server'
-                    : 'Local MCP Server'
-                }
-                onValueChange={(location) =>
-                  setFormDraft({
-                    ...formDraft,
-                    transport:
-                      location === 'remote' ? 'streamable_http' : 'stdio',
-                  })
-                }
-              >
-                <SelectTrigger id='mcp-server-location' className='w-full'>
-                  <SelectValue placeholder='Select an MCP Server type' />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='local'>Local MCP Server</SelectItem>
-                  <SelectItem value='remote'>Remote MCP Server</SelectItem>
-                </SelectContent>
-              </Select>
-              <FieldDescription>
-                {formDraft.transport === 'stdio'
-                  ? 'Runs a local stdio process managed by Workrun.'
-                  : 'Connects to a remote MCP server over Streamable HTTP.'}
-              </FieldDescription>
-            </Field>
-            {formDraft.transport === 'stdio' ? (
-              <>
-                <Field>
-                  <FieldLabel htmlFor='mcp-server-command'>Command</FieldLabel>
-                  <Input
-                    id='mcp-server-command'
-                    placeholder='npx'
-                    value={formDraft.command}
-                    onChange={(event) =>
-                      setFormDraft({
-                        ...formDraft,
-                        command: event.target.value,
-                      })
-                    }
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor='mcp-server-args'>Arguments</FieldLabel>
-                  <Textarea
-                    id='mcp-server-args'
-                    placeholder={'-y\n@modelcontextprotocol/server-everything'}
-                    value={argsText}
-                    onChange={(event) => setArgsText(event.target.value)}
-                  />
-                  <FieldDescription>
-                    One command argument per line.
-                  </FieldDescription>
-                </Field>
-              </>
-            ) : (
-              <>
-                <Field>
-                  <FieldLabel htmlFor='mcp-server-url'>Endpoint URL</FieldLabel>
-                  <Input
-                    id='mcp-server-url'
-                    type='url'
-                    placeholder='https://example.com/mcp'
-                    value={formDraft.url}
-                    onChange={(event) =>
-                      setFormDraft({ ...formDraft, url: event.target.value })
-                    }
-                  />
-                  <FieldDescription>
-                    The server must support MCP Streamable HTTP.
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor='mcp-server-auth'>
-                    Authentication
-                  </FieldLabel>
-                  <Select
-                    value={formDraft.auth}
-                    onValueChange={(auth) =>
-                      setFormDraft({
-                        ...formDraft,
-                        auth: auth as 'none' | 'bearer' | 'oauth',
-                      })
-                    }
-                  >
-                    <SelectTrigger id='mcp-server-auth' className='w-full'>
-                      <SelectValue>
-                        {formDraft.auth === 'bearer'
-                          ? 'Bearer Token'
-                          : formDraft.auth === 'oauth'
-                            ? 'OAuth'
-                            : 'No authentication'}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value='none'>No authentication</SelectItem>
-                      <SelectItem value='bearer'>Bearer Token</SelectItem>
-                      <SelectItem value='oauth'>OAuth</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                {formDraft.auth === 'bearer' ? (
+          <div className='max-h-[min(68vh,620px)] overflow-y-auto px-6 py-6'>
+            <FieldGroup className='gap-7'>
+              <FieldSet>
+                <FieldLegend>Server details</FieldLegend>
+                <FieldDescription>
+                  Use a recognizable name so collaborators can find this tool
+                  connection in a workflow.
+                </FieldDescription>
+                <FieldGroup className='grid gap-4 sm:grid-cols-2'>
                   <Field>
-                    <FieldLabel htmlFor='mcp-server-token'>
-                      Bearer Token
+                    <FieldLabel htmlFor='mcp-server-name'>Name</FieldLabel>
+                    <Input
+                      id='mcp-server-name'
+                      placeholder='e.g. GitHub MCP'
+                      value={formDraft.name}
+                      onChange={(event) =>
+                        setFormDraft({ ...formDraft, name: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor='mcp-server-description'>
+                      Description
                     </FieldLabel>
                     <Input
-                      id='mcp-server-token'
-                      type='password'
-                      placeholder='Paste token'
-                      value={formDraft.bearerToken ?? ''}
+                      id='mcp-server-description'
+                      placeholder='e.g. Search and manage GitHub repositories'
+                      value={formDraft.description}
                       onChange={(event) =>
                         setFormDraft({
                           ...formDraft,
-                          bearerToken: event.target.value,
+                          description: event.target.value,
                         })
                       }
                     />
-                    <FieldDescription>
-                      Stored encrypted. Leave this field empty to retain the
-                      saved token.
-                    </FieldDescription>
                   </Field>
-                ) : formDraft.auth === 'oauth' ? (
-                  <FieldDescription>
-                    Save the server, then authorize it in your browser. Workrun
-                    stores the resulting credentials encrypted.
-                  </FieldDescription>
-                ) : null}
-              </>
-            )}
-            <Field orientation='horizontal'>
-              <Switch
-                id='mcp-server-enabled'
-                checked={formDraft.enabled}
-                onCheckedChange={(enabled) =>
-                  setFormDraft({ ...formDraft, enabled })
-                }
-              />
-              <FieldContent>
-                <FieldLabel htmlFor='mcp-server-enabled'>Enabled</FieldLabel>
+                </FieldGroup>
+              </FieldSet>
+
+              <FieldSet className='bg-muted/20 rounded-xl border p-4 sm:p-5'>
+                <FieldLegend>Connection</FieldLegend>
                 <FieldDescription>
-                  Disabled servers cannot be started or used by workflows.
+                  Choose where this server runs, then provide the connection
+                  details.
                 </FieldDescription>
-              </FieldContent>
-            </Field>
-          </FieldGroup>
+                <FieldGroup className='gap-4'>
+                  <Field>
+                    <FieldLabel htmlFor='mcp-server-location'>
+                      Connection type
+                    </FieldLabel>
+                    <Select
+                      value={
+                        formDraft.transport === 'streamable_http'
+                          ? 'Remote MCP Server'
+                          : 'Local MCP Server'
+                      }
+                      onValueChange={(location) =>
+                        setFormDraft({
+                          ...formDraft,
+                          transport:
+                            location === 'remote' ? 'streamable_http' : 'stdio',
+                        })
+                      }
+                    >
+                      <SelectTrigger
+                        id='mcp-server-location'
+                        className='w-full'
+                      >
+                        <SelectValue placeholder='Select a connection type' />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='local'>
+                          Local process (stdio)
+                        </SelectItem>
+                        <SelectItem value='remote'>
+                          Remote endpoint (HTTP)
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <div className='bg-background/70 flex items-start gap-3 rounded-lg border p-3'>
+                    <div className='bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg'>
+                      {formDraft.transport === 'stdio' ? (
+                        <TerminalIcon className='size-4' />
+                      ) : (
+                        <CloudIcon className='size-4' />
+                      )}
+                    </div>
+                    <div>
+                      <div className='text-sm font-medium'>
+                        {formDraft.transport === 'stdio'
+                          ? 'Managed local process'
+                          : 'Streamable HTTP endpoint'}
+                      </div>
+                      <p className='text-muted-foreground mt-0.5 text-xs leading-5'>
+                        {formDraft.transport === 'stdio'
+                          ? 'Workrun starts and communicates with a stdio process on this device.'
+                          : 'Workrun connects to a hosted MCP server using its public endpoint.'}
+                      </p>
+                    </div>
+                  </div>
+                  {formDraft.transport === 'stdio' ? (
+                    <FieldGroup className='gap-4'>
+                      <Field>
+                        <FieldLabel htmlFor='mcp-server-command'>
+                          Command
+                        </FieldLabel>
+                        <Input
+                          id='mcp-server-command'
+                          placeholder='npx'
+                          value={formDraft.command}
+                          onChange={(event) =>
+                            setFormDraft({
+                              ...formDraft,
+                              command: event.target.value,
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor='mcp-server-args'>
+                          Arguments
+                        </FieldLabel>
+                        <Textarea
+                          id='mcp-server-args'
+                          className='min-h-24 font-mono text-xs'
+                          placeholder={
+                            '-y\n@modelcontextprotocol/server-everything'
+                          }
+                          value={argsText}
+                          onChange={(event) => setArgsText(event.target.value)}
+                        />
+                        <FieldDescription>
+                          Enter one command argument per line.
+                        </FieldDescription>
+                      </Field>
+                    </FieldGroup>
+                  ) : (
+                    <FieldGroup className='gap-4'>
+                      <Field>
+                        <FieldLabel htmlFor='mcp-server-url'>
+                          Endpoint URL
+                        </FieldLabel>
+                        <Input
+                          id='mcp-server-url'
+                          type='url'
+                          placeholder='https://example.com/mcp'
+                          value={formDraft.url}
+                          onChange={(event) =>
+                            setFormDraft({
+                              ...formDraft,
+                              url: event.target.value,
+                            })
+                          }
+                        />
+                        <FieldDescription>
+                          The server must support MCP Streamable HTTP.
+                        </FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor='mcp-server-auth'>
+                          Authentication
+                        </FieldLabel>
+                        <Select
+                          value={formDraft.auth}
+                          onValueChange={(auth) =>
+                            setFormDraft({
+                              ...formDraft,
+                              auth: auth as 'none' | 'bearer' | 'oauth',
+                            })
+                          }
+                        >
+                          <SelectTrigger
+                            id='mcp-server-auth'
+                            className='w-full'
+                          >
+                            <SelectValue placeholder='Select authentication'>
+                              {formDraft.auth === 'bearer'
+                                ? 'Bearer Token'
+                                : formDraft.auth === 'oauth'
+                                  ? 'OAuth'
+                                  : 'No authentication'}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value='none'>
+                              No authentication
+                            </SelectItem>
+                            <SelectItem value='bearer'>Bearer token</SelectItem>
+                            <SelectItem value='oauth'>OAuth</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      {formDraft.auth === 'bearer' ? (
+                        <Field>
+                          <FieldLabel htmlFor='mcp-server-token'>
+                            Bearer token
+                          </FieldLabel>
+                          <Input
+                            id='mcp-server-token'
+                            type='password'
+                            placeholder='Paste token'
+                            value={formDraft.bearerToken ?? ''}
+                            onChange={(event) =>
+                              setFormDraft({
+                                ...formDraft,
+                                bearerToken: event.target.value,
+                              })
+                            }
+                          />
+                          <FieldDescription>
+                            Stored encrypted. Leave empty to retain the saved
+                            token.
+                          </FieldDescription>
+                        </Field>
+                      ) : formDraft.auth === 'oauth' ? (
+                        <div className='border-primary/15 bg-primary/5 flex items-start gap-2 rounded-lg border p-3 text-sm'>
+                          <ShieldCheckIcon className='text-primary mt-0.5 size-4 shrink-0' />
+                          <p className='text-muted-foreground leading-5'>
+                            Save this server, then authorize it in your browser.
+                            Credentials are stored encrypted.
+                          </p>
+                        </div>
+                      ) : null}
+                    </FieldGroup>
+                  )}
+                </FieldGroup>
+              </FieldSet>
+
+              <FieldSet>
+                <FieldLegend>Availability</FieldLegend>
+                <Field
+                  orientation='horizontal'
+                  className='bg-background rounded-xl border p-4'
+                >
+                  <Switch
+                    id='mcp-server-enabled'
+                    checked={formDraft.enabled}
+                    onCheckedChange={(enabled) =>
+                      setFormDraft({ ...formDraft, enabled })
+                    }
+                  />
+                  <FieldContent>
+                    <FieldLabel
+                      htmlFor='mcp-server-enabled'
+                      className='flex items-center gap-2'
+                    >
+                      Enable this server
+                      <span
+                        className={`size-1.5 rounded-full ${formDraft.enabled ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`}
+                      />
+                    </FieldLabel>
+                    <FieldDescription>
+                      Disabled servers remain saved but cannot be started or
+                      used by workflows.
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+              </FieldSet>
+            </FieldGroup>
+          </div>
         ) : null}
         <DialogFooter>
           <Button variant='outline' onClick={() => onOpenChange(false)}>

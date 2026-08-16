@@ -9,7 +9,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import { Play, Redo2Icon, Undo2Icon } from 'lucide-react';
-import { type ReactNode, useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 
 import {
@@ -278,7 +278,7 @@ function WorkflowCanvas({
           >
             <MiniMap />
             <Controls />
-            <Background className='dark:bg-background' />
+            <Background className='bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]' />
             <Panel position='top-left'>
               <div className='bg-background z-10 flex gap-1 rounded-md border p-1 shadow-sm'>
                 <Button

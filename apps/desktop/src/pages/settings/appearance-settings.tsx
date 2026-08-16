@@ -26,7 +26,7 @@ function AppearanceSettings({ form }: { form: UseFormReturn<SettingsForm> }) {
 
   return (
     <FieldSet>
-      <FieldLegend className='text-muted-foreground pl-3'>
+      <FieldLegend className='text-muted-foreground'>
         {t('settings.appearance.title')}
       </FieldLegend>
       <FieldGroup>

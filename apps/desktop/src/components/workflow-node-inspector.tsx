@@ -20,6 +20,8 @@ import {
   Field,
   FieldDescription,
   FieldGroup,
+  FieldLegend,
+  FieldSet,
   Input,
   Label,
   Select,
@@ -34,6 +36,7 @@ import {
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 import { listProcessNodes } from '@/services/process-node';
 import { listTools, type ToolDefinition } from '@/services/tool';
@@ -199,185 +202,208 @@ function WorkflowNodeInspector({
     switch (node.type) {
       case 'agent':
         return (
-          <FieldGroup>
-            <TextField
-              id='agent-name'
-              label='Name'
-              description='A short name shown on the workflow canvas.'
-              value={getText(data, 'name')}
-              onChange={(name) => updateData({ name })}
-            />
-            <Field>
-              <Label htmlFor='agent-model-profile'>Model profile</Label>
-              <FieldDescription>
-                Selects the provider, model, and encrypted credential used by
-                this agent.
-              </FieldDescription>
-              <Select
-                value={getText(data, 'modelProfileId')}
-                onValueChange={(modelProfileId) =>
-                  updateData({ modelProfileId })
-                }
-              >
-                <SelectTrigger id='agent-model-profile' className='w-full'>
-                  <SelectValue placeholder='Select a model profile' />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(profilesByProvider).map(
-                    ([provider, profiles]) => (
-                      <SelectGroup key={provider}>
-                        <SelectLabel>
-                          {
-                            modelProviderLabels[
-                              provider as ModelDefinition['provider']
-                            ]
-                          }
-                        </SelectLabel>
-                        {profiles?.map((profile) => (
-                          <SelectItem key={profile.id} value={profile.id}>
-                            {profile.name} · {profile.model}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ),
-                  )}
-                </SelectContent>
-              </Select>
-            </Field>
-            <TextareaField
-              id='agent-description'
-              label='Description'
-              description='Briefly describe this agent’s responsibility for people reading the workflow.'
-              value={getText(data, 'description')}
-              onChange={(description) => updateData({ description })}
-            />
-            <TextareaField
-              id='agent-instruction'
-              label='Instruction'
-              description='Give the agent its role, goals, constraints, and the expected output.'
-              value={getText(data, 'instruction')}
-              onChange={(instruction) => updateData({ instruction })}
-              className='min-h-36 font-mono text-xs'
-            />
-            <FieldGroup className='grid grid-cols-2 gap-3'>
-              <Field>
-                <Label htmlFor='agent-temperature'>Temperature</Label>
-                <FieldDescription>
-                  Controls variation (0–2). Leave empty for the model default.
-                </FieldDescription>
-                <Input
-                  id='agent-temperature'
-                  type='number'
-                  min='0'
-                  max='2'
-                  step='0.1'
-                  value={getNumber(data, 'temperature')}
-                  onChange={(event) =>
-                    updateData({
-                      temperature: optionalNumber(event.target.value),
-                    })
-                  }
-                />
-              </Field>
-              <Field>
-                <Label htmlFor='agent-top-p'>Top P</Label>
-                <FieldDescription>
-                  Controls token diversity (0–1). Leave empty for the model
-                  default.
-                </FieldDescription>
-                <Input
-                  id='agent-top-p'
-                  type='number'
-                  min='0'
-                  max='1'
-                  step='0.05'
-                  value={getNumber(data, 'topP')}
-                  onChange={(event) =>
-                    updateData({ topP: optionalNumber(event.target.value) })
-                  }
-                />
-              </Field>
-            </FieldGroup>
-            <Field>
-              <Label>Tools</Label>
-              <FieldDescription>
-                Select local Tool Apps or tools discovered from running MCP
-                servers.
-              </FieldDescription>
-              <ToolCombobox
-                tools={tools.data ?? []}
-                selectedIds={getStringArray(data, 'toolIds')}
-                isLoading={tools.isLoading}
-                onChange={(toolIds) => updateData({ toolIds })}
+          <FieldGroup className='gap-7'>
+            <InspectorSection
+              title='Identity'
+              description='How this agent is identified on the workflow canvas.'
+            >
+              <TextField
+                id='agent-name'
+                label='Name'
+                description='A short name shown on the workflow canvas.'
+                value={getText(data, 'name')}
+                onChange={(name) => updateData({ name })}
               />
-            </Field>
-            <FieldGroup className='grid grid-cols-2 gap-3'>
+              <TextareaField
+                id='agent-description'
+                label='Description'
+                description='Briefly describe this agent’s responsibility for people reading the workflow.'
+                value={getText(data, 'description')}
+                onChange={(description) => updateData({ description })}
+              />
+            </InspectorSection>
+            <InspectorSection
+              title='Model and instructions'
+              description='Choose the model configuration and define how the agent should behave.'
+            >
               <Field>
-                <Label htmlFor='agent-max-tool-calls'>Call limit</Label>
+                <Label htmlFor='agent-model-profile'>Model profile</Label>
                 <FieldDescription>
-                  Maximum Tool App calls in one Agent run.
+                  Selects the provider, model, and encrypted credential used by
+                  this agent.
                 </FieldDescription>
-                <Input
-                  id='agent-max-tool-calls'
-                  type='number'
-                  min='1'
-                  max='50'
-                  step='1'
-                  value={getNumber(data, 'maxToolCalls') || 8}
-                  onChange={(event) =>
-                    updateData({
-                      maxToolCalls: optionalNumber(event.target.value),
-                    })
+                <Select
+                  value={getText(data, 'modelProfileId')}
+                  onValueChange={(modelProfileId) =>
+                    updateData({ modelProfileId })
                   }
+                >
+                  <SelectTrigger id='agent-model-profile' className='w-full'>
+                    <SelectValue placeholder='Select a model profile' />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(profilesByProvider).map(
+                      ([provider, profiles]) => (
+                        <SelectGroup key={provider}>
+                          <SelectLabel>
+                            {
+                              modelProviderLabels[
+                                provider as ModelDefinition['provider']
+                              ]
+                            }
+                          </SelectLabel>
+                          {profiles?.map((profile) => (
+                            <SelectItem key={profile.id} value={profile.id}>
+                              {profile.name} · {profile.model}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ),
+                    )}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <TextareaField
+                id='agent-instruction'
+                label='Instruction'
+                description='Give the agent its role, goals, constraints, and the expected output.'
+                value={getText(data, 'instruction')}
+                onChange={(instruction) => updateData({ instruction })}
+                className='min-h-36 font-mono text-xs'
+              />
+            </InspectorSection>
+            <InspectorSection
+              title='Generation controls'
+              description='Optional sampling settings. Leave either field empty to use the model default.'
+            >
+              <FieldGroup className='grid grid-cols-2 gap-4'>
+                <Field>
+                  <Label htmlFor='agent-temperature'>Temperature</Label>
+                  <FieldDescription>Controls variation (0–2).</FieldDescription>
+                  <Input
+                    id='agent-temperature'
+                    type='number'
+                    min='0'
+                    max='2'
+                    step='0.1'
+                    value={getNumber(data, 'temperature')}
+                    onChange={(event) =>
+                      updateData({
+                        temperature: optionalNumber(event.target.value),
+                      })
+                    }
+                  />
+                </Field>
+                <Field>
+                  <Label htmlFor='agent-top-p'>Top P</Label>
+                  <FieldDescription>
+                    Controls token diversity (0–1).
+                  </FieldDescription>
+                  <Input
+                    id='agent-top-p'
+                    type='number'
+                    min='0'
+                    max='1'
+                    step='0.05'
+                    value={getNumber(data, 'topP')}
+                    onChange={(event) =>
+                      updateData({ topP: optionalNumber(event.target.value) })
+                    }
+                  />
+                </Field>
+              </FieldGroup>
+            </InspectorSection>
+            <InspectorSection
+              title='Tools'
+              description='Select local Tool Apps or tools discovered from running MCP servers.'
+            >
+              <Field>
+                <Label>Available tools</Label>
+                <ToolCombobox
+                  tools={tools.data ?? []}
+                  selectedIds={getStringArray(data, 'toolIds')}
+                  isLoading={tools.isLoading}
+                  onChange={(toolIds) => updateData({ toolIds })}
                 />
               </Field>
-              <Field>
-                <Label htmlFor='agent-tool-timeout'>Tool timeout</Label>
-                <FieldDescription>
-                  Seconds allowed for each Tool App call.
-                </FieldDescription>
-                <Input
-                  id='agent-tool-timeout'
-                  type='number'
-                  min='1'
-                  max='600'
-                  step='1'
-                  value={getNumber(data, 'toolTimeoutSeconds') || 60}
-                  onChange={(event) =>
-                    updateData({
-                      toolTimeoutSeconds: optionalNumber(event.target.value),
-                    })
-                  }
-                />
-              </Field>
-            </FieldGroup>
+              <FieldGroup className='grid grid-cols-2 gap-4'>
+                <Field>
+                  <Label htmlFor='agent-max-tool-calls'>Call limit</Label>
+                  <FieldDescription>
+                    Maximum Tool App calls in one Agent run.
+                  </FieldDescription>
+                  <Input
+                    id='agent-max-tool-calls'
+                    type='number'
+                    min='1'
+                    max='50'
+                    step='1'
+                    value={getNumber(data, 'maxToolCalls') || 8}
+                    onChange={(event) =>
+                      updateData({
+                        maxToolCalls: optionalNumber(event.target.value),
+                      })
+                    }
+                  />
+                </Field>
+                <Field>
+                  <Label htmlFor='agent-tool-timeout'>Tool timeout</Label>
+                  <FieldDescription>
+                    Seconds allowed for each Tool App call.
+                  </FieldDescription>
+                  <Input
+                    id='agent-tool-timeout'
+                    type='number'
+                    min='1'
+                    max='600'
+                    step='1'
+                    value={getNumber(data, 'toolTimeoutSeconds') || 60}
+                    onChange={(event) =>
+                      updateData({
+                        toolTimeoutSeconds: optionalNumber(event.target.value),
+                      })
+                    }
+                  />
+                </Field>
+              </FieldGroup>
+            </InspectorSection>
           </FieldGroup>
         );
       case 'remote_agent':
         return (
-          <FieldGroup>
-            <TextField
-              id='remote-agent-name'
-              label='Name'
-              description='A short name shown on the workflow canvas.'
-              value={getText(data, 'name')}
-              onChange={(name) => updateData({ name })}
-            />
-            <TextField
-              id='remote-agent-url'
-              label='Service URL'
-              description='The HTTPS endpoint used to invoke the remote agent service.'
-              type='url'
-              value={getText(data, 'url')}
-              onChange={(url) => updateData({ url })}
-            />
-            <TextareaField
-              id='remote-agent-description'
-              label='Description'
-              description='Explain what the remote service does and when this workflow should call it.'
-              value={getText(data, 'description')}
-              onChange={(description) => updateData({ description })}
-            />
+          <FieldGroup className='gap-7'>
+            <InspectorSection
+              title='Identity'
+              description='How this service is identified on the workflow canvas.'
+            >
+              <TextField
+                id='remote-agent-name'
+                label='Name'
+                description='A short name shown on the workflow canvas.'
+                value={getText(data, 'name')}
+                onChange={(name) => updateData({ name })}
+              />
+              <TextareaField
+                id='remote-agent-description'
+                label='Description'
+                description='Explain what the remote service does and when this workflow should call it.'
+                value={getText(data, 'description')}
+                onChange={(description) => updateData({ description })}
+              />
+            </InspectorSection>
+            <InspectorSection
+              title='Connection'
+              description='The remote endpoint Workrun invokes for this node.'
+            >
+              <TextField
+                id='remote-agent-url'
+                label='Service URL'
+                description='The HTTPS endpoint used to invoke the remote agent service.'
+                type='url'
+                value={getText(data, 'url')}
+                onChange={(url) => updateData({ url })}
+              />
+            </InspectorSection>
           </FieldGroup>
         );
       case 'process': {
@@ -388,89 +414,102 @@ function WorkflowNodeInspector({
             processNode.definition.id === selectedId,
         );
         return (
-          <FieldGroup>
-            <TextField
-              id='process-name'
-              label='Name'
-              description='A short name shown on the workflow canvas.'
-              value={getText(data, 'name')}
-              onChange={(name) => updateData({ name })}
-            />
-            <Field>
-              <Label htmlFor='process-node'>App</Label>
-              <FieldDescription>
-                The selected local app receives the complete workflow state as
-                JSON on stdin and returns its result with{' '}
-                <code>process.result()</code>.
-              </FieldDescription>
-              <Select
-                value={selectedId}
-                onValueChange={(processNodeId) => {
-                  const app = processNodes.data?.find(
-                    (processNode) =>
-                      processNode.definition.kind === 'workflow' &&
-                      processNode.definition.id === processNodeId,
-                  );
-                  updateData({
-                    processNodeId,
-                    ...(app && {
-                      // name: app.definition.name,
-                      description: app.definition.description,
-                    }),
-                  });
-                }}
-              >
-                <SelectTrigger id='process-node' className='w-full'>
-                  <span className='flex flex-1 truncate text-left'>
-                    {selectedApp?.definition.name ??
-                      (processNodes.isLoading
-                        ? 'Loading apps…'
-                        : 'Select an installed app')}
-                  </span>
-                </SelectTrigger>
-                <SelectContent>
-                  {processNodes.data
-                    ?.filter(
-                      (processNode) =>
-                        processNode.installStatus === 'installed' &&
-                        processNode.definition.kind === 'workflow',
-                    )
-                    .map((processNode) => (
-                      <SelectItem
-                        key={processNode.definition.id}
-                        value={processNode.definition.id}
-                      >
-                        {processNode.definition.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-              {selectedId && !selectedApp ? (
-                <FieldDescription className='text-destructive'>
-                  The selected app is unavailable. Choose another installed app.
+          <FieldGroup className='gap-7'>
+            <InspectorSection
+              title='Identity'
+              description='How this app is identified on the workflow canvas.'
+            >
+              <TextField
+                id='process-name'
+                label='Name'
+                description='A short name shown on the workflow canvas.'
+                value={getText(data, 'name')}
+                onChange={(name) => updateData({ name })}
+              />
+            </InspectorSection>
+            <InspectorSection
+              title='App connection'
+              description='Choose the installed app this workflow node will run.'
+            >
+              <Field>
+                <Label htmlFor='process-node'>App</Label>
+                <FieldDescription>
+                  The selected local app receives the complete workflow state as
+                  JSON on stdin and returns its result with{' '}
+                  <code>process.result()</code>.
                 </FieldDescription>
-              ) : null}
-            </Field>
-            <TextareaField
-              id='process-description'
-              label='Description'
-              description='Explain what this app does in the workflow.'
-              value={getText(data, 'description')}
-              onChange={(description) => updateData({ description })}
-            />
+                <Select
+                  value={selectedId}
+                  onValueChange={(processNodeId) => {
+                    const app = processNodes.data?.find(
+                      (processNode) =>
+                        processNode.definition.kind === 'workflow' &&
+                        processNode.definition.id === processNodeId,
+                    );
+                    updateData({
+                      processNodeId,
+                      ...(app && {
+                        // name: app.definition.name,
+                        description: app.definition.description,
+                      }),
+                    });
+                  }}
+                >
+                  <SelectTrigger id='process-node' className='w-full'>
+                    <span className='flex flex-1 truncate text-left'>
+                      {selectedApp?.definition.name ??
+                        (processNodes.isLoading
+                          ? 'Loading apps…'
+                          : 'Select an installed app')}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {processNodes.data
+                      ?.filter(
+                        (processNode) =>
+                          processNode.installStatus === 'installed' &&
+                          processNode.definition.kind === 'workflow',
+                      )
+                      .map((processNode) => (
+                        <SelectItem
+                          key={processNode.definition.id}
+                          value={processNode.definition.id}
+                        >
+                          {processNode.definition.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                {selectedId && !selectedApp ? (
+                  <FieldDescription className='text-destructive'>
+                    The selected app is unavailable. Choose another installed
+                    app.
+                  </FieldDescription>
+                ) : null}
+              </Field>
+              <TextareaField
+                id='process-description'
+                label='Description'
+                description='Explain what this app does in the workflow.'
+                value={getText(data, 'description')}
+                onChange={(description) => updateData({ description })}
+              />
+            </InspectorSection>
           </FieldGroup>
         );
       }
       case 'if_else':
         return (
-          <FieldGroup>
-            <TextField
-              id='if-else-label'
-              label='Name'
-              description='A short name shown on the workflow canvas.'
-              value={getText(data, 'label')}
-              onChange={(label) => updateData({ label })}
-            />
+          <FieldGroup className='gap-7'>
+            <InspectorSection title='Node details'>
+              <TextField
+                id='if-else-label'
+                label='Name'
+                description='A short name shown on the workflow canvas.'
+                value={getText(data, 'label')}
+                onChange={(label) => updateData({ label })}
+              />
+            </InspectorSection>
             {(['true', 'false'] as const).map((branch) => {
               const current = getIfElseBranch(data, branch);
               const other = getIfElseBranch(
@@ -480,7 +519,13 @@ function WorkflowNodeInspector({
               const isTrueBranch = branch === 'true';
 
               return (
-                <FieldGroup key={branch}>
+                <FieldSet
+                  key={branch}
+                  className='bg-muted/20 gap-4 rounded-xl border p-4'
+                >
+                  <FieldLegend>
+                    {isTrueBranch ? 'True branch' : 'False branch'}
+                  </FieldLegend>
                   <TextField
                     id={`if-else-${branch}-label`}
                     label={`${isTrueBranch ? 'True' : 'False'} label`}
@@ -513,7 +558,7 @@ function WorkflowNodeInspector({
                       })
                     }
                   />
-                </FieldGroup>
+                </FieldSet>
               );
             })}
           </FieldGroup>
@@ -523,17 +568,19 @@ function WorkflowNodeInspector({
         const defaultCase = getSwitchDefault(data);
 
         return (
-          <FieldGroup>
-            <TextField
-              id='switch-label'
-              label='Name'
-              description='A short name shown on the workflow canvas.'
-              value={getText(data, 'label')}
-              onChange={(label) => updateData({ label })}
-            />
-            <Field>
+          <FieldGroup className='gap-7'>
+            <InspectorSection title='Node details'>
+              <TextField
+                id='switch-label'
+                label='Name'
+                description='A short name shown on the workflow canvas.'
+                value={getText(data, 'label')}
+                onChange={(label) => updateData({ label })}
+              />
+            </InspectorSection>
+            <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
-                <Label>Cases</Label>
+                <FieldLegend>Cases</FieldLegend>
                 <Button
                   type='button'
                   size='sm'
@@ -551,7 +598,7 @@ function WorkflowNodeInspector({
                     })
                   }
                 >
-                  <PlusIcon aria-hidden='true' />
+                  <PlusIcon data-icon='inline-start' />
                   Add case
                 </Button>
               </div>
@@ -559,15 +606,20 @@ function WorkflowNodeInspector({
                 Cases are evaluated from top to bottom. The first matching
                 condition determines the outgoing branch.
               </FieldDescription>
-              <FieldGroup className='gap-3'>
+              <FieldGroup className='gap-4'>
                 {cases.map((switchCase, index) => (
-                  <Field key={switchCase.id}>
+                  <FieldSet
+                    key={switchCase.id}
+                    className='bg-background gap-4 rounded-lg border p-3'
+                  >
                     <div className='flex items-center justify-between gap-2'>
-                      <Label>Case {index + 1}</Label>
+                      <FieldLegend variant='label'>
+                        Case {index + 1}
+                      </FieldLegend>
                       <Button
                         type='button'
                         size='icon-sm'
-                        variant='destructive'
+                        variant='ghost'
                         aria-label={`Remove case ${index + 1}`}
                         onClick={() =>
                           updateData({
@@ -610,12 +662,12 @@ function WorkflowNodeInspector({
                         })
                       }
                     />
-                  </Field>
+                  </FieldSet>
                 ))}
               </FieldGroup>
-            </Field>
-            <Field>
-              <Label>Default</Label>
+            </FieldSet>
+            <FieldSet className='bg-card gap-4 rounded-xl border p-4 shadow-xs'>
+              <FieldLegend>Default branch</FieldLegend>
               <FieldDescription>
                 Used when no case condition matches.
               </FieldDescription>
@@ -635,7 +687,7 @@ function WorkflowNodeInspector({
                 placeholder='Other cases'
                 onChange={() => undefined}
               />
-            </Field>
+            </FieldSet>
           </FieldGroup>
         );
       }
@@ -644,18 +696,20 @@ function WorkflowNodeInspector({
       case 'group':
         return (
           <FieldGroup>
-            <TextField
-              id={`${node.type}-label`}
-              label='Name'
-              description={
-                node.type === 'group'
-                  ? 'A title for this layout container. Resize it directly on the canvas.'
-                  : `A short name shown on the workflow canvas for this ${node.type} node.`
-              }
-              disabled={node.type === 'start' || node.type === 'end'}
-              value={getText(data, 'label')}
-              onChange={(label) => updateData({ label })}
-            />
+            <InspectorSection title='Node details'>
+              <TextField
+                id={`${node.type}-label`}
+                label='Name'
+                description={
+                  node.type === 'group'
+                    ? 'A title for this layout container. Resize it directly on the canvas.'
+                    : `A short name shown on the workflow canvas for this ${node.type} node.`
+                }
+                disabled={node.type === 'start' || node.type === 'end'}
+                value={getText(data, 'label')}
+                onChange={(label) => updateData({ label })}
+              />
+            </InspectorSection>
           </FieldGroup>
         );
       default:
@@ -675,11 +729,11 @@ function WorkflowNodeInspector({
         }
       }}
     >
-      <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>Edit {title}</DrawerTitle>
+      <DrawerContent className='sm:[--drawer-content-width:32rem]'>
+        <DrawerHeader className='bg-muted/30 border-b px-5 py-5 pr-14'>
+          <DrawerTitle className='text-base'>Edit {title}</DrawerTitle>
           <DrawerDescription>
-            Changes are applied to the workflow.
+            Changes apply to the workflow immediately.
           </DrawerDescription>
         </DrawerHeader>
         <Button
@@ -692,11 +746,33 @@ function WorkflowNodeInspector({
         >
           <XIcon aria-hidden='true' />
         </Button>
-        <div className='min-h-0 overflow-y-auto px-4 py-4'>
+        <div className='min-h-0 overflow-y-auto px-5 py-6'>
           {renderFields()}
         </div>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+function InspectorSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <FieldSet className='bg-card gap-4 rounded-xl border p-4 shadow-xs'>
+      <div className='flex flex-col gap-1'>
+        <FieldLegend>{title}</FieldLegend>
+        {description ? (
+          <FieldDescription>{description}</FieldDescription>
+        ) : null}
+      </div>
+      <FieldGroup className='gap-4'>{children}</FieldGroup>
+    </FieldSet>
   );
 }
 

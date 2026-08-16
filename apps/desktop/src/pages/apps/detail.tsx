@@ -14,10 +14,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
+  FieldLegend,
+  FieldSet,
   Input,
   Select,
   SelectContent,
@@ -195,43 +198,60 @@ function ContractEditor({
       <FieldDescription>
         Define the values this App {label === 'Inputs' ? 'accepts' : 'returns'}.
       </FieldDescription>
-      <div className='flex flex-col gap-3'>
+      <FieldGroup className='gap-4'>
         {fields.map((field, index) => (
-          <div
+          <FieldSet
             key={`${field.key}-${index}`}
-            className='bg-muted/40 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_9rem_minmax(0,1fr)_auto_auto] sm:items-end'
+            className='bg-muted/20 gap-4 rounded-xl border p-4'
           >
-            <Field>
-              <FieldLabel>Field</FieldLabel>
-              <Input
-                value={field.key}
-                onChange={(event) =>
-                  updateField(index, { key: event.target.value })
+            <div className='flex items-center justify-between gap-3'>
+              <FieldLegend variant='label'>
+                {field.key || `${label.slice(0, -1)} ${index + 1}`}
+              </FieldLegend>
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                aria-label={`Remove ${field.key}`}
+                onClick={() =>
+                  updateFields(fields.filter((_, current) => current !== index))
                 }
-              />
-            </Field>
-            <Field>
-              <FieldLabel>Type</FieldLabel>
-              <Select
-                value={field.type}
-                onValueChange={(type) => {
-                  if (type !== null) updateField(index, { type });
-                }}
               >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {contractTypes.map((type) => (
-                      <SelectItem key={type} value={type}>
-                        {type}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
+                <Trash2Icon />
+              </Button>
+            </div>
+            <FieldGroup className='grid gap-4 sm:grid-cols-[minmax(0,1fr)_9rem]'>
+              <Field>
+                <FieldLabel>Field name</FieldLabel>
+                <Input
+                  value={field.key}
+                  onChange={(event) =>
+                    updateField(index, { key: event.target.value })
+                  }
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Type</FieldLabel>
+                <Select
+                  value={field.type}
+                  onValueChange={(type) => {
+                    if (type !== null) updateField(index, { type });
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {contractTypes.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {type}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
             <Field>
               <FieldLabel>Description</FieldLabel>
               <Input
@@ -242,24 +262,27 @@ function ContractEditor({
                 placeholder='Optional help for the Agent'
               />
             </Field>
-            <Field className='w-fit'>
-              <FieldLabel>Required</FieldLabel>
+            <Field
+              orientation='horizontal'
+              className='bg-background rounded-lg border p-3'
+            >
               <Switch
+                id={`contract-field-required-${label}-${index}`}
                 checked={field.required}
                 onCheckedChange={(required) => updateField(index, { required })}
               />
+              <FieldContent>
+                <FieldLabel
+                  htmlFor={`contract-field-required-${label}-${index}`}
+                >
+                  Required
+                </FieldLabel>
+                <FieldDescription>
+                  Require this value when the App is called.
+                </FieldDescription>
+              </FieldContent>
             </Field>
-            <Button
-              variant='ghost'
-              size='icon-sm'
-              aria-label={`Remove ${field.key}`}
-              onClick={() =>
-                updateFields(fields.filter((_, current) => current !== index))
-              }
-            >
-              <Trash2Icon />
-            </Button>
-          </div>
+          </FieldSet>
         ))}
         <Button
           type='button'
@@ -270,7 +293,7 @@ function ContractEditor({
           <PlusIcon data-icon='inline-start' />
           Add {label === 'Inputs' ? 'input' : 'output'}
         </Button>
-      </div>
+      </FieldGroup>
       <Collapsible className='rounded-md border'>
         <CollapsibleTrigger
           render={
@@ -365,8 +388,9 @@ function ProcessNodeDetailPage() {
 
   return (
     <div className='size-full overflow-y-auto'>
-      <main className='mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-5'>
-        <div className='flex items-center justify-between gap-3'>
+      <main className='mx-auto flex w-full max-w-4xl flex-col gap-6 px-6 py-6'>
+        <section className='via-background relative flex flex-col gap-4 overflow-hidden rounded-2xl border bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-6'>
+          <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[16px_16px]' />
           <div className='flex min-w-0 items-center gap-3'>
             <Button
               variant='ghost'
@@ -376,16 +400,23 @@ function ProcessNodeDetailPage() {
             >
               <ArrowLeftIcon />
             </Button>
-            <div>
-              <h1 className='text-lg font-semibold tracking-tight'>
+            <div className='relative'>
+              <div className='text-muted-foreground text-xs font-medium tracking-[0.14em] uppercase'>
+                Local project
+              </div>
+              <h1 className='mt-1 text-xl font-semibold tracking-tight'>
                 App details
               </h1>
-              <p className='text-muted-foreground text-sm'>
+              <p className='text-muted-foreground mt-1 text-sm'>
                 Configure this App’s identity, runtime, and data contract.
               </p>
             </div>
           </div>
-          <Button disabled={save.isPending} onClick={() => save.mutate()}>
+          <Button
+            className='relative shrink-0'
+            disabled={save.isPending}
+            onClick={() => save.mutate()}
+          >
             {save.isPending ? (
               <Spinner data-icon='inline-start' />
             ) : (
@@ -393,7 +424,7 @@ function ProcessNodeDetailPage() {
             )}
             Save changes
           </Button>
-        </div>
+        </section>
 
         {formError ? (
           <Alert variant='destructive'>
@@ -403,7 +434,7 @@ function ProcessNodeDetailPage() {
           </Alert>
         ) : null}
 
-        <Card>
+        <Card className='shadow-sm'>
           <CardHeader>
             <CardTitle>Identity</CardTitle>
             <CardDescription>
@@ -411,7 +442,7 @@ function ProcessNodeDetailPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <FieldGroup>
+            <FieldGroup className='gap-6'>
               <Field data-invalid={Boolean(formError && !draft.name.trim())}>
                 <FieldLabel htmlFor='process-node-name'>Name</FieldLabel>
                 <Input
@@ -471,7 +502,7 @@ function ProcessNodeDetailPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className='shadow-sm'>
           <CardHeader>
             <CardTitle>Runtime</CardTitle>
             <CardDescription>
@@ -525,7 +556,7 @@ function ProcessNodeDetailPage() {
             </div>
           </CardFooter>
         </Card>
-        <Card>
+        <Card className='shadow-sm'>
           <CardHeader>
             <CardTitle>Data contract</CardTitle>
             <CardDescription>
@@ -533,7 +564,7 @@ function ProcessNodeDetailPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <FieldGroup>
+            <FieldGroup className='gap-7'>
               <ContractEditor
                 label='Inputs'
                 value={draft.inputs}

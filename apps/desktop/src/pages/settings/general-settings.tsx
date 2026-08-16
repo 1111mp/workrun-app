@@ -34,7 +34,7 @@ function GeneralSettings({ form }: { form: UseFormReturn<SettingsForm> }) {
 
   return (
     <FieldSet>
-      <FieldLegend className='text-muted-foreground pl-3'>
+      <FieldLegend className='text-muted-foreground'>
         {t('settings.general.title')}
       </FieldLegend>
       <div className='overflow-hidden rounded-xl'>
