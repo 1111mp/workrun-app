@@ -1,6 +1,7 @@
 use crate::{
     core::handle,
     logging,
+    module::mcp_server::McpServerRegistry,
     utils::{logging::Type, window_manager::WindowManager},
 };
 
@@ -19,7 +20,9 @@ pub async fn quit() {
 
     handle::Handle::global().set_is_exiting();
 
-    // let _ = server::stop_http_server().await;
+    if let Err(error) = McpServerRegistry::shutdown_all().await {
+        logging!(error, Type::System, "Failed to stop MCP servers: {}", error);
+    }
 
     let app_handle = handle::Handle::app_handle();
     app_handle.exit(0);

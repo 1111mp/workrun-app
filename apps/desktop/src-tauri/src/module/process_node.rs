@@ -10,6 +10,7 @@ use crate::{
     module::{
         ipc::IpcServer,
         python_runtime::{PythonOutputChunk, PythonOutputStream, PythonRuntime, StreamingPythonExecutionResult},
+        tool_registry::{ToolDefinition, ToolRiskLevel, ToolSource},
     },
     utils::dirs,
 };
@@ -79,6 +80,10 @@ pub struct ProcessNodeDefinition {
     #[serde(default)]
     pub tool_execution_policy: ToolExecutionPolicy,
     #[serde(default)]
+    pub tool_risk_level: ToolRiskLevel,
+    #[serde(default)]
+    pub tool_permissions: Vec<String>,
+    #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
     #[serde(default)]
     pub outputs: BTreeMap<String, Value>,
@@ -144,19 +149,6 @@ pub struct WorkflowProcessNodeRun {
     pub result: Value,
 }
 
-/// Metadata required to expose a Tool App to an LLM agent.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProcessToolDefinition {
-    pub process_node_id: String,
-    pub display_name: String,
-    pub name: String,
-    pub description: String,
-    pub input_schema: Value,
-    pub output_schema: Value,
-    pub execution_policy: ToolExecutionPolicy,
-}
-
 /// Stateless access to the source-owned catalog and the local installation cache.
 pub struct ProcessNodeRegistry;
 
@@ -192,30 +184,13 @@ impl ProcessNodeRegistry {
     }
 
     /// List the App definitions that can be attached to an Agent as tools.
-    pub async fn list_tools() -> Result<Vec<ProcessToolDefinition>> {
+    pub async fn list_tool_definitions() -> Result<Vec<ToolDefinition>> {
         let catalog = Self::read_catalog().await?;
         catalog
             .nodes
             .into_iter()
             .filter(|node| node.kind == ProcessNodeKind::Tool)
             .map(process_tool_definition)
-            .collect()
-    }
-
-    /// Resolve selected Tool Apps before an Agent is constructed.
-    pub async fn tools(ids: &[String]) -> Result<Vec<ProcessToolDefinition>> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let tools = Self::list_tools().await?;
-        ids.iter()
-            .map(|id| {
-                tools
-                    .iter()
-                    .find(|tool| tool.process_node_id == *id)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("Tool App is not in the catalog: {id}"))
-            })
             .collect()
     }
 
@@ -250,6 +225,8 @@ impl ProcessNodeRegistry {
             entry: PathBuf::from("main.py"),
             kind: request.kind,
             tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
+            tool_risk_level: ToolRiskLevel::Low,
+            tool_permissions: Vec::new(),
             inputs: BTreeMap::new(),
             outputs: BTreeMap::new(),
         };
@@ -588,7 +565,7 @@ fn validate_schemas(kind: &str, schemas: &BTreeMap<String, Value>) -> Result<()>
     Ok(())
 }
 
-fn process_tool_definition(node: ProcessNodeDefinition) -> Result<ProcessToolDefinition> {
+fn process_tool_definition(node: ProcessNodeDefinition) -> Result<ToolDefinition> {
     if node.inputs.is_empty() {
         bail!("Tool App `{}` must define at least one input schema", node.name);
     }
@@ -601,7 +578,12 @@ fn process_tool_definition(node: ProcessNodeDefinition) -> Result<ProcessToolDef
         .with_context(|| format!("Tool App `{}` has an invalid input schema", node.name))?;
     jsonschema::validator_for(&output_schema)
         .with_context(|| format!("Tool App `{}` has an invalid output schema", node.name))?;
-    Ok(ProcessToolDefinition {
+    let id = node.id.clone();
+    Ok(ToolDefinition {
+        id,
+        source: ToolSource::Process,
+        source_id: None,
+        source_name: None,
         display_name: node.name.clone(),
         name: format!("process_{}", node.id.replace('-', "_")),
         description: if node.description.trim().is_empty() {
@@ -609,9 +591,11 @@ fn process_tool_definition(node: ProcessNodeDefinition) -> Result<ProcessToolDef
         } else {
             format!("{}: {}", node.name, node.description)
         },
-        process_node_id: node.id,
+        version: node.version,
         input_schema,
         output_schema,
+        risk_level: node.tool_risk_level,
+        permissions: node.tool_permissions,
         execution_policy: node.tool_execution_policy,
     })
 }
@@ -677,6 +661,8 @@ mod tests {
             entry: "main.py".into(),
             kind: ProcessNodeKind::Workflow,
             tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
+            tool_risk_level: ToolRiskLevel::Low,
+            tool_permissions: Vec::new(),
             inputs: BTreeMap::from([("query".into(), serde_json::json!({ "type": "string" }))]),
             outputs: BTreeMap::new(),
         }
@@ -704,6 +690,11 @@ mod tests {
         tool.outputs = BTreeMap::from([("result".into(), serde_json::json!({ "type": "string" }))]);
 
         let tool_definition = process_tool_definition(tool).unwrap();
+        assert_eq!(tool_definition.id, "019b812d-4958-7d37-8a45-47e1e20a4744");
+        assert_eq!(tool_definition.source, ToolSource::Process);
+        assert_eq!(tool_definition.version, "0.1.0");
+        assert_eq!(tool_definition.risk_level, ToolRiskLevel::Low);
+        assert!(tool_definition.permissions.is_empty());
         assert_eq!(tool_definition.name, "process_019b812d_4958_7d37_8a45_47e1e20a4744");
         assert_eq!(tool_definition.input_schema["required"], serde_json::json!(["query"]));
 

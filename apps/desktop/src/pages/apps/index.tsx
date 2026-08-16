@@ -25,6 +25,7 @@ import {
   Skeleton,
   Spinner,
 } from '@workspace/ui/components';
+import { cn } from '@workspace/ui/lib/utils';
 import {
   BoxIcon,
   CheckCircle2Icon,
@@ -39,6 +40,8 @@ import {
   RefreshCwIcon,
   SearchIcon,
   TerminalIcon,
+  WrenchIcon,
+  WorkflowIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -140,6 +143,7 @@ function AppItem({
   onViewOutput: () => void;
 }) {
   const { definition } = node;
+  const isToolApp = definition.kind === 'tool';
   const inputCount = Object.keys(definition.inputs).length;
   const outputCount = Object.keys(definition.outputs).length;
   const hasRun = Boolean(run);
@@ -147,12 +151,24 @@ function AppItem({
   return (
     <Card
       size='sm'
-      className='h-full transition-[box-shadow,transform] hover:-translate-y-0.5 hover:shadow-md'
+      className={cn(
+        'h-full transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:shadow-md',
+        isToolApp
+          ? 'border-sky-500/35 bg-sky-500/5 hover:border-sky-500/55'
+          : 'border-violet-500/35 bg-violet-500/5 hover:border-violet-500/55',
+      )}
     >
       <CardHeader>
         <div className='flex items-center gap-2'>
-          <div className='bg-muted flex size-8 items-center justify-center rounded-lg'>
-            <BoxIcon className='text-muted-foreground size-4' />
+          <div
+            className={cn(
+              'flex size-8 items-center justify-center rounded-lg border',
+              isToolApp
+                ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                : 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+            )}
+          >
+            <BoxIcon className='size-4' />
           </div>
           <CardTitle>{definition.name}</CardTitle>
         </div>
@@ -173,8 +189,20 @@ function AppItem({
         <div className='text-muted-foreground flex items-center gap-2 text-xs'>
           <BoxIcon />
           <span>v{definition.version}</span>
-          <Badge variant='outline'>
-            {definition.kind === 'tool' ? 'Tool App' : 'Workflow App'}
+          <Badge
+            variant='outline'
+            className={cn(
+              isToolApp
+                ? 'border-sky-500/35 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                : 'border-violet-500/35 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+            )}
+          >
+            {isToolApp ? (
+              <WrenchIcon data-icon='inline-start' />
+            ) : (
+              <WorkflowIcon data-icon='inline-start' />
+            )}
+            {isToolApp ? 'Tool App' : 'Workflow App'}
           </Badge>
           <span>{inputCount} inputs</span>
           <span>{outputCount} outputs</span>
@@ -463,7 +491,7 @@ function AppsPage() {
         ) : null}
 
         {apps.data?.length === 0 ? (
-          <Empty>
+          <Empty className='via-card border border-dashed border-sky-200/70 bg-gradient-to-br from-sky-500/[0.06] to-violet-500/[0.05] py-14 dark:border-sky-400/15'>
             <EmptyHeader>
               <EmptyMedia variant='icon'>
                 <PackageSearchIcon />
@@ -498,7 +526,7 @@ function AppsPage() {
         ) : null}
 
         {apps.data?.length && filteredApps?.length === 0 ? (
-          <Empty className='min-h-64 rounded-xl border border-dashed'>
+          <Empty className='bg-card/70 min-h-64 rounded-xl border border-dashed border-sky-200/70 dark:border-sky-400/15'>
             <EmptyHeader>
               <EmptyTitle>No matching apps</EmptyTitle>
               <EmptyDescription>

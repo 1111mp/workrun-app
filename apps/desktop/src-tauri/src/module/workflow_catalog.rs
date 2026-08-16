@@ -78,7 +78,7 @@ impl WorkflowCatalogStore {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(WorkflowCatalog::default());
-            }
+            },
             Err(error) => return Err(error).with_context(|| format!("failed to read {}", path.display())),
         };
         let catalog = serde_json::from_slice::<WorkflowCatalog>(&bytes)
@@ -137,12 +137,14 @@ mod tests {
 
     #[test]
     fn validates_a_complete_workflow_document() {
-        assert!(validate_document(&json!({
-            "nodes": [],
-            "edges": [],
-            "settings": { "name": "Example" },
-        }))
-        .is_ok());
+        assert!(
+            validate_document(&json!({
+                "nodes": [],
+                "edges": [],
+                "settings": { "name": "Example" },
+            }))
+            .is_ok()
+        );
         assert!(validate_document(&json!({ "nodes": [] })).is_err());
     }
 

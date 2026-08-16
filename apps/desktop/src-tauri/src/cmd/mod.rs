@@ -4,10 +4,12 @@ use anyhow::Result;
 pub type CmdResult<T = ()> = Result<T, String>;
 
 pub mod ipc;
+pub mod mcp_server;
 pub mod model;
 pub mod process_node;
 pub mod python_runtime;
 pub mod system;
+pub mod tool_registry;
 pub mod workflow;
 pub mod workflow_catalog;
 pub mod workrun;

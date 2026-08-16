@@ -5,6 +5,7 @@ import type { DependencySyncResult } from '@/services/runtime';
 export type ProcessNodeInstallStatus = 'notInstalled' | 'installed' | 'invalid';
 export type ProcessNodeKind = 'workflow' | 'tool';
 export type ToolExecutionPolicy = 'ask_every_time' | 'auto';
+export type ToolRiskLevel = 'low' | 'medium' | 'high';
 
 export type ProcessNodeDefinition = {
   id: string;
@@ -16,6 +17,8 @@ export type ProcessNodeDefinition = {
   entry: string;
   kind: ProcessNodeKind;
   toolExecutionPolicy: ToolExecutionPolicy;
+  toolRiskLevel?: ToolRiskLevel;
+  toolPermissions?: string[];
   inputs: Record<string, unknown>;
   outputs: Record<string, unknown>;
 };
@@ -25,16 +28,6 @@ export type ProcessNode = {
   projectPath: string;
   installStatus: ProcessNodeInstallStatus;
   installError?: string;
-};
-
-export type ProcessToolDefinition = {
-  processNodeId: string;
-  displayName: string;
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
-  executionPolicy: ToolExecutionPolicy;
 };
 
 export type CreateProcessNodeRequest = Pick<
@@ -70,10 +63,6 @@ export type ProcessNodeRunResult = {
 
 export function listProcessNodes() {
   return invoke<ProcessNode[]>('process_node_list');
-}
-
-export function listProcessTools() {
-  return invoke<ProcessToolDefinition[]>('process_node_tool_list');
 }
 
 export function inspectProcessNode(id: string) {

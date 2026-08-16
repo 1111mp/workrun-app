@@ -6,7 +6,11 @@
 
 use crate::{
     config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog},
-    module::process_node::{ProcessNodeRegistry, ProcessToolDefinition, ToolExecutionPolicy},
+    module::{
+        mcp_server::McpServerRegistry,
+        process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
+        tool_registry::{ToolDefinition, ToolRegistry, ToolSource},
+    },
 };
 use adk_rust::{
     graph::{
@@ -501,7 +505,7 @@ async fn add_local_agent_node(
     let tool_ids = string_array_data(node, "toolIds")?;
     let max_tool_calls = integer_data(node, "maxToolCalls", 8, 1, 50)?;
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
-    let tools = ProcessNodeRegistry::tools(&tool_ids).await?;
+    let tools = ToolRegistry::resolve(&tool_ids).await?;
     let model = model_catalog()
         .into_iter()
         .find(|model| model.id == profile_id)
@@ -520,8 +524,13 @@ async fn add_local_agent_node(
     let tool_calls = Arc::new(AtomicU32::new(0));
     let tool_trace = Arc::new(Mutex::new(Vec::new()));
     for tool in tools {
-        agent = agent.tool(Arc::new(ProcessTool::new(
+        let executor = match tool.source {
+            ToolSource::Process => ManagedToolExecutor::Process,
+            ToolSource::Mcp => ManagedToolExecutor::Mcp(McpServerRegistry::resolve_tool(&tool.id).await?.1),
+        };
+        agent = agent.tool(Arc::new(ManagedTool::new(
             tool,
+            executor,
             id.clone(),
             on_event.clone(),
             Arc::clone(&tool_calls),
@@ -541,8 +550,14 @@ async fn add_local_agent_node(
     )))
 }
 
-struct ProcessTool {
-    definition: ProcessToolDefinition,
+enum ManagedToolExecutor {
+    Process,
+    Mcp(Arc<dyn Tool>),
+}
+
+struct ManagedTool {
+    definition: ToolDefinition,
+    executor: ManagedToolExecutor,
     agent_node_id: String,
     on_event: Option<Channel<StreamEvent>>,
     tool_calls: Arc<AtomicU32>,
@@ -551,9 +566,10 @@ struct ProcessTool {
     timeout_seconds: u64,
 }
 
-impl ProcessTool {
+impl ManagedTool {
     fn new(
-        definition: ProcessToolDefinition,
+        definition: ToolDefinition,
+        executor: ManagedToolExecutor,
         agent_node_id: String,
         on_event: Option<Channel<StreamEvent>>,
         tool_calls: Arc<AtomicU32>,
@@ -563,6 +579,7 @@ impl ProcessTool {
     ) -> Self {
         Self {
             definition,
+            executor,
             agent_node_id,
             on_event,
             tool_calls,
@@ -574,7 +591,7 @@ impl ProcessTool {
 }
 
 #[async_trait::async_trait]
-impl Tool for ProcessTool {
+impl Tool for ManagedTool {
     fn name(&self) -> &str {
         &self.definition.name
     }
@@ -591,7 +608,7 @@ impl Tool for ProcessTool {
         Some(self.definition.output_schema.clone())
     }
 
-    async fn execute(&self, _context: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+    async fn execute(&self, context: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
         if self.tool_calls.fetch_add(1, Ordering::Relaxed) >= self.max_tool_calls {
             return Err(adk_rust::AdkError::tool(format!(
                 "Agent reached its {} tool-call limit",
@@ -643,40 +660,43 @@ impl Tool for ProcessTool {
                 }),
             ));
         }
-        let node_id = self.agent_node_id.clone();
-        let name = self.definition.name.clone();
-        let on_event = self.on_event.clone();
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(self.timeout_seconds),
-            ProcessNodeRegistry::run_for_tool(
-                &self.definition.process_node_id,
-                &args,
-                Arc::new(move |chunk| {
-                    if let Some(on_event) = &on_event {
-                        let _ = on_event.send(StreamEvent::custom(
-                            &node_id,
-                            "agent.tool_output",
-                            json!({ "tool": name, "stream": chunk.stream, "data": chunk.data }),
-                        ));
-                    }
-                }),
-            ),
-        )
-        .await
-        .map_err(|_| {
-            adk_rust::AdkError::tool(format!(
-                "Tool `{}` timed out after {} seconds",
-                self.name(),
-                self.timeout_seconds
-            ))
-        })?
-        .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
-        validate_tool_value(&self.definition.output_schema, &result.result, "output")?;
+        let timeout = std::time::Duration::from_secs(self.timeout_seconds);
+        let result = match &self.executor {
+            ManagedToolExecutor::Process => {
+                let node_id = self.agent_node_id.clone();
+                let name = self.definition.name.clone();
+                let on_event = self.on_event.clone();
+                tokio::time::timeout(
+                    timeout,
+                    ProcessNodeRegistry::run_for_tool(
+                        &self.definition.id,
+                        &args,
+                        Arc::new(move |chunk| {
+                            if let Some(on_event) = &on_event {
+                                let _ = on_event.send(StreamEvent::custom(
+                                    &node_id,
+                                    "agent.tool_output",
+                                    json!({ "tool": name, "stream": chunk.stream, "data": chunk.data }),
+                                ));
+                            }
+                        }),
+                    ),
+                )
+                .await
+                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?
+                .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?
+                .result
+            },
+            ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, args.clone()))
+                .await
+                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
+        };
+        validate_tool_value(&self.definition.output_schema, &result, "output")?;
         let trace = json!({
             "tool": self.name(),
             "name": self.definition.display_name,
             "input": args,
-            "result": result.result,
+            "result": result,
         });
         if let Ok(mut tool_trace) = self.tool_trace.lock() {
             tool_trace.push(trace.clone());
@@ -684,8 +704,12 @@ impl Tool for ProcessTool {
         if let Some(on_event) = &self.on_event {
             let _ = on_event.send(StreamEvent::custom(&self.agent_node_id, "agent.tool_result", trace));
         }
-        Ok(result.result)
+        Ok(result)
     }
+}
+
+fn tool_timeout_error(name: &str, timeout_seconds: u64) -> adk_rust::AdkError {
+    adk_rust::AdkError::tool(format!("Tool `{name}` timed out after {timeout_seconds} seconds"))
 }
 
 fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
@@ -1483,10 +1507,7 @@ mod tests {
     async fn resolves_one_time_tool_approval() {
         let request_id = uuid::Uuid::now_v7().to_string();
         let (sender, receiver) = oneshot::channel();
-        tool_approvals()
-            .lock()
-            .unwrap()
-            .insert(request_id.clone(), sender);
+        tool_approvals().lock().unwrap().insert(request_id.clone(), sender);
 
         resolve_tool_approval(&request_id, true).await.unwrap();
 

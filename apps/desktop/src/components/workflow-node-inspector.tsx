@@ -7,7 +7,9 @@ import {
   ComboboxChipsInput,
   ComboboxContent,
   ComboboxEmpty,
+  ComboboxGroup,
   ComboboxItem,
+  ComboboxLabel,
   ComboboxList,
   ComboboxValue,
   Drawer,
@@ -33,7 +35,8 @@ import {
 import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 
-import { listProcessNodes, listProcessTools } from '@/services/process-node';
+import { listProcessNodes } from '@/services/process-node';
+import { listTools } from '@/services/tool';
 
 type WorkflowNodeInspectorProps = {
   node: Node | null;
@@ -176,9 +179,9 @@ function WorkflowNodeInspector({
     queryFn: listProcessNodes,
     enabled: node?.type === 'process',
   });
-  const processTools = useQuery({
-    queryKey: ['processTools'],
-    queryFn: listProcessTools,
+  const tools = useQuery({
+    queryKey: ['tools'],
+    queryFn: listTools,
     enabled: node?.type === 'agent',
   });
 
@@ -298,13 +301,13 @@ function WorkflowNodeInspector({
             <Field>
               <Label>Tools</Label>
               <FieldDescription>
-                Let this agent call selected Tool Apps when their structured
-                input is needed.
+                Select local Tool Apps or tools discovered from running MCP
+                servers.
               </FieldDescription>
               <ToolCombobox
-                tools={processTools.data ?? []}
+                tools={tools.data ?? []}
                 selectedIds={getStringArray(data, 'toolIds')}
-                isLoading={processTools.isLoading}
+                isLoading={tools.isLoading}
                 onChange={(toolIds) => updateData({ toolIds })}
               />
             </Field>
@@ -703,16 +706,21 @@ function ToolCombobox({
   isLoading = false,
   onChange,
 }: {
-  tools: Awaited<ReturnType<typeof listProcessTools>>;
+  tools: Awaited<ReturnType<typeof listTools>>;
   selectedIds: string[];
   isLoading?: boolean;
   onChange: (toolIds: string[]) => void;
 }) {
   const anchor = useComboboxAnchor();
-
-  const selectedTools = tools.filter((tool) =>
-    selectedIds.includes(tool.processNodeId),
-  );
+  const selectedTools = tools.filter((tool) => selectedIds.includes(tool.id));
+  const toolApps = tools.filter((tool) => tool.source === 'process');
+  const mcpToolGroups = new Map<string, typeof tools>();
+  for (const tool of tools.filter((tool) => tool.source === 'mcp')) {
+    const key = tool.sourceId ?? tool.sourceName ?? 'unknown-server';
+    const group = mcpToolGroups.get(key) ?? [];
+    group.push(tool);
+    mcpToolGroups.set(key, group);
+  }
 
   return (
     <Combobox
@@ -720,40 +728,65 @@ function ToolCombobox({
       multiple
       value={selectedTools}
       disabled={isLoading}
-      onValueChange={(selected) =>
-        onChange(selected.map((tool) => tool.processNodeId))
-      }
+      onValueChange={(selected) => onChange(selected.map((tool) => tool.id))}
       itemToStringValue={(tool) => `${tool.displayName} ${tool.description}`}
     >
       <ComboboxChips ref={anchor}>
         <ComboboxValue>
           {selectedTools.map((tool) => (
-            <ComboboxChip key={tool.processNodeId}>
-              {tool.displayName}
-            </ComboboxChip>
+            <ComboboxChip key={tool.id}>{tool.displayName}</ComboboxChip>
           ))}
         </ComboboxValue>
         <ComboboxChipsInput
           disabled={isLoading}
-          placeholder={isLoading ? 'Loading Tool Apps…' : 'Search Tool Apps…'}
+          placeholder={isLoading ? 'Loading tools…' : 'Search tools…'}
         />
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
-        <ComboboxEmpty>No Tool Apps found.</ComboboxEmpty>
+        <ComboboxEmpty>
+          No tools found. Start an MCP server to discover its tools.
+        </ComboboxEmpty>
         <ComboboxList>
-          {(tool) => (
-            <ComboboxItem key={tool.processNodeId} value={tool}>
-              <span className='flex min-w-0 flex-col'>
-                <span className='truncate'>{tool.displayName}</span>
-                <span className='text-muted-foreground truncate text-xs'>
-                  {tool.description}
-                </span>
-              </span>
-            </ComboboxItem>
+          {toolApps.length ? (
+            <ComboboxGroup>
+              <ComboboxLabel>Tool Apps</ComboboxLabel>
+              {toolApps.map((tool) => (
+                <ToolComboboxItem key={tool.id} tool={tool} />
+              ))}
+            </ComboboxGroup>
+          ) : null}
+          {Array.from(mcpToolGroups.entries()).map(
+            ([serverId, serverTools]) => (
+              <ComboboxGroup key={serverId}>
+                <ComboboxLabel>
+                  MCP · {serverTools[0]?.sourceName ?? 'Server'}
+                </ComboboxLabel>
+                {serverTools.map((tool) => (
+                  <ToolComboboxItem key={tool.id} tool={tool} />
+                ))}
+              </ComboboxGroup>
+            ),
           )}
         </ComboboxList>
       </ComboboxContent>
     </Combobox>
+  );
+}
+
+function ToolComboboxItem({
+  tool,
+}: {
+  tool: Awaited<ReturnType<typeof listTools>>[number];
+}) {
+  return (
+    <ComboboxItem value={tool}>
+      <span className='flex min-w-0 flex-col'>
+        <span className='truncate'>{tool.displayName}</span>
+        <span className='text-muted-foreground truncate text-xs'>
+          {tool.description}
+        </span>
+      </span>
+    </ComboboxItem>
   );
 }
 

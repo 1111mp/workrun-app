@@ -81,6 +81,13 @@ pub fn run() {
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,
             cmd::model::model_catalog_list,
+            cmd::mcp_server::mcp_server_list,
+            cmd::mcp_server::mcp_server_create,
+            cmd::mcp_server::mcp_server_update,
+            cmd::mcp_server::mcp_server_delete,
+            cmd::mcp_server::mcp_server_start,
+            cmd::mcp_server::mcp_server_stop,
+            cmd::tool_registry::tool_list,
             cmd::ipc::python_ui_respond,
             // statically provisioned Process Nodes
             cmd::process_node::process_node_list,

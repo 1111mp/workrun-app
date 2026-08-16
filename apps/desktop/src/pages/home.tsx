@@ -13,6 +13,7 @@ import {
 import {
   BoxesIcon,
   RefreshCwIcon,
+  ServerCogIcon,
   SettingsIcon,
   User,
   WorkflowIcon,
@@ -62,7 +63,7 @@ function HomePage() {
   };
 
   return (
-    <div className='bg-background flex h-dvh min-h-0 flex-col overflow-hidden'>
+    <div className='flex h-dvh min-h-0 flex-col overflow-hidden bg-[radial-gradient(ellipse_80%_45%_at_50%_-10%,hsl(214_95%_93%_/_0.8),transparent),radial-gradient(ellipse_55%_35%_at_100%_20%,hsl(270_95%_94%_/_0.55),transparent)] dark:bg-[radial-gradient(ellipse_80%_45%_at_50%_-10%,hsl(214_70%_20%_/_0.5),transparent),radial-gradient(ellipse_55%_35%_at_100%_20%,hsl(270_65%_19%_/_0.4),transparent)]'>
       <header
         data-tauri-drag-region={OS_PLATFORM !== 'win32'}
         className='flex h-12 shrink-0 items-center gap-1 border-b pr-2 pl-20'
@@ -114,6 +115,10 @@ function HomePage() {
             <DropdownMenuItem onClick={() => navigate('/settings')}>
               <SettingsIcon />
               {t('navigation.settings')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate('/mcp-servers')}>
+              <ServerCogIcon />
+              MCP servers
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

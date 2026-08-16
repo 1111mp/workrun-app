@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 name = "workrun_lib"
 
 [dependencies]
-adk-rust = { workspace = true, features = ["deepseek", "full", "groq", "ollama"] }
+adk-rust = { workspace = true, features = ["deepseek", "full", "groq", "mcp-http", "ollama"] }
 aes-gcm = "0.11.0"
 anyhow = { workspace = true }
 async-stream = "0.3.6"
@@ -39,6 +39,7 @@ log = { workspace = true }
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
 open = "5.4.1"
 parking_lot = { workspace = true }
+rustls = { version = "0.23.43", default-features = false, features = ["aws_lc_rs", "std"] }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

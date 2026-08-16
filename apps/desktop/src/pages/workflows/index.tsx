@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Badge,
   Button,
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -21,9 +23,11 @@ import {
 } from '@workspace/ui/components';
 import {
   FilePenLineIcon,
+  GitBranchIcon,
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
+  SlidersHorizontalIcon,
   WorkflowIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -40,25 +44,53 @@ import {
 
 function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
   const { settings } = workflow.document;
+  const inputCount = settings.inputSchema.fields.length;
   return (
-    <Card size='sm' className='h-full'>
+    <Card
+      size='sm'
+      className='h-full border-violet-500/35 bg-violet-500/5 transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-violet-500/55 hover:shadow-md'
+    >
       <CardHeader>
         <div className='flex items-center gap-2'>
-          <div className='bg-muted flex size-8 items-center justify-center rounded-lg'>
-            <WorkflowIcon className='text-muted-foreground size-4' />
+          <div className='flex size-9 items-center justify-center rounded-lg bg-violet-500/10 text-violet-700 dark:text-violet-300'>
+            <WorkflowIcon className='size-4' />
           </div>
           <CardTitle className='truncate'>{settings.name}</CardTitle>
         </div>
-        <CardDescription>
+        <CardDescription className='line-clamp-2 min-h-10'>
           {settings.description || 'No description provided.'}
         </CardDescription>
+        <CardAction>
+          <Badge variant='secondary' className='capitalize'>
+            {settings.mode}
+          </Badge>
+        </CardAction>
       </CardHeader>
-      <CardContent className='text-muted-foreground flex flex-1 items-center gap-2 text-xs'>
-        <span>{workflow.document.nodes.length} nodes</span>
-        <span>{workflow.document.edges.length} connections</span>
-        <span className='capitalize'>{settings.mode}</span>
+      <CardContent className='flex-1'>
+        <div className='bg-background/60 grid grid-cols-3 overflow-hidden rounded-lg border border-violet-500/15 text-xs'>
+          <div className='flex flex-col gap-1 p-2.5'>
+            <WorkflowIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
+            <span className='text-foreground font-medium'>
+              {workflow.document.nodes.length}
+            </span>
+            <span className='text-muted-foreground'>Nodes</span>
+          </div>
+          <div className='flex flex-col gap-1 border-x border-violet-500/15 p-2.5'>
+            <GitBranchIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
+            <span className='text-foreground font-medium'>
+              {workflow.document.edges.length}
+            </span>
+            <span className='text-muted-foreground'>Connections</span>
+          </div>
+          <div className='flex flex-col gap-1 p-2.5'>
+            <SlidersHorizontalIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
+            <span className='text-foreground font-medium'>{inputCount}</span>
+            <span className='text-muted-foreground'>Inputs</span>
+          </div>
+        </div>
       </CardContent>
-      <CardFooter className='justify-end'>
+      <CardFooter className='justify-between'>
+        <span className='text-muted-foreground text-xs'>Workflow canvas</span>
         <Button
           size='sm'
           nativeButton={false}
@@ -185,7 +217,7 @@ function WorkflowsPage() {
           </section>
         ) : null}
         {workflows.isError ? (
-          <Empty>
+          <Empty className='via-card border border-dashed border-violet-200/70 bg-gradient-to-br from-violet-500/[0.06] to-sky-500/[0.05] py-14 dark:border-violet-400/15'>
             <EmptyHeader>
               <EmptyTitle>Workflows could not be loaded</EmptyTitle>
               <EmptyDescription>
@@ -221,7 +253,7 @@ function WorkflowsPage() {
           </Empty>
         ) : null}
         {workflows.data?.length && filteredWorkflows?.length === 0 ? (
-          <Empty className='min-h-64 rounded-xl border border-dashed'>
+          <Empty className='bg-card/70 min-h-64 rounded-xl border border-dashed border-violet-200/70 dark:border-violet-400/15'>
             <EmptyHeader>
               <EmptyTitle>No matching workflows</EmptyTitle>
               <EmptyDescription>

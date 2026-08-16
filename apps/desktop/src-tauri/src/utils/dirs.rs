@@ -79,6 +79,11 @@ pub fn process_node_catalog_path() -> Result<PathBuf> {
     Ok(process_nodes_dir()?.join("catalog.json"))
 }
 
+/// Local catalog of configured stdio MCP Servers.
+pub fn mcp_server_catalog_path() -> Result<PathBuf> {
+    Ok(app_home_dir()?.join("mcp-servers").join("catalog.json"))
+}
+
 /// Local workflow catalog managed from the Workflows page.
 pub fn workflow_catalog_path() -> Result<PathBuf> {
     Ok(app_home_dir()?.join("workflow.json"))
