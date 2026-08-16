@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Alert,
+  AlertDescription,
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -8,6 +10,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertTitle,
   Button,
   Card,
   CardContent,
@@ -44,6 +47,7 @@ import {
 } from '@workspace/ui/components';
 import {
   CircleAlertIcon,
+  CircleCheckIcon,
   CirclePauseIcon,
   CirclePlayIcon,
   CloudIcon,
@@ -52,6 +56,7 @@ import {
   PencilIcon,
   PlusIcon,
   RadioTowerIcon,
+  RefreshCwIcon,
   ShieldCheckIcon,
   TerminalIcon,
   Trash2Icon,
@@ -63,13 +68,19 @@ import {
   authorizeMcpServer,
   createMcpServer,
   deleteMcpServer,
+  listMcpServerWorkflowReferences,
   listMcpServers,
+  reconnectMcpServer,
   startMcpServer,
   stopMcpServer,
+  testMcpServerConnection,
   updateMcpServer,
   type CreateMcpServerRequest,
   type McpServer,
+  type McpServerConnectionTest,
   type McpServerDefinition,
+  type McpServerHealth,
+  type TestMcpServerConnectionRequest,
   type UpdateMcpServerRequest,
 } from '@/services/mcp-server';
 
@@ -82,10 +93,30 @@ const emptyDraft = (): Draft => ({
   transport: 'stdio',
   command: '',
   args: [],
+  env: {},
   url: '',
   auth: 'none',
   enabled: true,
 });
+
+function formatEnvironment(env: Record<string, string>) {
+  return Object.entries(env)
+    .map(([name, value]) => `${name}=${value}`)
+    .join('\n');
+}
+
+function parseEnvironment(lines: string) {
+  return Object.fromEntries(
+    lines
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf('=');
+        return [line.slice(0, separator).trim(), line.slice(separator + 1)];
+      }),
+  );
+}
 
 function statusLabel(server: McpServer) {
   if (server.status === 'Running') return 'Online';
@@ -104,6 +135,10 @@ function statusTone(server: McpServer) {
   }
   if (server.status === 'Restarting') return 'bg-amber-500';
   return 'bg-muted-foreground/40';
+}
+
+function diagnosticTime(timestamp?: string) {
+  return timestamp ? new Date(timestamp).toLocaleString() : undefined;
 }
 
 function serverLocation(server: McpServer): ServerLocation {
@@ -137,15 +172,33 @@ function McpServersPage() {
   const servers = useQuery({
     queryKey: ['mcp-servers'],
     queryFn: listMcpServers,
-    refetchInterval: (query) =>
-      query.state.data?.some(
-        (server) => server.definition.authorizationStatus === 'authorizing',
+    refetchInterval: (query) => {
+      const configuredServers = query.state.data ?? [];
+      if (
+        configuredServers.some(
+          (server) => server.definition.authorizationStatus === 'authorizing',
+        )
+      ) {
+        return 2_000;
+      }
+      return configuredServers.some(
+        (server) =>
+          server.status === 'Running' || server.status === 'Restarting',
       )
-        ? 2_000
-        : false,
+        ? 10_000
+        : false;
+    },
   });
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deleting, setDeleting] = useState<McpServerDefinition | null>(null);
+  const workflowReferences = useQuery({
+    queryKey: ['mcp-server-workflow-references', deleting?.id],
+    queryFn: () =>
+      deleting
+        ? listMcpServerWorkflowReferences(deleting.id)
+        : Promise.resolve([]),
+    enabled: Boolean(deleting),
+  });
   const configuredServers = servers.data ?? [];
   const runningCount = configuredServers.filter(
     (server) => server.status === 'Running',
@@ -191,6 +244,14 @@ function McpServersPage() {
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const reconnect = useMutation({
+    mutationFn: reconnectMcpServer,
+    onError: (error) =>
+      toast.error('Could not reconnect to MCP server', {
+        description: error instanceof Error ? error.message : String(error),
+      }),
+    onSettled: () => void refresh(),
   });
   const remove = useMutation({
     mutationFn: deleteMcpServer,
@@ -270,11 +331,18 @@ function McpServersPage() {
           <div className='grid gap-3'>
             {servers.data.map((server) => {
               const isRunning = server.status === 'Running';
+              const needsRetry =
+                server.status === 'FailedToStart' ||
+                server.status === 'Crashed';
+              const isRestarting = server.status === 'Restarting';
               const location = locationPresentation(serverLocation(server));
               const LocationIcon = location.icon;
               const isPending =
                 lifecycle.isPending &&
                 lifecycle.variables?.id === server.definition.id;
+              const isReconnecting =
+                reconnect.isPending &&
+                reconnect.variables === server.definition.id;
               return (
                 <Card
                   key={server.definition.id}
@@ -331,28 +399,71 @@ function McpServersPage() {
                               ].join(' ')}
                         </code>
                       </div>
+                      {server.health.lastError ? (
+                        <p className='text-destructive mt-2 line-clamp-1 text-xs'>
+                          Last check failed: {server.health.lastError}
+                        </p>
+                      ) : server.health.lastCheckedAt ? (
+                        <p className='text-muted-foreground mt-2 text-xs'>
+                          Last checked{' '}
+                          {diagnosticTime(server.health.lastCheckedAt)}
+                          {server.health.toolCount !== undefined
+                            ? ` · ${server.health.toolCount} tools discovered`
+                            : null}
+                        </p>
+                      ) : null}
                     </div>
                     <div className='flex items-center justify-between gap-2 border-t pt-3 sm:justify-end sm:border-t-0 sm:pt-0'>
-                      <Button
-                        variant='outline'
-                        size='sm'
-                        disabled={isPending || server.status === 'Disabled'}
-                        onClick={() =>
-                          lifecycle.mutate({
-                            id: server.definition.id,
-                            action: isRunning ? 'stop' : 'start',
-                          })
-                        }
-                      >
-                        {isPending ? (
+                      {isRestarting ? (
+                        <Button variant='outline' size='sm' disabled>
                           <Spinner data-icon='inline-start' />
-                        ) : isRunning ? (
-                          <CirclePauseIcon data-icon='inline-start' />
-                        ) : (
-                          <CirclePlayIcon data-icon='inline-start' />
-                        )}
-                        {isRunning ? 'Stop' : 'Start'}
-                      </Button>
+                          Reconnecting
+                        </Button>
+                      ) : server.status !== 'Disabled' ? (
+                        <>
+                          {isRunning ? (
+                            <Button
+                              variant='outline'
+                              size='sm'
+                              disabled={isReconnecting}
+                              onClick={() =>
+                                reconnect.mutate(server.definition.id)
+                              }
+                            >
+                              {isReconnecting ? (
+                                <Spinner data-icon='inline-start' />
+                              ) : (
+                                <RefreshCwIcon data-icon='inline-start' />
+                              )}
+                              Reconnect
+                            </Button>
+                          ) : null}
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            disabled={isPending || isReconnecting}
+                            onClick={() =>
+                              lifecycle.mutate({
+                                id: server.definition.id,
+                                action: isRunning ? 'stop' : 'start',
+                              })
+                            }
+                          >
+                            {isPending ? (
+                              <Spinner data-icon='inline-start' />
+                            ) : isRunning ? (
+                              <CirclePauseIcon data-icon='inline-start' />
+                            ) : (
+                              <CirclePlayIcon data-icon='inline-start' />
+                            )}
+                            {isRunning
+                              ? 'Stop'
+                              : needsRetry
+                                ? 'Retry'
+                                : 'Start'}
+                          </Button>
+                        </>
+                      ) : null}
                       {server.definition.auth === 'oauth' ? (
                         <Button
                           variant='outline'
@@ -418,9 +529,17 @@ function McpServersPage() {
         ) : null}
         <McpServerDialog
           draft={draft}
+          health={
+            draft
+              ? configuredServers.find(
+                  (server) => server.definition.id === draft.id,
+                )?.health
+              : undefined
+          }
           isSaving={save.isPending}
           onOpenChange={(open) => !open && setDraft(null)}
           onSave={(next) => save.mutate(next)}
+          onDiagnosticsUpdated={() => void refresh()}
         />
         <AlertDialog
           open={Boolean(deleting)}
@@ -431,8 +550,11 @@ function McpServersPage() {
               <AlertDialogTitle>Delete MCP server?</AlertDialogTitle>
               <AlertDialogDescription>
                 This stops the server and removes its local configuration.
-                Workflows that reference its tools will remain unchanged until
-                MCP tool selection is added.
+                {workflowReferences.isLoading
+                  ? ' Checking workflows that use its tools…'
+                  : workflowReferences.data?.length
+                    ? ` ${workflowReferences.data.length} workflow${workflowReferences.data.length === 1 ? '' : 's'} will retain unavailable tool selections: ${workflowReferences.data.map((workflow) => workflow.name).join(', ')}.`
+                    : ' No saved workflows reference its tools.'}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -440,7 +562,7 @@ function McpServersPage() {
                 Cancel
               </AlertDialogCancel>
               <AlertDialogAction
-                disabled={remove.isPending}
+                disabled={remove.isPending || workflowReferences.isLoading}
                 onClick={() => deleting && remove.mutate(deleting.id)}
               >
                 {remove.isPending ? (
@@ -460,22 +582,77 @@ function McpServersPage() {
 
 function McpServerDialog({
   draft,
+  health,
   isSaving,
   onOpenChange,
   onSave,
+  onDiagnosticsUpdated,
 }: {
   draft: Draft | null;
+  health?: McpServerHealth;
   isSaving: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (draft: Draft) => void;
+  onDiagnosticsUpdated: () => void;
 }) {
   const [formDraft, setFormDraft] = useState<Draft | null>(draft);
   const [argsText, setArgsText] = useState('');
+  const [environmentText, setEnvironmentText] = useState('');
+  const [testResult, setTestResult] = useState<
+    | {
+        signature: string;
+        result?: McpServerConnectionTest;
+        error?: string;
+      }
+    | undefined
+  >();
   useEffect(() => {
     setFormDraft(draft);
     setArgsText(draft?.args.join('\n') ?? '');
+    setEnvironmentText(draft ? formatEnvironment(draft.env) : '');
   }, [draft]);
   const isOpen = formDraft !== null;
+  const hasInvalidEnvironmentLine = environmentText
+    .split('\n')
+    .some((line) => line.trim() && line.indexOf('=') <= 0);
+  const testRequest: TestMcpServerConnectionRequest | undefined = formDraft
+    ? {
+        id: formDraft.id,
+        name: formDraft.name,
+        transport: formDraft.transport,
+        command: formDraft.command,
+        args: argsText
+          .split('\n')
+          .map((item) => item.trim())
+          .filter(Boolean),
+        env: parseEnvironment(environmentText),
+        url: formDraft.url,
+        auth: formDraft.auth,
+        bearerToken: formDraft.bearerToken,
+      }
+    : undefined;
+  const testSignature = JSON.stringify(testRequest);
+  const testConnection = useMutation({
+    mutationFn: testMcpServerConnection,
+    onSuccess: (result, request) =>
+      setTestResult({ signature: JSON.stringify(request), result }),
+    onError: (error, request) =>
+      setTestResult({
+        signature: JSON.stringify(request),
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    onSettled: () => onDiagnosticsUpdated(),
+  });
+  const currentTestResult =
+    testResult?.signature === testSignature ? testResult : undefined;
+  const canTest =
+    Boolean(testRequest?.name.trim()) &&
+    !hasInvalidEnvironmentLine &&
+    Boolean(
+      testRequest?.transport === 'stdio'
+        ? testRequest.command.trim()
+        : testRequest?.url.trim(),
+    );
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className='max-w-3xl! gap-0 overflow-hidden p-0'>
@@ -638,6 +815,29 @@ function McpServerDialog({
                           Enter one command argument per line.
                         </FieldDescription>
                       </Field>
+                      <Field
+                        data-invalid={hasInvalidEnvironmentLine || undefined}
+                      >
+                        <FieldLabel htmlFor='mcp-server-environment'>
+                          Environment variables
+                        </FieldLabel>
+                        <Textarea
+                          id='mcp-server-environment'
+                          className='min-h-24 font-mono text-xs'
+                          placeholder={
+                            'GITHUB_TOKEN=…\nAPI_BASE_URL=https://api.example.com'
+                          }
+                          value={environmentText}
+                          aria-invalid={hasInvalidEnvironmentLine}
+                          onChange={(event) =>
+                            setEnvironmentText(event.target.value)
+                          }
+                        />
+                        <FieldDescription>
+                          One <code>KEY=value</code> pair per line. Values are
+                          encrypted with this server configuration.
+                        </FieldDescription>
+                      </Field>
                     </FieldGroup>
                   ) : (
                     <FieldGroup className='gap-4'>
@@ -761,21 +961,60 @@ function McpServerDialog({
                   </FieldContent>
                 </Field>
               </FieldSet>
+              {health?.lastCheckedAt ? (
+                <Alert variant={health.lastError ? 'destructive' : 'default'}>
+                  {health.lastError ? <CircleAlertIcon /> : <CircleCheckIcon />}
+                  <AlertTitle>
+                    {health.lastError
+                      ? 'Latest connection check failed'
+                      : 'Latest connection check succeeded'}
+                  </AlertTitle>
+                  <AlertDescription>
+                    Checked {diagnosticTime(health.lastCheckedAt)}.
+                    {health.lastError
+                      ? ` ${health.lastError}`
+                      : health.toolCount !== undefined
+                        ? ` ${health.toolCount} tools discovered.`
+                        : null}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {currentTestResult?.result ? (
+                <Alert>
+                  <CircleCheckIcon />
+                  <AlertTitle>Connection successful</AlertTitle>
+                  <AlertDescription>
+                    {currentTestResult.result.toolNames.length
+                      ? `Discovered ${currentTestResult.result.toolNames.length} tools: ${currentTestResult.result.toolNames.join(', ')}.`
+                      : 'The server connected but did not advertise any tools.'}
+                  </AlertDescription>
+                </Alert>
+              ) : currentTestResult?.error ? (
+                <Alert variant='destructive'>
+                  <CircleAlertIcon />
+                  <AlertTitle>Connection failed</AlertTitle>
+                  <AlertDescription>{currentTestResult.error}</AlertDescription>
+                </Alert>
+              ) : null}
             </FieldGroup>
           </div>
         ) : null}
         <DialogFooter>
+          <Button
+            variant='outline'
+            disabled={testConnection.isPending || !canTest}
+            onClick={() => testRequest && testConnection.mutate(testRequest)}
+          >
+            {testConnection.isPending ? (
+              <Spinner data-icon='inline-start' />
+            ) : null}
+            Test connection
+          </Button>
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
-            disabled={
-              isSaving ||
-              !formDraft?.name.trim() ||
-              (formDraft?.transport === 'stdio'
-                ? !formDraft.command.trim()
-                : !formDraft.url.trim())
-            }
+            disabled={isSaving || !canTest}
             onClick={() =>
               formDraft &&
               onSave({
@@ -784,6 +1023,7 @@ function McpServerDialog({
                   .split('\n')
                   .map((item) => item.trim())
                   .filter(Boolean),
+                env: parseEnvironment(environmentText),
               })
             }
           >

@@ -1,6 +1,9 @@
 use crate::{
     cmd::{CmdResult, StringifyErr as _},
-    module::mcp_server::{CreateMcpServerRequest, McpServer, McpServerDefinition, McpServerRegistry},
+    module::mcp_server::{
+        CreateMcpServerRequest, McpServer, McpServerConnectionTest, McpServerDefinition, McpServerRegistry,
+        McpServerWorkflowReference, TestMcpServerConnectionRequest,
+    },
 };
 
 #[tauri::command]
@@ -24,6 +27,16 @@ pub async fn mcp_server_delete(id: String) -> CmdResult {
 }
 
 #[tauri::command]
+pub async fn mcp_server_test_connection(request: TestMcpServerConnectionRequest) -> CmdResult<McpServerConnectionTest> {
+    McpServerRegistry::test_connection(request).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn mcp_server_workflow_references(id: String) -> CmdResult<Vec<McpServerWorkflowReference>> {
+    McpServerRegistry::workflow_references(&id).await.stringify_err()
+}
+
+#[tauri::command]
 pub async fn mcp_server_start(id: String) -> CmdResult<McpServer> {
     McpServerRegistry::start(&id).await.stringify_err()
 }
@@ -31,6 +44,11 @@ pub async fn mcp_server_start(id: String) -> CmdResult<McpServer> {
 #[tauri::command]
 pub async fn mcp_server_stop(id: String) -> CmdResult<McpServer> {
     McpServerRegistry::stop(&id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn mcp_server_reconnect(id: String) -> CmdResult<McpServer> {
+    McpServerRegistry::reconnect(&id).await.stringify_err()
 }
 
 #[tauri::command]

@@ -1,0 +1,163 @@
+use super::*;
+
+pub(super) enum ManagedToolExecutor {
+    Process,
+    Mcp(Arc<dyn Tool>),
+}
+
+pub(super) struct ManagedTool {
+    definition: ToolDefinition,
+    executor: ManagedToolExecutor,
+    agent_node_id: String,
+    on_event: Option<Channel<StreamEvent>>,
+    tool_calls: Arc<AtomicU32>,
+    tool_trace: Arc<Mutex<Vec<Value>>>,
+    max_tool_calls: u32,
+    timeout_seconds: u64,
+}
+
+impl ManagedTool {
+    pub(super) fn new(
+        definition: ToolDefinition,
+        executor: ManagedToolExecutor,
+        agent_node_id: String,
+        on_event: Option<Channel<StreamEvent>>,
+        tool_calls: Arc<AtomicU32>,
+        tool_trace: Arc<Mutex<Vec<Value>>>,
+        max_tool_calls: u32,
+        timeout_seconds: u64,
+    ) -> Self {
+        Self {
+            definition,
+            executor,
+            agent_node_id,
+            on_event,
+            tool_calls,
+            tool_trace,
+            max_tool_calls,
+            timeout_seconds,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for ManagedTool {
+    fn name(&self) -> &str {
+        &self.definition.name
+    }
+
+    fn description(&self) -> &str {
+        &self.definition.description
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(self.definition.input_schema.clone())
+    }
+
+    fn response_schema(&self) -> Option<Value> {
+        Some(self.definition.output_schema.clone())
+    }
+
+    async fn execute(&self, context: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+        if self.tool_calls.fetch_add(1, Ordering::Relaxed) >= self.max_tool_calls {
+            return Err(adk_rust::AdkError::tool(format!(
+                "Agent reached its {} tool-call limit",
+                self.max_tool_calls
+            )));
+        }
+        validate_tool_value(&self.definition.input_schema, &args, "input")?;
+        if self.definition.execution_policy == ToolExecutionPolicy::AskEveryTime {
+            let request_id = uuid::Uuid::now_v7().to_string();
+            let (sender, receiver) = oneshot::channel();
+            tool_approvals()
+                .lock()
+                .map_err(|_| adk_rust::AdkError::tool("Tool approval registry is unavailable"))?
+                .insert(request_id.clone(), sender);
+            if let Some(on_event) = &self.on_event {
+                let _ = on_event.send(StreamEvent::custom(
+                    &self.agent_node_id,
+                    "agent.tool_approval_required",
+                    json!({
+                        "requestId": request_id,
+                        "tool": self.name(),
+                        "name": self.definition.display_name,
+                        "description": self.definition.description,
+                        "input": args,
+                    }),
+                ));
+            }
+            let approved = tokio::time::timeout(std::time::Duration::from_secs(300), receiver)
+                .await
+                .ok()
+                .and_then(|value| value.ok())
+                .unwrap_or(false);
+            tool_approvals()
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.remove(&request_id));
+            if !approved {
+                return Err(adk_rust::AdkError::tool("Tool denied by user"));
+            }
+        }
+        if let Some(on_event) = &self.on_event {
+            let _ = on_event.send(StreamEvent::custom(
+                &self.agent_node_id,
+                "agent.tool_call",
+                json!({
+                    "tool": self.name(),
+                    "name": self.definition.display_name,
+                    "input": args,
+                }),
+            ));
+        }
+        let timeout = std::time::Duration::from_secs(self.timeout_seconds);
+        let result = match &self.executor {
+            ManagedToolExecutor::Process => {
+                let node_id = self.agent_node_id.clone();
+                let name = self.definition.name.clone();
+                let on_event = self.on_event.clone();
+                tokio::time::timeout(
+                    timeout,
+                    ProcessNodeRegistry::run_for_tool(
+                        &self.definition.id,
+                        &args,
+                        Arc::new(move |chunk| {
+                            if let Some(on_event) = &on_event {
+                                let _ = on_event.send(StreamEvent::custom(
+                                    &node_id,
+                                    "agent.tool_output",
+                                    json!({ "tool": name, "stream": chunk.stream, "data": chunk.data }),
+                                ));
+                            }
+                        }),
+                    ),
+                )
+                .await
+                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?
+                .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?
+                .result
+            },
+            ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, args.clone()))
+                .await
+                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
+        };
+        validate_tool_value(&self.definition.output_schema, &result, "output")?;
+        let trace = json!({
+            "tool": self.name(),
+            "name": self.definition.display_name,
+            "input": args,
+            "result": result,
+        });
+        if let Ok(mut tool_trace) = self.tool_trace.lock() {
+            tool_trace.push(trace.clone());
+        }
+        if let Some(on_event) = &self.on_event {
+            let _ = on_event.send(StreamEvent::custom(&self.agent_node_id, "agent.tool_result", trace));
+        }
+        Ok(result)
+    }
+}
+
+fn tool_timeout_error(name: &str, timeout_seconds: u64) -> adk_rust::AdkError {
+    adk_rust::AdkError::tool(format!("Tool `{name}` timed out after {timeout_seconds} seconds"))
+}
