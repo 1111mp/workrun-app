@@ -258,6 +258,14 @@ export function runWorkflow(
   });
 }
 
-export function resolveToolApproval(requestId: string, approved: boolean) {
-  return invoke('workflow_resolve_tool_approval', { requestId, approved });
+export function resolveToolApproval(
+  requestId: string,
+  fingerprint: string,
+  approved: boolean,
+) {
+  return invoke('workflow_resolve_tool_approval', {
+    requestId,
+    fingerprint,
+    approved,
+  });
 }

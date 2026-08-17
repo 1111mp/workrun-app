@@ -55,21 +55,28 @@ use tokio::sync::oneshot;
 
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 
-static TOOL_APPROVALS: OnceLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> = OnceLock::new();
+struct PendingToolApproval {
+    sender: oneshot::Sender<bool>,
+    fingerprint: String,
+}
 
-fn tool_approvals() -> &'static Mutex<HashMap<String, oneshot::Sender<bool>>> {
+static TOOL_APPROVALS: OnceLock<Mutex<HashMap<String, PendingToolApproval>>> = OnceLock::new();
+
+fn tool_approvals() -> &'static Mutex<HashMap<String, PendingToolApproval>> {
     TOOL_APPROVALS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub async fn resolve_tool_approval(request_id: &str, approved: bool) -> Result<()> {
-    let sender = tool_approvals()
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.remove(request_id));
-    let Some(sender) = sender else {
+pub async fn resolve_tool_approval(request_id: &str, fingerprint: &str, approved: bool) -> Result<()> {
+    let approval = tool_approvals().lock().ok().and_then(|mut pending| {
+        let expected = pending.get(request_id)?;
+        (expected.fingerprint == fingerprint)
+            .then(|| pending.remove(request_id))
+            .flatten()
+    });
+    let Some(approval) = approval else {
         bail!("Tool approval request is no longer pending")
     };
-    let _ = sender.send(approved);
+    let _ = approval.sender.send(approved);
     Ok(())
 }
 
@@ -608,13 +615,21 @@ mod tests {
     #[tokio::test]
     async fn resolves_one_time_tool_approval() {
         let request_id = uuid::Uuid::now_v7().to_string();
+        let fingerprint = "tool\u{1f}{\"value\":true}";
         let (sender, receiver) = oneshot::channel();
-        tool_approvals().lock().unwrap().insert(request_id.clone(), sender);
+        tool_approvals().lock().unwrap().insert(
+            request_id.clone(),
+            PendingToolApproval {
+                sender,
+                fingerprint: fingerprint.into(),
+            },
+        );
 
-        resolve_tool_approval(&request_id, true).await.unwrap();
+        assert!(resolve_tool_approval(&request_id, "mismatch", true).await.is_err());
+        resolve_tool_approval(&request_id, fingerprint, true).await.unwrap();
 
         assert!(receiver.await.unwrap());
-        assert!(resolve_tool_approval(&request_id, false).await.is_err());
+        assert!(resolve_tool_approval(&request_id, fingerprint, false).await.is_err());
     }
 
     #[test]

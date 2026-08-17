@@ -53,6 +53,7 @@ import Markdown from 'react-markdown';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
 import type {
   WorkflowRunExecution,
+  WorkflowRunMessage,
   WorkflowRunView,
 } from '@/services/workflow';
 
@@ -253,7 +254,10 @@ function TraceResult({
           <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
             {responses.map((response, index) => (
               <div key={index} className='text-sm leading-6'>
-                <Markdown>{response}</Markdown>
+                <MarkdownContent
+                  content={response}
+                  isStreaming={entry.status === 'running'}
+                />
               </div>
             ))}
           </div>
@@ -303,6 +307,107 @@ function codeText(children: ReactNode) {
     })
     .join('')
     .replace(/\n$/, '');
+}
+
+const markdownComponents = {
+  a: ({ children, ...props }: React.ComponentProps<'a'>) => (
+    <a
+      {...props}
+      className='text-primary underline underline-offset-3'
+      target='_blank'
+      rel='noreferrer'
+    >
+      {children}
+    </a>
+  ),
+  blockquote: ({ children }: { children?: ReactNode }) => (
+    <blockquote className='text-muted-foreground border-border border-l pl-3'>
+      {children}
+    </blockquote>
+  ),
+  code: ({
+    children,
+    className,
+  }: {
+    children?: ReactNode;
+    className?: string;
+  }) =>
+    className ? (
+      <WorkflowCodeBlock className={className} code={codeText(children)} />
+    ) : (
+      <code className='bg-muted rounded px-1 py-0.5'>{children}</code>
+    ),
+  h1: ({ children }: { children?: ReactNode }) => (
+    <h1 className='text-base font-semibold'>{children}</h1>
+  ),
+  h2: ({ children }: { children?: ReactNode }) => (
+    <h2 className='text-sm font-semibold'>{children}</h2>
+  ),
+  li: ({ children }: { children?: ReactNode }) => (
+    <li className='leading-6'>{children}</li>
+  ),
+  ol: ({ children }: { children?: ReactNode }) => (
+    <ol className='list-decimal pl-5'>{children}</ol>
+  ),
+  p: ({ children }: { children?: ReactNode }) => (
+    <p className='leading-6'>{children}</p>
+  ),
+  pre: ({ children }: { children?: ReactNode }) => (
+    <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
+      {children}
+    </pre>
+  ),
+  ul: ({ children }: { children?: ReactNode }) => (
+    <ul className='list-disc pl-5'>{children}</ul>
+  ),
+};
+
+function MarkdownContent({
+  content,
+  isStreaming = false,
+}: {
+  content: string;
+  isStreaming?: boolean;
+}) {
+  if (isStreaming) {
+    return <p className='leading-6 whitespace-pre-wrap'>{content}</p>;
+  }
+
+  return <Markdown components={markdownComponents}>{content}</Markdown>;
+}
+
+function ChatMessageBubble({
+  message,
+  nodeName,
+}: {
+  message: WorkflowRunMessage;
+  nodeName: string;
+}) {
+  const isUser = message.role === 'user';
+
+  return (
+    <Message align={isUser ? 'end' : 'start'}>
+      <MessageContent>
+        {!isUser && <MessageHeader>{nodeName}</MessageHeader>}
+        <Bubble
+          align={isUser ? 'end' : 'start'}
+          variant={isUser ? 'secondary' : 'ghost'}
+        >
+          <BubbleContent>
+            <MarkdownContent
+              content={message.content}
+              isStreaming={message.isStreaming}
+            />
+          </BubbleContent>
+        </Bubble>
+        {message.isStreaming && (
+          <span className='text-muted-foreground flex items-center gap-1 px-3 text-xs'>
+            <Spinner /> Streaming
+          </span>
+        )}
+      </MessageContent>
+    </Message>
+  );
 }
 
 function ThinkingProcess({
@@ -380,7 +485,7 @@ function WorkflowRunOutput({
     await navigator.clipboard.writeText(output);
   };
 
-  const sendMessage = (event: React.FormEvent<HTMLFormElement>) => {
+  const sendMessage = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = message.trim();
     if (!content || isRunning || !onSend) return;
@@ -554,102 +659,10 @@ function WorkflowRunOutput({
                             messageId={message.id}
                             scrollAnchor={message.role === 'user'}
                           >
-                            <Message
-                              align={message.role === 'user' ? 'end' : 'start'}
-                            >
-                              <MessageContent>
-                                {message.role !== 'user' && (
-                                  <MessageHeader>
-                                    {displayNodeName(message.nodeId)}
-                                  </MessageHeader>
-                                )}
-                                <Bubble
-                                  align={
-                                    message.role === 'user' ? 'end' : 'start'
-                                  }
-                                  variant={
-                                    message.role === 'user'
-                                      ? 'secondary'
-                                      : 'ghost'
-                                  }
-                                >
-                                  <BubbleContent>
-                                    <Markdown
-                                      components={{
-                                        a: ({ children, ...props }) => (
-                                          <a
-                                            {...props}
-                                            className='text-primary underline underline-offset-3'
-                                            target='_blank'
-                                            rel='noreferrer'
-                                          >
-                                            {children}
-                                          </a>
-                                        ),
-                                        blockquote: ({ children }) => (
-                                          <blockquote className='text-muted-foreground border-border border-l pl-3'>
-                                            {children}
-                                          </blockquote>
-                                        ),
-                                        code: ({ children, className }) =>
-                                          className ? (
-                                            <WorkflowCodeBlock
-                                              className={className}
-                                              code={codeText(children)}
-                                            />
-                                          ) : (
-                                            <code className='bg-muted rounded px-1 py-0.5'>
-                                              {children}
-                                            </code>
-                                          ),
-                                        h1: ({ children }) => (
-                                          <h1 className='text-base font-semibold'>
-                                            {children}
-                                          </h1>
-                                        ),
-                                        h2: ({ children }) => (
-                                          <h2 className='text-sm font-semibold'>
-                                            {children}
-                                          </h2>
-                                        ),
-                                        li: ({ children }) => (
-                                          <li className='leading-6'>
-                                            {children}
-                                          </li>
-                                        ),
-                                        ol: ({ children }) => (
-                                          <ol className='list-decimal pl-5'>
-                                            {children}
-                                          </ol>
-                                        ),
-                                        p: ({ children }) => (
-                                          <p className='leading-6'>
-                                            {children}
-                                          </p>
-                                        ),
-                                        pre: ({ children }) => (
-                                          <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
-                                            {children}
-                                          </pre>
-                                        ),
-                                        ul: ({ children }) => (
-                                          <ul className='list-disc pl-5'>
-                                            {children}
-                                          </ul>
-                                        ),
-                                      }}
-                                    >
-                                      {message.content}
-                                    </Markdown>
-                                  </BubbleContent>
-                                </Bubble>
-                                {message.isStreaming && (
-                                  <span className='text-muted-foreground flex items-center gap-1 px-3 text-xs'>
-                                    <Spinner /> Streaming
-                                  </span>
-                                )}
-                              </MessageContent>
-                            </Message>
+                            <ChatMessageBubble
+                              message={message}
+                              nodeName={displayNodeName(message.nodeId)}
+                            />
                           </MessageScrollerItem>
                           {message.role === 'user' &&
                             turnExecution.map((entry, index) => {

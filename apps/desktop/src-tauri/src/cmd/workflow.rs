@@ -45,8 +45,8 @@ pub async fn workflow_run(
 }
 
 #[tauri::command]
-pub async fn workflow_resolve_tool_approval(request_id: String, approved: bool) -> CmdResult<()> {
-    workflow::resolve_tool_approval(&request_id, approved)
+pub async fn workflow_resolve_tool_approval(request_id: String, fingerprint: String, approved: bool) -> CmdResult<()> {
+    workflow::resolve_tool_approval(&request_id, &fingerprint, approved)
         .await
         .stringify_err()
 }

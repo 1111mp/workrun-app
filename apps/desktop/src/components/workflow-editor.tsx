@@ -9,6 +9,7 @@ import {
   AlertDialogHeader,
   AlertDialogMedia,
   AlertDialogTitle,
+  Badge,
   Button,
   Field,
   FieldGroup,
@@ -251,18 +252,8 @@ function WorkflowEditor({ workflow }: WorkflowEditorProps) {
           onSettingsChange={updateWorkflowSettings}
         />
         <WorkflowRunPanel
-          open={workflowRun.runPanelOpen}
           settings={workflowSettings}
-          run={workflowRun.runView}
-          isRunning={workflowRun.isRunning}
-          showOutput={workflowRun.showRunOutput}
-          onOpenChange={workflowRun.setRunPanelOpen}
           onRun={workflowRun.startWorkflowRun}
-          onRunAgain={() => {
-            if (workflowRun.lastRunInput) {
-              workflowRun.startWorkflowRun(workflowRun.lastRunInput);
-            }
-          }}
         />
         <AlertDialog open={Boolean(workflowRun.toolApproval)}>
           <AlertDialogContent>
@@ -270,14 +261,31 @@ function WorkflowEditor({ workflow }: WorkflowEditorProps) {
               <AlertDialogMedia>
                 <ShieldAlertIcon />
               </AlertDialogMedia>
-              <AlertDialogTitle>
-                Allow {String(workflowRun.toolApproval?.name ?? 'Tool')} to run?
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {typeof workflowRun.toolApproval?.description === 'string'
-                  ? workflowRun.toolApproval.description
-                  : 'The Agent requested a Tool App execution.'}
-              </AlertDialogDescription>
+              <div className='space-y-2 sm:col-start-2'>
+                <AlertDialogTitle>
+                  Allow {String(workflowRun.toolApproval?.name ?? 'Tool')} to
+                  run?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {typeof workflowRun.toolApproval?.description === 'string'
+                    ? workflowRun.toolApproval.description
+                    : 'The Agent requested a Tool App execution.'}
+                </AlertDialogDescription>
+                <div className='flex flex-wrap gap-1.5 pt-1'>
+                  <Badge variant='outline'>
+                    Source:{' '}
+                    {String(
+                      workflowRun.toolApproval?.sourceName ??
+                        workflowRun.toolApproval?.source ??
+                        'Tool App',
+                    )}
+                  </Badge>
+                  <Badge variant='secondary'>
+                    Risk:{' '}
+                    {String(workflowRun.toolApproval?.riskLevel ?? 'unknown')}
+                  </Badge>
+                </div>
+              </div>
             </AlertDialogHeader>
             <pre className='bg-muted max-h-64 overflow-auto rounded-md p-3 text-xs'>
               {JSON.stringify(workflowRun.toolApproval?.input ?? {}, null, 2)}

@@ -68,21 +68,42 @@ impl Tool for ManagedTool {
         validate_tool_value(&self.definition.input_schema, &args, "input")?;
         if self.definition.execution_policy == ToolExecutionPolicy::AskEveryTime {
             let request_id = uuid::Uuid::now_v7().to_string();
+            let function_call_id = context.function_call_id().to_string();
+            let fingerprint = adk_rust::tool_call_fingerprint(self.name(), &args);
             let (sender, receiver) = oneshot::channel();
-            tool_approvals()
-                .lock()
-                .map_err(|_| adk_rust::AdkError::tool("Tool approval registry is unavailable"))?
-                .insert(request_id.clone(), sender);
+            {
+                let mut pending = tool_approvals()
+                    .lock()
+                    .map_err(|_| adk_rust::AdkError::tool("Tool approval registry is unavailable"))?;
+                if pending.contains_key(&request_id) {
+                    return Err(adk_rust::AdkError::tool(format!(
+                        "Tool confirmation is already pending for request `{request_id}`"
+                    )));
+                }
+                pending.insert(
+                    request_id.clone(),
+                    PendingToolApproval {
+                        sender,
+                        fingerprint: fingerprint.clone(),
+                    },
+                );
+            }
             if let Some(on_event) = &self.on_event {
                 let _ = on_event.send(StreamEvent::custom(
                     &self.agent_node_id,
                     "agent.tool_approval_required",
                     json!({
                         "requestId": request_id,
+                        "functionCallId": function_call_id,
+                        "fingerprint": fingerprint,
                         "tool": self.name(),
                         "name": self.definition.display_name,
                         "description": self.definition.description,
                         "input": args,
+                        "riskLevel": self.definition.risk_level,
+                        "permissions": self.definition.permissions,
+                        "source": self.definition.source,
+                        "sourceName": self.definition.source_name,
                     }),
                 ));
             }

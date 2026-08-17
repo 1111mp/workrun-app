@@ -18,21 +18,16 @@ import {
 } from '@workspace/ui/components';
 import { PlayIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { WorkflowRunOutput } from '@/components/workflow-output-panel';
-import type { WorkflowRunView } from '@/services/workflow';
+import { useWorkflowRunStore } from '@/stores';
 
 type RunValues = Record<string, string | boolean>;
 
 type WorkflowRunPanelProps = {
-  open: boolean;
   settings: WorkflowSettings;
-  run: WorkflowRunView;
-  isRunning: boolean;
-  showOutput: boolean;
-  onOpenChange: (open: boolean) => void;
   onRun: (initialState: Record<string, unknown>) => void;
-  onRunAgain: () => void;
 };
 
 const chatMessageInput: WorkflowInput = {
@@ -63,16 +58,23 @@ function initialValues(settings: WorkflowSettings): RunValues {
   );
 }
 
-function WorkflowRunPanel({
-  open,
-  settings,
-  run,
-  isRunning,
-  showOutput,
-  onOpenChange,
-  onRun,
-  onRunAgain,
-}: WorkflowRunPanelProps) {
+function WorkflowRunPanel({ settings, onRun }: WorkflowRunPanelProps) {
+  const {
+    lastRunInput,
+    open,
+    run,
+    showOutput,
+    setRunPanelOpen: onOpenChange,
+  } = useWorkflowRunStore(
+    useShallow((state) => ({
+      lastRunInput: state.lastRunInput,
+      open: state.runPanelOpen,
+      run: state.runView,
+      showOutput: state.showRunOutput,
+      setRunPanelOpen: state.setRunPanelOpen,
+    })),
+  );
+  const isRunning = run.status === 'running';
   const [values, setValues] = useState<RunValues>(() =>
     initialValues(settings),
   );
@@ -128,7 +130,9 @@ function WorkflowRunPanel({
             run={run}
             isRunning={isRunning}
             isChat
-            onRunAgain={onRunAgain}
+            onRunAgain={() => {
+              if (lastRunInput) onRun(lastRunInput);
+            }}
             onSend={onRun}
             onClose={() => onOpenChange(false)}
           />
@@ -136,7 +140,9 @@ function WorkflowRunPanel({
           <WorkflowRunOutput
             run={run}
             isRunning={isRunning}
-            onRunAgain={onRunAgain}
+            onRunAgain={() => {
+              if (lastRunInput) onRun(lastRunInput);
+            }}
             onClose={() => onOpenChange(false)}
           />
         ) : (
