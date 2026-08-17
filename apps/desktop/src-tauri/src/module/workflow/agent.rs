@@ -115,10 +115,9 @@ pub(super) fn remote_a2a_graph_node(
     ))
 }
 
-/// `adk-graph` calls `execute_stream` to emit tokens, then calls `execute` a
-/// second time to obtain state updates. Its built-in `AgentNode` starts a new
-/// model request in both methods. Cache the events from the first request so
-/// the second call can derive the state from exactly the text the user saw.
+/// ADK 2.0 executes this node once through `execute_stream`. Cache the agent
+/// events from that run, then emit the corresponding workflow trace and state
+/// updates without issuing another model request.
 pub(super) struct StreamingAgentNode {
     id: String,
     inner: AdkAgentNode,
@@ -216,7 +215,12 @@ impl Node for StreamingAgentNode {
                         {
                             events.push(data.clone());
                         }
-                        yield Ok(event);
+                        // ADK 2.0 applies state only from `Updates` emitted by
+                        // this wrapper. Keep the inner agent's streamed tokens,
+                        // but replace its updates with the workflow trace below.
+                        if !matches!(event, StreamEvent::Updates { .. }) {
+                            yield Ok(event);
+                        }
                     }
                     Err(error) => {
                         yield Err(error);
@@ -227,6 +231,17 @@ impl Node for StreamingAgentNode {
 
             if let Err(error) = node.store_streamed_events(key, events) {
                 yield Err(error);
+                return;
+            }
+
+            match node.execute(context).await {
+                Ok(output) => {
+                    for event in output.events {
+                        yield Ok(event);
+                    }
+                    yield Ok(StreamEvent::updates(node.name(), output.updates));
+                }
+                Err(error) => yield Err(error),
             }
         })
     }

@@ -13,12 +13,17 @@ use adk_rust::{
     ReadonlyContext,
     tool::{
         McpAuth, McpHttpClientBuilder, SimpleToolContext, Tool, Toolset,
-        mcp::{McpServerConfig, McpServerManager, ServerStatus},
+        mcp::{
+            McpServerConfig, McpServerManager, ServerStatus,
+            rmcp::{
+                self,
+                transport::auth::{AuthorizationManager, AuthorizationRequest, CredentialStore, StoredCredentials},
+            },
+        },
     },
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use rmcp::transport::auth::{AuthorizationManager, CredentialStore, StoredCredentials};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use url::Url;
@@ -274,14 +279,16 @@ impl McpServerRegistry {
         let mut manager = manager;
         manager.set_credential_store(store.clone());
         let metadata = manager
-            .discover_metadata()
+            .resolve_metadata()
             .await
             .map_err(|error| anyhow::anyhow!("OAuth metadata discovery failed: {error}"))?;
-        manager.set_metadata(metadata);
-        let session =
-            rmcp::transport::auth::AuthorizationSession::new(manager, &[], &redirect_uri, Some("Workrun"), None)
-                .await
-                .map_err(|error| anyhow::anyhow!("OAuth authorization setup failed: {error}"))?;
+        manager.set_metadata(metadata.metadata);
+        let session = rmcp::transport::auth::AuthorizationSession::new(
+            manager,
+            AuthorizationRequest::new(&redirect_uri).with_client_name("Workrun"),
+        )
+        .await
+        .map_err(|(_, error)| anyhow::anyhow!("OAuth authorization setup failed: {error}"))?;
         let authorization_url = session.get_authorization_url().to_string();
         open::that(&authorization_url).context("failed to open the OAuth authorization page")?;
 
@@ -295,12 +302,10 @@ impl McpServerRegistry {
                 let request = std::str::from_utf8(&request[..count]).context("OAuth callback is not valid UTF-8")?;
                 let target = request.split_whitespace().nth(1).context("OAuth callback request is invalid")?;
                 let callback = Url::parse(&format!("http://localhost{target}"))?;
-                let code = callback.query_pairs().find(|(key, _)| key == "code").map(|(_, value)| value.into_owned());
-                let state = callback.query_pairs().find(|(key, _)| key == "state").map(|(_, value)| value.into_owned());
-                let result = match (code, state) {
-                    (Some(code), Some(state)) => session.handle_callback(&code, &state).await.map_err(|error| anyhow::anyhow!("OAuth authorization failed: {error}")),
-                    _ => bail!("OAuth authorization was denied or returned an invalid callback"),
-                };
+                let result = session
+                    .handle_callback_url(callback.as_str())
+                    .await
+                    .map_err(|error| anyhow::anyhow!("OAuth authorization failed: {error}"));
                 let response = if result.is_ok() { "Authorization complete. You can return to Workrun." } else { "Authorization failed. You can close this page and try again in Workrun." };
                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).as_bytes()).await?;
                 result?;

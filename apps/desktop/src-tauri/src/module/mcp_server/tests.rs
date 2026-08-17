@@ -2,7 +2,10 @@ use super::*;
 use crate::module::{process_node::ToolExecutionPolicy, tool_registry::ToolRiskLevel};
 use adk_rust::{
     ToolContext,
-    tool::{Tool, mcp::ServerStatus},
+    tool::{
+        Tool,
+        mcp::{ServerStatus, rmcp::transport::auth::StoredCredentials},
+    },
 };
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
@@ -101,6 +104,20 @@ fn serializes_oauth_auth_with_a_stable_wire_value() {
         serde_json::from_str::<McpServerAuth>("\"o_auth\"").unwrap(),
         McpServerAuth::OAuth
     );
+}
+
+#[test]
+fn reads_credentials_saved_by_rmcp_v1_without_an_issuer() {
+    let credentials: StoredCredentials = serde_json::from_value(serde_json::json!({
+        "client_id": "workrun",
+        "token_response": null,
+        "granted_scopes": [],
+        "token_received_at": null,
+    }))
+    .unwrap();
+
+    assert_eq!(credentials.client_id, "workrun");
+    assert!(credentials.issuer.is_none());
 }
 
 #[test]

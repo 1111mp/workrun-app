@@ -71,11 +71,4 @@ impl Node for ProcessWorkflowNode {
         }
         Ok(output)
     }
-
-    fn execute_stream<'a>(
-        &'a self,
-        _context: &'a NodeContext,
-    ) -> std::pin::Pin<Box<dyn futures::Stream<Item = adk_rust::graph::Result<StreamEvent>> + Send + 'a>> {
-        Box::pin(futures::stream::empty())
-    }
 }

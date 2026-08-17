@@ -457,6 +457,68 @@ mod tests {
         assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
     }
 
+    #[tokio::test]
+    async fn executes_process_nodes_when_streaming_workflow_messages() {
+        let dsl: WorkflowDsl = serde_json::from_value(json!({
+            "nodes": [
+                {"id":"start","type":"start"},
+                {"id":"process","type":"process","data":{}},
+                {"id":"end","type":"end"}
+            ],
+            "edges": [
+                {"source":"start","target":"process"},
+                {"source":"process","target":"end"}
+            ]
+        }))
+        .unwrap();
+
+        let error = compile(dsl, &Default::default(), None)
+            .await
+            .unwrap()
+            .run_stream(State::new(), "test", |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("process node needs data.processNodeId"));
+    }
+
+    #[tokio::test]
+    async fn runs_a_fan_in_node_once_after_both_branches_arrive() {
+        let dsl: WorkflowDsl = serde_json::from_value(json!({
+            "nodes": [
+                {"id":"start","type":"start"},
+                {"id":"left","type":"if_else","data":{"conditions":{"true":{"label":"Continue","condition":"approved == true"},"false":{"label":"Stop","condition":"approved == false"}}}},
+                {"id":"right","type":"if_else","data":{"conditions":{"true":{"label":"Continue","condition":"approved == true"},"false":{"label":"Stop","condition":"approved == false"}}}},
+                {"id":"join","type":"if_else","data":{"conditions":{"true":{"label":"Complete","condition":"approved == true"},"false":{"label":"Stop","condition":"approved == false"}}}},
+                {"id":"end","type":"end"}
+            ],
+            "edges": [
+                {"source":"start","target":"left"}, {"source":"start","target":"right"},
+                {"source":"left","target":"join","sourceHandle":"true"},
+                {"source":"right","target":"join","sourceHandle":"true"},
+                {"source":"join","target":"end","sourceHandle":"true"}
+            ]
+        }))
+        .unwrap();
+        let state = State::from_iter([("approved".into(), json!(true))]);
+        let result = compile(dsl, &Default::default(), None)
+            .await
+            .unwrap()
+            .run_stream(state, "test", |_| {})
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.state["workflow.trace"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|event| event["nodeId"] == "join")
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn evaluates_independent_if_else_conditions() {
         let conditions = if_else_conditions(&WorkflowNode {

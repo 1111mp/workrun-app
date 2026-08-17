@@ -6,11 +6,13 @@ use crate::{
 };
 use adk_rust::tool::{
     Toolset,
-    mcp::{McpServerManager, RestartPolicy, ServerStatus},
+    mcp::{
+        McpServerManager, RestartPolicy, ServerStatus,
+        rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials},
+    },
 };
 use anyhow::Result;
 use chrono::Utc;
-use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
