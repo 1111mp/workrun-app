@@ -28,6 +28,7 @@ type RunValues = Record<string, string | boolean>;
 type WorkflowRunPanelProps = {
   settings: WorkflowSettings;
   onRun: (initialState: Record<string, unknown>) => void;
+  onResume: () => void;
 };
 
 const chatMessageInput: WorkflowInput = {
@@ -58,7 +59,11 @@ function initialValues(settings: WorkflowSettings): RunValues {
   );
 }
 
-function WorkflowRunPanel({ settings, onRun }: WorkflowRunPanelProps) {
+function WorkflowRunPanel({
+  settings,
+  onRun,
+  onResume,
+}: WorkflowRunPanelProps) {
   const {
     lastRunInput,
     open,
@@ -131,7 +136,9 @@ function WorkflowRunPanel({ settings, onRun }: WorkflowRunPanelProps) {
             isRunning={isRunning}
             isChat
             onRunAgain={() => {
-              if (lastRunInput) onRun(lastRunInput);
+              if (run.status === 'failed' || run.status === 'interrupted')
+                onResume();
+              else if (lastRunInput) onRun(lastRunInput);
             }}
             onSend={onRun}
             onClose={() => onOpenChange(false)}
@@ -141,7 +148,9 @@ function WorkflowRunPanel({ settings, onRun }: WorkflowRunPanelProps) {
             run={run}
             isRunning={isRunning}
             onRunAgain={() => {
-              if (lastRunInput) onRun(lastRunInput);
+              if (run.status === 'failed' || run.status === 'interrupted')
+                onResume();
+              else if (lastRunInput) onRun(lastRunInput);
             }}
             onClose={() => onOpenChange(false)}
           />

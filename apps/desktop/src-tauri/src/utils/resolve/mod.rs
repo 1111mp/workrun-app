@@ -1,6 +1,6 @@
 use crate::{
     config::Config,
-    core::{logger::Logger, tray::Tray},
+    core::{db, logger::Logger, tray::Tray},
     logging, logging_error,
     module::ipc::IpcServer,
     process::AsyncHandler,
@@ -22,7 +22,8 @@ pub fn init_work_dir_and_logger() -> Result<()> {
 
 pub fn resolve_server_setup_async() {
     AsyncHandler::spawn(|| async {
-        logging_error!(Type::IpcServer, IpcServer::global().start().await);
+        logging_error!(Type::Setup, db::DBManager::global().init().await);
+        logging_error!(Type::Setup, IpcServer::global().start().await);
     });
 }
 

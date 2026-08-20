@@ -254,14 +254,15 @@ function WorkflowEditor({ workflow }: WorkflowEditorProps) {
         <WorkflowRunPanel
           settings={workflowSettings}
           onRun={workflowRun.startWorkflowRun}
+          onResume={workflowRun.resumeWorkflowRun}
         />
         <AlertDialog open={Boolean(workflowRun.toolApproval)}>
           <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogMedia>
+            <AlertDialogHeader className='grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
+              <AlertDialogMedia className='mb-0 size-8'>
                 <ShieldAlertIcon />
               </AlertDialogMedia>
-              <div className='space-y-2 sm:col-start-2'>
+              <div className='min-w-0 space-y-1.5'>
                 <AlertDialogTitle>
                   Allow {String(workflowRun.toolApproval?.name ?? 'Tool')} to
                   run?

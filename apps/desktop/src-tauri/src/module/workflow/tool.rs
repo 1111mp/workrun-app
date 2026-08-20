@@ -65,61 +65,43 @@ impl Tool for ManagedTool {
                 self.max_tool_calls
             )));
         }
+
         validate_tool_value(&self.definition.input_schema, &args, "input")?;
+
         if self.definition.execution_policy == ToolExecutionPolicy::AskEveryTime {
             let request_id = uuid::Uuid::now_v7().to_string();
             let function_call_id = context.function_call_id().to_string();
             let fingerprint = adk_rust::tool_call_fingerprint(self.name(), &args);
-            let (sender, receiver) = oneshot::channel();
-            {
-                let mut pending = tool_approvals()
-                    .lock()
-                    .map_err(|_| adk_rust::AdkError::tool("Tool approval registry is unavailable"))?;
-                if pending.contains_key(&request_id) {
-                    return Err(adk_rust::AdkError::tool(format!(
-                        "Tool confirmation is already pending for request `{request_id}`"
-                    )));
-                }
-                pending.insert(
-                    request_id.clone(),
-                    PendingToolApproval {
-                        sender,
-                        fingerprint: fingerprint.clone(),
-                    },
-                );
-            }
-            if let Some(on_event) = &self.on_event {
-                let _ = on_event.send(StreamEvent::custom(
-                    &self.agent_node_id,
-                    "agent.tool_approval_required",
-                    json!({
-                        "requestId": request_id,
-                        "functionCallId": function_call_id,
-                        "fingerprint": fingerprint,
-                        "tool": self.name(),
-                        "name": self.definition.display_name,
-                        "description": self.definition.description,
-                        "input": args,
-                        "riskLevel": self.definition.risk_level,
-                        "permissions": self.definition.permissions,
-                        "source": self.definition.source,
-                        "sourceName": self.definition.source_name,
-                    }),
-                ));
-            }
-            let approved = tokio::time::timeout(std::time::Duration::from_secs(300), receiver)
-                .await
-                .ok()
-                .and_then(|value| value.ok())
-                .unwrap_or(false);
-            tool_approvals()
-                .lock()
-                .ok()
-                .and_then(|mut pending| pending.remove(&request_id));
+
+            let approved = ToolApprovalRegistry::global()
+                .request_approval(request_id.clone(), fingerprint.clone(), || {
+                    if let Some(on_event) = &self.on_event {
+                        let _ = on_event.send(StreamEvent::custom(
+                            &self.agent_node_id,
+                            "agent.tool_approval_required",
+                            json!({
+                                "requestId": request_id,
+                                "functionCallId": function_call_id,
+                                "fingerprint": fingerprint,
+                                "tool": self.name(),
+                                "name": self.definition.display_name,
+                                "description": self.definition.description,
+                                "input": args,
+                                "riskLevel": self.definition.risk_level,
+                                "permissions": self.definition.permissions,
+                                "source": self.definition.source,
+                                "sourceName": self.definition.source_name,
+                            }),
+                        ));
+                    }
+                })
+                .await?;
+
             if !approved {
                 return Err(adk_rust::AdkError::tool("Tool denied by user"));
             }
         }
+
         if let Some(on_event) = &self.on_event {
             let _ = on_event.send(StreamEvent::custom(
                 &self.agent_node_id,
@@ -162,7 +144,9 @@ impl Tool for ManagedTool {
                 .await
                 .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
         };
+
         validate_tool_value(&self.definition.output_schema, &result, "output")?;
+
         let trace = json!({
             "tool": self.name(),
             "name": self.definition.display_name,
@@ -172,9 +156,11 @@ impl Tool for ManagedTool {
         if let Ok(mut tool_trace) = self.tool_trace.lock() {
             tool_trace.push(trace.clone());
         }
+
         if let Some(on_event) = &self.on_event {
             let _ = on_event.send(StreamEvent::custom(&self.agent_node_id, "agent.tool_result", trace));
         }
+
         Ok(result)
     }
 }

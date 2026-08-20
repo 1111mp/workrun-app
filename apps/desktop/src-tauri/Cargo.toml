@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 name = "workrun_lib"
 
 [dependencies]
-adk-rust = { workspace = true, features = ["deepseek", "full", "groq", "mcp-http", "ollama"] }
+adk-rust = { workspace = true, features = ["deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama"] }
 aes-gcm = "0.11.0"
 anyhow = { workspace = true }
 async-stream = "0.3.6"
@@ -45,6 +45,7 @@ semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
 sys-locale = "0.3.2"
 tauri = { workspace = true, features = [
   "devtools",
@@ -67,8 +68,8 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 url = "2.5.8"
+uuid = { workspace = true, features = ["v4"] }
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

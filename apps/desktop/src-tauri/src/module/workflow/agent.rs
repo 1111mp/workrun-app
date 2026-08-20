@@ -204,9 +204,9 @@ impl Node for StreamingAgentNode {
         let node = self;
 
         Box::pin(async_stream::stream! {
-            futures::pin_mut!(stream);
-            let mut events = Vec::new();
+            tokio::pin!(stream);
 
+            let mut events = Vec::new();
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(event) => {

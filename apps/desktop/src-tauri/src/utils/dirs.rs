@@ -62,6 +62,11 @@ pub fn app_logs_dir() -> Result<PathBuf> {
     Ok(app_home_dir()?.join("logs"))
 }
 
+/// sqlite db dir
+pub fn app_db_dir() -> Result<PathBuf> {
+    Ok(app_home_dir()?.join("db"))
+}
+
 /// runtime dir
 pub fn runtime_dir() -> Result<PathBuf> {
     Ok(app_home_dir()?.join("runtime"))

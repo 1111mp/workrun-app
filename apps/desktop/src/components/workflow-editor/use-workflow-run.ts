@@ -21,6 +21,12 @@ type PendingRunEvent =
   | Exclude<WorkflowRunEvent, MessageEvent>
   | BufferedMessageEvent;
 
+type WorkflowRunRequest = {
+  input: Record<string, unknown>;
+  threadId: string;
+  resume: boolean;
+};
+
 function charactersPerFrame(pendingCharacters: number) {
   if (pendingCharacters <= 0) return 0;
   return Math.min(1 + Math.floor(Math.sqrt(pendingCharacters) * 0.6), 32);
@@ -49,6 +55,7 @@ function useWorkflowRun(
       resetRunView: state.resetRunView,
       setRunPanelOpen: state.setRunPanelOpen,
       setShowRunOutput: state.setShowRunOutput,
+      lastRunInput: state.lastRunInput,
       startWorkflowRun: state.startWorkflowRun,
       applyRunEvents: state.applyRunEvents,
       finishWorkflowRun: state.finishWorkflowRun,
@@ -58,6 +65,7 @@ function useWorkflowRun(
     })),
   );
   const chatThreadId = useRef<string | undefined>(undefined);
+  const runThreadId = useRef<string | undefined>(undefined);
   const chatTurnId = useRef<string | undefined>(undefined);
   const pendingEvents = useRef<PendingRunEvent[]>([]);
   const pendingCharacters = useRef(0);
@@ -137,15 +145,23 @@ function useWorkflowRun(
     store.applyRunEvents([event], context());
   };
   const mutation = useMutation({
-    mutationFn: (input: Record<string, unknown>) =>
+    mutationFn: ({ input, threadId, resume }: WorkflowRunRequest) =>
       runWorkflow(
         toWorkflowDsl(workflowId, nodes, edges, settings),
         input,
-        settings.mode === 'chat' ? chatThreadId.current : crypto.randomUUID(),
+        threadId,
+        resume,
         handleEvent,
       ),
     onSuccess: (result) => {
       runAfterDrain(() => {
+        if (result.interrupted) {
+          toast.info('Workflow interrupted', {
+            toasterId: 'global',
+            description: 'Resume to continue from the saved checkpoint.',
+          });
+          return;
+        }
         store.finishWorkflowRun(result.state);
         const lastNode = result.state['workflow.last_node'];
         toast.success('Workflow completed', {
@@ -179,8 +195,29 @@ function useWorkflowRun(
     afterDrain.current = [];
     chatTurnId.current =
       settings.mode === 'chat' ? crypto.randomUUID() : undefined;
+    const threadId =
+      settings.mode === 'chat'
+        ? (chatThreadId.current ?? crypto.randomUUID())
+        : crypto.randomUUID();
+    runThreadId.current = threadId;
     store.startWorkflowRun(input, settings.mode, chatTurnId.current);
-    mutation.mutate(input);
+    mutation.mutate({ input, threadId, resume: false });
+  };
+  const resumeWorkflowRun = () => {
+    const threadId = runThreadId.current;
+    if (!threadId) return;
+    const input = store.lastRunInput ?? {};
+    if (pendingFrame.current !== undefined) {
+      cancelAnimationFrame(pendingFrame.current);
+      pendingFrame.current = undefined;
+    }
+    pendingEvents.current = [];
+    pendingCharacters.current = 0;
+    afterDrain.current = [];
+    chatTurnId.current =
+      settings.mode === 'chat' ? crypto.randomUUID() : undefined;
+    store.startWorkflowRun(input, settings.mode, chatTurnId.current);
+    mutation.mutate({ input, threadId, resume: true });
   };
   const startRun = () => {
     if (settings.mode === 'chat') {
@@ -208,6 +245,7 @@ function useWorkflowRun(
     runningNodeId: store.runningNodeId,
     toolApproval: store.toolApproval,
     resolvePendingToolApproval,
+    resumeWorkflowRun,
   };
 }
 

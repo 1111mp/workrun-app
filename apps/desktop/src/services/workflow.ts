@@ -32,6 +32,7 @@ export type WorkflowPlan = {
 export type WorkflowRunResult = {
   plan: WorkflowPlan;
   state: Record<string, unknown>;
+  interrupted: boolean;
 };
 
 /** Ordered runtime events emitted while a workflow is executing. */
@@ -245,6 +246,7 @@ export function runWorkflow(
   dsl: Workflow,
   initialState: Record<string, unknown> = {},
   threadId?: string,
+  resume = false,
   onEvent?: (event: WorkflowRunEvent) => void,
 ) {
   const channel = new Channel<WorkflowRunEvent>();
@@ -254,6 +256,7 @@ export function runWorkflow(
     dsl,
     initialState,
     threadId,
+    resume,
     onEvent: channel,
   });
 }

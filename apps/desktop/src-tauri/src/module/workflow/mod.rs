@@ -8,14 +8,17 @@ mod agent;
 mod process;
 mod routing;
 mod tool;
+mod tool_approval;
 
 use agent::*;
 use process::*;
 use routing::*;
 use tool::*;
+use tool_approval::*;
 
 use crate::{
     config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog},
+    core::db::DBManager,
     module::{
         mcp_server::McpServerRegistry,
         process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
@@ -24,8 +27,8 @@ use crate::{
 };
 use adk_rust::{
     graph::{
-        AgentNode as AdkAgentNode, END, Edge, EdgeTarget, ExecutionConfig, GraphError, Node, NodeContext, NodeOutput,
-        START, State, StateGraph, StreamEvent, StreamMode,
+        AgentNode as AdkAgentNode, Checkpointer, END, Edge, EdgeTarget, ExecutionConfig, GraphError, Node, NodeContext,
+        NodeOutput, START, SqliteCheckpointer, State, StateGraph, StreamEvent, StreamMode,
     },
     model::{
         GeminiModel,
@@ -45,39 +48,17 @@ use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
         atomic::{AtomicU32, Ordering},
     },
     time::Instant,
 };
 use tauri::ipc::Channel;
-use tokio::sync::oneshot;
 
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 
-struct PendingToolApproval {
-    sender: oneshot::Sender<bool>,
-    fingerprint: String,
-}
-
-static TOOL_APPROVALS: OnceLock<Mutex<HashMap<String, PendingToolApproval>>> = OnceLock::new();
-
-fn tool_approvals() -> &'static Mutex<HashMap<String, PendingToolApproval>> {
-    TOOL_APPROVALS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 pub async fn resolve_tool_approval(request_id: &str, fingerprint: &str, approved: bool) -> Result<()> {
-    let approval = tool_approvals().lock().ok().and_then(|mut pending| {
-        let expected = pending.get(request_id)?;
-        (expected.fingerprint == fingerprint)
-            .then(|| pending.remove(request_id))
-            .flatten()
-    });
-    let Some(approval) = approval else {
-        bail!("Tool approval request is no longer pending")
-    };
-    let _ = approval.sender.send(approved);
-    Ok(())
+    ToolApprovalRegistry::global().resolve(request_id, fingerprint, approved)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -133,11 +114,13 @@ pub struct PlanEdge {
 pub struct WorkflowRunResult {
     pub plan: WorkflowPlan,
     pub state: State,
+    pub interrupted: bool,
 }
 
 pub struct CompiledWorkflow {
     graph: adk_rust::graph::CompiledGraph,
     plan: WorkflowPlan,
+    checkpoint_db_url: String,
 }
 
 impl CompiledWorkflow {
@@ -147,16 +130,28 @@ impl CompiledWorkflow {
         self,
         initial_state: State,
         thread_id: &str,
+        _resume: bool,
         mut on_event: F,
     ) -> Result<WorkflowRunResult>
     where
         F: FnMut(StreamEvent),
     {
+        let checkpointer = SqliteCheckpointer::new(&self.checkpoint_db_url).await?;
+        let has_checkpoint = checkpointer.load(thread_id).await?.is_some();
+        let initial_state = if has_checkpoint {
+            State::new()
+        } else {
+            initial_state
+        };
+
         let stream = self
             .graph
             .stream(initial_state, ExecutionConfig::new(thread_id), StreamMode::Messages);
-        futures::pin_mut!(stream);
+
+        tokio::pin!(stream);
+
         let mut final_state = None;
+        let mut interrupted = false;
         let mut node_started_at = HashMap::new();
 
         while let Some(event) = stream.next().await {
@@ -164,11 +159,26 @@ impl CompiledWorkflow {
             if let StreamEvent::Done { state, .. } = &event {
                 final_state = Some(state.clone());
             }
+            if matches!(event, StreamEvent::Interrupted { .. }) {
+                interrupted = true;
+            }
             on_event(with_measured_node_duration(event, &mut node_started_at));
         }
 
-        let state = final_state.ok_or_else(|| anyhow!("workflow stream ended without a final state"))?;
-        Ok(WorkflowRunResult { plan: self.plan, state })
+        let state = match final_state {
+            Some(state) => state,
+            None if interrupted => self
+                .graph
+                .get_state(thread_id)
+                .await?
+                .ok_or_else(|| anyhow!("interrupted workflow checkpoint is unavailable"))?,
+            None => bail!("workflow stream ended without a final state"),
+        };
+        Ok(WorkflowRunResult {
+            plan: self.plan,
+            state,
+            interrupted,
+        })
     }
 
     pub fn plan(&self) -> &WorkflowPlan {
@@ -311,9 +321,14 @@ pub async fn compile(
         executable_nodes: executable.into_iter().map(|node| node.id.clone()).collect(),
         edges: plan_edges,
     };
+    let db_url = DBManager::db_url().await?;
+    let checkpointer = SqliteCheckpointer::new(&db_url).await?;
+    let graph = graph.compile()?.with_checkpointer(checkpointer);
+
     Ok(CompiledWorkflow {
-        graph: graph.compile()?,
+        graph,
         plan,
+        checkpoint_db_url: db_url,
     })
 }
 
@@ -452,7 +467,7 @@ mod tests {
         let result = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(input, "test", |event| events.push(event))
+            .run_stream(input, "test", false, |event| events.push(event))
             .await
             .unwrap();
         assert_eq!(result.state["workflow.last_node"], json!("check"));
@@ -482,7 +497,7 @@ mod tests {
         let error = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(State::new(), "test", |_| {})
+            .run_stream(State::new(), "test", false, |_| {})
             .await
             .unwrap_err();
 
@@ -511,7 +526,7 @@ mod tests {
         let result = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(state, "test", |_| {})
+            .run_stream(state, "test", false, |_| {})
             .await
             .unwrap();
 
@@ -616,19 +631,21 @@ mod tests {
     async fn resolves_one_time_tool_approval() {
         let request_id = uuid::Uuid::now_v7().to_string();
         let fingerprint = "tool\u{1f}{\"value\":true}";
-        let (sender, receiver) = oneshot::channel();
-        tool_approvals().lock().unwrap().insert(
-            request_id.clone(),
-            PendingToolApproval {
-                sender,
-                fingerprint: fingerprint.into(),
-            },
-        );
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let approval_request_id = request_id.clone();
+        let approval = tokio::spawn(async move {
+            ToolApprovalRegistry::global()
+                .request_approval(approval_request_id, fingerprint.into(), || {
+                    let _ = started_sender.send(());
+                })
+                .await
+        });
+        started_receiver.await.unwrap();
 
         assert!(resolve_tool_approval(&request_id, "mismatch", true).await.is_err());
         resolve_tool_approval(&request_id, fingerprint, true).await.unwrap();
 
-        assert!(receiver.await.unwrap());
+        assert!(approval.await.unwrap().unwrap());
         assert!(resolve_tool_approval(&request_id, fingerprint, false).await.is_err());
     }
 
@@ -675,7 +692,7 @@ mod tests {
         let result = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(state, "test", |_| {})
+            .run_stream(state, "test", false, |_| {})
             .await
             .unwrap();
 

@@ -81,6 +81,12 @@ function statusLabel(status: WorkflowRunView['status']) {
   }
 }
 
+function rerunLabel(status: WorkflowRunView['status']) {
+  if (status === 'interrupted') return 'Resume';
+  if (status === 'failed') return 'Retry';
+  return 'Run again';
+}
+
 function durationLabel(run: WorkflowRunView) {
   if (!run.startedAt) return undefined;
   const end = run.endedAt ?? Date.now();
@@ -769,6 +775,12 @@ function WorkflowRunOutput({
 
       {isChat ? (
         <DrawerFooter>
+          {(run.status === 'interrupted' || run.status === 'failed') && (
+            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+              <RotateCcwIcon data-icon='inline-start' />
+              {rerunLabel(run.status)}
+            </Button>
+          )}
           <form className='w-full' onSubmit={sendMessage}>
             <InputGroup className='h-auto'>
               <InputGroupTextarea
@@ -805,7 +817,7 @@ function WorkflowRunOutput({
         <DrawerFooter className='flex-row justify-end'>
           <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
             <RotateCcwIcon data-icon='inline-start' />
-            Run again
+            {rerunLabel(run.status)}
           </Button>
           <Button variant='outline' disabled={!output} onClick={copyAll}>
             <ClipboardIcon data-icon='inline-start' />
