@@ -31,13 +31,13 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
+  Switch,
   Textarea,
   useComboboxAnchor,
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
-import type { ReactNode } from 'react';
-
+import { type ReactNode } from 'react';
 import { listProcessNodes } from '@/services/process-node';
 import { listTools, type ToolDefinition } from '@/services/tool';
 
@@ -50,6 +50,7 @@ type WorkflowNodeInspectorProps = {
 
 const nodeTitles: Record<string, string> = {
   agent: 'Agent',
+  codeact_agent: 'CodeAct Agent',
   remote_agent: 'Remote Agent',
   process: 'App',
   if_else: 'If / Else',
@@ -100,6 +101,43 @@ function getStringArray(data: Record<string, unknown>, key: string) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : [];
+}
+
+function getBoolean(data: Record<string, unknown>, key: string, fallback: boolean) {
+  const value = data[key];
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function getCodeActMounts(data: Record<string, unknown>) {
+  const value = data.mounts;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((mount) => {
+    if (typeof mount !== 'object' || mount === null) return [];
+    const record = mount as Record<string, unknown>;
+    return [
+      {
+        virtualPath:
+          typeof record.virtualPath === 'string' ? record.virtualPath : '',
+        hostPath: typeof record.hostPath === 'string' ? record.hostPath : '',
+        access: record.access === 'read_write' ? 'read_write' : 'read_only',
+      } satisfies WorkflowCodeActMount,
+    ];
+  });
+}
+
+function getCodeActEnvironment(data: Record<string, unknown>) {
+  const value = data.environment;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((binding) => {
+    if (typeof binding !== 'object' || binding === null) return [];
+    const record = binding as Record<string, unknown>;
+    return [
+      {
+        name: typeof record.name === 'string' ? record.name : '',
+        value: typeof record.value === 'string' ? record.value : '',
+      } satisfies WorkflowCodeActEnvironmentBinding,
+    ];
+  });
 }
 
 function getIfElseBranch(
@@ -169,6 +207,256 @@ function getSwitchDefault(
   };
 }
 
+function CodeActRuntimeFields({
+  data,
+  onChange,
+}: {
+  data: Record<string, unknown>;
+  onChange: (patch: Record<string, unknown>) => void;
+}) {
+  const mounts = getCodeActMounts(data);
+  const environment = getCodeActEnvironment(data);
+
+  const updateMount = (
+    index: number,
+    patch: Partial<WorkflowCodeActMount>,
+  ) => {
+    onChange({
+      mounts: mounts.map((mount, candidate) =>
+        candidate === index ? { ...mount, ...patch } : mount,
+      ),
+    });
+  };
+  const updateEnvironment = (
+    index: number,
+    patch: Partial<WorkflowCodeActEnvironmentBinding>,
+  ) => {
+    onChange({
+      environment: environment.map((binding, candidate) =>
+        candidate === index ? { ...binding, ...patch } : binding,
+      ),
+    });
+  };
+
+  return (
+    <>
+      <InspectorSection
+        title='Script limits'
+        description='Caps apply to each Python interpreter step, not the time spent calling tools.'
+      >
+        <FieldGroup className='grid grid-cols-2 gap-4'>
+          <Field>
+            <Label htmlFor='codeact-script-duration'>Step timeout</Label>
+            <FieldDescription>Seconds allowed per script step (1–300).</FieldDescription>
+            <Input
+              id='codeact-script-duration'
+              type='number'
+              min='1'
+              max='300'
+              step='1'
+              value={getNumber(data, 'maxScriptDurationSeconds') || 5}
+              onChange={(event) =>
+                onChange({
+                  maxScriptDurationSeconds: optionalNumber(event.target.value),
+                })
+              }
+            />
+          </Field>
+          <Field>
+            <Label htmlFor='codeact-script-memory'>Memory limit</Label>
+            <FieldDescription>MiB allowed for one script (16–4096).</FieldDescription>
+            <Input
+              id='codeact-script-memory'
+              type='number'
+              min='16'
+              max='4096'
+              step='16'
+              value={getNumber(data, 'maxScriptMemoryMiB') || 256}
+              onChange={(event) =>
+                onChange({
+                  maxScriptMemoryMiB: optionalNumber(event.target.value),
+                })
+              }
+            />
+          </Field>
+        </FieldGroup>
+      </InspectorSection>
+      <InspectorSection
+        title='Filesystem mounts'
+        description='Mount only directories this agent needs. Paths outside these mounts are denied by Monty.'
+      >
+        <FieldGroup className='gap-3'>
+          {mounts.map((mount, index) => (
+            <Field key={`${mount.virtualPath}-${index}`}>
+              <div className='flex items-end gap-2'>
+                <Field className='min-w-0 flex-1'>
+                  <Label htmlFor={`codeact-mount-virtual-${index}`}>
+                    Virtual path
+                  </Label>
+                  <Input
+                    id={`codeact-mount-virtual-${index}`}
+                    value={mount.virtualPath}
+                    placeholder='/data'
+                    onChange={(event) =>
+                      updateMount(index, { virtualPath: event.target.value })
+                    }
+                  />
+                </Field>
+                <Field className='min-w-0 flex-1'>
+                  <Label htmlFor={`codeact-mount-host-${index}`}>Host path</Label>
+                  <Input
+                    id={`codeact-mount-host-${index}`}
+                    value={mount.hostPath}
+                    placeholder='/absolute/path'
+                    onChange={(event) =>
+                      updateMount(index, { hostPath: event.target.value })
+                    }
+                  />
+                </Field>
+                <Field className='w-28'>
+                  <Label>Access</Label>
+                  <Select
+                    value={mount.access}
+                    onValueChange={(access) =>
+                      updateMount(index, {
+                        access: access as WorkflowCodeActMount['access'],
+                      })
+                    }
+                  >
+                    <SelectTrigger aria-label={`Mount ${index + 1} access`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value='read_only'>Read only</SelectItem>
+                        <SelectItem value='read_write'>Read/write</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-sm'
+                  aria-label={`Remove mount ${index + 1}`}
+                  onClick={() =>
+                    onChange({
+                      mounts: mounts.filter((_, candidate) => candidate !== index),
+                    })
+                  }
+                >
+                  <Trash2Icon data-icon aria-hidden='true' />
+                </Button>
+              </div>
+            </Field>
+          ))}
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='self-start'
+            onClick={() =>
+              onChange({
+                mounts: [
+                  ...mounts,
+                  { virtualPath: '/data', hostPath: '', access: 'read_only' },
+                ],
+              })
+            }
+          >
+            <PlusIcon data-icon='inline-start' aria-hidden='true' />
+            Add mount
+          </Button>
+        </FieldGroup>
+      </InspectorSection>
+      <InspectorSection
+        title='Environment'
+        description='Values are stored with this workflow and passed to Monty as environment variables.'
+      >
+        <FieldGroup className='gap-3'>
+          {environment.map((binding, index) => (
+            <Field key={`${binding.name}-${index}`}>
+              <div className='flex items-end gap-2'>
+                <Field className='min-w-0 flex-1'>
+                  <Label htmlFor={`codeact-environment-name-${index}`}>
+                    Variable name
+                  </Label>
+                  <Input
+                    id={`codeact-environment-name-${index}`}
+                    value={binding.name}
+                    placeholder='API_TOKEN'
+                    onChange={(event) =>
+                      updateEnvironment(index, { name: event.target.value })
+                    }
+                  />
+                </Field>
+                <Field className='min-w-0 flex-1'>
+                  <Label htmlFor={`codeact-environment-value-${index}`}>
+                    Value
+                  </Label>
+                  <Input
+                    id={`codeact-environment-value-${index}`}
+                    value={binding.value}
+                    placeholder='value'
+                    onChange={(event) =>
+                      updateEnvironment(index, { value: event.target.value })
+                    }
+                  />
+                </Field>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-sm'
+                  aria-label={`Remove environment variable ${index + 1}`}
+                  onClick={() =>
+                    onChange({
+                      environment: environment.filter(
+                        (_, candidate) => candidate !== index,
+                      ),
+                    })
+                  }
+                >
+                  <Trash2Icon data-icon aria-hidden='true' />
+                </Button>
+              </div>
+            </Field>
+          ))}
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='self-start'
+            onClick={() =>
+              onChange({
+                environment: [
+                  ...environment,
+                  { name: '', value: '' },
+                ],
+              })
+            }
+          >
+            <PlusIcon data-icon='inline-start' aria-hidden='true' />
+            Add variable
+          </Button>
+        </FieldGroup>
+      </InspectorSection>
+      <InspectorSection
+        title='Clock access'
+        description='Allow scripts to call date.today() and datetime.now().'
+      >
+        <Field orientation='horizontal'>
+          <Label htmlFor='codeact-system-clock'>Expose system clock</Label>
+          <Switch
+            id='codeact-system-clock'
+            checked={getBoolean(data, 'systemClock', true)}
+            onCheckedChange={(systemClock) => onChange({ systemClock })}
+          />
+        </Field>
+      </InspectorSection>
+    </>
+  );
+}
+
 function WorkflowNodeInspector({
   node,
   onClose,
@@ -187,7 +475,7 @@ function WorkflowNodeInspector({
   const tools = useQuery({
     queryKey: ['tools'],
     queryFn: listTools,
-    enabled: node?.type === 'agent',
+    enabled: node?.type === 'agent' || node?.type === 'codeact_agent',
   });
 
   const updateData = (patch: Record<string, unknown>) => {
@@ -203,6 +491,8 @@ function WorkflowNodeInspector({
 
     switch (node.type) {
       case 'agent':
+      case 'codeact_agent': {
+        const isCodeActAgent = node.type === 'codeact_agent';
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
@@ -274,7 +564,7 @@ function WorkflowNodeInspector({
                 className='min-h-36 font-mono text-xs'
               />
             </InspectorSection>
-            <InspectorSection
+            {!isCodeActAgent && <InspectorSection
               title='Generation controls'
               description='Optional sampling settings. Leave either field empty to use the model default.'
             >
@@ -314,7 +604,7 @@ function WorkflowNodeInspector({
                   />
                 </Field>
               </FieldGroup>
-            </InspectorSection>
+            </InspectorSection>}
             <InspectorSection
               title='Tools'
               description='Select local Tool Apps or tools discovered from running MCP servers.'
@@ -329,6 +619,29 @@ function WorkflowNodeInspector({
                 />
               </Field>
               <FieldGroup className='grid grid-cols-2 gap-4'>
+                {isCodeActAgent && (
+                  <Field>
+                    <Label htmlFor='codeact-agent-max-iterations'>
+                      Iteration limit
+                    </Label>
+                    <FieldDescription>
+                      Maximum model turns to write or repair a script.
+                    </FieldDescription>
+                    <Input
+                      id='codeact-agent-max-iterations'
+                      type='number'
+                      min='1'
+                      max='50'
+                      step='1'
+                      value={getNumber(data, 'maxIterations') || 8}
+                      onChange={(event) =>
+                        updateData({
+                          maxIterations: optionalNumber(event.target.value),
+                        })
+                      }
+                    />
+                  </Field>
+                )}
                 <Field>
                   <Label htmlFor='agent-max-tool-calls'>Call limit</Label>
                   <FieldDescription>
@@ -369,8 +682,12 @@ function WorkflowNodeInspector({
                 </Field>
               </FieldGroup>
             </InspectorSection>
+            {isCodeActAgent && (
+              <CodeActRuntimeFields data={data} onChange={updateData} />
+            )}
           </FieldGroup>
         );
+      }
       case 'remote_agent':
         return (
           <FieldGroup className='gap-7'>

@@ -14,6 +14,7 @@ import { useStore } from 'zustand';
 
 import {
   AgentNode,
+  CodeActAgentNode,
   EndNode,
   GroupNode,
   HumanReviewNode,
@@ -28,6 +29,7 @@ import { useWorkflowStoreApi, useWorkrunStore } from '@/stores';
 
 const nodeTypes = {
   agent: AgentNode,
+  codeact_agent: CodeActAgentNode,
   remote_agent: RemoteAgentNode,
   process: ProcessNode,
   start: StartNode,
@@ -51,6 +53,22 @@ function createNodeData(type: WorkflowNodeType) {
         toolIds: [],
         maxToolCalls: 8,
         toolTimeoutSeconds: 60,
+      };
+    case 'codeact_agent':
+      return {
+        name: 'New CodeAct agent',
+        modelProfileId: '',
+        description: 'Compose tools and Python into one executable plan',
+        instruction: '',
+        toolIds: [],
+        maxIterations: 8,
+        maxToolCalls: 8,
+        toolTimeoutSeconds: 60,
+        maxScriptDurationSeconds: 5,
+        maxScriptMemoryMiB: 256,
+        systemClock: true,
+        mounts: [],
+        environment: [],
       };
     case 'remote_agent':
       return {

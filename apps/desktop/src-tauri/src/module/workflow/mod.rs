@@ -5,6 +5,7 @@
 //! and the edge endpoint/handle information.
 
 mod agent;
+mod codeact_agent;
 mod human_review;
 mod process;
 mod routing;
@@ -12,6 +13,7 @@ mod tool;
 mod tool_approval;
 
 use agent::*;
+use codeact_agent::*;
 use human_review::*;
 use process::*;
 use routing::*;
@@ -290,6 +292,7 @@ pub async fn compile(
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
             "agent" => add_local_agent_node(graph, node, config, on_event.clone()).await?,
+            "codeact_agent" => add_codeact_agent_node(graph, node, config, on_event.clone()).await?,
             _ => add_control_node(graph, node),
         };
     }
@@ -351,7 +354,7 @@ pub async fn compile(
 fn is_executable(node: &WorkflowNode) -> bool {
     matches!(
         node.kind.as_str(),
-        "agent" | "remote_agent" | "process" | "if_else" | "switch" | "human_review"
+        "agent" | "codeact_agent" | "remote_agent" | "process" | "if_else" | "switch" | "human_review"
     )
 }
 
@@ -752,5 +755,14 @@ mod tests {
         .unwrap();
         let compiled = compile(dsl, &Default::default(), None).await.unwrap();
         assert_eq!(compiled.plan().executable_nodes, vec!["remote"]);
+    }
+
+    #[test]
+    fn recognizes_codeact_agents_as_executable_nodes() {
+        assert!(is_executable(&WorkflowNode {
+            id: "codeact".into(),
+            kind: "codeact_agent".into(),
+            data: Value::Null,
+        }));
     }
 }

@@ -12,6 +12,7 @@ import {
 } from '@workspace/ui/components';
 import {
   BotIcon,
+  CodeXmlIcon,
   CircleStopIcon,
   GitBranchIcon,
   Globe2Icon,
@@ -45,6 +46,13 @@ const nodeGroups: {
         description: 'Run a local ADK agent',
         icon: BotIcon,
         iconClassName: 'text-violet-500',
+      },
+      {
+        type: 'codeact_agent',
+        label: 'CodeAct Agent',
+        description: 'Compose tools with Python',
+        icon: CodeXmlIcon,
+        iconClassName: 'text-fuchsia-500',
       },
       {
         type: 'remote_agent',

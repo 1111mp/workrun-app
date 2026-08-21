@@ -8,7 +8,7 @@ default-run = "workrun"
 repository = "https://github.com/1111mp/workrun-app.git"
 license = "MIT"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 name = "workrun_lib"
 
 [dependencies]
-adk-rust = { workspace = true, features = ["deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama"] }
+adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama"] }
 aes-gcm = "0.11.0"
 anyhow = { workspace = true }
 async-stream = "0.3.6"

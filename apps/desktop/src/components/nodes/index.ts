@@ -1,4 +1,5 @@
 export * from './agent-node';
+export * from './codeact-agent-node';
 export * from './end-node';
 export * from './group-node';
 export * from './human-review-node';

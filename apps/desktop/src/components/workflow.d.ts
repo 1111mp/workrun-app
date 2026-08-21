@@ -53,6 +53,36 @@ type WorkflowAgentNode = WorkflowBaseNode & {
   data: WorkflowAgentNodeData;
 };
 
+// ---------- CodeAct Agent Node ----------
+type WorkflowCodeActMount = {
+  virtualPath: string;
+  hostPath: string;
+  access: 'read_only' | 'read_write';
+};
+type WorkflowCodeActEnvironmentBinding = {
+  name: string;
+  value: string;
+};
+type WorkflowCodeActAgentNodeData = {
+  name: string;
+  modelProfileId: string;
+  description: string;
+  instruction: string;
+  toolIds?: string[];
+  maxIterations?: number;
+  maxToolCalls?: number;
+  toolTimeoutSeconds?: number;
+  maxScriptDurationSeconds?: number;
+  maxScriptMemoryMiB?: number;
+  systemClock?: boolean;
+  mounts?: WorkflowCodeActMount[];
+  environment?: WorkflowCodeActEnvironmentBinding[];
+};
+type WorkflowCodeActAgentNode = WorkflowBaseNode & {
+  type: 'codeact_agent';
+  data: WorkflowCodeActAgentNodeData;
+};
+
 // ---------- Remote Agent Node ----------
 type WorkflowRemoteAgentNodeData = {
   name: string;
@@ -163,6 +193,7 @@ type WorkflowGroupNode = WorkflowBaseNode & {
 type WorkflowNode =
   // basic nodes
   | WorkflowAgentNode
+  | WorkflowCodeActAgentNode
   | WorkflowRemoteAgentNode
   | WorkflowProcessNode
   | WorkflowHumanReviewNode

@@ -61,7 +61,7 @@ pub(super) async fn add_local_agent_node(
     )))
 }
 
-fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
+pub(super) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
     let credential = config.credential_for(&model.provider);
     let api_key = credential.and_then(|credential| credential.api_key.as_deref());
     if model.provider != ModelProvider::Ollama && api_key.is_none_or(|api_key| api_key.trim().is_empty()) {
@@ -129,7 +129,7 @@ pub(super) struct StreamingAgentNode {
 }
 
 impl StreamingAgentNode {
-    fn new(
+    pub(super) fn new(
         inner: AdkAgentNode,
         id: String,
         kind: impl Into<String>,
@@ -247,7 +247,7 @@ impl Node for StreamingAgentNode {
     }
 }
 
-fn state_as_agent_input(state: &State) -> Content {
+pub(super) fn state_as_agent_input(state: &State) -> Content {
     // A2A carries text parts. JSON preserves the full shared workflow state,
     // while still allowing remote agents to treat it as a normal user message.
     let input = serde_json::to_string(state).unwrap_or_else(|_| "{}".to_string());
