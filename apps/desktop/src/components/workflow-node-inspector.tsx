@@ -56,6 +56,7 @@ const nodeTitles: Record<string, string> = {
   if_else: 'If / Else',
   switch: 'Switch',
   human_review: 'Human Review',
+  ask_user_question: 'Ask User Question',
   group: 'Group',
   start: 'Start',
   end: 'End',
@@ -205,6 +206,28 @@ function getSwitchDefault(
     label: typeof record.label === 'string' ? record.label : 'Default',
     condition: typeof record.condition === 'string' ? record.condition : '',
   };
+}
+
+function getAskUserQuestionOptions(
+  data: Record<string, unknown>,
+): WorkflowAskUserQuestionOption[] {
+  const options = data.options;
+  if (!Array.isArray(options)) return [];
+  return options.flatMap((option) => {
+    if (typeof option !== 'object' || option === null) return [];
+    const record = option as Record<string, unknown>;
+    if (typeof record.id !== 'string' || typeof record.label !== 'string')
+      return [];
+    return [
+      {
+        id: record.id,
+        label: record.label,
+        ...(typeof record.description === 'string' && {
+          description: record.description,
+        }),
+      },
+    ];
+  });
 }
 
 function CodeActRuntimeFields({
@@ -1047,6 +1070,115 @@ function WorkflowNodeInspector({
             </InspectorSection>
           </FieldGroup>
         );
+      case 'ask_user_question': {
+        const options = getAskUserQuestionOptions(data);
+        return (
+          <FieldGroup className='gap-7'>
+            <InspectorSection
+              title='Question'
+              description='The workflow pauses here and continues through the output for the selected option.'
+            >
+              <TextField
+                id='ask-user-question-title'
+                label='Question'
+                value={getText(data, 'title')}
+                onChange={(title) => updateData({ title })}
+              />
+              <TextareaField
+                id='ask-user-question-description'
+                label='Description'
+                description='Optional context shown before the choices.'
+                value={getText(data, 'description')}
+                onChange={(description) => updateData({ description })}
+              />
+            </InspectorSection>
+            <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
+              <div className='flex items-center justify-between gap-2'>
+                <FieldLegend>Options</FieldLegend>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  onClick={() =>
+                    updateData({
+                      options: [
+                        ...options,
+                        {
+                          id: crypto.randomUUID(),
+                          label: `Option ${options.length + 1}`,
+                        },
+                      ],
+                    })
+                  }
+                >
+                  <PlusIcon data-icon='inline-start' />
+                  Add option
+                </Button>
+              </div>
+              <FieldDescription>
+                Each option has one canvas output. Its identifier stays stable
+                when its label changes.
+              </FieldDescription>
+              <FieldGroup className='gap-4'>
+                {options.map((option, index) => (
+                  <FieldSet
+                    key={option.id}
+                    className='bg-background gap-4 rounded-lg border p-3'
+                  >
+                    <div className='flex items-center justify-between gap-2'>
+                      <FieldLegend variant='label'>
+                        Option {index + 1}
+                      </FieldLegend>
+                      <Button
+                        type='button'
+                        size='icon-sm'
+                        variant='ghost'
+                        aria-label={`Remove option ${index + 1}`}
+                        disabled={options.length === 1}
+                        onClick={() =>
+                          updateData({
+                            options: options.filter(
+                              (item) => item.id !== option.id,
+                            ),
+                          })
+                        }
+                      >
+                        <Trash2Icon aria-hidden='true' />
+                      </Button>
+                    </div>
+                    <TextField
+                      id={`ask-user-question-option-${option.id}-label`}
+                      label='Label'
+                      value={option.label}
+                      onChange={(label) =>
+                        updateData({
+                          options: options.map((item) =>
+                            item.id === option.id ? { ...item, label } : item,
+                          ),
+                        })
+                      }
+                    />
+                    <TextField
+                      id={`ask-user-question-option-${option.id}-description`}
+                      label='Description'
+                      value={option.description ?? ''}
+                      onChange={(description) =>
+                        updateData({
+                          options: options.map((item) =>
+                            item.id === option.id
+                              ? { ...item, description }
+                              : item,
+                          ),
+                        })
+                      }
+                    />
+                  </FieldSet>
+                ))}
+              </FieldGroup>
+            </FieldSet>
+          </FieldGroup>
+        );
+      }
       case 'start':
       case 'end':
       case 'group':

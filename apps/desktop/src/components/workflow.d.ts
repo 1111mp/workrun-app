@@ -11,6 +11,7 @@ type WorkflowNodeType =
   | 'if_else'
   | 'switch'
   | 'human_review'
+  | 'ask_user_question'
   | 'group';
 
 type WorkflowMode = 'task' | 'chat';
@@ -180,6 +181,24 @@ type WorkflowHumanReviewNode = WorkflowBaseNode & {
   data: WorkflowHumanReviewNodeData;
 };
 
+// ---------- Ask User Question Node ----------
+type WorkflowAskUserQuestionOption = {
+  /** Stable identifier used as the React Flow source handle ID. */
+  id: string;
+  /** Text presented to the person answering the question. */
+  label: string;
+  description?: string;
+};
+type WorkflowAskUserQuestionNodeData = {
+  title: string;
+  description: string;
+  options: WorkflowAskUserQuestionOption[];
+};
+type WorkflowAskUserQuestionNode = WorkflowBaseNode & {
+  type: 'ask_user_question';
+  data: WorkflowAskUserQuestionNodeData;
+};
+
 // ---------- Group Layout Node ----------
 type WorkflowGroupNodeData = {
   /** Human-readable title shown in the group header. */
@@ -197,6 +216,7 @@ type WorkflowNode =
   | WorkflowRemoteAgentNode
   | WorkflowProcessNode
   | WorkflowHumanReviewNode
+  | WorkflowAskUserQuestionNode
   // control nodes
   | WorkflowStartNode
   | WorkflowEndNode

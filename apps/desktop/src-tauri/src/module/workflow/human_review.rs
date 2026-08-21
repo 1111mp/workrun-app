@@ -41,8 +41,23 @@ pub(super) fn add_human_review_node(
             // A resumed dynamic interrupt re-executes this node. Its
             // conditional edges route the persisted decision to the matching
             // Approved or Rejected handle.
-            if context.get(&config.approval_key).and_then(Value::as_bool).is_some() {
-                return Ok(NodeOutput::new());
+            if let Some(approved) = context.get(&config.approval_key).and_then(Value::as_bool) {
+                let event = json!({
+                    "nodeId": id,
+                    "type": "human_review",
+                    "data": { "title": config.title },
+                    "result": {
+                        "approved": approved,
+                        "label": if approved { "Approved" } else { "Rejected" },
+                    },
+                });
+                if let Some(on_event) = on_event {
+                    let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+                }
+                return Ok(NodeOutput::new()
+                    .with_update("workflow.last_node", json!(id))
+                    .with_update("workflow.node", event.clone())
+                    .with_update("workflow.trace", event));
             }
 
             let context_values = config

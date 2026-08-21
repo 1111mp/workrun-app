@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import {
+  resolveAskUserQuestion,
   resolveHumanReview,
   resolveToolApproval,
   runWorkflow,
@@ -50,22 +51,27 @@ function useWorkflowRun(
   settings: WorkflowSettings,
 ) {
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
+  const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
+    useState(false);
   const store = useWorkflowRunStore(
     useShallow((state) => ({
       runningNodeId: state.runningNodeId,
       toolApproval: state.toolApproval,
       humanReview: state.humanReview,
+      askUserQuestion: state.askUserQuestion,
       resetRunView: state.resetRunView,
       setRunPanelOpen: state.setRunPanelOpen,
       setShowRunOutput: state.setShowRunOutput,
       lastRunInput: state.lastRunInput,
       startWorkflowRun: state.startWorkflowRun,
+      resumeWorkflowRun: state.resumeWorkflowRun,
       applyRunEvents: state.applyRunEvents,
       finishWorkflowRun: state.finishWorkflowRun,
       failWorkflowRun: state.failWorkflowRun,
       clearRunningNode: state.clearRunningNode,
       clearToolApproval: state.clearToolApproval,
       clearHumanReview: state.clearHumanReview,
+      clearAskUserQuestion: state.clearAskUserQuestion,
     })),
   );
   const chatThreadId = useRef<string | undefined>(undefined);
@@ -160,10 +166,12 @@ function useWorkflowRun(
     onSuccess: (result) => {
       runAfterDrain(() => {
         if (result.interrupted) {
-          toast.info('Workflow interrupted', {
-            toasterId: 'global',
-            description: 'Resume to continue from the saved checkpoint.',
-          });
+          if (!store.humanReview && !store.askUserQuestion) {
+            toast.info('Workflow interrupted', {
+              toasterId: 'global',
+              description: 'Resume to continue from the saved checkpoint.',
+            });
+          }
           return;
         }
         store.finishWorkflowRun(result.state);
@@ -218,9 +226,7 @@ function useWorkflowRun(
     pendingEvents.current = [];
     pendingCharacters.current = 0;
     afterDrain.current = [];
-    chatTurnId.current =
-      settings.mode === 'chat' ? crypto.randomUUID() : undefined;
-    store.startWorkflowRun(input, settings.mode, chatTurnId.current);
+    store.resumeWorkflowRun();
     mutation.mutate({ input, threadId, resume: true });
   };
   const startRun = () => {
@@ -270,6 +276,33 @@ function useWorkflowRun(
       setIsResolvingHumanReview(false);
     }
   };
+  const resolvePendingAskUserQuestion = async (optionId: string) => {
+    if (isResolvingAskUserQuestion) return;
+    const nodeId = store.askUserQuestion?.nodeId;
+    if (typeof nodeId !== 'string') return;
+    const threadId = runThreadId.current;
+    if (!threadId) return;
+
+    setIsResolvingAskUserQuestion(true);
+    try {
+      await resolveAskUserQuestion(
+        toWorkflowDsl(workflowId, nodes, edges, settings),
+        threadId,
+        nodeId,
+        optionId,
+      );
+      store.clearAskUserQuestion();
+      resumeWorkflowRun();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error('Could not record the selected option', {
+        toasterId: 'global',
+        description: message,
+      });
+    } finally {
+      setIsResolvingAskUserQuestion(false);
+    }
+  };
   return {
     isRunning: mutation.isPending,
     startRun,
@@ -277,9 +310,12 @@ function useWorkflowRun(
     runningNodeId: store.runningNodeId,
     toolApproval: store.toolApproval,
     humanReview: store.humanReview,
+    askUserQuestion: store.askUserQuestion,
     isResolvingHumanReview,
+    isResolvingAskUserQuestion,
     resolvePendingToolApproval,
     resolvePendingHumanReview,
+    resolvePendingAskUserQuestion,
     resumeWorkflowRun,
   };
 }

@@ -15,6 +15,15 @@ import {
   FieldGroup,
   FieldLabel,
   Input,
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireChoice,
+  QuestionnaireChoiceDescription,
+  QuestionnaireChoices,
+  QuestionnaireError,
+  QuestionnaireItem,
+  QuestionnaireSubmit,
+  QuestionnaireTitle,
   Select,
   SelectContent,
   SelectGroup,
@@ -127,6 +136,26 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
     edges,
     workflowSettings,
   );
+  const askUserQuestionOptions = Array.isArray(
+    workflowRun.askUserQuestion?.options,
+  )
+    ? workflowRun.askUserQuestion.options.flatMap((option) => {
+        if (typeof option !== 'object' || option === null) return [];
+        const value = option as Record<string, unknown>;
+        if (typeof value.id !== 'string' || typeof value.label !== 'string')
+          return [];
+        return [
+          {
+            id: value.id,
+            label: value.label,
+            description:
+              typeof value.description === 'string'
+                ? value.description
+                : undefined,
+          },
+        ];
+      })
+    : [];
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -379,6 +408,68 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
                   : 'Approve & continue'}
               </AlertDialogAction>
             </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog open={Boolean(workflowRun.askUserQuestion)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {String(
+                  workflowRun.askUserQuestion?.title ?? 'Choose an option',
+                )}
+              </AlertDialogTitle>
+              {typeof workflowRun.askUserQuestion?.description ===
+              'string' ? (
+                <AlertDialogDescription>
+                  {workflowRun.askUserQuestion.description}
+                </AlertDialogDescription>
+              ) : null}
+            </AlertDialogHeader>
+            <Questionnaire
+              items={[
+                {
+                  name: 'answer',
+                  required: true,
+                  choices: askUserQuestionOptions.map((option) => ({
+                    value: option.id,
+                  })),
+                },
+              ]}
+              onSubmit={(event) => {
+                event.preventDefault();
+                const answer = new FormData(event.currentTarget).get('answer');
+                if (typeof answer === 'string')
+                  void workflowRun.resolvePendingAskUserQuestion(answer);
+              }}
+            >
+              <QuestionnaireItem name='answer' required>
+                <QuestionnaireTitle className='sr-only'>
+                  Available options
+                </QuestionnaireTitle>
+                <QuestionnaireChoices>
+                  {askUserQuestionOptions.map((option) => (
+                    <QuestionnaireChoice key={option.id} value={option.id}>
+                      <span>{option.label}</span>
+                      {option.description ? (
+                        <QuestionnaireChoiceDescription>
+                          {option.description}
+                        </QuestionnaireChoiceDescription>
+                      ) : null}
+                    </QuestionnaireChoice>
+                  ))}
+                </QuestionnaireChoices>
+                <QuestionnaireError />
+              </QuestionnaireItem>
+              <QuestionnaireActions>
+                <QuestionnaireSubmit
+                  disabled={workflowRun.isResolvingAskUserQuestion}
+                >
+                  {workflowRun.isResolvingAskUserQuestion
+                    ? 'Saving answer…'
+                    : 'Continue'}
+                </QuestionnaireSubmit>
+              </QuestionnaireActions>
+            </Questionnaire>
           </AlertDialogContent>
         </AlertDialog>
       </WorkflowCanvas>

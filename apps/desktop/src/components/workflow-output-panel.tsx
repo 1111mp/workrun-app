@@ -186,11 +186,40 @@ function TraceResult({
   entry: WorkflowTraceEntry;
   showAgentResponse?: boolean;
 }) {
+  const result =
+    typeof entry.result === 'object' && entry.result !== null
+      ? (entry.result as Record<string, unknown>)
+      : undefined;
+
+  if (entry.type === 'human_review') {
+    const approved = result?.approved;
+    return (
+      <p className='text-muted-foreground mt-2 text-sm'>
+        {entry.status === 'running'
+          ? 'Waiting for review…'
+          : approved === true
+            ? 'Approved.'
+            : approved === false
+              ? 'Rejected.'
+              : 'Review completed.'}
+      </p>
+    );
+  }
+
+  if (entry.type === 'ask_user_question') {
+    const label = typeof result?.label === 'string' ? result.label : undefined;
+    return (
+      <p className='text-muted-foreground mt-2 text-sm'>
+        {entry.status === 'running'
+          ? 'Waiting for an answer…'
+          : label
+            ? `Selected: ${label}.`
+            : 'Answer received.'}
+      </p>
+    );
+  }
+
   if (entry.type === 'if_else') {
-    const result =
-      typeof entry.result === 'object' && entry.result !== null
-        ? (entry.result as Record<string, unknown>)
-        : undefined;
     const route = result?.route;
     const label = typeof result?.label === 'string' ? result.label : undefined;
     const condition =
@@ -208,10 +237,6 @@ function TraceResult({
   }
 
   if (entry.type === 'switch') {
-    const result =
-      typeof entry.result === 'object' && entry.result !== null
-        ? (entry.result as Record<string, unknown>)
-        : undefined;
     const route = result?.route;
     const label = typeof result?.label === 'string' ? result.label : undefined;
     const condition =

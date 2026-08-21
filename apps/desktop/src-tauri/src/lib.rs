@@ -106,6 +106,7 @@ pub fn run() {
             cmd::workflow::workflow_run,
             cmd::workflow::workflow_resolve_tool_approval,
             cmd::workflow::workflow_resolve_human_review,
+            cmd::workflow::workflow_resolve_ask_user_question,
             cmd::workflow_catalog::workflow_catalog_list,
             cmd::workflow_catalog::workflow_catalog_create,
             cmd::workflow_catalog::workflow_catalog_inspect,

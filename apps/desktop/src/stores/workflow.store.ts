@@ -121,7 +121,8 @@ export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>
         const isBranch =
           source.type === 'if_else' ||
           source.type === 'switch' ||
-          source.type === 'human_review';
+          source.type === 'human_review' ||
+          source.type === 'ask_user_question';
         if (isBranch && !connection.sourceHandle) {
           return;
         }
@@ -143,6 +144,12 @@ export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>
           source.type === 'human_review' &&
           connection.sourceHandle !== 'approved' &&
           connection.sourceHandle !== 'rejected'
+        ) {
+          return;
+        }
+        if (
+          source.type === 'ask_user_question' &&
+          !connection.sourceHandle?.startsWith('option:')
         ) {
           return;
         }

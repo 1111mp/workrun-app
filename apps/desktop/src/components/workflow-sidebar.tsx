@@ -12,6 +12,7 @@ import {
 } from '@workspace/ui/components';
 import {
   BotIcon,
+  CircleHelpIcon,
   CodeXmlIcon,
   CircleStopIcon,
   GitBranchIcon,
@@ -100,6 +101,13 @@ const nodeGroups: {
         description: 'Pause for approval or rejection',
         icon: ShieldCheckIcon,
         iconClassName: 'text-yellow-500',
+      },
+      {
+        type: 'ask_user_question',
+        label: 'Ask User Question',
+        description: 'Pause for a choice and branch by answer',
+        icon: CircleHelpIcon,
+        iconClassName: 'text-blue-500',
       },
     ],
   },

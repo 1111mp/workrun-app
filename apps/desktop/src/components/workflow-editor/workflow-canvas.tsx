@@ -14,6 +14,7 @@ import { useStore } from 'zustand';
 
 import {
   AgentNode,
+  AskUserQuestionNode,
   CodeActAgentNode,
   EndNode,
   GroupNode,
@@ -38,6 +39,7 @@ const nodeTypes = {
   switch: SwitchNode,
   group: GroupNode,
   human_review: HumanReviewNode,
+  ask_user_question: AskUserQuestionNode,
 };
 
 function createNodeData(type: WorkflowNodeType) {
@@ -105,6 +107,15 @@ function createNodeData(type: WorkflowNodeType) {
         description:
           'Pause this workflow until a reviewer approves or rejects it.',
         contextKeys: [],
+      };
+    case 'ask_user_question':
+      return {
+        title: 'Choose an option',
+        description: 'The workflow continues along the selected option.',
+        options: [
+          { id: 'option-1', label: 'Option 1' },
+          { id: 'option-2', label: 'Option 2' },
+        ],
       };
     case 'start':
       return { label: 'Start' };

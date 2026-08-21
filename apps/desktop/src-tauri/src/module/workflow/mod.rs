@@ -5,6 +5,7 @@
 //! and the edge endpoint/handle information.
 
 mod agent;
+mod ask_user_question;
 mod codeact_agent;
 mod human_review;
 mod process;
@@ -13,6 +14,7 @@ mod tool;
 mod tool_approval;
 
 use agent::*;
+use ask_user_question::*;
 use codeact_agent::*;
 use human_review::*;
 use process::*;
@@ -237,7 +239,16 @@ pub async fn compile(
     for node in &dsl.nodes {
         if !matches!(
             node.kind.as_str(),
-            "start" | "end" | "agent" | "remote_agent" | "process" | "if_else" | "switch" | "human_review" | "group"
+            "start"
+                | "end"
+                | "agent"
+                | "remote_agent"
+                | "process"
+                | "if_else"
+                | "switch"
+                | "human_review"
+                | "ask_user_question"
+                | "group"
         ) {
             bail!("node `{}` has unsupported type `{}`", node.id, node.kind);
         }
@@ -270,6 +281,7 @@ pub async fn compile(
         "workflow.trace".to_string(),
         adk_rust::graph::Channel::list("workflow.trace"),
     );
+
     for node in dsl.nodes.iter().filter(|node| node.kind == "human_review") {
         let approval_key = human_review_config(node)?.approval_key;
         graph
@@ -277,6 +289,15 @@ pub async fn compile(
             .channels
             .entry(approval_key.clone())
             .or_insert_with(|| adk_rust::graph::Channel::new(&approval_key));
+    }
+
+    for node in dsl.nodes.iter().filter(|node| node.kind == "ask_user_question") {
+        let answer_key = ask_user_question_config(node)?.answer_key;
+        graph
+            .schema
+            .channels
+            .entry(answer_key.clone())
+            .or_insert_with(|| adk_rust::graph::Channel::new(&answer_key));
     }
 
     for node in &executable {
@@ -287,6 +308,7 @@ pub async fn compile(
             "remote_agent" => graph.add_node(remote_a2a_graph_node(node, on_event.clone())?),
             "process" => add_process_node(graph, node, on_event.clone()),
             "human_review" => add_human_review_node(graph, node, on_event.clone())?,
+            "ask_user_question" => add_ask_user_question_node(graph, node, on_event.clone())?,
             "if_else" => add_if_else_control_node(graph, node, on_event.clone())?,
             "switch" => add_switch_control_node(graph, node, on_event.clone())?,
             // Build the LLM only at execution time. This keeps `compile` pure
@@ -317,6 +339,7 @@ pub async fn compile(
             "if_else" => add_if_else_edges(&mut graph, node, &outgoing, &end_ids, &mut plan_edges)?,
             "switch" => add_switch_edges(&mut graph, node, &outgoing, &end_ids, &mut plan_edges)?,
             "human_review" => add_human_review_edges(&mut graph, node, &outgoing, &end_ids, &mut plan_edges)?,
+            "ask_user_question" => add_ask_user_question_edges(&mut graph, node, &outgoing, &end_ids, &mut plan_edges)?,
             _ => {
                 for edge in outgoing {
                     let target = graph_target(&edge.target, &end_ids);
@@ -354,7 +377,14 @@ pub async fn compile(
 fn is_executable(node: &WorkflowNode) -> bool {
     matches!(
         node.kind.as_str(),
-        "agent" | "codeact_agent" | "remote_agent" | "process" | "if_else" | "switch" | "human_review"
+        "agent"
+            | "codeact_agent"
+            | "remote_agent"
+            | "process"
+            | "if_else"
+            | "switch"
+            | "human_review"
+            | "ask_user_question"
     )
 }
 
@@ -368,6 +398,31 @@ pub fn human_review_approval_key(dsl: &WorkflowDsl, node_id: &str) -> Result<Str
         .find(|node| node.id == node_id && node.kind == "human_review")
         .ok_or_else(|| anyhow!("human review node `{node_id}` does not exist"))?;
     Ok(review_approval_key(&node.id))
+}
+
+/// Return the one state key an Ask User Question node is allowed to update.
+/// This keeps arbitrary state mutation out of the webview IPC boundary.
+pub fn ask_user_question_answer_key(dsl: &WorkflowDsl, node_id: &str) -> Result<String> {
+    let node = dsl
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id && node.kind == "ask_user_question")
+        .ok_or_else(|| anyhow!("ask user question node `{node_id}` does not exist"))?;
+    Ok(ask_user_question_config(node)?.answer_key)
+}
+
+/// Validate that an answer is one of the options configured by its node.
+pub fn ask_user_question_option_id(dsl: &WorkflowDsl, node_id: &str, option_id: &str) -> Result<String> {
+    let node = dsl
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id && node.kind == "ask_user_question")
+        .ok_or_else(|| anyhow!("ask user question node `{node_id}` does not exist"))?;
+    let config = ask_user_question_config(node)?;
+    if !config.options.iter().any(|option| option.id == option_id) {
+        bail!("ask user question node `{node_id}` does not have option `{option_id}`");
+    }
+    Ok(option_id.to_string())
 }
 
 fn add_control_node(graph: StateGraph, node: &WorkflowNode) -> StateGraph {

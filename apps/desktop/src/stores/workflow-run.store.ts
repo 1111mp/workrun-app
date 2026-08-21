@@ -21,6 +21,8 @@ type WorkflowRunStore = {
   showRunOutput: boolean;
   toolApproval?: Record<string, unknown>;
   humanReview?: Record<string, unknown>;
+  askUserQuestion?: Record<string, unknown>;
+  isResuming: boolean;
   setLastRunInput: (input: Record<string, unknown> | undefined) => void;
   setRunPanelOpen: (open: boolean) => void;
   setRunningNodeId: (nodeId: string | null) => void;
@@ -30,12 +32,14 @@ type WorkflowRunStore = {
   setShowRunOutput: (show: boolean) => void;
   setToolApproval: (approval: Record<string, unknown> | undefined) => void;
   setHumanReview: (review: Record<string, unknown> | undefined) => void;
+  setAskUserQuestion: (question: Record<string, unknown> | undefined) => void;
   resetRunView: () => void;
   startWorkflowRun: (
     input: Record<string, unknown>,
     mode: WorkflowMode,
     turnId?: string,
   ) => void;
+  resumeWorkflowRun: () => void;
   applyRunEvents: (
     events: WorkflowRunEvent[],
     context: { mode: WorkflowMode; nodes: Node[]; turnId?: string },
@@ -45,6 +49,7 @@ type WorkflowRunStore = {
   clearRunningNode: () => void;
   clearToolApproval: () => void;
   clearHumanReview: () => void;
+  clearAskUserQuestion: () => void;
 };
 
 /** Transient UI state for the workflow run panel. It is intentionally not persisted. */
@@ -57,6 +62,8 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
     showRunOutput: false,
     toolApproval: undefined,
     humanReview: undefined,
+    askUserQuestion: undefined,
+    isResuming: false,
 
     setLastRunInput: (input) => {
       set((state) => {
@@ -96,13 +103,20 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
         state.humanReview = review;
       });
     },
+    setAskUserQuestion: (question) => {
+      set((state) => {
+        state.askUserQuestion = question;
+      });
+    },
     resetRunView: () => {
       set((state) => {
         state.runView = initialRunView;
+        state.isResuming = false;
       });
     },
     startWorkflowRun: (input, mode, turnId) => {
       set((state) => {
+        state.isResuming = false;
         state.lastRunInput = input;
         state.runPanelOpen = true;
         state.showRunOutput = true;
@@ -136,6 +150,18 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
         }
       });
     },
+    resumeWorkflowRun: () => {
+      set((state) => {
+        state.isResuming = true;
+        state.runPanelOpen = true;
+        state.showRunOutput = true;
+        state.runView.status = 'running';
+        state.runView.endedAt = undefined;
+        state.runView.activeNodeId = undefined;
+        state.runView.finalState = undefined;
+        state.runView.error = undefined;
+      });
+    },
     applyRunEvents: (events, context) => {
       set((state) => {
         for (const event of events) applyRunEvent(state, event, context);
@@ -162,6 +188,11 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
         state.humanReview = undefined;
       });
     },
+    clearAskUserQuestion: () => {
+      set((state) => {
+        state.askUserQuestion = undefined;
+      });
+    },
   })),
 );
 
@@ -183,18 +214,36 @@ function applyRunEvent(
       });
     state.runningNodeId = event.node;
     view.activeNodeId = event.node;
-    view.execution.push({
-      nodeId: event.node,
-      type: node?.type ?? 'node',
-      status: 'running',
-      turnId: context.turnId,
-    });
-    view.thoughts.push({
-      id: crypto.randomUUID(),
-      nodeId: event.node,
-      status: 'running',
-      turnId: context.turnId,
-    });
+    const previousExecution = state.isResuming
+      ? view.execution.findLast((entry) => entry.nodeId === event.node)
+      : undefined;
+    if (previousExecution) {
+      Object.assign(previousExecution, {
+        status: 'running',
+        durationMs: undefined,
+      });
+    } else {
+      view.execution.push({
+        nodeId: event.node,
+        type: node?.type ?? 'node',
+        status: 'running',
+        turnId: context.turnId,
+      });
+    }
+    const previousThought = state.isResuming
+      ? view.thoughts.findLast((thought) => thought.nodeId === event.node)
+      : undefined;
+    if (previousThought) {
+      Object.assign(previousThought, { status: 'running', durationMs: undefined });
+    } else {
+      view.thoughts.push({
+        id: crypto.randomUUID(),
+        nodeId: event.node,
+        status: 'running',
+        turnId: context.turnId,
+      });
+    }
+    state.isResuming = false;
     return;
   }
   if (event.type === 'message') return appendMessage(view, event, context);
@@ -285,6 +334,10 @@ function applyCustom(
     state.humanReview = event.data as Record<string, unknown>;
     return;
   }
+  if (event.event_type === 'workflow.ask_user_question_required') {
+    state.askUserQuestion = event.data as Record<string, unknown>;
+    return;
+  }
   const execution = state.runView.execution.findLast(
     (item) => item.nodeId === event.node,
   );
@@ -350,6 +403,8 @@ function displayName(node?: Node) {
     ? data.name
     : typeof data?.label === 'string' && data.label.trim()
       ? data.label
+      : typeof data?.title === 'string' && data.title.trim()
+        ? data.title
       : (node?.id ?? '');
 }
 

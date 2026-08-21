@@ -150,6 +150,21 @@ pub(super) fn validate_edges(
             if !branch_handles.insert((source.id.clone(), handle.to_string())) {
                 bail!("human_review node `{}` has multiple `{handle}` edges", source.id);
             }
+        } else if source.kind == "ask_user_question" {
+            let handle = edge
+                .source_handle
+                .as_deref()
+                .ok_or_else(|| anyhow!("ask user question node `{}` requires a sourceHandle", source.id))?;
+            let option_id = handle
+                .strip_prefix("option:")
+                .ok_or_else(|| anyhow!("ask user question node `{}` has invalid handle `{handle}`", source.id))?;
+            let config = ask_user_question_config(source)?;
+            if !config.options.iter().any(|option| option.id == option_id) {
+                bail!("ask user question node `{}` has invalid handle `{handle}`", source.id);
+            }
+            if !branch_handles.insert((source.id.clone(), handle.to_string())) {
+                bail!("ask user question node `{}` has multiple `{handle}` edges", source.id);
+            }
         } else if edge.source_handle.is_some() {
             bail!("node `{}` does not support sourceHandle routing", source.id);
         }

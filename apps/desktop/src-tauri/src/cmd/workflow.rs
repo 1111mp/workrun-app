@@ -75,3 +75,22 @@ pub async fn workflow_resolve_human_review(
         .await
         .stringify_err()
 }
+
+/// Persist a validated option selection before resuming the workflow checkpoint.
+#[tauri::command]
+pub async fn workflow_resolve_ask_user_question(
+    dsl: Value,
+    thread_id: String,
+    node_id: String,
+    option_id: String,
+) -> CmdResult<()> {
+    let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
+    let answer_key = workflow::ask_user_question_answer_key(&dsl, &node_id).stringify_err()?;
+    let option_id = workflow::ask_user_question_option_id(&dsl, &node_id, &option_id).stringify_err()?;
+    let config = Config::workrun().await.latest_arc();
+    let compiled = workflow::compile(dsl, &config, None).await.stringify_err()?;
+    compiled
+        .update_state(&thread_id, [(answer_key, Value::String(option_id))])
+        .await
+        .stringify_err()
+}

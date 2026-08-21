@@ -286,3 +286,17 @@ export function resolveHumanReview(
     approved,
   });
 }
+
+export function resolveAskUserQuestion(
+  dsl: Workflow,
+  threadId: string,
+  nodeId: string,
+  optionId: string,
+) {
+  return invoke('workflow_resolve_ask_user_question', {
+    dsl,
+    threadId,
+    nodeId,
+    optionId,
+  });
+}
