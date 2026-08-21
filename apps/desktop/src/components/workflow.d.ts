@@ -10,6 +10,7 @@ type WorkflowNodeType =
   | 'end'
   | 'if_else'
   | 'switch'
+  | 'human_review'
   | 'group';
 
 type WorkflowMode = 'task' | 'chat';
@@ -137,6 +138,18 @@ type WorkflowSwitchNode = WorkflowBaseNode & {
   data: WorkflowSwitchNodeData;
 };
 
+// ---------- Human Review Node ----------
+type WorkflowHumanReviewNodeData = {
+  title: string;
+  description: string;
+  /** State keys presented to the reviewer. */
+  contextKeys: string[];
+};
+type WorkflowHumanReviewNode = WorkflowBaseNode & {
+  type: 'human_review';
+  data: WorkflowHumanReviewNodeData;
+};
+
 // ---------- Group Layout Node ----------
 type WorkflowGroupNodeData = {
   /** Human-readable title shown in the group header. */
@@ -152,6 +165,7 @@ type WorkflowNode =
   | WorkflowAgentNode
   | WorkflowRemoteAgentNode
   | WorkflowProcessNode
+  | WorkflowHumanReviewNode
   // control nodes
   | WorkflowStartNode
   | WorkflowEndNode

@@ -30,10 +30,12 @@ import {
   SaveIcon,
   Settings2Icon,
   ShieldAlertIcon,
+  ShieldCheckIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
+import { useStore } from 'zustand';
 
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
@@ -45,8 +47,13 @@ import {
   toWorkflowDocument,
   updateWorkflow,
   type StoredWorkflow,
+  type WorkflowDocument,
 } from '@/services/workflow';
-import { useWorkflowStore } from '@/stores';
+import {
+  createWorkflowStore,
+  useWorkflowStoreApi,
+  WorkflowStoreProvider,
+} from '@/stores';
 
 import { useWorkflowRun } from './workflow-editor/use-workflow-run';
 import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
@@ -61,46 +68,65 @@ type WorkflowEditorProps = {
 };
 
 function WorkflowEditor({ workflow }: WorkflowEditorProps) {
+  const [draftDocument] = useState<WorkflowDocument>(() =>
+    createWorkflowDocument(),
+  );
+  const [workflowStore] = useState(() =>
+    createWorkflowStore(workflow?.document ?? draftDocument),
+  );
+
+  return (
+    <WorkflowStoreProvider store={workflowStore}>
+      <WorkflowEditorContent workflow={workflow} />
+    </WorkflowStoreProvider>
+  );
+}
+
+function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [savedDocument, setSavedDocument] = useState<string>(() =>
+    workflow ? JSON.stringify(workflow.document) : '',
+  );
+
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const draftId = useRef(crypto.randomUUID());
-  const [draftDocument] = useState(() => createWorkflowDocument());
-  const initialDocument = workflow?.document ?? draftDocument;
-  const nodes = useWorkflowStore((state) => state.nodes);
-  const edges = useWorkflowStore((state) => state.edges);
-  const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
-  const workflowSettings = useWorkflowStore((state) => state.settings);
-  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
-  const updateWorkflowSettings = useWorkflowStore(
+  const [draftId] = useState(() => crypto.randomUUID());
+  const workflowStore = useWorkflowStoreApi();
+  const nodes = useStore(workflowStore, (state) => state.nodes);
+  const edges = useStore(workflowStore, (state) => state.edges);
+  const selectedNodeId = useStore(
+    workflowStore,
+    (state) => state.selectedNodeId,
+  );
+  const workflowSettings = useStore(workflowStore, (state) => state.settings);
+  const updateNodeData = useStore(
+    workflowStore,
+    (state) => state.updateNodeData,
+  );
+  const updateWorkflowSettings = useStore(
+    workflowStore,
     (state) => state.updateSettings,
   );
-  const replaceWorkflow = useWorkflowStore((state) => state.replaceWorkflow);
-  const clearSelection = useWorkflowStore((state) => state.clearSelection);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [savedDocument, setSavedDocument] = useState(() =>
-    workflow ? JSON.stringify(workflow.document) : '',
+  const clearSelection = useStore(
+    workflowStore,
+    (state) => state.clearSelection,
   );
 
   const workflowDocument = toWorkflowDocument(nodes, edges, workflowSettings);
   const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
   const isDirty = workflowDocumentSnapshot !== savedDocument;
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+
   const { data: modelCatalog } = useQuery({
     queryKey: ['modelCatalog'],
     queryFn: getModelCatalog,
   });
   const workflowRun = useWorkflowRun(
-    workflow?.id ?? draftId.current,
+    workflow?.id ?? draftId,
     nodes,
     edges,
     workflowSettings,
   );
-
-  useEffect(() => {
-    useWorkflowStore.temporal.getState().clear();
-    replaceWorkflow(initialDocument);
-    setSavedDocument(workflow ? JSON.stringify(initialDocument) : '');
-  }, [initialDocument, replaceWorkflow, workflow]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -117,18 +143,18 @@ function WorkflowEditor({ workflow }: WorkflowEditorProps) {
       const key = event.key.toLowerCase();
       if (key === 'z' && !event.shiftKey) {
         event.preventDefault();
-        const { undo, pastStates } = useWorkflowStore.temporal.getState();
+        const { undo, pastStates } = workflowStore.temporal.getState();
         if (pastStates.length > 0) undo();
       }
       if ((key === 'z' && event.shiftKey) || key === 'y') {
         event.preventDefault();
-        const { redo, futureStates } = useWorkflowStore.temporal.getState();
+        const { redo, futureStates } = workflowStore.temporal.getState();
         if (futureStates.length > 0) redo();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [workflowStore]);
 
   const saveWorkflow = async () => {
     try {
@@ -305,6 +331,52 @@ function WorkflowEditor({ workflow }: WorkflowEditorProps) {
                 }
               >
                 Run tool
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog open={Boolean(workflowRun.humanReview)}>
+          <AlertDialogContent>
+            <AlertDialogHeader className='grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
+              <AlertDialogMedia className='mb-0 size-8'>
+                <ShieldCheckIcon />
+              </AlertDialogMedia>
+              <div className='min-w-0 space-y-1.5'>
+                <AlertDialogTitle>
+                  {String(
+                    workflowRun.humanReview?.title ?? 'Human review required',
+                  )}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {typeof workflowRun.humanReview?.description === 'string'
+                    ? workflowRun.humanReview.description
+                    : 'Review the workflow context before allowing it to continue.'}
+                </AlertDialogDescription>
+                <p className='text-muted-foreground text-sm'>
+                  Approval and rejection follow their matching workflow outputs.
+                  An unconnected output stops this run.
+                </p>
+              </div>
+            </AlertDialogHeader>
+            <pre className='bg-muted max-h-64 overflow-auto rounded-md p-3 text-xs'>
+              {JSON.stringify(workflowRun.humanReview?.context ?? {}, null, 2)}
+            </pre>
+            <AlertDialogFooter>
+              <AlertDialogCancel
+                disabled={workflowRun.isResolvingHumanReview}
+                onClick={() =>
+                  void workflowRun.resolvePendingHumanReview(false)
+                }
+              >
+                Reject
+              </AlertDialogCancel>
+              <AlertDialogAction
+                disabled={workflowRun.isResolvingHumanReview}
+                onClick={() => void workflowRun.resolvePendingHumanReview(true)}
+              >
+                {workflowRun.isResolvingHumanReview
+                  ? 'Saving decision…'
+                  : 'Approve & continue'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

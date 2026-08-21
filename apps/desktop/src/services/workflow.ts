@@ -272,3 +272,17 @@ export function resolveToolApproval(
     approved,
   });
 }
+
+export function resolveHumanReview(
+  dsl: Workflow,
+  threadId: string,
+  nodeId: string,
+  approved: boolean,
+) {
+  return invoke('workflow_resolve_human_review', {
+    dsl,
+    threadId,
+    nodeId,
+    approved,
+  });
+}

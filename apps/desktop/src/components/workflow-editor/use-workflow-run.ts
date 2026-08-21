@@ -1,10 +1,11 @@
 import { useMutation } from '@tanstack/react-query';
 import type { Edge, Node } from '@xyflow/react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import {
+  resolveHumanReview,
   resolveToolApproval,
   runWorkflow,
   toWorkflowDsl,
@@ -48,10 +49,12 @@ function useWorkflowRun(
   edges: Edge[],
   settings: WorkflowSettings,
 ) {
+  const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const store = useWorkflowRunStore(
     useShallow((state) => ({
       runningNodeId: state.runningNodeId,
       toolApproval: state.toolApproval,
+      humanReview: state.humanReview,
       resetRunView: state.resetRunView,
       setRunPanelOpen: state.setRunPanelOpen,
       setShowRunOutput: state.setShowRunOutput,
@@ -62,6 +65,7 @@ function useWorkflowRun(
       failWorkflowRun: state.failWorkflowRun,
       clearRunningNode: state.clearRunningNode,
       clearToolApproval: state.clearToolApproval,
+      clearHumanReview: state.clearHumanReview,
     })),
   );
   const chatThreadId = useRef<string | undefined>(undefined);
@@ -238,13 +242,44 @@ function useWorkflowRun(
     store.clearToolApproval();
     await resolveToolApproval(requestId, fingerprint, approved);
   };
+  const resolvePendingHumanReview = async (approved: boolean) => {
+    if (isResolvingHumanReview) return;
+    const review = store.humanReview;
+    const nodeId = review?.nodeId;
+    if (typeof nodeId !== 'string') return;
+    const threadId = runThreadId.current;
+    if (!threadId) return;
+
+    setIsResolvingHumanReview(true);
+    try {
+      await resolveHumanReview(
+        toWorkflowDsl(workflowId, nodes, edges, settings),
+        threadId,
+        nodeId,
+        approved,
+      );
+      store.clearHumanReview();
+      resumeWorkflowRun();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error('Could not record the review decision', {
+        toasterId: 'global',
+        description: message,
+      });
+    } finally {
+      setIsResolvingHumanReview(false);
+    }
+  };
   return {
     isRunning: mutation.isPending,
     startRun,
     startWorkflowRun,
     runningNodeId: store.runningNodeId,
     toolApproval: store.toolApproval,
+    humanReview: store.humanReview,
+    isResolvingHumanReview,
     resolvePendingToolApproval,
+    resolvePendingHumanReview,
     resumeWorkflowRun,
   };
 }

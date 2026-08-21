@@ -16,6 +16,7 @@ import {
   AgentNode,
   EndNode,
   GroupNode,
+  HumanReviewNode,
   IfElseNode,
   ProcessNode,
   RemoteAgentNode,
@@ -23,7 +24,7 @@ import {
   SwitchNode,
 } from '@/components/nodes';
 import { WorkflowSidebar } from '@/components/workflow-sidebar';
-import { useWorkflowStore, useWorkrunStore } from '@/stores';
+import { useWorkflowStoreApi, useWorkrunStore } from '@/stores';
 
 const nodeTypes = {
   agent: AgentNode,
@@ -34,6 +35,7 @@ const nodeTypes = {
   if_else: IfElseNode,
   switch: SwitchNode,
   group: GroupNode,
+  human_review: HumanReviewNode,
 };
 
 function createNodeData(type: WorkflowNodeType) {
@@ -78,6 +80,13 @@ function createNodeData(type: WorkflowNodeType) {
           { id: 'case-2', label: 'Case 2', condition: '' },
         ],
         defaultCase: { label: 'Default', condition: '' },
+      };
+    case 'human_review':
+      return {
+        title: 'Human review',
+        description:
+          'Pause this workflow until a reviewer approves or rejects it.',
+        contextKeys: [],
       };
     case 'start':
       return { label: 'Start' };
@@ -152,28 +161,45 @@ function WorkflowCanvas({
   runningNodeId,
   onRun,
 }: WorkflowCanvasProps) {
-  const nodes = useWorkflowStore((state) => state.nodes);
-  const edges = useWorkflowStore((state) => state.edges);
+  const workflowStore = useWorkflowStoreApi();
+  const nodes = useStore(workflowStore, (state) => state.nodes);
+  const edges = useStore(workflowStore, (state) => state.edges);
   const colorMode = useWorkrunStore((state) => state.resolvedTheme);
-  const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
+  const selectedNodeId = useStore(
+    workflowStore,
+    (state) => state.selectedNodeId,
+  );
   const canUndo = useStore(
-    useWorkflowStore.temporal,
+    workflowStore.temporal,
     (state) => state.pastStates.length > 0,
   );
   const canRedo = useStore(
-    useWorkflowStore.temporal,
+    workflowStore.temporal,
     (state) => state.futureStates.length > 0,
   );
-  const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
-  const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
-  const addNode = useWorkflowStore((state) => state.addNode);
-  const addConnection = useWorkflowStore((state) => state.addConnection);
-  const setNodes = useWorkflowStore((state) => state.setNodes);
-  const setSelectedNodeId = useWorkflowStore(
+  const onNodesChange = useStore(
+    workflowStore,
+    (state) => state.onNodesChange,
+  );
+  const onEdgesChange = useStore(
+    workflowStore,
+    (state) => state.onEdgesChange,
+  );
+  const addNode = useStore(workflowStore, (state) => state.addNode);
+  const addConnection = useStore(workflowStore, (state) => state.addConnection);
+  const setNodes = useStore(workflowStore, (state) => state.setNodes);
+  const setSelectedNodeId = useStore(
+    workflowStore,
     (state) => state.setSelectedNodeId,
   );
-  const startNodeDrag = useWorkflowStore((state) => state.startNodeDrag);
-  const finishNodeDrag = useWorkflowStore((state) => state.finishNodeDrag);
+  const startNodeDrag = useStore(
+    workflowStore,
+    (state) => state.startNodeDrag,
+  );
+  const finishNodeDrag = useStore(
+    workflowStore,
+    (state) => state.finishNodeDrag,
+  );
   const [reactFlowInstance, setReactFlowInstance] =
     useState<ReactFlowInstance | null>(null);
 
@@ -199,11 +225,12 @@ function WorkflowCanvas({
 
   const addPaletteNode = (type: WorkflowNodeType, x: number, y: number) => {
     if (!reactFlowInstance) return;
+    const id = crypto.randomUUID();
     const position = reactFlowInstance.screenToFlowPosition({ x, y });
     const group =
       type === 'group' ? undefined : findGroupAtPosition(nodes, position);
     addNode({
-      id: crypto.randomUUID(),
+      id,
       type,
       position: group
         ? { x: position.x - group.position.x, y: position.y - group.position.y }
@@ -289,7 +316,7 @@ function WorkflowCanvas({
                   disabled={!canUndo}
                   onClick={() => {
                     const { undo, pastStates } =
-                      useWorkflowStore.temporal.getState();
+                      workflowStore.temporal.getState();
                     if (pastStates.length > 0) undo();
                   }}
                 >
@@ -303,7 +330,7 @@ function WorkflowCanvas({
                   disabled={!canRedo}
                   onClick={() => {
                     const { redo, futureStates } =
-                      useWorkflowStore.temporal.getState();
+                      workflowStore.temporal.getState();
                     if (futureStates.length > 0) redo();
                   }}
                 >

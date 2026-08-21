@@ -20,6 +20,7 @@ type WorkflowRunStore = {
   runningNodeId: string | null;
   showRunOutput: boolean;
   toolApproval?: Record<string, unknown>;
+  humanReview?: Record<string, unknown>;
   setLastRunInput: (input: Record<string, unknown> | undefined) => void;
   setRunPanelOpen: (open: boolean) => void;
   setRunningNodeId: (nodeId: string | null) => void;
@@ -28,6 +29,7 @@ type WorkflowRunStore = {
   ) => void;
   setShowRunOutput: (show: boolean) => void;
   setToolApproval: (approval: Record<string, unknown> | undefined) => void;
+  setHumanReview: (review: Record<string, unknown> | undefined) => void;
   resetRunView: () => void;
   startWorkflowRun: (
     input: Record<string, unknown>,
@@ -42,6 +44,7 @@ type WorkflowRunStore = {
   failWorkflowRun: (message: string) => void;
   clearRunningNode: () => void;
   clearToolApproval: () => void;
+  clearHumanReview: () => void;
 };
 
 /** Transient UI state for the workflow run panel. It is intentionally not persisted. */
@@ -53,6 +56,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
     runningNodeId: null,
     showRunOutput: false,
     toolApproval: undefined,
+    humanReview: undefined,
 
     setLastRunInput: (input) => {
       set((state) => {
@@ -85,6 +89,11 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
     setToolApproval: (approval) => {
       set((state) => {
         state.toolApproval = approval;
+      });
+    },
+    setHumanReview: (review) => {
+      set((state) => {
+        state.humanReview = review;
       });
     },
     resetRunView: () => {
@@ -146,6 +155,11 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
     clearToolApproval: () => {
       set((state) => {
         state.toolApproval = undefined;
+      });
+    },
+    clearHumanReview: () => {
+      set((state) => {
+        state.humanReview = undefined;
       });
     },
   })),
@@ -265,6 +279,10 @@ function applyCustom(
   if (typeof event.data !== 'object' || event.data === null) return;
   if (event.event_type === 'agent.tool_approval_required') {
     state.toolApproval = event.data as Record<string, unknown>;
+    return;
+  }
+  if (event.event_type === 'workflow.human_review_required') {
+    state.humanReview = event.data as Record<string, unknown>;
     return;
   }
   const execution = state.runView.execution.findLast(

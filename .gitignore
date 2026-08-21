@@ -28,3 +28,5 @@ dist-ssr
 
 .agents
 .skills-lock.json
+
+.pnpm-store

@@ -9,21 +9,32 @@ import {
   type NodeChange,
 } from '@xyflow/react';
 import { temporal } from 'zundo';
-import { create } from 'zustand';
+import { createStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
 const maxHistoryEntries = 50;
+
+type TemporalControls = {
+  pause: () => void;
+  resume: () => void;
+};
+
+function getTemporalControls(store: unknown): TemporalControls {
+  return (
+    store as { temporal: { getState: () => TemporalControls } }
+  ).temporal.getState();
+}
 
 type TrackedWorkflowState = {
   nodes: Node[];
   edges: Edge[];
 };
 
-type WorkflowDocumentState = TrackedWorkflowState & {
+export type WorkflowDocumentState = TrackedWorkflowState & {
   settings: WorkflowSettings;
 };
 
-type WorkflowStore = TrackedWorkflowState & {
+export type WorkflowStore = TrackedWorkflowState & {
   settings: WorkflowSettings;
   selectedNodeId: string | null;
   dragStartNodes: Node[] | null;
@@ -57,14 +68,15 @@ const initialSettings: WorkflowSettings = {
   inputSchema: { fields: [] },
 };
 
-export const useWorkflowStore = create<WorkflowStore>()(
-  temporal(
-    immer((set, get) => ({
-      nodes: initialNodes,
-      edges: [],
-      settings: initialSettings,
-      selectedNodeId: null,
-      dragStartNodes: null,
+export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>
+  createStore<WorkflowStore>()(
+    temporal(
+      immer((set, get, store) => ({
+        nodes: initialWorkflow?.nodes ?? initialNodes,
+        edges: initialWorkflow?.edges ?? [],
+        settings: initialWorkflow?.settings ?? initialSettings,
+        selectedNodeId: null,
+        dragStartNodes: null,
 
       onNodesChange: (changes) => {
         const removedNodeIds = new Set(
@@ -106,7 +118,10 @@ export const useWorkflowStore = create<WorkflowStore>()(
           return;
         }
 
-        const isBranch = source.type === 'if_else' || source.type === 'switch';
+        const isBranch =
+          source.type === 'if_else' ||
+          source.type === 'switch' ||
+          source.type === 'human_review';
         if (isBranch && !connection.sourceHandle) {
           return;
         }
@@ -121,6 +136,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
           source.type === 'switch' &&
           connection.sourceHandle !== 'default' &&
           !connection.sourceHandle?.startsWith('case:')
+        ) {
+          return;
+        }
+        if (
+          source.type === 'human_review' &&
+          connection.sourceHandle !== 'approved' &&
+          connection.sourceHandle !== 'rejected'
         ) {
           return;
         }
@@ -206,13 +228,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
       startNodeDrag: () => {
         set({ dragStartNodes: get().nodes });
-        useWorkflowStore.temporal.getState().pause();
+        getTemporalControls(store).pause();
       },
 
       finishNodeDrag: () => {
         const dragStartNodes = get().dragStartNodes;
         if (!dragStartNodes) {
-          useWorkflowStore.temporal.getState().resume();
+          getTemporalControls(store).resume();
           return;
         }
 
@@ -220,7 +242,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
         // While tracking is paused, return to the pre-drag nodes. Resuming and
         // restoring the final nodes creates one temporal entry for the drag.
         set({ nodes: dragStartNodes, dragStartNodes: null });
-        useWorkflowStore.temporal.getState().resume();
+        getTemporalControls(store).resume();
         set({ nodes: finalNodes });
       },
     })),

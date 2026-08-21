@@ -40,10 +40,10 @@ pub async fn workflow_run(
             thread_id.as_deref().unwrap_or("workflow-run"),
             resume.unwrap_or(false),
             |event| {
-            // The webview may go away while a workflow is still running.
-            // The workflow should complete cleanly even if it has nobody
-            // left to receive its progress events.
-            let _ = on_event.send(event);
+                // The webview may go away while a workflow is still running.
+                // The workflow should complete cleanly even if it has nobody
+                // left to receive its progress events.
+                let _ = on_event.send(event);
             },
         )
         .await
@@ -53,6 +53,25 @@ pub async fn workflow_run(
 #[tauri::command]
 pub async fn workflow_resolve_tool_approval(request_id: String, fingerprint: String, approved: bool) -> CmdResult<()> {
     workflow::resolve_tool_approval(&request_id, &fingerprint, approved)
+        .await
+        .stringify_err()
+}
+
+/// Persist one human-review decision before resuming the workflow checkpoint.
+/// The requested node determines the only state key this command may write.
+#[tauri::command]
+pub async fn workflow_resolve_human_review(
+    dsl: Value,
+    thread_id: String,
+    node_id: String,
+    approved: bool,
+) -> CmdResult<()> {
+    let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
+    let approval_key = workflow::human_review_approval_key(&dsl, &node_id).stringify_err()?;
+    let config = Config::workrun().await.latest_arc();
+    let compiled = workflow::compile(dsl, &config, None).await.stringify_err()?;
+    compiled
+        .update_state(&thread_id, [(approval_key, Value::Bool(approved))])
         .await
         .stringify_err()
 }

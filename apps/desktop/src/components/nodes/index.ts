@@ -1,6 +1,7 @@
 export * from './agent-node';
 export * from './end-node';
 export * from './group-node';
+export * from './human-review-node';
 export * from './if-else-node';
 export * from './remote-agent-node';
 export * from './process-node';

@@ -139,6 +139,17 @@ pub(super) fn validate_edges(
             if !branch_handles.insert((source.id.clone(), handle.to_string())) {
                 bail!("switch node `{}` has multiple `{handle}` edges", source.id);
             }
+        } else if source.kind == "human_review" {
+            // Existing workflows used an unlabelled outgoing edge. Preserve it
+            // as the new Approved route while newly-created edges must use a
+            // labelled handle from the canvas.
+            let handle = edge.source_handle.as_deref().unwrap_or("approved");
+            if handle != "approved" && handle != "rejected" {
+                bail!("human_review node `{}` has invalid handle `{handle}`", source.id);
+            }
+            if !branch_handles.insert((source.id.clone(), handle.to_string())) {
+                bail!("human_review node `{}` has multiple `{handle}` edges", source.id);
+            }
         } else if edge.source_handle.is_some() {
             bail!("node `{}` does not support sourceHandle routing", source.id);
         }
@@ -208,7 +219,7 @@ pub(super) fn add_switch_edges(
     Ok(())
 }
 
-fn routes_from_edges<F>(
+pub(super) fn routes_from_edges<F>(
     edges: &[&WorkflowEdge],
     end_ids: &HashSet<String>,
     route: F,

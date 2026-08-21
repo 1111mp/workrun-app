@@ -54,6 +54,7 @@ const nodeTitles: Record<string, string> = {
   process: 'App',
   if_else: 'If / Else',
   switch: 'Switch',
+  human_review: 'Human Review',
   group: 'Group',
   start: 'Start',
   end: 'End',
@@ -177,6 +178,7 @@ function WorkflowNodeInspector({
   const data = node?.data ?? {};
   const title = node ? (nodeTitles[node.type ?? ''] ?? 'Node') : 'Node';
   const profilesByProvider = groupModelProfiles(modelProfiles);
+
   const processNodes = useQuery({
     queryKey: ['processNodes'],
     queryFn: listProcessNodes,
@@ -691,6 +693,43 @@ function WorkflowNodeInspector({
           </FieldGroup>
         );
       }
+      case 'human_review':
+        return (
+          <FieldGroup className='gap-7'>
+            <InspectorSection
+              title='Review request'
+              description='The workflow pauses here. Connect the Approved and Rejected outputs to choose what happens next.'
+            >
+              <TextField
+                id='human-review-title'
+                label='Title'
+                value={getText(data, 'title')}
+                onChange={(title) => updateData({ title })}
+              />
+              <TextareaField
+                id='human-review-description'
+                label='Description'
+                description='Explain the decision the reviewer needs to make.'
+                value={getText(data, 'description')}
+                onChange={(description) => updateData({ description })}
+              />
+              <TextField
+                id='human-review-context-keys'
+                label='Context keys'
+                description='Comma-separated state keys shown to the reviewer.'
+                value={getStringArray(data, 'contextKeys').join(', ')}
+                onChange={(value) =>
+                  updateData({
+                    contextKeys: value
+                      .split(',')
+                      .map((key) => key.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+            </InspectorSection>
+          </FieldGroup>
+        );
       case 'start':
       case 'end':
       case 'group':
