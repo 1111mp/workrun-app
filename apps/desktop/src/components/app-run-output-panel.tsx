@@ -10,7 +10,7 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import { CheckCircle2Icon, CircleAlertIcon, ClipboardIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import type { ProcessNode } from '@/services/process-node';
 
@@ -33,6 +33,61 @@ type AppRunOutputPanelProps = {
 
 type OutputStream = keyof ProcessNodeOutput;
 
+function AppRunOutputContent({ run }: { run: ProcessNodeRun }) {
+  const [stream, setStream] = useState<OutputStream>(() =>
+    run.output.stderr ? 'stderr' : 'stdout',
+  );
+  const output = run.output[stream];
+
+  return (
+    <div className='flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-3'>
+      {run.error ? (
+        <div className='border-destructive/30 bg-destructive/5 text-destructive mb-3 flex items-start gap-2 rounded-md border p-3 text-sm'>
+          <CircleAlertIcon className='mt-0.5 size-4 shrink-0' />
+          <p>{run.error}</p>
+        </div>
+      ) : null}
+      <div className='mb-2 flex items-center gap-1'>
+        {(['stdout', 'stderr'] as const).map((item) => (
+          <Button
+            key={item}
+            size='sm'
+            variant={stream === item ? 'secondary' : 'ghost'}
+            onClick={() => setStream(item)}
+          >
+            {item === 'stdout' ? 'Output' : 'Errors'}
+            {run.output[item] ? ' •' : ''}
+          </Button>
+        ))}
+      </div>
+      <div className='bg-muted min-h-0 flex-1 overflow-hidden rounded-md'>
+        {output ? (
+          <LazyLog
+            text={output}
+            follow
+            selectableLines
+            wrapLines
+            enableLineNumbers
+            rowHeight={20}
+            style={{
+              backgroundColor: 'transparent',
+              color: 'var(--foreground)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.75rem',
+              lineHeight: '1.25rem',
+              padding: '0.75rem',
+            }}
+          />
+        ) : (
+          <div className='p-3 font-mono text-xs leading-5 whitespace-pre-wrap'>
+            {run.isRunning ? 'Waiting for output…' : 'No output was produced.'}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AppRunOutputPanel({
   onClear,
   onOpenChange,
@@ -40,13 +95,7 @@ function AppRunOutputPanel({
   open,
   run,
 }: AppRunOutputPanelProps) {
-  const [stream, setStream] = useState<OutputStream>('stdout');
-  const output = run?.output[stream] ?? '';
   const hasOutput = Boolean(run?.output.stdout || run?.output.stderr);
-
-  useEffect(() => {
-    if (run?.output.stderr) setStream('stderr');
-  }, [run?.output.stderr]);
 
   if (!run) return null;
 
@@ -93,53 +142,10 @@ function AppRunOutputPanel({
           </DrawerDescription>
         </DrawerHeader>
 
-        <div className='flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-3'>
-          {run.error ? (
-            <div className='border-destructive/30 bg-destructive/5 text-destructive mb-3 flex items-start gap-2 rounded-md border p-3 text-sm'>
-              <CircleAlertIcon className='mt-0.5 size-4 shrink-0' />
-              <p>{run.error}</p>
-            </div>
-          ) : null}
-          <div className='mb-2 flex items-center gap-1'>
-            {(['stdout', 'stderr'] as const).map((item) => (
-              <Button
-                key={item}
-                size='sm'
-                variant={stream === item ? 'secondary' : 'ghost'}
-                onClick={() => setStream(item)}
-              >
-                {item === 'stdout' ? 'Output' : 'Errors'}
-                {run.output[item] ? ' •' : ''}
-              </Button>
-            ))}
-          </div>
-          <div className='bg-muted min-h-0 flex-1 overflow-hidden rounded-md'>
-            {output ? (
-              <LazyLog
-                text={output}
-                follow
-                selectableLines
-                wrapLines
-                enableLineNumbers
-                rowHeight={20}
-                style={{
-                  backgroundColor: 'transparent',
-                  color: 'var(--foreground)',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.75rem',
-                  lineHeight: '1.25rem',
-                  padding: '0.75rem',
-                }}
-              />
-            ) : (
-              <div className='p-3 font-mono text-xs leading-5 whitespace-pre-wrap'>
-                {run.isRunning
-                  ? 'Waiting for output…'
-                  : 'No output was produced.'}
-              </div>
-            )}
-          </div>
-        </div>
+        <AppRunOutputContent
+          key={`${run.node.definition.id}:${run.output.stderr}`}
+          run={run}
+        />
 
         <DrawerFooter className='flex-row justify-end'>
           <Button variant='outline' disabled={!hasOutput} onClick={onClear}>

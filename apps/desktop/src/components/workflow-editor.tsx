@@ -41,7 +41,7 @@ import {
   ShieldAlertIcon,
   ShieldCheckIcon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
@@ -74,9 +74,10 @@ const WORKFLOW_MODE = [
 
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
+  autoStartRun?: boolean;
 };
 
-function WorkflowEditor({ workflow }: WorkflowEditorProps) {
+function WorkflowEditor({ workflow, autoStartRun }: WorkflowEditorProps) {
   const [draftDocument] = useState<WorkflowDocument>(() =>
     createWorkflowDocument(),
   );
@@ -86,16 +87,20 @@ function WorkflowEditor({ workflow }: WorkflowEditorProps) {
 
   return (
     <WorkflowStoreProvider store={workflowStore}>
-      <WorkflowEditorContent workflow={workflow} />
+      <WorkflowEditorContent workflow={workflow} autoStartRun={autoStartRun} />
     </WorkflowStoreProvider>
   );
 }
 
-function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
+function WorkflowEditorContent({
+  workflow,
+  autoStartRun,
+}: WorkflowEditorProps) {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [savedDocument, setSavedDocument] = useState<string>(() =>
     workflow ? JSON.stringify(workflow.document) : '',
   );
+  const autoStartHandled = useRef(false);
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -130,12 +135,20 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
     queryKey: ['modelCatalog'],
     queryFn: getModelCatalog,
   });
+
   const workflowRun = useWorkflowRun(
     workflow?.id ?? draftId,
     nodes,
     edges,
     workflowSettings,
   );
+
+  useEffect(() => {
+    if (!autoStartRun || autoStartHandled.current) return;
+    autoStartHandled.current = true;
+    workflowRun.startRun();
+  }, [autoStartRun, workflowRun]);
+
   const askUserQuestionOptions = Array.isArray(
     workflowRun.askUserQuestion?.options,
   )
@@ -196,7 +209,7 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
         toasterId: 'global',
       });
       if (!workflow) {
-        navigate(`/workflows/${saved.id}`, { replace: true });
+        void navigate(`/workflows/${saved.id}`, { replace: true });
       }
     } catch (error) {
       toast.error('Workflow could not be saved', {
@@ -319,8 +332,8 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
               </AlertDialogMedia>
               <div className='min-w-0 space-y-1.5'>
                 <AlertDialogTitle>
-                  Allow {String(workflowRun.toolApproval?.name ?? 'Tool')} to
-                  run?
+                  Allow {(workflowRun.toolApproval?.name as string) ?? 'Tool'}{' '}
+                  to run?
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {typeof workflowRun.toolApproval?.description === 'string'
@@ -330,15 +343,14 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
                 <div className='flex flex-wrap gap-1.5 pt-1'>
                   <Badge variant='outline'>
                     Source:{' '}
-                    {String(
-                      workflowRun.toolApproval?.sourceName ??
-                        workflowRun.toolApproval?.source ??
-                        'Tool App',
-                    )}
+                    {(workflowRun.toolApproval?.sourceName as string) ??
+                      (workflowRun.toolApproval?.source as string) ??
+                      'Tool App'}
                   </Badge>
                   <Badge variant='secondary'>
                     Risk:{' '}
-                    {String(workflowRun.toolApproval?.riskLevel ?? 'unknown')}
+                    {(workflowRun.toolApproval?.riskLevel as string) ??
+                      'unknown'}
                   </Badge>
                 </div>
               </div>
@@ -372,9 +384,8 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
               </AlertDialogMedia>
               <div className='min-w-0 space-y-1.5'>
                 <AlertDialogTitle>
-                  {String(
-                    workflowRun.humanReview?.title ?? 'Human review required',
-                  )}
+                  {(workflowRun.humanReview?.title as string) ??
+                    'Human review required'}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {typeof workflowRun.humanReview?.description === 'string'
@@ -414,12 +425,10 @@ function WorkflowEditorContent({ workflow }: WorkflowEditorProps) {
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {String(
-                  workflowRun.askUserQuestion?.title ?? 'Choose an option',
-                )}
+                {(workflowRun.askUserQuestion?.title as string) ??
+                  'Choose an option'}
               </AlertDialogTitle>
-              {typeof workflowRun.askUserQuestion?.description ===
-              'string' ? (
+              {typeof workflowRun.askUserQuestion?.description === 'string' ? (
                 <AlertDialogDescription>
                   {workflowRun.askUserQuestion.description}
                 </AlertDialogDescription>

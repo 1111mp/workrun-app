@@ -71,7 +71,7 @@ function CreateProcessNodePage() {
     onSuccess: (node) => {
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
       toast.success('App created', { toasterId: 'global' });
-      navigate(`/apps/${node.definition.id}`, { replace: true });
+      void navigate(`/apps/${node.definition.id}`, { replace: true });
     },
     onError: (error) => {
       setCreateStage(undefined);

@@ -5,6 +5,7 @@ type WorkflowBaseNode = {
 type WorkflowNodeType =
   | 'agent'
   | 'remote_agent'
+  | 'codeact_agent'
   | 'process'
   | 'start'
   | 'end'

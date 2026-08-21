@@ -24,6 +24,7 @@ import {
 import {
   FilePenLineIcon,
   GitBranchIcon,
+  PlayIcon,
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -89,16 +90,27 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
           </div>
         </div>
       </CardContent>
-      <CardFooter className='justify-between'>
+      <CardFooter className='gap-2'>
         <span className='text-muted-foreground text-xs'>Workflow canvas</span>
-        <Button
-          size='sm'
-          nativeButton={false}
-          render={<Link to={`/workflows/${workflow.id}`} />}
-        >
-          <FilePenLineIcon data-icon='inline-start' />
-          Edit workflow
-        </Button>
+        <div className='ml-auto flex items-center gap-1.5'>
+          <Button
+            size='sm'
+            nativeButton={false}
+            render={<Link to={`/workflows/${workflow.id}?run=true`} />}
+          >
+            <PlayIcon data-icon='inline-start' />
+            Run
+          </Button>
+          <Button
+            variant='outline'
+            size='sm'
+            nativeButton={false}
+            render={<Link to={`/workflows/${workflow.id}`} />}
+          >
+            <FilePenLineIcon data-icon='inline-start' />
+            Edit
+          </Button>
+        </div>
       </CardFooter>
     </Card>
   );

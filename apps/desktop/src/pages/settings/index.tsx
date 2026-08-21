@@ -51,20 +51,6 @@ function SettingsPage() {
     },
   });
 
-  useEffect(() => {
-    return form.subscribe({
-      formState: {
-        values: true,
-        isDirty: true,
-      },
-      callback: () => {
-        void form.handleSubmit(onSubmit, (errors) => {
-          console.error('Settings form validation failed:', errors);
-        })();
-      },
-    });
-  }, [form]);
-
   const onSubmit = useEffectEvent(async (values: SettingsForm) => {
     const settings: IWorkrunConfig = {
       locale: values.locale,
@@ -94,6 +80,20 @@ function SettingsPage() {
 
     await updateConfig(settings);
   });
+
+  useEffect(() => {
+    return form.subscribe({
+      formState: {
+        values: true,
+        isDirty: true,
+      },
+      callback: () => {
+        void form.handleSubmit(onSubmit, (errors) => {
+          console.error('Settings form validation failed:', errors);
+        })();
+      },
+    });
+  }, [form]);
 
   return (
     <div className='size-full overflow-y-auto'>

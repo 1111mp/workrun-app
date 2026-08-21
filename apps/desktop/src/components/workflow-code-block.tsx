@@ -10,6 +10,12 @@ type HighlightedToken = {
   color?: string;
 };
 
+type HighlightedCode = {
+  code: string;
+  language: BundledLanguage;
+  tokens: HighlightedToken[][];
+};
+
 type WorkflowCodeBlockProps = {
   className?: string;
   code: string;
@@ -21,27 +27,26 @@ function languageFromClassName(className?: string) {
     return language as BundledLanguage;
   }
 
-  return 'text';
+  return 'text' as BundledLanguage;
 }
 
 function WorkflowCodeBlock({ className, code }: WorkflowCodeBlockProps) {
   const language = languageFromClassName(className);
-  const [tokens, setTokens] = useState<HighlightedToken[][]>();
+  const [highlightedCode, setHighlightedCode] = useState<HighlightedCode>();
 
   useEffect(() => {
     let cancelled = false;
-    setTokens(undefined);
     const timer = window.setTimeout(() => {
       void codeToTokens(code, {
         lang: language,
         theme: 'github-dark',
       })
         .then((result) => {
-          if (!cancelled) setTokens(result.tokens);
+          if (!cancelled) {
+            setHighlightedCode({ code, language, tokens: result.tokens });
+          }
         })
-        .catch(() => {
-          if (!cancelled) setTokens(undefined);
-        });
+        .catch(() => undefined);
     }, 150);
 
     return () => {
@@ -49,6 +54,11 @@ function WorkflowCodeBlock({ className, code }: WorkflowCodeBlockProps) {
       window.clearTimeout(timer);
     };
   }, [code, language]);
+
+  const tokens =
+    highlightedCode?.code === code && highlightedCode.language === language
+      ? highlightedCode.tokens
+      : undefined;
 
   if (!tokens) {
     return <code className={className}>{code}</code>;

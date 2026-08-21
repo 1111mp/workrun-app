@@ -42,7 +42,7 @@ import {
   SaveIcon,
   Trash2Icon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 
@@ -318,49 +318,15 @@ function ContractEditor({
   );
 }
 
+type ProcessNodeDetails = Awaited<ReturnType<typeof inspectProcessNode>>;
+
 function ProcessNodeDetailPage() {
   const { id } = useParams();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<DefinitionDraft>();
-  const [formError, setFormError] = useState<string>();
   const node = useQuery({
     queryKey: ['apps', id],
     queryFn: () => inspectProcessNode(id!),
     enabled: Boolean(id),
   });
-
-  useEffect(() => {
-    if (node.data) setDraft(toDraft(node.data.definition));
-  }, [node.data]);
-
-  const save = useMutation({
-    mutationFn: async () => {
-      if (!draft?.name.trim()) throw new Error('Name is required.');
-      return updateProcessNode({
-        ...draft,
-        inputs: parseSchemas(draft.inputs, 'Inputs'),
-        outputs: parseSchemas(draft.outputs, 'Outputs'),
-      });
-    },
-    onSuccess: (saved) => {
-      queryClient.setQueryData(['apps', saved.definition.id], saved);
-      void queryClient.invalidateQueries({ queryKey: ['apps'] });
-      toast.success('Process Node saved', { toasterId: 'global' });
-      navigate(`/apps/${saved.definition.id}`, { replace: true });
-    },
-    onError: (error) => {
-      setFormError(error instanceof Error ? error.message : String(error));
-    },
-  });
-
-  const update = <K extends keyof DefinitionDraft>(
-    key: K,
-    value: DefinitionDraft[K],
-  ) => {
-    setDraft((current) => current && { ...current, [key]: value });
-    setFormError(undefined);
-  };
 
   if (node.isError) {
     return (
@@ -378,13 +344,61 @@ function ProcessNodeDetailPage() {
     );
   }
 
-  if (node.isLoading || !draft) {
+  if (node.isLoading || !node.data) {
     return (
       <div className='text-muted-foreground p-6 text-sm'>
         Loading Process Node…
       </div>
     );
   }
+
+  return (
+    <ProcessNodeDetailEditor
+      key={node.data.definition.id}
+      processNode={node.data}
+    />
+  );
+}
+
+function ProcessNodeDetailEditor({
+  processNode,
+}: {
+  processNode: ProcessNodeDetails;
+}) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<DefinitionDraft>(() =>
+    toDraft(processNode.definition),
+  );
+  const [formError, setFormError] = useState<string>();
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!draft.name.trim()) throw new Error('Name is required.');
+      return updateProcessNode({
+        ...draft,
+        inputs: parseSchemas(draft.inputs, 'Inputs'),
+        outputs: parseSchemas(draft.outputs, 'Outputs'),
+      });
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData(['apps', saved.definition.id], saved);
+      void queryClient.invalidateQueries({ queryKey: ['apps'] });
+      toast.success('Process Node saved', { toasterId: 'global' });
+      void navigate(`/apps/${saved.definition.id}`, { replace: true });
+    },
+    onError: (error) => {
+      setFormError(error instanceof Error ? error.message : String(error));
+    },
+  });
+
+  const update = <K extends keyof DefinitionDraft>(
+    key: K,
+    value: DefinitionDraft[K],
+  ) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+    setFormError(undefined);
+  };
 
   return (
     <div className='size-full overflow-y-auto'>
@@ -533,14 +547,14 @@ function ProcessNodeDetailPage() {
           </CardContent>
           <CardFooter className='text-muted-foreground text-sm'>
             <FolderCodeIcon data-icon='inline-start' />
-            <code className='truncate'>{node.data?.projectPath}</code>
+            <code className='truncate'>{processNode.projectPath}</code>
             <div className='ml-auto flex shrink-0 items-center gap-1'>
               <Button
                 variant='ghost'
                 size='icon-sm'
                 aria-label='Open project directory'
                 onClick={() =>
-                  void openProjectDirectory(node.data!.definition.id)
+                  void openProjectDirectory(processNode.definition.id)
                 }
               >
                 <FolderOpenIcon />
@@ -549,7 +563,7 @@ function ProcessNodeDetailPage() {
                 variant='ghost'
                 size='icon-sm'
                 aria-label='Copy project path'
-                onClick={() => void copyProjectPath(node.data!.projectPath)}
+                onClick={() => void copyProjectPath(processNode.projectPath)}
               >
                 <CopyIcon />
               </Button>

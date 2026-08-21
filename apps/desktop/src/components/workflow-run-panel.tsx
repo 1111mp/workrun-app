@@ -17,7 +17,7 @@ import {
   Textarea,
 } from '@workspace/ui/components';
 import { PlayIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import { WorkflowRunOutput } from '@/components/workflow-output-panel';
@@ -59,40 +59,24 @@ function initialValues(settings: WorkflowSettings): RunValues {
   );
 }
 
-function WorkflowRunPanel({
+type WorkflowRunFormProps = {
+  settings: WorkflowSettings;
+  isRunning: boolean;
+  onClose: () => void;
+  onRun: (initialState: Record<string, unknown>) => void;
+};
+
+function WorkflowRunForm({
   settings,
+  isRunning,
+  onClose,
   onRun,
-  onResume,
-}: WorkflowRunPanelProps) {
-  const {
-    lastRunInput,
-    open,
-    run,
-    showOutput,
-    setRunPanelOpen: onOpenChange,
-  } = useWorkflowRunStore(
-    useShallow((state) => ({
-      lastRunInput: state.lastRunInput,
-      open: state.runPanelOpen,
-      run: state.runView,
-      showOutput: state.showRunOutput,
-      setRunPanelOpen: state.setRunPanelOpen,
-    })),
-  );
-  const isRunning = run.status === 'running';
+}: WorkflowRunFormProps) {
+  const inputs = runInputs(settings);
   const [values, setValues] = useState<RunValues>(() =>
     initialValues(settings),
   );
   const [errors, setErrors] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (open) {
-      setValues(initialValues(settings));
-      setErrors(new Set());
-    }
-  }, [open, settings]);
-
-  const inputs = runInputs(settings);
 
   const submit = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -120,6 +104,110 @@ function WorkflowRunPanel({
     );
     onRun(state);
   };
+
+  return (
+    <form className='flex min-h-0 flex-1 flex-col' onSubmit={submit}>
+      <div className='min-h-0 flex-1 overflow-y-auto px-4 py-4'>
+        <FieldGroup>
+          {inputs.map((input) => {
+            const invalid = errors.has(input.key);
+            const value = values[input.key];
+            return (
+              <Field key={input.id} data-invalid={invalid || undefined}>
+                <FieldLabel htmlFor={`run-input-${input.id}`}>
+                  {input.label}
+                </FieldLabel>
+                {input.description && (
+                  <FieldDescription>{input.description}</FieldDescription>
+                )}
+                {input.type === 'textarea' ? (
+                  <Textarea
+                    id={`run-input-${input.id}`}
+                    aria-invalid={invalid || undefined}
+                    required={input.required}
+                    value={typeof value === 'string' ? value : ''}
+                    onChange={(event) =>
+                      setValues((current) => ({
+                        ...current,
+                        [input.key]: event.target.value,
+                      }))
+                    }
+                  />
+                ) : input.type === 'boolean' ? (
+                  <Field orientation='horizontal'>
+                    <Switch
+                      id={`run-input-${input.id}`}
+                      checked={value === true}
+                      onCheckedChange={(checked) =>
+                        setValues((current) => ({
+                          ...current,
+                          [input.key]: checked,
+                        }))
+                      }
+                    />
+                    <FieldContent>
+                      <FieldDescription>Enabled</FieldDescription>
+                    </FieldContent>
+                  </Field>
+                ) : (
+                  <Input
+                    id={`run-input-${input.id}`}
+                    type={input.type === 'number' ? 'number' : 'text'}
+                    aria-invalid={invalid || undefined}
+                    required={input.required}
+                    value={typeof value === 'string' ? value : ''}
+                    onChange={(event) =>
+                      setValues((current) => ({
+                        ...current,
+                        [input.key]: event.target.value,
+                      }))
+                    }
+                  />
+                )}
+              </Field>
+            );
+          })}
+        </FieldGroup>
+      </div>
+      <DrawerFooter>
+        <Button type='button' variant='outline' onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type='submit' disabled={isRunning}>
+          {isRunning ? (
+            <Spinner data-icon='inline-start' />
+          ) : (
+            <PlayIcon data-icon='inline-start' />
+          )}
+          Run
+        </Button>
+      </DrawerFooter>
+    </form>
+  );
+}
+
+function WorkflowRunPanel({
+  settings,
+  onRun,
+  onResume,
+}: WorkflowRunPanelProps) {
+  const {
+    lastRunInput,
+    open,
+    run,
+    showOutput,
+    setRunPanelOpen: onOpenChange,
+  } = useWorkflowRunStore(
+    useShallow((state) => ({
+      lastRunInput: state.lastRunInput,
+      open: state.runPanelOpen,
+      run: state.runView,
+      showOutput: state.showRunOutput,
+      setRunPanelOpen: state.setRunPanelOpen,
+    })),
+  );
+  const isRunning = run.status === 'running';
+  const formKey = `${open}:${JSON.stringify(settings)}`;
 
   return (
     <Drawer
@@ -163,89 +251,13 @@ function WorkflowRunPanel({
                 to the workflow.
               </DrawerDescription>
             </DrawerHeader>
-            <form className='flex min-h-0 flex-1 flex-col' onSubmit={submit}>
-              <div className='min-h-0 flex-1 overflow-y-auto px-4 py-4'>
-                <FieldGroup>
-                  {inputs.map((input) => {
-                    const invalid = errors.has(input.key);
-                    const value = values[input.key];
-                    return (
-                      <Field key={input.id} data-invalid={invalid || undefined}>
-                        <FieldLabel htmlFor={`run-input-${input.id}`}>
-                          {input.label}
-                        </FieldLabel>
-                        {input.description && (
-                          <FieldDescription>
-                            {input.description}
-                          </FieldDescription>
-                        )}
-                        {input.type === 'textarea' ? (
-                          <Textarea
-                            id={`run-input-${input.id}`}
-                            aria-invalid={invalid || undefined}
-                            required={input.required}
-                            value={typeof value === 'string' ? value : ''}
-                            onChange={(event) =>
-                              setValues((current) => ({
-                                ...current,
-                                [input.key]: event.target.value,
-                              }))
-                            }
-                          />
-                        ) : input.type === 'boolean' ? (
-                          <Field orientation='horizontal'>
-                            <Switch
-                              id={`run-input-${input.id}`}
-                              checked={value === true}
-                              onCheckedChange={(checked) =>
-                                setValues((current) => ({
-                                  ...current,
-                                  [input.key]: checked,
-                                }))
-                              }
-                            />
-                            <FieldContent>
-                              <FieldDescription>Enabled</FieldDescription>
-                            </FieldContent>
-                          </Field>
-                        ) : (
-                          <Input
-                            id={`run-input-${input.id}`}
-                            type={input.type === 'number' ? 'number' : 'text'}
-                            aria-invalid={invalid || undefined}
-                            required={input.required}
-                            value={typeof value === 'string' ? value : ''}
-                            onChange={(event) =>
-                              setValues((current) => ({
-                                ...current,
-                                [input.key]: event.target.value,
-                              }))
-                            }
-                          />
-                        )}
-                      </Field>
-                    );
-                  })}
-                </FieldGroup>
-              </div>
-              <DrawerFooter>
-                <Button
-                  type='button'
-                  variant='outline'
-                  onClick={() => onOpenChange(false)}
-                >
-                  Cancel
-                </Button>
-                <Button type='submit' disabled={isRunning}>
-                  {isRunning ? (
-                    <Spinner data-icon='inline-start' />
-                  ) : (
-                    <PlayIcon data-icon='inline-start' />
-                  )}
-                  Run
-                </Button>
-              </DrawerFooter>
-            </form>
+            <WorkflowRunForm
+              key={formKey}
+              settings={settings}
+              isRunning={isRunning}
+              onClose={() => onOpenChange(false)}
+              onRun={onRun}
+            />
           </>
         )}
       </DrawerContent>

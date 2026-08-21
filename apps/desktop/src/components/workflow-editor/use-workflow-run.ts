@@ -90,6 +90,7 @@ function useWorkflowRun(
     if (pendingEvents.current.length) afterDrain.current.push(callback);
     else callback();
   };
+
   const drain = () => {
     const events: WorkflowRunEvent[] = [];
     let remaining = charactersPerFrame(pendingCharacters.current);
@@ -129,6 +130,7 @@ function useWorkflowRun(
     afterDrain.current = [];
     callbacks.forEach((callback) => callback());
   };
+
   const queue = (event: MessageEvent) => {
     const content = splitGraphemes(event.content);
     pendingCharacters.current += content.length;

@@ -234,7 +234,10 @@ function applyRunEvent(
       ? view.thoughts.findLast((thought) => thought.nodeId === event.node)
       : undefined;
     if (previousThought) {
-      Object.assign(previousThought, { status: 'running', durationMs: undefined });
+      Object.assign(previousThought, {
+        status: 'running',
+        durationMs: undefined,
+      });
     } else {
       view.thoughts.push({
         id: crypto.randomUUID(),
@@ -359,7 +362,7 @@ function applyCustom(
       typeof data !== 'string'
     )
       return;
-    execution[stream] = truncate(String(execution[stream] ?? '') + data);
+    execution[stream] = truncate(((execution[stream] as string) ?? '') + data);
     let log = state.runView.processLogs.find(
       (item) => item.nodeId === event.node,
     );
@@ -405,7 +408,7 @@ function displayName(node?: Node) {
       ? data.label
       : typeof data?.title === 'string' && data.title.trim()
         ? data.title
-      : (node?.id ?? '');
+        : (node?.id ?? '');
 }
 
 function truncate(value: string) {

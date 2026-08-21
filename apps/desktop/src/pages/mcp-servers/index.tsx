@@ -61,7 +61,7 @@ import {
   TerminalIcon,
   Trash2Icon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 
 import {
@@ -528,6 +528,7 @@ function McpServersPage() {
           </Empty>
         ) : null}
         <McpServerDialog
+          key={draft?.id ?? (draft ? 'new' : 'closed')}
           draft={draft}
           health={
             draft
@@ -596,8 +597,10 @@ function McpServerDialog({
   onDiagnosticsUpdated: () => void;
 }) {
   const [formDraft, setFormDraft] = useState<Draft | null>(draft);
-  const [argsText, setArgsText] = useState('');
-  const [environmentText, setEnvironmentText] = useState('');
+  const [argsText, setArgsText] = useState(() => draft?.args.join('\n') ?? '');
+  const [environmentText, setEnvironmentText] = useState(() =>
+    draft ? formatEnvironment(draft.env) : '',
+  );
   const [testResult, setTestResult] = useState<
     | {
         signature: string;
@@ -606,11 +609,7 @@ function McpServerDialog({
       }
     | undefined
   >();
-  useEffect(() => {
-    setFormDraft(draft);
-    setArgsText(draft?.args.join('\n') ?? '');
-    setEnvironmentText(draft ? formatEnvironment(draft.env) : '');
-  }, [draft]);
+
   const isOpen = formDraft !== null;
   const hasInvalidEnvironmentLine = environmentText
     .split('\n')
@@ -631,7 +630,9 @@ function McpServerDialog({
         bearerToken: formDraft.bearerToken,
       }
     : undefined;
+
   const testSignature = JSON.stringify(testRequest);
+
   const testConnection = useMutation({
     mutationFn: testMcpServerConnection,
     onSuccess: (result, request) =>
@@ -643,6 +644,7 @@ function McpServerDialog({
       }),
     onSettled: () => onDiagnosticsUpdated(),
   });
+
   const currentTestResult =
     testResult?.signature === testSignature ? testResult : undefined;
   const canTest =
@@ -653,6 +655,7 @@ function McpServerDialog({
         ? testRequest.command.trim()
         : testRequest?.url.trim(),
     );
+
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className='max-w-3xl! gap-0 overflow-hidden p-0'>

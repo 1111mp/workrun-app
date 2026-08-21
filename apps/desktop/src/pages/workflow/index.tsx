@@ -7,13 +7,14 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useParams } from 'react-router';
+import { useSearchParams, useParams } from 'react-router';
 
 import { WorkflowEditor } from '@/components';
 import { inspectWorkflow } from '@/services/workflow';
 
 function WorkflowPage() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const workflow = useQuery({
     queryKey: ['workflows', id],
     queryFn: () => inspectWorkflow(id!),
@@ -46,7 +47,11 @@ function WorkflowPage() {
 
   return (
     <ReactFlowProvider>
-      <WorkflowEditor key={workflow.data.id} workflow={workflow.data} />
+      <WorkflowEditor
+        key={workflow.data.id}
+        workflow={workflow.data}
+        autoStartRun={searchParams.get('run') === 'true'}
+      />
     </ReactFlowProvider>
   );
 }
