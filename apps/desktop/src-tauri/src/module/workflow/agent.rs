@@ -9,6 +9,7 @@ pub(super) async fn add_local_agent_node(
     let id = node.id.clone();
     let description = string_data(node, "description").unwrap_or_default();
     let instruction = string_data(node, "instruction").unwrap_or_default();
+    let output_key = string_data(node, "outputKey").filter(|key| !key.trim().is_empty());
     let profile_id =
         string_data(node, "modelProfileId").ok_or_else(|| anyhow!("agent node `{id}` needs data.modelProfileId"))?;
     let temperature = number_data(node, "temperature", 0.0, 2.0)?;
@@ -58,6 +59,7 @@ pub(super) async fn add_local_agent_node(
         label,
         on_event,
         Some(tool_trace),
+        output_key,
     )))
 }
 
@@ -112,6 +114,7 @@ pub(super) fn remote_a2a_graph_node(
         url,
         on_event,
         None,
+        None,
     ))
 }
 
@@ -126,6 +129,7 @@ pub(super) struct StreamingAgentNode {
     on_event: Option<Channel<StreamEvent>>,
     streamed_events: Mutex<HashMap<(String, usize), Vec<Value>>>,
     tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
+    output_key: Option<String>,
 }
 
 impl StreamingAgentNode {
@@ -136,6 +140,7 @@ impl StreamingAgentNode {
         endpoint_or_model: impl Into<String>,
         on_event: Option<Channel<StreamEvent>>,
         tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
+        output_key: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -145,6 +150,7 @@ impl StreamingAgentNode {
             on_event,
             streamed_events: Mutex::new(HashMap::new()),
             tool_trace,
+            output_key,
         }
     }
 
@@ -192,6 +198,7 @@ impl Node for StreamingAgentNode {
             &self.endpoint_or_model,
             self.on_event.as_ref(),
             &tool_calls,
+            self.output_key.as_deref(),
         )))
     }
 
@@ -261,6 +268,7 @@ pub(super) fn agent_output_updates(
     endpoint_or_model: &str,
     on_event: Option<&Channel<StreamEvent>>,
     tool_calls: &[Value],
+    output_key: Option<&str>,
 ) -> HashMap<String, Value> {
     let messages = events
         .iter()
@@ -293,8 +301,17 @@ pub(super) fn agent_output_updates(
         ("workflow.node".to_string(), event.clone()),
         ("workflow.trace".to_string(), event),
     ]);
+    let output_content = output_key.map(|_| {
+        messages
+            .iter()
+            .filter_map(|message| message.get("content").and_then(Value::as_str))
+            .collect::<String>()
+    });
     if !messages.is_empty() {
         updates.insert("messages".to_string(), Value::Array(messages));
+    }
+    if let (Some(output_key), Some(content)) = (output_key, output_content) {
+        updates.insert(output_key.to_string(), Value::String(content));
     }
     updates
 }

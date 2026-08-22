@@ -50,6 +50,7 @@ function createNodeData(type: WorkflowNodeType) {
         modelProfileId: '',
         description: 'Describe this agent’s responsibility',
         instruction: '',
+        outputKey: '',
         temperature: undefined,
         topP: undefined,
         toolIds: [],
@@ -106,7 +107,9 @@ function createNodeData(type: WorkflowNodeType) {
         title: 'Human review',
         description:
           'Pause this workflow until a reviewer approves or rejects it.',
+        contentKey: '',
         contextKeys: [],
+        editable: false,
       };
     case 'ask_user_question':
       return {

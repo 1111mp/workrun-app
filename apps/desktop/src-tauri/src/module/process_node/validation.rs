@@ -57,6 +57,13 @@ pub(super) fn validate_schemas(kind: &str, schemas: &BTreeMap<String, Value>) ->
         if name.trim().is_empty() || !schema.is_object() {
             bail!("Process Node {kind} must map non-empty names to JSON object schemas");
         }
+        if let Some(default) = schema.get("default") {
+            let validator = jsonschema::validator_for(schema)
+                .with_context(|| format!("Process Node {kind}.{name} has an invalid JSON Schema"))?;
+            if let Some(error) = validator.iter_errors(default).next() {
+                bail!("Process Node {kind}.{name} default does not match its schema: {error}");
+            }
+        }
     }
     Ok(())
 }

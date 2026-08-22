@@ -5,6 +5,7 @@ use crate::{
 };
 use adk_rust::graph::State;
 use serde_json::Value;
+use std::collections::HashMap;
 use tauri::ipc::Channel;
 
 /// Validate and compile the exact `{ nodes, edges }` document emitted by React
@@ -65,15 +66,23 @@ pub async fn workflow_resolve_human_review(
     thread_id: String,
     node_id: String,
     approved: bool,
+    edits: HashMap<String, String>,
 ) -> CmdResult<()> {
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
     let approval_key = workflow::human_review_approval_key(&dsl, &node_id).stringify_err()?;
+    let editable_key = workflow::human_review_editable_key(&dsl, &node_id).stringify_err()?;
+    if edits.len() > usize::from(editable_key.is_some()) || edits.keys().any(|key| Some(key) != editable_key.as_ref()) {
+        return Err("review edits do not match the configured editable key".into());
+    }
     let config = Config::workrun().await.latest_arc();
     let compiled = workflow::compile(dsl, &config, None).await.stringify_err()?;
-    compiled
-        .update_state(&thread_id, [(approval_key, Value::Bool(approved))])
-        .await
-        .stringify_err()
+    let mut updates = vec![(approval_key, Value::Bool(approved))];
+    if let Some(editable_key) = editable_key
+        && let Some(value) = edits.get(&editable_key)
+    {
+        updates.push((editable_key, Value::String(value.clone())));
+    }
+    compiled.update_state(&thread_id, updates).await.stringify_err()
 }
 
 /// Persist a validated option selection before resuming the workflow checkpoint.

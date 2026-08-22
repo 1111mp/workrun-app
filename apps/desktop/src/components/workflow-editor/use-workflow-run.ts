@@ -250,7 +250,10 @@ function useWorkflowRun(
     store.clearToolApproval();
     await resolveToolApproval(requestId, fingerprint, approved);
   };
-  const resolvePendingHumanReview = async (approved: boolean) => {
+  const resolvePendingHumanReview = async (
+    approved: boolean,
+    edits: Record<string, string> = {},
+  ) => {
     if (isResolvingHumanReview) return;
     const review = store.humanReview;
     const nodeId = review?.nodeId;
@@ -265,6 +268,7 @@ function useWorkflowRun(
         threadId,
         nodeId,
         approved,
+        edits,
       );
       store.clearHumanReview();
       resumeWorkflowRun();

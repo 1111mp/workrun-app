@@ -278,12 +278,14 @@ export function resolveHumanReview(
   threadId: string,
   nodeId: string,
   approved: boolean,
+  edits: Record<string, string> = {},
 ) {
   return invoke('workflow_resolve_human_review', {
     dsl,
     threadId,
     nodeId,
     approved,
+    edits,
   });
 }
 

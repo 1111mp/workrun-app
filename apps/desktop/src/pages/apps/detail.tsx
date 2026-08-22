@@ -82,9 +82,12 @@ function parseSchemas(value: string, label: string) {
 
 type ContractField = {
   key: string;
+  title: string;
   type: string;
   description: string;
   required: boolean;
+  hasDefault: boolean;
+  defaultValue: unknown;
   schema: Record<string, unknown>;
 };
 
@@ -113,10 +116,13 @@ function contractFields(value: string): ContractField[] | undefined {
       return [
         {
           key,
+          title: typeof schema.title === 'string' ? schema.title : '',
           type: contractTypes.includes(type) ? type : 'string',
           description:
             typeof schema.description === 'string' ? schema.description : '',
           required: schema['x-workrun-optional'] !== true,
+          hasDefault: Object.hasOwn(schema, 'default'),
+          defaultValue: schema.default,
           schema,
         },
       ];
@@ -129,14 +135,29 @@ function contractFields(value: string): ContractField[] | undefined {
 function serializeContractFields(fields: ContractField[]) {
   return JSON.stringify(
     Object.fromEntries(
-      fields.map(({ key, type, description, required, schema }) => {
-        const next: Record<string, unknown> = { ...schema, type };
-        if (description) next.description = description;
-        else delete next.description;
-        if (required) delete next['x-workrun-optional'];
-        else next['x-workrun-optional'] = true;
-        return [key, next];
-      }),
+      fields.map(
+        ({
+          key,
+          title,
+          type,
+          description,
+          required,
+          hasDefault,
+          defaultValue,
+          schema,
+        }) => {
+          const next: Record<string, unknown> = { ...schema, type };
+          if (title) next.title = title;
+          else delete next.title;
+          if (description) next.description = description;
+          else delete next.description;
+          if (required) delete next['x-workrun-optional'];
+          else next['x-workrun-optional'] = true;
+          if (hasDefault) next.default = defaultValue;
+          else delete next.default;
+          return [key, next];
+        },
+      ),
     ),
     null,
     2,
@@ -144,14 +165,15 @@ function serializeContractFields(fields: ContractField[]) {
 }
 
 function ContractEditor({
-  label,
+  kind,
   value,
   onChange,
 }: {
-  label: string;
+  kind: 'input' | 'output';
   value: string;
   onChange: (value: string) => void;
 }) {
+  const label = kind === 'input' ? 'Inputs' : 'Outputs';
   const fields = contractFields(value);
   const updateFields = (next: ContractField[]) =>
     onChange(serializeContractFields(next));
@@ -179,7 +201,7 @@ function ContractEditor({
       ),
     );
   const addField = () => {
-    const base = label === 'Inputs' ? 'input' : 'output';
+    const base = kind;
     let index = fields.length + 1;
     let key = `${base}_${index}`;
     while (fields.some((field) => field.key === key)) {
@@ -188,7 +210,16 @@ function ContractEditor({
     }
     updateFields([
       ...fields,
-      { key, type: 'string', description: '', required: true, schema: {} },
+      {
+        key,
+        title: '',
+        type: 'string',
+        description: '',
+        required: true,
+        hasDefault: false,
+        defaultValue: undefined,
+        schema: {},
+      },
     ]);
   };
 
@@ -206,7 +237,7 @@ function ContractEditor({
           >
             <div className='flex items-center justify-between gap-3'>
               <FieldLegend variant='label'>
-                {field.key || `${label.slice(0, -1)} ${index + 1}`}
+                {field.title || field.key || `${kind} ${index + 1}`}
               </FieldLegend>
               <Button
                 variant='ghost'
@@ -219,6 +250,16 @@ function ContractEditor({
                 <Trash2Icon />
               </Button>
             </div>
+            <Field>
+              <FieldLabel>Label</FieldLabel>
+              <Input
+                value={field.title}
+                onChange={(event) =>
+                  updateField(index, { title: event.target.value })
+                }
+                placeholder='Shown to people configuring or running this App'
+              />
+            </Field>
             <FieldGroup className='grid gap-4 sm:grid-cols-[minmax(0,1fr)_9rem]'>
               <Field>
                 <FieldLabel>Field name</FieldLabel>
@@ -262,6 +303,76 @@ function ContractEditor({
                 placeholder='Optional help for the Agent'
               />
             </Field>
+            {kind === 'input' &&
+            ['string', 'number', 'integer', 'boolean'].includes(field.type) ? (
+              <Field className='gap-3'>
+                <Field orientation='horizontal' className='justify-between'>
+                  <FieldContent>
+                    <FieldLabel>Default value</FieldLabel>
+                    <FieldDescription>
+                      Use this value when the workflow does not provide the
+                      field.
+                    </FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    id={`contract-field-default-${kind}-${index}`}
+                    checked={field.hasDefault}
+                    onCheckedChange={(hasDefault) =>
+                      updateField(index, {
+                        hasDefault,
+                        defaultValue:
+                          hasDefault && field.defaultValue === undefined
+                            ? field.type === 'boolean'
+                              ? false
+                              : field.type === 'string'
+                                ? ''
+                                : 0
+                            : field.defaultValue,
+                      })
+                    }
+                  />
+                </Field>
+                {field.hasDefault ? (
+                  field.type === 'boolean' ? (
+                    <Field orientation='horizontal'>
+                      <Switch
+                        id={`contract-field-default-value-${kind}-${index}`}
+                        checked={field.defaultValue === true}
+                        onCheckedChange={(defaultValue) =>
+                          updateField(index, { defaultValue })
+                        }
+                      />
+                      <FieldContent>
+                        <FieldLabel
+                          htmlFor={`contract-field-default-value-${kind}-${index}`}
+                        >
+                          Enabled by default
+                        </FieldLabel>
+                      </FieldContent>
+                    </Field>
+                  ) : (
+                    <Input
+                      type={field.type === 'string' ? 'text' : 'number'}
+                      step={field.type === 'integer' ? '1' : 'any'}
+                      value={
+                        typeof field.defaultValue === 'string' ||
+                        typeof field.defaultValue === 'number'
+                          ? String(field.defaultValue)
+                          : ''
+                      }
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        updateField(index, {
+                          hasDefault: field.type === 'string' || value !== '',
+                          defaultValue:
+                            field.type === 'string' ? value : Number(value),
+                        });
+                      }}
+                    />
+                  )
+                ) : null}
+              </Field>
+            ) : null}
             <Field
               orientation='horizontal'
               className='bg-background rounded-lg border p-3'
@@ -580,12 +691,12 @@ function ProcessNodeDetailEditor({
           <CardContent>
             <FieldGroup className='gap-7'>
               <ContractEditor
-                label='Inputs'
+                kind='input'
                 value={draft.inputs}
                 onChange={(value) => update('inputs', value)}
               />
               <ContractEditor
-                label='Outputs'
+                kind='output'
                 value={draft.outputs}
                 onChange={(value) => update('outputs', value)}
               />

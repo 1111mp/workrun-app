@@ -4,7 +4,9 @@ use adk_rust::graph::END;
 pub(super) struct HumanReviewConfig {
     pub(super) title: String,
     pub(super) description: String,
+    pub(super) content_key: Option<String>,
     pub(super) context_keys: Vec<String>,
+    pub(super) editable: bool,
     pub(super) approval_key: String,
 }
 
@@ -13,10 +15,20 @@ pub(super) fn review_approval_key(node_id: &str) -> String {
 }
 
 pub(super) fn human_review_config(node: &WorkflowNode) -> Result<HumanReviewConfig> {
+    let legacy_editable_key = string_data(node, "editableKey").filter(|key| !key.trim().is_empty());
     Ok(HumanReviewConfig {
         title: string_data(node, "title").unwrap_or_else(|| "Human review required".to_string()),
         description: string_data(node, "description").unwrap_or_default(),
+        content_key: string_data(node, "contentKey")
+            .filter(|key| !key.trim().is_empty())
+            .or_else(|| legacy_editable_key.clone())
+            .or_else(|| string_array_data(node, "contextKeys").ok()?.into_iter().next()),
         context_keys: string_array_data(node, "contextKeys")?,
+        editable: node
+            .data
+            .get("editable")
+            .and_then(Value::as_bool)
+            .unwrap_or(legacy_editable_key.is_some()),
         approval_key: review_approval_key(&node.id),
     })
 }
@@ -33,7 +45,9 @@ pub(super) fn add_human_review_node(
         let config = HumanReviewConfig {
             title: config.title.clone(),
             description: config.description.clone(),
+            content_key: config.content_key.clone(),
             context_keys: config.context_keys.clone(),
+            editable: config.editable,
             approval_key: config.approval_key.clone(),
         };
         let on_event = on_event.clone();
@@ -69,7 +83,10 @@ pub(super) fn add_human_review_node(
                 "nodeId": id,
                 "title": config.title,
                 "description": config.description,
+                "contentKey": config.content_key.clone(),
+                "content": config.content_key.as_ref().and_then(|key| context.get(key).cloned()),
                 "context": context_values,
+                "editable": config.editable,
             });
             if let Some(on_event) = on_event {
                 let _ = on_event.send(StreamEvent::custom(
@@ -140,7 +157,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.approval_key, "workflow.human_review.review.approved");
+        assert!(config.content_key.is_none());
         assert!(config.context_keys.is_empty());
+        assert!(!config.editable);
+    }
+
+    #[test]
+    fn reads_the_content_key_and_editing_flag() {
+        let config = human_review_config(&WorkflowNode {
+            id: "review".to_string(),
+            kind: "human_review".to_string(),
+            data: json!({ "contentKey": "release_notes", "editable": true }),
+        })
+        .unwrap();
+
+        assert_eq!(config.content_key.as_deref(), Some("release_notes"));
+        assert!(config.editable);
     }
 
     #[tokio::test]

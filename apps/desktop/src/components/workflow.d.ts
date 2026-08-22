@@ -44,6 +44,8 @@ type WorkflowAgentNodeData = {
   modelProfileId: string;
   description: string;
   instruction: string;
+  /** Optional state key that receives the agent's complete final text. */
+  outputKey?: string;
   temperature?: number;
   topP?: number;
   toolIds?: string[];
@@ -174,8 +176,12 @@ type WorkflowSwitchNode = WorkflowBaseNode & {
 type WorkflowHumanReviewNodeData = {
   title: string;
   description: string;
-  /** State keys presented to the reviewer. */
-  contextKeys: string[];
+  /** State key whose value is presented to the reviewer. */
+  contentKey?: string;
+  /** Whether the reviewer may edit the string value before approval. */
+  editable?: boolean;
+  /** Additional read-only state values shown with the review content. */
+  contextKeys?: string[];
 };
 type WorkflowHumanReviewNode = WorkflowBaseNode & {
   type: 'human_review';

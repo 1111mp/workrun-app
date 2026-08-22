@@ -95,6 +95,7 @@ pub(super) async fn add_codeact_agent_node(
         label,
         on_event,
         Some(tool_trace),
+        None,
     )))
 }
 

@@ -400,6 +400,16 @@ pub fn human_review_approval_key(dsl: &WorkflowDsl, node_id: &str) -> Result<Str
     Ok(review_approval_key(&node.id))
 }
 
+pub fn human_review_editable_key(dsl: &WorkflowDsl, node_id: &str) -> Result<Option<String>> {
+    let node = dsl
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id && node.kind == "human_review")
+        .ok_or_else(|| anyhow!("human review node `{node_id}` does not exist"))?;
+    let config = human_review_config(node)?;
+    Ok(config.editable.then_some(config.content_key).flatten())
+}
+
 /// Return the one state key an Ask User Question node is allowed to update.
 /// This keeps arbitrary state mutation out of the webview IPC boundary.
 pub fn ask_user_question_answer_key(dsl: &WorkflowDsl, node_id: &str) -> Result<String> {
@@ -744,7 +754,7 @@ mod tests {
             "result": {"uppercase": "HELLO"},
         })];
 
-        let updates = agent_output_updates(&[], "agent", "agent", "model", None, &tool_calls);
+        let updates = agent_output_updates(&[], "agent", "agent", "model", None, &tool_calls, None);
 
         assert_eq!(
             updates["workflow.trace"]["toolCalls"],

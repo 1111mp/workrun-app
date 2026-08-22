@@ -33,6 +33,7 @@ import {
   Separator,
   SidebarProvider,
   SidebarTrigger,
+  Textarea,
 } from '@workspace/ui/components';
 import {
   ArrowLeftIcon,
@@ -42,6 +43,7 @@ import {
   ShieldCheckIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import Markdown from 'react-markdown';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
@@ -77,6 +79,85 @@ type WorkflowEditorProps = {
   autoStartRun?: boolean;
 };
 
+function ReviewMarkdown({ content }: { content: string }) {
+  return (
+    <Markdown
+      components={{
+        h1: ({ children }) => (
+          <h1 className='font-heading text-xl font-semibold tracking-tight'>
+            {children}
+          </h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className='font-heading mt-6 text-lg font-semibold first:mt-0'>
+            {children}
+          </h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className='mt-5 text-sm font-semibold'>{children}</h3>
+        ),
+        li: ({ children }) => <li className='leading-6'>{children}</li>,
+        p: ({ children }) => <p className='leading-6'>{children}</p>,
+        ul: ({ children }) => (
+          <ul className='list-disc space-y-1 pl-5'>{children}</ul>
+        ),
+      }}
+    >
+      {content}
+    </Markdown>
+  );
+}
+
+function HumanReviewContent({
+  review,
+  edits,
+  onEdit,
+}: {
+  review: Record<string, unknown> | undefined;
+  edits: Record<string, string>;
+  onEdit: (key: string, value: string) => void;
+}) {
+  const contentKey =
+    typeof review?.contentKey === 'string' ? review.contentKey : undefined;
+  const content = review?.content;
+  const context = review?.context;
+  const editable = review?.editable === true;
+
+  return (
+    <div className='max-h-[calc(88vh-12rem)] min-h-0 overflow-y-auto'>
+      <section className='bg-muted/20 rounded-lg border p-5'>
+        <div className='mb-4 flex items-center gap-2'>
+          <Badge variant='secondary'>审核内容</Badge>
+          {contentKey ? <code className='text-xs'>{contentKey}</code> : null}
+        </div>
+        {editable && contentKey && typeof content === 'string' ? (
+          <Textarea
+            value={edits[contentKey] ?? content}
+            onChange={(event) => onEdit(contentKey, event.target.value)}
+            className='min-h-72 font-mono text-sm leading-6'
+          />
+        ) : typeof content === 'string' ? (
+          <ReviewMarkdown content={content} />
+        ) : (
+          <pre className='bg-muted max-h-[calc(88vh-16rem)] overflow-auto rounded-md p-3 text-xs'>
+            {JSON.stringify(content ?? null, null, 2)}
+          </pre>
+        )}
+      </section>
+      {context && typeof context === 'object' ? (
+        <section className='bg-muted/20 mt-4 rounded-lg border p-5'>
+          <div className='mb-4 flex items-center gap-2'>
+            <Badge variant='secondary'>补充上下文</Badge>
+          </div>
+          <pre className='bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs'>
+            {JSON.stringify(context, null, 2)}
+          </pre>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 function WorkflowEditor({ workflow, autoStartRun }: WorkflowEditorProps) {
   const [draftDocument] = useState<WorkflowDocument>(() =>
     createWorkflowDocument(),
@@ -100,6 +181,10 @@ function WorkflowEditorContent({
   const [savedDocument, setSavedDocument] = useState<string>(() =>
     workflow ? JSON.stringify(workflow.document) : '',
   );
+  const [humanReviewEdits, setHumanReviewEdits] = useState<{
+    nodeId: string | undefined;
+    values: Record<string, string>;
+  }>({ nodeId: undefined, values: {} });
   const autoStartHandled = useRef(false);
 
   const queryClient = useQueryClient();
@@ -142,6 +227,15 @@ function WorkflowEditorContent({
     edges,
     workflowSettings,
   );
+
+  const humanReviewNodeId =
+    typeof workflowRun.humanReview?.nodeId === 'string'
+      ? workflowRun.humanReview.nodeId
+      : undefined;
+  const currentHumanReviewEdits =
+    humanReviewEdits.nodeId === humanReviewNodeId
+      ? humanReviewEdits.values
+      : {};
 
   useEffect(() => {
     if (!autoStartRun || autoStartHandled.current) return;
@@ -377,7 +471,7 @@ function WorkflowEditorContent({
           </AlertDialogContent>
         </AlertDialog>
         <AlertDialog open={Boolean(workflowRun.humanReview)}>
-          <AlertDialogContent>
+          <AlertDialogContent className='max-h-[88vh] w-[min(94vw,72rem)]! max-w-none!'>
             <AlertDialogHeader className='grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
               <AlertDialogMedia className='mb-0 size-8'>
                 <ShieldCheckIcon />
@@ -398,9 +492,19 @@ function WorkflowEditorContent({
                 </p>
               </div>
             </AlertDialogHeader>
-            <pre className='bg-muted max-h-64 overflow-auto rounded-md p-3 text-xs'>
-              {JSON.stringify(workflowRun.humanReview?.context ?? {}, null, 2)}
-            </pre>
+            <HumanReviewContent
+              review={workflowRun.humanReview}
+              edits={currentHumanReviewEdits}
+              onEdit={(key, value) =>
+                setHumanReviewEdits((current) => ({
+                  nodeId: humanReviewNodeId,
+                  values:
+                    current.nodeId === humanReviewNodeId
+                      ? { ...current.values, [key]: value }
+                      : { [key]: value },
+                }))
+              }
+            />
             <AlertDialogFooter>
               <AlertDialogCancel
                 disabled={workflowRun.isResolvingHumanReview}
@@ -412,7 +516,12 @@ function WorkflowEditorContent({
               </AlertDialogCancel>
               <AlertDialogAction
                 disabled={workflowRun.isResolvingHumanReview}
-                onClick={() => void workflowRun.resolvePendingHumanReview(true)}
+                onClick={() =>
+                  void workflowRun.resolvePendingHumanReview(
+                    true,
+                    currentHumanReviewEdits,
+                  )
+                }
               >
                 {workflowRun.isResolvingHumanReview
                   ? 'Saving decision…'

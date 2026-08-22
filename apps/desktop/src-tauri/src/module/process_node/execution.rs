@@ -8,7 +8,10 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 use tauri::{AppHandle, ipc::Channel};
 
 impl ProcessNodeRegistry {
@@ -77,7 +80,8 @@ impl ProcessNodeRegistry {
         let app = handle::Handle::app_handle();
         let sync = PythonRuntime::sync_dependencies(app, &node.project_path, &python_version).await?;
         let mut ipc = IpcServer::global().create_session().await?;
-        let input = serde_json::to_vec(input).context("failed to serialize input for Process Node")?;
+        let input = apply_input_defaults(input, &node.definition.inputs)?;
+        let input = serde_json::to_vec(&input).context("failed to serialize input for Process Node")?;
         let logs = Arc::new(Mutex::new((String::new(), String::new())));
         let captured_logs = Arc::clone(&logs);
         let execution = PythonRuntime::run_python_streaming_with_env_and_stdin(
@@ -139,6 +143,21 @@ impl ProcessNodeRegistry {
     }
 }
 
+fn apply_input_defaults(input: &Value, schemas: &BTreeMap<String, Value>) -> Result<Value> {
+    let mut input = input.clone();
+    let state = input
+        .as_object_mut()
+        .context("Process Node input must be a JSON object")?;
+    for (name, schema) in schemas {
+        if !state.contains_key(name) {
+            if let Some(default) = schema.get("default") {
+                state.insert(name.clone(), default.clone());
+            }
+        }
+    }
+    Ok(input)
+}
+
 const MAX_WORKFLOW_LOG_CHARS: usize = 200_000;
 
 fn append_output(current: &mut String, chunk: &str) {
@@ -146,5 +165,24 @@ fn append_output(current: &mut String, chunk: &str) {
     if current.len() > MAX_WORKFLOW_LOG_CHARS {
         let keep_from = current.len() - MAX_WORKFLOW_LOG_CHARS;
         current.replace_range(..keep_from, "[Earlier output truncated]\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_input_defaults;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn fills_only_missing_input_fields_from_schema_defaults() {
+        let schemas = BTreeMap::from([
+            ("branch".to_string(), json!({"type": "string", "default": "main"})),
+            ("limit".to_string(), json!({"type": "integer", "default": 250})),
+        ]);
+
+        let result = apply_input_defaults(&json!({"branch": "release"}), &schemas).unwrap();
+
+        assert_eq!(result, json!({"branch": "release", "limit": 250}));
     }
 }

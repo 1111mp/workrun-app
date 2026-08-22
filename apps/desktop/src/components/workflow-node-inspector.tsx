@@ -38,6 +38,7 @@ import {
 import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
+
 import { listProcessNodes } from '@/services/process-node';
 import { listTools, type ToolDefinition } from '@/services/tool';
 
@@ -104,7 +105,11 @@ function getStringArray(data: Record<string, unknown>, key: string) {
     : [];
 }
 
-function getBoolean(data: Record<string, unknown>, key: string, fallback: boolean) {
+function getBoolean(
+  data: Record<string, unknown>,
+  key: string,
+  fallback: boolean,
+) {
   const value = data[key];
   return typeof value === 'boolean' ? value : fallback;
 }
@@ -240,10 +245,7 @@ function CodeActRuntimeFields({
   const mounts = getCodeActMounts(data);
   const environment = getCodeActEnvironment(data);
 
-  const updateMount = (
-    index: number,
-    patch: Partial<WorkflowCodeActMount>,
-  ) => {
+  const updateMount = (index: number, patch: Partial<WorkflowCodeActMount>) => {
     onChange({
       mounts: mounts.map((mount, candidate) =>
         candidate === index ? { ...mount, ...patch } : mount,
@@ -270,7 +272,9 @@ function CodeActRuntimeFields({
         <FieldGroup className='grid grid-cols-2 gap-4'>
           <Field>
             <Label htmlFor='codeact-script-duration'>Step timeout</Label>
-            <FieldDescription>Seconds allowed per script step (1–300).</FieldDescription>
+            <FieldDescription>
+              Seconds allowed per script step (1–300).
+            </FieldDescription>
             <Input
               id='codeact-script-duration'
               type='number'
@@ -287,7 +291,9 @@ function CodeActRuntimeFields({
           </Field>
           <Field>
             <Label htmlFor='codeact-script-memory'>Memory limit</Label>
-            <FieldDescription>MiB allowed for one script (16–4096).</FieldDescription>
+            <FieldDescription>
+              MiB allowed for one script (16–4096).
+            </FieldDescription>
             <Input
               id='codeact-script-memory'
               type='number'
@@ -326,7 +332,9 @@ function CodeActRuntimeFields({
                   />
                 </Field>
                 <Field className='min-w-0 flex-1'>
-                  <Label htmlFor={`codeact-mount-host-${index}`}>Host path</Label>
+                  <Label htmlFor={`codeact-mount-host-${index}`}>
+                    Host path
+                  </Label>
                   <Input
                     id={`codeact-mount-host-${index}`}
                     value={mount.hostPath}
@@ -364,7 +372,9 @@ function CodeActRuntimeFields({
                   aria-label={`Remove mount ${index + 1}`}
                   onClick={() =>
                     onChange({
-                      mounts: mounts.filter((_, candidate) => candidate !== index),
+                      mounts: mounts.filter(
+                        (_, candidate) => candidate !== index,
+                      ),
                     })
                   }
                 >
@@ -451,10 +461,7 @@ function CodeActRuntimeFields({
             className='self-start'
             onClick={() =>
               onChange({
-                environment: [
-                  ...environment,
-                  { name: '', value: '' },
-                ],
+                environment: [...environment, { name: '', value: '' }],
               })
             }
           >
@@ -586,48 +593,62 @@ function WorkflowNodeInspector({
                 onChange={(instruction) => updateData({ instruction })}
                 className='min-h-36 font-mono text-xs'
               />
+              {!isCodeActAgent && (
+                <TextField
+                  id='agent-output-key'
+                  label='Output key'
+                  description='Optionally save the complete final response to this workflow state key, such as release_notes.'
+                  value={getText(data, 'outputKey')}
+                  onChange={(outputKey) => updateData({ outputKey })}
+                  placeholder='Output key'
+                />
+              )}
             </InspectorSection>
-            {!isCodeActAgent && <InspectorSection
-              title='Generation controls'
-              description='Optional sampling settings. Leave either field empty to use the model default.'
-            >
-              <FieldGroup className='grid grid-cols-2 gap-4'>
-                <Field>
-                  <Label htmlFor='agent-temperature'>Temperature</Label>
-                  <FieldDescription>Controls variation (0–2).</FieldDescription>
-                  <Input
-                    id='agent-temperature'
-                    type='number'
-                    min='0'
-                    max='2'
-                    step='0.1'
-                    value={getNumber(data, 'temperature')}
-                    onChange={(event) =>
-                      updateData({
-                        temperature: optionalNumber(event.target.value),
-                      })
-                    }
-                  />
-                </Field>
-                <Field>
-                  <Label htmlFor='agent-top-p'>Top P</Label>
-                  <FieldDescription>
-                    Controls token diversity (0–1).
-                  </FieldDescription>
-                  <Input
-                    id='agent-top-p'
-                    type='number'
-                    min='0'
-                    max='1'
-                    step='0.05'
-                    value={getNumber(data, 'topP')}
-                    onChange={(event) =>
-                      updateData({ topP: optionalNumber(event.target.value) })
-                    }
-                  />
-                </Field>
-              </FieldGroup>
-            </InspectorSection>}
+            {!isCodeActAgent && (
+              <InspectorSection
+                title='Generation controls'
+                description='Optional sampling settings. Leave either field empty to use the model default.'
+              >
+                <FieldGroup className='grid grid-cols-2 gap-4'>
+                  <Field>
+                    <Label htmlFor='agent-temperature'>Temperature</Label>
+                    <FieldDescription>
+                      Controls variation (0–2).
+                    </FieldDescription>
+                    <Input
+                      id='agent-temperature'
+                      type='number'
+                      min='0'
+                      max='2'
+                      step='0.1'
+                      value={getNumber(data, 'temperature')}
+                      onChange={(event) =>
+                        updateData({
+                          temperature: optionalNumber(event.target.value),
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <Label htmlFor='agent-top-p'>Top P</Label>
+                    <FieldDescription>
+                      Controls token diversity (0–1).
+                    </FieldDescription>
+                    <Input
+                      id='agent-top-p'
+                      type='number'
+                      min='0'
+                      max='1'
+                      step='0.05'
+                      value={getNumber(data, 'topP')}
+                      onChange={(event) =>
+                        updateData({ topP: optionalNumber(event.target.value) })
+                      }
+                    />
+                  </Field>
+                </FieldGroup>
+              </InspectorSection>
+            )}
             <InspectorSection
               title='Tools'
               description='Select local Tool Apps or tools discovered from running MCP servers.'
@@ -1054,9 +1075,17 @@ function WorkflowNodeInspector({
                 onChange={(description) => updateData({ description })}
               />
               <TextField
+                id='human-review-content-key'
+                label='Content key'
+                description='The state value shown to the reviewer, such as release_notes.'
+                value={getText(data, 'contentKey')}
+                onChange={(contentKey) => updateData({ contentKey })}
+                placeholder='Content key'
+              />
+              <TextField
                 id='human-review-context-keys'
                 label='Context keys'
-                description='Comma-separated state keys shown to the reviewer.'
+                description='Comma-separated read-only state keys shown below the review content.'
                 value={getStringArray(data, 'contextKeys').join(', ')}
                 onChange={(value) =>
                   updateData({
@@ -1067,6 +1096,20 @@ function WorkflowNodeInspector({
                   })
                 }
               />
+              <Field orientation='horizontal'>
+                <div className='flex flex-1 flex-col gap-1'>
+                  <Label htmlFor='human-review-editable'>Allow editing</Label>
+                  <FieldDescription>
+                    Write the edited text back to this content key when
+                    approved.
+                  </FieldDescription>
+                </div>
+                <Switch
+                  id='human-review-editable'
+                  checked={getBoolean(data, 'editable', false)}
+                  onCheckedChange={(editable) => updateData({ editable })}
+                />
+              </Field>
             </InspectorSection>
           </FieldGroup>
         );

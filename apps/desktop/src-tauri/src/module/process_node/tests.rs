@@ -82,6 +82,17 @@ fn tool_schema_allows_fields_marked_optional() {
 }
 
 #[test]
+fn rejects_a_default_value_that_does_not_match_its_schema() {
+    let mut node = definition();
+    node.inputs.insert(
+        "max_commits".into(),
+        serde_json::json!({ "type": "integer", "default": "250" }),
+    );
+
+    assert!(validate_definition(&node).is_err());
+}
+
+#[test]
 fn legacy_catalog_entries_default_to_workflow_apps() {
     let mut value = serde_json::to_value(definition()).unwrap();
     value.as_object_mut().unwrap().remove("kind");
