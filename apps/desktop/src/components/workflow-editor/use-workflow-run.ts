@@ -254,12 +254,12 @@ function useWorkflowRun(
     approved: boolean,
     edits: Record<string, string> = {},
   ) => {
-    if (isResolvingHumanReview) return;
+    if (isResolvingHumanReview) return false;
     const review = store.humanReview;
     const nodeId = review?.nodeId;
-    if (typeof nodeId !== 'string') return;
+    if (typeof nodeId !== 'string') return false;
     const threadId = runThreadId.current;
-    if (!threadId) return;
+    if (!threadId) return false;
 
     setIsResolvingHumanReview(true);
     try {
@@ -272,12 +272,14 @@ function useWorkflowRun(
       );
       store.clearHumanReview();
       resumeWorkflowRun();
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.error('Could not record the review decision', {
         toasterId: 'global',
         description: message,
       });
+      return false;
     } finally {
       setIsResolvingHumanReview(false);
     }

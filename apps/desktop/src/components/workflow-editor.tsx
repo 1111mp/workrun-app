@@ -236,6 +236,13 @@ function WorkflowEditorContent({
     humanReviewEdits.nodeId === humanReviewNodeId
       ? humanReviewEdits.values
       : {};
+  const resolveHumanReview = async (approved: boolean) => {
+    const resolved = await workflowRun.resolvePendingHumanReview(
+      approved,
+      currentHumanReviewEdits,
+    );
+    if (resolved) setHumanReviewEdits({ nodeId: undefined, values: {} });
+  };
 
   useEffect(() => {
     if (!autoStartRun || autoStartHandled.current) return;
@@ -508,20 +515,13 @@ function WorkflowEditorContent({
             <AlertDialogFooter>
               <AlertDialogCancel
                 disabled={workflowRun.isResolvingHumanReview}
-                onClick={() =>
-                  void workflowRun.resolvePendingHumanReview(false)
-                }
+                onClick={() => void resolveHumanReview(false)}
               >
                 Reject
               </AlertDialogCancel>
               <AlertDialogAction
                 disabled={workflowRun.isResolvingHumanReview}
-                onClick={() =>
-                  void workflowRun.resolvePendingHumanReview(
-                    true,
-                    currentHumanReviewEdits,
-                  )
-                }
+                onClick={() => void resolveHumanReview(true)}
               >
                 {workflowRun.isResolvingHumanReview
                   ? 'Saving decision…'
