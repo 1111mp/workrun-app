@@ -1252,8 +1252,10 @@ function WorkflowNodeInspector({
     <Drawer
       open={node !== null}
       modal={false}
-      swipeDirection='right'
       disablePointerDismissal
+      defaultHorizontalSnapPoint='31rem'
+      horizontalSnapPoints={['31rem', '48rem', '64rem']}
+      swipeDirection='right'
       onOpenChange={(open) => {
         if (!open) {
           onClose();
