@@ -171,7 +171,10 @@ function AppItem({
           </div>
           <CardTitle>{definition.name}</CardTitle>
         </div>
-        <CardDescription>
+        <CardDescription
+          className='line-clamp-2 min-h-10'
+          title={definition?.description}
+        >
           {definition.description || 'No description provided.'}
         </CardDescription>
         <CardAction className='flex flex-col items-end gap-2'>
@@ -490,7 +493,7 @@ function AppsPage() {
         ) : null}
 
         {apps.data?.length === 0 ? (
-          <Empty className='via-card border border-dashed border-sky-200/70 bg-gradient-to-br from-sky-500/[0.06] to-violet-500/[0.05] py-14 dark:border-sky-400/15'>
+          <Empty className='via-card border border-dashed border-sky-200/70 bg-linear-to-br from-sky-500/[0.06] to-violet-500/[0.05] py-14 dark:border-sky-400/15'>
             <EmptyHeader>
               <EmptyMedia variant='icon'>
                 <PackageSearchIcon />

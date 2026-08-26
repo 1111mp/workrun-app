@@ -15,6 +15,7 @@ import { GeneralSettings } from './general-settings';
 import { LoggerSettings } from './logger-settings';
 import { ModelProfilesSettings } from './model-profiles-settings';
 import { formSchema, type SettingsForm } from './settings-schema';
+import { WorkspaceSettings } from './workspace-settings';
 
 function SettingsPage() {
   const config = useWorkrunStore((s) => s.config);
@@ -119,6 +120,9 @@ function SettingsPage() {
         </section>
         <form id='form-synclan-settings'>
           <FieldGroup className='gap-5 pb-6 lg:grid lg:grid-cols-2'>
+            <SettingsPanel className='lg:col-span-2'>
+              <WorkspaceSettings />
+            </SettingsPanel>
             <SettingsPanel>
               <GeneralSettings form={form} />
             </SettingsPanel>

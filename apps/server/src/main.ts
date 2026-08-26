@@ -34,7 +34,11 @@ async function bootstrap() {
   app.set('trust proxy', true);
 
   app.enableCors({
-    origin: [/localhost:\d+$/],
+    origin: [
+      /localhost:\d+$/,
+      'http://tauri.localhost',
+      'https://tauri.localhost',
+    ],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

@@ -3,16 +3,20 @@ import { create } from 'zustand';
 import { persist, type PersistStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 
+import { localProfileAvatarUrl } from '@/lib/avatar';
 import { applyPendingTheme } from '@/lib/utils';
 import {
   getSystemTheme,
   getWorkrunConfig,
   patchWorkrunConfig,
 } from '@/services/cmd';
+import type { TeamUser } from '@/services/session';
 
 type WorkrunState = {
   config?: IWorkrunConfig;
   resolvedTheme?: AppBaseTheme;
+  teamUser?: TeamUser;
+  setTeamUser: (user?: TeamUser) => void;
   updateConfig: (patch: Partial<IWorkrunConfig>) => Promise<void>;
   setResolvedTheme: (theme: AppBaseTheme) => void;
   updateTheme: (theme: AppTheme) => Promise<void>;
@@ -73,8 +77,23 @@ export const useWorkrunStore = create<WorkrunState>()(
     immer((set, get) => ({
       config: undefined,
       resolvedTheme: undefined,
+      teamUser: undefined,
+
+      setTeamUser: (user) => {
+        set((state) => {
+          state.teamUser = user;
+        });
+      },
 
       updateConfig: async (patch) => {
+        const currentConfig = get().config;
+        if (
+          !currentConfig ||
+          isEqual(currentConfig, { ...currentConfig, ...patch })
+        ) {
+          return;
+        }
+
         const resolvedTheme =
           patch.theme === 'system' ? await getSystemTheme() : patch.theme;
         set((state) => {
@@ -111,6 +130,28 @@ export const useWorkrunStore = create<WorkrunState>()(
   ),
 );
 
+type WorkspaceUserInfo = {
+  avatarUrl?: string | null;
+  name: string;
+};
+
+function selectWorkspaceUserInfo(
+  state: WorkrunState,
+): WorkspaceUserInfo | undefined {
+  if (state.config?.workspace_mode === 'team') {
+    const user = state.teamUser;
+    return user && { avatarUrl: user.image, name: user.name };
+  }
+
+  const profile = state.config?.local_profile;
+  return (
+    profile && {
+      avatarUrl: localProfileAvatarUrl(profile.avatar_id),
+      name: profile.display_name,
+    }
+  );
+}
+
 /**
  * Create config patch
  *
@@ -130,3 +171,5 @@ function createConfigPatch(
 
   return patch;
 }
+
+export { selectWorkspaceUserInfo };

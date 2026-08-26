@@ -13,36 +13,41 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import ajvErrors from 'ajv-errors';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const validator = customizeValidator({ extenderFn: ajvErrors });
 
 import {
+  onPythonUiRequest,
   respondToPythonUiRequest,
   type PythonUiRequestEvent,
 } from '@/services/python-ipc';
 
-type PythonUiRequestDialogProps = {
-  request: PythonUiRequestEvent | null;
-  onResolved: () => void;
-};
-
 /** Renders an IPC interaction using the same JSON Schema and uiSchema contract as RJSF. */
-function PythonUiRequestDialog({
-  request,
-  onResolved,
-}: PythonUiRequestDialogProps) {
+function PythonUiRequestDialog() {
+  const [request, setRequest] = useState<PythonUiRequestEvent | null>(null);
   const [responding, setResponding] = useState(false);
   const [liveValidationRequestId, setLiveValidationRequestId] = useState<
     string | null
   >(null);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void onPythonUiRequest((request) => {
+      setRequest(request);
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+
+    return () => unlisten?.();
+  }, []);
 
   const respond = async (data: unknown) => {
     if (!request || responding) return;
     setResponding(true);
     try {
       await respondToPythonUiRequest(request, data);
-      onResolved();
+      setRequest(null);
     } finally {
       setResponding(false);
     }

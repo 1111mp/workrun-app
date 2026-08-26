@@ -56,14 +56,17 @@ tauri = { workspace = true, features = [
   "tray-icon",
 ] }
 tauri-plugin-autostart = "2.5.1"
+tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-devtools = "2.1.0"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-fs = "2.5.1"
+tauri-plugin-http = "2.5.9"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-opener = "2.5.4"
+tauri-plugin-os = "2.3.2"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-shell = "2.3.5"
-tauri-plugin-single-instance = "2.4.3"
+tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }

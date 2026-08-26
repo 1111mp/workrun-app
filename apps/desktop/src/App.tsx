@@ -1,43 +1,32 @@
 import { Toaster, TooltipProvider } from '@workspace/ui/components';
-import { useEffect, useState } from 'react';
 import { RouterProvider } from 'react-router';
 
 import { UpdateDialog } from '@/components';
+import { TeamAuthTauriHandler } from '@/components/team-auth-tauri-handler';
 import { PythonUiRequestDialog } from '@/components/python-ui-request-dialog';
 import { useTheme } from '@/hooks';
+import { OnboardingPage } from '@/pages/onboarding';
 import { router } from '@/routes';
-import {
-  onPythonUiRequest,
-  type PythonUiRequestEvent,
-} from '@/services/python-ipc';
+import { useWorkrunStore } from '@/stores';
 
 function App() {
+  const config = useWorkrunStore((s) => s.config);
+
   useTheme();
-  const [pythonUiRequest, setPythonUiRequest] =
-    useState<PythonUiRequestEvent | null>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onPythonUiRequest((request) => {
-      setPythonUiRequest(request);
-    }).then((dispose) => {
-      unlisten = dispose;
-    });
-
-    return () => unlisten?.();
-  }, []);
+  if (!config?.onboarding_completed) {
+    return <OnboardingPage />;
+  }
 
   return (
     <>
       <TooltipProvider>
         <RouterProvider router={router} />
       </TooltipProvider>
+      <TeamAuthTauriHandler />
       <Toaster id='global' position='top-center' richColors={true} />
       <UpdateDialog />
-      <PythonUiRequestDialog
-        request={pythonUiRequest}
-        onResolved={() => setPythonUiRequest(null)}
-      />
+      <PythonUiRequestDialog />
     </>
   );
 }

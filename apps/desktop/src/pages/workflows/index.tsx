@@ -229,7 +229,7 @@ function WorkflowsPage() {
           </section>
         ) : null}
         {workflows.isError ? (
-          <Empty className='via-card border border-dashed border-violet-200/70 bg-gradient-to-br from-violet-500/[0.06] to-sky-500/[0.05] py-14 dark:border-violet-400/15'>
+          <Empty className='via-card border border-dashed border-violet-200/70 bg-linear-to-br from-violet-500/[0.06] to-sky-500/[0.05] py-14 dark:border-violet-400/15'>
             <EmptyHeader>
               <EmptyTitle>Workflows could not be loaded</EmptyTitle>
               <EmptyDescription>

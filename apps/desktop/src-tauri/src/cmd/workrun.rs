@@ -1,7 +1,10 @@
 use super::CmdResult;
 use crate::{
     cmd::StringifyErr as _,
-    config::{Config, IWorkrun, ProviderCredential, WorkrunPatch},
+    config::{
+        Config, IWorkrun, LocalProfile, ProviderCredential, TeamSettings, WorkspaceMode,
+        WorkrunPatch,
+    },
     feat,
 };
 use serde::Serialize;
@@ -12,6 +15,10 @@ use serde::Serialize;
 /// only used while constructing a Monty runtime in the backend.
 #[derive(Serialize)]
 pub struct PublicWorkrunConfig {
+    workspace_mode: Option<WorkspaceMode>,
+    onboarding_completed: bool,
+    local_profile: Option<LocalProfile>,
+    team: Option<TeamSettings>,
     provider_credentials: Vec<ProviderCredential>,
     app_log_level: Option<String>,
     app_log_max_size: Option<u64>,
@@ -27,6 +34,10 @@ pub struct PublicWorkrunConfig {
 impl From<&IWorkrun> for PublicWorkrunConfig {
     fn from(config: &IWorkrun) -> Self {
         Self {
+            workspace_mode: config.workspace_mode.clone(),
+            onboarding_completed: config.onboarding_completed,
+            local_profile: config.local_profile.clone(),
+            team: config.team.clone(),
             provider_credentials: config.provider_credentials.clone(),
             app_log_level: config.app_log_level.clone(),
             app_log_max_size: config.app_log_max_size,

@@ -27,6 +27,7 @@ if (process.env.NODE_ENV === 'development') {
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get('MONGODB_URI'),
+        retryWrites: false,
         retryAttempts: 10,
         retryDelay: 1000,
         autoIndex: true,

@@ -5,6 +5,10 @@ import { HomePage } from '@/pages/home';
 export const router = createMemoryRouter(
   [
     {
+      path: '/login',
+      lazy: () => import('@/pages/login'),
+    },
+    {
       path: '/',
       Component: HomePage,
       children: [
@@ -35,6 +39,10 @@ export const router = createMemoryRouter(
         {
           path: 'settings',
           lazy: () => import('@/pages/settings'),
+        },
+        {
+          path: 'profile',
+          lazy: () => import('@/pages/profile'),
         },
         {
           path: 'mcp-servers',

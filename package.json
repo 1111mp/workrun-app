@@ -5,7 +5,7 @@
   "type": "module",
   "author": "The1111mp@outlook.com",
   "scripts": {
-    "dev:app": "turbo dev --filter workrun",
+    "app:dev": "turbo dev --filter workrun",
     "server:dev": "turbo dev --filter workrun-server",
     "ui:dev": "turbo ui:dev --filter workrun",
     "oxlint": "turbo oxlint",

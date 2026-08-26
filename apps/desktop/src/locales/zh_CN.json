@@ -4,13 +4,83 @@
     "workflow": "工作流",
     "apps": "应用",
     "accountMenu": "应用菜单",
+    "profile": "个人资料",
+    "teamAccount": "团队账户",
+    "signOut": "退出登录",
+    "signOutFailed": "退出登录失败，请检查网络后重试。",
     "settings": "设置",
     "checkForUpdates": "检查更新",
     "checkingForUpdates": "正在检查更新…"
   },
+  "onboarding": {
+    "title": "选择你的工作方式",
+    "description": "选择最适合你当前使用方式的模式。",
+    "back": "返回",
+    "personal": {
+      "title": "个人模式",
+      "description": "无需部署 Workrun Server。工作流、应用和运行数据都保存在本机。",
+      "action": "在本机开始使用"
+    },
+    "team": {
+      "title": "团队模式",
+      "description": "连接 Workrun Server，与团队共享工作流、应用和发布版本。",
+      "action": "以团队模式继续",
+      "setupTitle": "连接你的团队",
+      "setupDescription": "输入团队 Workrun Server 的地址。",
+      "serverUrl": "Workrun Server 地址",
+      "serverUrlHint": "例如 https://workrun.example.com",
+      "connect": "连接",
+      "invalidUrl": "请输入有效的 HTTP 或 HTTPS 地址。",
+      "unreachable": "无法连接到此 Workrun Server。"
+    },
+    "profile": {
+      "title": "设置本地个人资料",
+      "description": "此资料仅保存在当前设备，用于个人模式。",
+      "name": "名称",
+      "namePlaceholder": "Workrun 应该如何称呼你？",
+      "avatar": "头像",
+      "avatarOption": "头像 {{number}}",
+      "continue": "开始使用 Workrun"
+    },
+    "login": {
+      "title": "登录团队",
+      "description": "登录 {{serverUrl}} 以继续。",
+      "email": "邮箱",
+      "password": "密码",
+      "submit": "登录",
+      "failed": "邮箱或密码不正确，或者服务端无法创建登录会话。",
+      "continueWithGithub": "使用 GitHub 继续",
+      "google": "Google",
+      "feishu": "飞书",
+      "moreProvidersSoon": "Google 和飞书登录将在 Server 配置完成后开放。",
+      "openingBrowser": "正在打开浏览器…",
+      "signingIn": "正在登录…",
+      "orContinueWithEmail": "或使用邮箱登录",
+      "oauthStartFailed": "无法打开浏览器以开始登录。",
+      "oauthFailed": "第三方登录未完成，请重试。",
+      "oauthExchangeFailed": "登录已完成，但无法在 Workrun 中建立会话。",
+      "checkingSession": "正在验证登录状态…",
+      "missingServerTitle": "未配置团队 Server",
+      "missingServerDescription": "请先在工作区设置中填写 Workrun Server 地址。",
+      "openWorkspaceSettings": "工作区设置"
+    }
+  },
   "settings": {
     "title": "设置",
     "description": "自定义应用、本地运行环境与已连接的模型提供商。",
+    "workspace": {
+      "title": "工作区模式",
+      "description": "选择此桌面端如何存储和共享 Workrun 数据。",
+      "personal": "个人模式",
+      "personalDescription": "将工作流和应用保存在当前设备。",
+      "team": "团队模式",
+      "teamDescription": "连接 Workrun Server 以进行团队协作。",
+      "serverUrl": "Workrun Server 地址",
+      "save": "保存工作区设置",
+      "saved": "工作区设置已保存",
+      "signOutFailed": "无法结束团队登录状态，未切换工作区模式。请检查网络后重试。",
+      "invalidServerUrl": "请输入有效的 HTTP 或 HTTPS Server 地址。"
+    },
     "restartSynclan": "重启 Synclan？",
     "restartDescription": "部分更改需要重启后才能生效。Synclan 将立即重启。",
     "restart": "重启",
@@ -64,6 +134,26 @@
       "checkNow": "立即检查更新",
       "version": "版本",
       "versionCopied": "版本号已复制到剪贴板"
+    }
+  },
+
+  "profile": {
+    "title": "个人资料",
+    "description": "管理保存在当前设备上的名称和头像。",
+    "name": "名称",
+    "namePlaceholder": "Workrun 应该如何称呼你？",
+    "avatar": "头像",
+    "avatarOption": "头像 {{number}}",
+    "save": "保存个人资料",
+    "saved": "个人资料已保存",
+    "team": {
+      "title": "团队账户",
+      "badge": "团队模式",
+      "description": "此账户由你的 Workrun Server 管理。",
+      "name": "名称",
+      "email": "邮箱",
+      "server": "已连接的 Server",
+      "workspaceSettings": "工作区设置"
     }
   },
 

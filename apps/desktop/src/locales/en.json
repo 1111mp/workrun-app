@@ -4,13 +4,83 @@
     "workflow": "Workflow",
     "apps": "Apps",
     "accountMenu": "Application menu",
+    "profile": "Profile",
+    "teamAccount": "Team account",
+    "signOut": "Sign out",
+    "signOutFailed": "Couldn't sign out. Check your connection and try again.",
     "settings": "Settings",
     "checkForUpdates": "Check for updates",
     "checkingForUpdates": "Checking for updates…"
   },
+  "onboarding": {
+    "title": "Choose how you want to work",
+    "description": "Choose the mode that best fits how you work today.",
+    "back": "Back",
+    "personal": {
+      "title": "Personal mode",
+      "description": "No Workrun Server required. Your workflows, apps, and run data stay on this device.",
+      "action": "Use this device"
+    },
+    "team": {
+      "title": "Team mode",
+      "description": "Connect to Workrun Server to share workflows, apps, and published versions with your team.",
+      "action": "Continue with a team",
+      "setupTitle": "Connect to your team",
+      "setupDescription": "Enter the URL for your team's Workrun Server.",
+      "serverUrl": "Workrun Server URL",
+      "serverUrlHint": "For example, https://workrun.example.com",
+      "connect": "Connect",
+      "invalidUrl": "Enter a valid HTTP or HTTPS URL.",
+      "unreachable": "We couldn't connect to this Workrun Server."
+    },
+    "profile": {
+      "title": "Set up your local profile",
+      "description": "This profile stays on this device and is used in personal mode.",
+      "name": "Name",
+      "namePlaceholder": "How should Workrun call you?",
+      "avatar": "Avatar",
+      "avatarOption": "Avatar {{number}}",
+      "continue": "Start using Workrun"
+    },
+    "login": {
+      "title": "Sign in to your team",
+      "description": "Sign in to {{serverUrl}} to continue.",
+      "email": "Email",
+      "password": "Password",
+      "submit": "Sign in",
+      "failed": "Email or password is incorrect, or the server could not create a session.",
+      "continueWithGithub": "Continue with GitHub",
+      "google": "Google",
+      "feishu": "Feishu",
+      "moreProvidersSoon": "Google and Feishu will be available once the Server is configured.",
+      "openingBrowser": "Opening browser…",
+      "signingIn": "Signing in…",
+      "orContinueWithEmail": "or continue with email",
+      "oauthStartFailed": "We couldn't open a browser to start sign-in.",
+      "oauthFailed": "Third-party sign-in was not completed. Please try again.",
+      "oauthExchangeFailed": "Sign-in completed, but Workrun could not establish a session.",
+      "checkingSession": "Checking your sign-in status…",
+      "missingServerTitle": "No team server configured",
+      "missingServerDescription": "Set the Workrun Server URL in workspace settings first.",
+      "openWorkspaceSettings": "Workspace settings"
+    }
+  },
   "settings": {
     "title": "Settings",
     "description": "Customize the app, local runtime, and connected model providers.",
+    "workspace": {
+      "title": "Workspace mode",
+      "description": "Choose how this desktop app stores and shares Workrun data.",
+      "personal": "Personal mode",
+      "personalDescription": "Keep workflows and apps on this device.",
+      "team": "Team mode",
+      "teamDescription": "Connect to a Workrun Server for collaboration.",
+      "serverUrl": "Workrun Server URL",
+      "save": "Save workspace settings",
+      "saved": "Workspace settings saved",
+      "signOutFailed": "Couldn't end the team session, so the workspace mode wasn't changed. Check your connection and try again.",
+      "invalidServerUrl": "Enter a valid HTTP or HTTPS Server URL."
+    },
     "restartSynclan": "Restart Synclan?",
     "restartDescription": "Some changes require a restart to take effect. Synclan will restart now.",
     "restart": "Restart",
@@ -66,6 +136,26 @@
       "checkNow": "Check Now",
       "version": "Version",
       "versionCopied": "Version copied to clipboard"
+    }
+  },
+
+  "profile": {
+    "title": "Profile",
+    "description": "Manage the name and avatar saved on this device.",
+    "name": "Name",
+    "namePlaceholder": "How should Workrun call you?",
+    "avatar": "Avatar",
+    "avatarOption": "Avatar {{number}}",
+    "save": "Save profile",
+    "saved": "Profile saved",
+    "team": {
+      "title": "Team account",
+      "badge": "Team mode",
+      "description": "This account is managed by your Workrun Server.",
+      "name": "Name",
+      "email": "Email",
+      "server": "Connected Server",
+      "workspaceSettings": "Workspace settings"
     }
   },
 

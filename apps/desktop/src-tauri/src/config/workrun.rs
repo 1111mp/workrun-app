@@ -145,10 +145,39 @@ pub fn model_catalog() -> Vec<ModelDefinition> {
         .collect()
 }
 
+/// Selects whether this installation works independently or joins a team.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMode {
+    Personal,
+    Team,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalProfile {
+    pub display_name: String,
+    pub avatar_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamSettings {
+    pub server_url: String,
+}
+
 /// Workrun configuration
 /// ### `workrun.yaml` schema
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IWorkrun {
+    /// Selected during first-run onboarding. `None` means onboarding is still required.
+    pub workspace_mode: Option<WorkspaceMode>,
+
+    #[serde(default)]
+    pub onboarding_completed: bool,
+
+    pub local_profile: Option<LocalProfile>,
+
+    pub team: Option<TeamSettings>,
+
     #[serde(default)]
     pub provider_credentials: Vec<ProviderCredential>,
     /// app log level
@@ -187,6 +216,10 @@ pub struct IWorkrun {
 /// This is deliberately separate from `IWorkrun` so missing fields remain untouched.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkrunPatch {
+    pub workspace_mode: Option<WorkspaceMode>,
+    pub onboarding_completed: Option<bool>,
+    pub local_profile: Option<LocalProfile>,
+    pub team: Option<TeamSettings>,
     pub provider_credentials: Option<Vec<ProviderCredential>>,
     pub app_log_level: Option<String>,
     pub app_log_max_size: Option<u64>,
@@ -202,6 +235,10 @@ pub struct WorkrunPatch {
 impl Default for IWorkrun {
     fn default() -> Self {
         Self {
+            workspace_mode: None,
+            onboarding_completed: false,
+            local_profile: None,
+            team: None,
             provider_credentials: Vec::new(),
             app_log_level: None,
             app_log_max_size: None,
@@ -235,6 +272,11 @@ impl IWorkrun {
 
     pub fn template() -> Self {
         Self {
+            // First-run onboarding completes these fields with the selected mode.
+            workspace_mode: None,
+            onboarding_completed: false,
+            local_profile: None,
+            team: None,
             app_log_max_size: Some(128),
             app_log_max_count: Some(8),
             locale: Some(Self::get_system_locale()),
@@ -281,6 +323,12 @@ impl IWorkrun {
             }
         }
 
+        patch!(workspace_mode);
+        if let Some(onboarding_completed) = patch.onboarding_completed {
+            self.onboarding_completed = onboarding_completed;
+        }
+        patch!(local_profile);
+        patch!(team);
         patch!(app_log_level);
         patch!(app_log_max_size);
         patch!(app_log_max_count);

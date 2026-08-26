@@ -2,6 +2,16 @@ type AppBaseTheme = 'light' | 'dark';
 type AppTheme = AppBaseTheme | 'system';
 
 type AppLocale = 'en' | 'zh-CN';
+type WorkspaceMode = 'personal' | 'team';
+
+type LocalProfile = {
+  display_name: string;
+  avatar_id: string;
+};
+
+type TeamSettings = {
+  server_url: string;
+};
 
 type ModelProvider =
   | 'gemini'
@@ -26,6 +36,10 @@ type ProviderCredential = {
 };
 
 interface IWorkrunConfig {
+  workspace_mode?: WorkspaceMode;
+  onboarding_completed?: boolean;
+  local_profile?: LocalProfile;
+  team?: TeamSettings;
   locale?: AppLocale;
   theme: AppTheme;
   enable_auto_launch?: boolean;
