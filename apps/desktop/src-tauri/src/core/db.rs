@@ -56,4 +56,11 @@ impl DBManager {
         let db_path = db_dir.join("sqlite.db");
         Ok(format!("sqlite://{}", db_path.display()))
     }
+
+    pub fn pool(&self) -> Result<sqlx::SqlitePool> {
+        self.db_pool
+            .get()
+            .cloned()
+            .ok_or_else(|| anyhow!("database is not initialized"))
+    }
 }

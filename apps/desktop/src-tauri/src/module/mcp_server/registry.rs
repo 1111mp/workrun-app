@@ -405,6 +405,8 @@ impl McpServerRegistry {
                     disabled: !definition.enabled,
                     auto_approve: Vec::new(),
                     restart_policy: Some(stdio_restart_policy()),
+                    lifecycle: Default::default(),
+                    task_config: Default::default(),
                 };
                 let manager = Arc::new(
                     McpServerManager::new(HashMap::from([(definition.id.clone(), config)]))
