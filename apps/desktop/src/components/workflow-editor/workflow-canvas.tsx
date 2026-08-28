@@ -53,6 +53,7 @@ function createNodeData(type: WorkflowNodeType) {
         outputKey: '',
         temperature: undefined,
         topP: undefined,
+        skillRefs: [],
         toolIds: [],
         maxToolCalls: 8,
         toolTimeoutSeconds: 60,
@@ -209,14 +210,8 @@ function WorkflowCanvas({
     workflowStore.temporal,
     (state) => state.futureStates.length > 0,
   );
-  const onNodesChange = useStore(
-    workflowStore,
-    (state) => state.onNodesChange,
-  );
-  const onEdgesChange = useStore(
-    workflowStore,
-    (state) => state.onEdgesChange,
-  );
+  const onNodesChange = useStore(workflowStore, (state) => state.onNodesChange);
+  const onEdgesChange = useStore(workflowStore, (state) => state.onEdgesChange);
   const addNode = useStore(workflowStore, (state) => state.addNode);
   const addConnection = useStore(workflowStore, (state) => state.addConnection);
   const setNodes = useStore(workflowStore, (state) => state.setNodes);
@@ -224,10 +219,7 @@ function WorkflowCanvas({
     workflowStore,
     (state) => state.setSelectedNodeId,
   );
-  const startNodeDrag = useStore(
-    workflowStore,
-    (state) => state.startNodeDrag,
-  );
+  const startNodeDrag = useStore(workflowStore, (state) => state.startNodeDrag);
   const finishNodeDrag = useStore(
     workflowStore,
     (state) => state.finishNodeDrag,

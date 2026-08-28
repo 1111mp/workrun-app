@@ -40,6 +40,7 @@ import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
 
 import { listProcessNodes } from '@/services/process-node';
+import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
 
 type WorkflowNodeInspectorProps = {
@@ -103,6 +104,18 @@ function getStringArray(data: Record<string, unknown>, key: string) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : [];
+}
+
+function getPersonalSkillNames(data: Record<string, unknown>) {
+  const value = data.skillRefs;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((skill) => {
+    if (typeof skill !== 'object' || skill === null) return [];
+    const record = skill as Record<string, unknown>;
+    return record.source === 'personal' && typeof record.name === 'string'
+      ? [record.name]
+      : [];
+  });
 }
 
 function getBoolean(
@@ -507,6 +520,11 @@ function WorkflowNodeInspector({
     queryFn: listTools,
     enabled: node?.type === 'agent' || node?.type === 'codeact_agent',
   });
+  const skills = useQuery({
+    queryKey: ['skills'],
+    queryFn: listSkills,
+    enabled: node?.type === 'agent',
+  });
 
   const updateData = (patch: Record<string, unknown>) => {
     if (node) {
@@ -647,6 +665,29 @@ function WorkflowNodeInspector({
                     />
                   </Field>
                 </FieldGroup>
+              </InspectorSection>
+            )}
+            {!isCodeActAgent && (
+              <InspectorSection
+                title='Skills'
+                description='Attach local Agent Skills. Their instructions are added to this agent and their allowed tools restrict its selected tools.'
+              >
+                <Field>
+                  <Label>Active skills</Label>
+                  <SkillCombobox
+                    skills={skills.data ?? []}
+                    selectedNames={getPersonalSkillNames(data)}
+                    isLoading={skills.isLoading}
+                    onChange={(names) =>
+                      updateData({
+                        skillRefs: names.map((name) => ({
+                          source: 'personal',
+                          name,
+                        })),
+                      })
+                    }
+                  />
+                </Field>
               </InspectorSection>
             )}
             <InspectorSection
@@ -1391,6 +1432,76 @@ function ToolCombobox({
               </ComboboxGroup>
             ),
           )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
+  );
+}
+
+function SkillCombobox({
+  skills,
+  selectedNames,
+  isLoading = false,
+  onChange,
+}: {
+  skills: SkillSummary[];
+  selectedNames: string[];
+  isLoading?: boolean;
+  onChange: (names: string[]) => void;
+}) {
+  const anchor = useComboboxAnchor();
+  const unavailableSkills = selectedNames
+    .filter((name) => !skills.some((skill) => skill.name === name))
+    .map((name) => ({
+      name,
+      description: 'This local Skill is no longer available.',
+      allowedTools: [],
+    }));
+  const selectedSkills = [
+    ...skills.filter((skill) => selectedNames.includes(skill.name)),
+    ...unavailableSkills,
+  ];
+  const allSkills = [...skills, ...unavailableSkills];
+
+  return (
+    <Combobox
+      items={allSkills}
+      multiple
+      value={selectedSkills}
+      disabled={isLoading}
+      onValueChange={(selected) =>
+        onChange(selected.map((skill) => skill.name))
+      }
+      itemToStringValue={(skill) => `${skill.name} ${skill.description}`}
+    >
+      <ComboboxChips ref={anchor}>
+        <ComboboxValue>
+          {selectedSkills.map((skill) => (
+            <ComboboxChip key={skill.name}>{skill.name}</ComboboxChip>
+          ))}
+        </ComboboxValue>
+        <ComboboxChipsInput
+          disabled={isLoading}
+          placeholder={isLoading ? 'Loading skills…' : 'Search skills…'}
+        />
+      </ComboboxChips>
+      <ComboboxContent anchor={anchor}>
+        <ComboboxEmpty>No local Skills found.</ComboboxEmpty>
+        <ComboboxList>
+          {allSkills.map((skill) => (
+            <ComboboxItem
+              key={skill.name}
+              value={skill}
+              disabled={unavailableSkills.includes(skill)}
+            >
+              <span className='flex min-w-0 flex-col'>
+                <span className='truncate'>{skill.name}</span>
+                <span className='text-muted-foreground truncate text-xs'>
+                  {skill.description}
+                </span>
+              </span>
+            </ComboboxItem>
+          ))}
         </ComboboxList>
       </ComboboxContent>
     </Combobox>

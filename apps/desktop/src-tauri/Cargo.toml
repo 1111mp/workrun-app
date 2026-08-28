@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 name = "workrun_lib"
 
 [dependencies]
-adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama"] }
+adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama", "skills"] }
 aes-gcm = "0.11.0"
 anyhow = { workspace = true }
 async-stream = "0.3.6"

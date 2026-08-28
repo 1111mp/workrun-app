@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@workspace/ui/components';
 import {
+  BookOpenIcon,
   BoxesIcon,
   LogOutIcon,
   RefreshCwIcon,
@@ -164,6 +165,15 @@ function HomeLayout() {
                   {displayName}
                 </DropdownMenuLabel>
               ) : null}
+              <DropdownMenuItem onClick={() => navigate('/mcp-servers')}>
+                <ServerCogIcon />
+                MCP servers
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate('/skills')}>
+                <BookOpenIcon />
+                {t('navigation.skills')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => navigate('/profile')}>
                 <User />
                 {t('navigation.profile')}
@@ -171,10 +181,6 @@ function HomeLayout() {
               <DropdownMenuItem onClick={() => navigate('/settings')}>
                 <SettingsIcon />
                 {t('navigation.settings')}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate('/mcp-servers')}>
-                <ServerCogIcon />
-                MCP servers
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={checkingForUpdates}

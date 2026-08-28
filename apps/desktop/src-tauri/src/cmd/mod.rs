@@ -8,6 +8,7 @@ pub mod mcp_server;
 pub mod model;
 pub mod process_node;
 pub mod python_runtime;
+pub mod skill;
 pub mod system;
 pub mod tool_registry;
 pub mod workflow;

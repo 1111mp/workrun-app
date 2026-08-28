@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Debug, Deserialize)]
+struct SkillReference {
+    source: String,
+    name: String,
+}
+
 pub(super) async fn add_local_agent_node(
     graph: StateGraph,
     node: &WorkflowNode,
@@ -15,6 +21,8 @@ pub(super) async fn add_local_agent_node(
     let temperature = number_data(node, "temperature", 0.0, 2.0)?;
     let top_p = number_data(node, "topP", 0.0, 1.0)?;
     let tool_ids = string_array_data(node, "toolIds")?;
+    let skills = crate::module::skill::SkillRegistry::resolve(&personal_skill_names(node)?)?;
+    let tool_ids = crate::module::skill::allowed_tool_ids(&skills, tool_ids)?;
     let max_tool_calls = integer_data(node, "maxToolCalls", 8, 1, 50)?;
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
     let tools = ToolRegistry::resolve(&tool_ids).await?;
@@ -27,6 +35,16 @@ pub(super) async fn add_local_agent_node(
         .description(description)
         .instruction(instruction)
         .model(create_model(&model, config)?);
+    if !skills.is_empty() {
+        agent = agent
+            .with_skills(adk_rust::skill::SkillIndex::new(skills.clone()))
+            .with_skill_policy(adk_rust::skill::SelectionPolicy {
+                top_k: 1,
+                min_score: 0.0,
+                ..Default::default()
+            })
+            .with_skill_budget(5_000);
+    }
     if let Some(temperature) = temperature {
         agent = agent.temperature(temperature);
     }
@@ -61,6 +79,26 @@ pub(super) async fn add_local_agent_node(
         Some(tool_trace),
         output_key,
     )))
+}
+
+fn personal_skill_names(node: &WorkflowNode) -> Result<Vec<String>> {
+    let Some(value) = node.data.get("skillRefs") else {
+        return Ok(Vec::new());
+    };
+    let refs = serde_json::from_value::<Vec<SkillReference>>(value.clone())
+        .map_err(|error| anyhow!("agent node `{}` field `skillRefs` is invalid: {error}", node.id))?;
+    refs.into_iter()
+        .map(|skill| {
+            if skill.source != "personal" {
+                bail!(
+                    "agent node `{}` references unsupported skill source `{}`",
+                    node.id,
+                    skill.source
+                );
+            }
+            Ok(skill.name)
+        })
+        .collect()
 }
 
 pub(super) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {

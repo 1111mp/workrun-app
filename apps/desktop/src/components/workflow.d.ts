@@ -29,6 +29,11 @@ type WorkflowInput = {
   description?: string;
 };
 
+type WorkflowSkillRef = {
+  source: 'personal';
+  name: string;
+};
+
 type WorkflowSettings = {
   name: string;
   description: string;
@@ -48,6 +53,7 @@ type WorkflowAgentNodeData = {
   outputKey?: string;
   temperature?: number;
   topP?: number;
+  skillRefs?: WorkflowSkillRef[];
   toolIds?: string[];
   maxToolCalls?: number;
   toolTimeoutSeconds?: number;

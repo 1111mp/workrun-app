@@ -95,6 +95,13 @@ pub fn run() {
             cmd::mcp_server::mcp_server_reconnect,
             cmd::mcp_server::mcp_server_authorize,
             cmd::tool_registry::tool_list,
+            cmd::skill::skill_list,
+            cmd::skill::skill_inspect,
+            cmd::skill::skill_create,
+            cmd::skill::skill_update,
+            cmd::skill::skill_delete,
+            cmd::skill::skill_open_directory,
+            cmd::skill::skill_open_folder,
             cmd::ipc::python_ui_respond,
             // statically provisioned Process Nodes
             cmd::process_node::process_node_list,
