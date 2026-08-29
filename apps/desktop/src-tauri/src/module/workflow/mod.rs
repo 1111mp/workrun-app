@@ -10,6 +10,7 @@ mod codeact_agent;
 mod human_review;
 mod process;
 mod routing;
+mod state_bridge;
 mod tool;
 mod tool_approval;
 

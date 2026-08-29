@@ -1,10 +1,7 @@
 use super::CmdResult;
 use crate::{
     cmd::StringifyErr as _,
-    config::{
-        Config, IWorkrun, LocalProfile, ProviderCredential, TeamSettings, WorkspaceMode,
-        WorkrunPatch,
-    },
+    config::{Config, IWorkrun, LocalProfile, ProviderCredential, TeamSettings, WorkrunPatch, WorkspaceMode},
     feat,
 };
 use serde::Serialize;
