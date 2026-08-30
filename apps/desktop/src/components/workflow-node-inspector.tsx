@@ -45,6 +45,7 @@ import { listTools, type ToolDefinition } from '@/services/tool';
 
 type WorkflowNodeInspectorProps = {
   node: Node | null;
+  executableNodes: Node[];
   onClose: () => void;
   onDataChange: (nodeId: string, patch: Record<string, unknown>) => void;
   modelProfiles?: ModelDefinition[];
@@ -104,6 +105,44 @@ function getStringArray(data: Record<string, unknown>, key: string) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : [];
+}
+
+function getNodeStateConfig(data: Record<string, unknown>) {
+  const value = data.state;
+  if (typeof value !== 'object' || value === null) {
+    return { readers: [], globalKeys: [] };
+  }
+  const state = value as Record<string, unknown>;
+  const access =
+    typeof state.access === 'object' && state.access !== null
+      ? (state.access as Record<string, unknown>)
+      : {};
+  return {
+    readers: getStringArray(access, 'readers'),
+    globalKeys: getStringArray(state, 'globalKeys'),
+  };
+}
+
+function supportsNodeState(type: string | undefined) {
+  return (
+    type === 'agent' ||
+    type === 'codeact_agent' ||
+    type === 'remote_agent' ||
+    type === 'process' ||
+    type === 'if_else' ||
+    type === 'switch' ||
+    type === 'human_review' ||
+    type === 'ask_user_question'
+  );
+}
+
+function supportsGlobalPublication(type: string | undefined) {
+  return (
+    type === 'agent' ||
+    type === 'codeact_agent' ||
+    type === 'remote_agent' ||
+    type === 'process'
+  );
 }
 
 function getPersonalSkillNames(data: Record<string, unknown>) {
@@ -502,6 +541,7 @@ function CodeActRuntimeFields({
 
 function WorkflowNodeInspector({
   node,
+  executableNodes,
   onClose,
   onDataChange,
   modelProfiles = [],
@@ -615,7 +655,7 @@ function WorkflowNodeInspector({
                 <TextField
                   id='agent-output-key'
                   label='Output key'
-                  description='Optionally save the complete final response to this workflow state key, such as release_notes.'
+                  description='Optionally save the complete final response to this workflow state key.'
                   value={getText(data, 'outputKey')}
                   onChange={(outputKey) => updateData({ outputKey })}
                   placeholder='Output key'
@@ -838,8 +878,8 @@ function WorkflowNodeInspector({
               <Field>
                 <Label htmlFor='process-node'>App</Label>
                 <FieldDescription>
-                  The selected local app receives the complete workflow state as
-                  JSON on stdin and returns its result with{' '}
+                  The selected local app receives this node’s authorized State
+                  view as JSON on stdin and returns its result with{' '}
                   <code>process.result()</code>.
                 </FieldDescription>
                 <Select
@@ -1118,7 +1158,7 @@ function WorkflowNodeInspector({
               <TextField
                 id='human-review-content-key'
                 label='Content key'
-                description='The state value shown to the reviewer, such as release_notes.'
+                description='The workflow state value shown to the reviewer.'
                 value={getText(data, 'contentKey')}
                 onChange={(contentKey) => updateData({ contentKey })}
                 placeholder='Content key'
@@ -1322,9 +1362,130 @@ function WorkflowNodeInspector({
         </Button>
         <div className='min-h-0 overflow-y-auto px-5 py-6'>
           {renderFields()}
+          {node && supportsNodeState(node.type) ? (
+            <NodeStateFields
+              node={node}
+              executableNodes={executableNodes}
+              onChange={(state) => updateData({ state })}
+            />
+          ) : null}
         </div>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+function NodeStateFields({
+  node,
+  executableNodes,
+  onChange,
+}: {
+  node: Node;
+  executableNodes: Node[];
+  onChange: (state: WorkflowNodeStateConfig) => void;
+}) {
+  const config = getNodeStateConfig(node.data);
+  const readers = config.readers.filter((id) => id !== node.id);
+  const availableReaders = executableNodes
+    .filter((candidate) => candidate.id !== node.id)
+    .map((candidate) => ({
+      id: candidate.id,
+      name:
+        getText(candidate.data, 'name') ||
+        getText(candidate.data, 'title') ||
+        nodeTitles[candidate.type ?? ''] ||
+        'Untitled node',
+    }));
+  const setReaders = (nextReaders: string[]) =>
+    onChange({
+      access: { readers: nextReaders },
+      globalKeys: config.globalKeys,
+    });
+
+  return (
+    <FieldGroup className='mt-7 gap-7'>
+      <InspectorSection
+        title='State access'
+        description='This node always owns its private State. Grant selected nodes read-only access to all of it.'
+      >
+        <Field>
+          <Label>Allowed readers</Label>
+          <FieldDescription>
+            By default, no other node can read this node’s private State.
+          </FieldDescription>
+          <NodeCombobox
+            nodes={availableReaders}
+            selectedIds={readers}
+            onChange={setReaders}
+          />
+        </Field>
+      </InspectorSection>
+      {supportsGlobalPublication(node.type) ? (
+        <InspectorSection
+          title='Global State publication'
+          description='Outputs are private by default. List the output keys this node should publish for every node to read and write.'
+        >
+          <TextField
+            id={`${node.id}-global-state-keys`}
+            label='Published output keys'
+            description='Separate keys with commas, for example summary, score.'
+            value={config.globalKeys.join(', ')}
+            placeholder='summary, score'
+            onChange={(value) =>
+              onChange({
+                access: { readers },
+                globalKeys: value
+                  .split(',')
+                  .map((key) => key.trim())
+                  .filter(Boolean),
+              })
+            }
+          />
+        </InspectorSection>
+      ) : null}
+    </FieldGroup>
+  );
+}
+
+function NodeCombobox({
+  nodes,
+  selectedIds,
+  onChange,
+}: {
+  nodes: { id: string; name: string }[];
+  selectedIds: string[];
+  onChange: (nodeIds: string[]) => void;
+}) {
+  const anchor = useComboboxAnchor();
+  const selected = nodes.filter((node) => selectedIds.includes(node.id));
+
+  return (
+    <Combobox
+      items={nodes}
+      multiple
+      value={selected}
+      onValueChange={(selected) => onChange(selected.map((node) => node.id))}
+      itemToStringValue={(node) => node.name}
+    >
+      <ComboboxChips ref={anchor}>
+        <ComboboxValue>
+          {selected.map((node) => (
+            <ComboboxChip key={node.id}>{node.name}</ComboboxChip>
+          ))}
+        </ComboboxValue>
+        <ComboboxChipsInput placeholder='Select workflow nodes…' />
+      </ComboboxChips>
+      <ComboboxContent anchor={anchor}>
+        <ComboboxEmpty>No other executable nodes are available.</ComboboxEmpty>
+        <ComboboxList>
+          {nodes.map((node) => (
+            <ComboboxItem key={node.id} value={node}>
+              {node.name}
+            </ComboboxItem>
+          ))}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   );
 }
 
@@ -1450,7 +1611,10 @@ function SkillCombobox({
   onChange: (names: string[]) => void;
 }) {
   const anchor = useComboboxAnchor();
-  const unavailableSkills = selectedNames
+  const unavailableSkills: Pick<
+    SkillSummary,
+    'name' | 'description' | 'allowedTools'
+  >[] = selectedNames
     .filter((name) => !skills.some((skill) => skill.name === name))
     .map((name) => ({
       name,

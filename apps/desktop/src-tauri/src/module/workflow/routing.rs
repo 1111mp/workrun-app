@@ -4,24 +4,27 @@ pub(super) fn add_if_else_control_node(
     graph: StateGraph,
     node: &WorkflowNode,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
 ) -> Result<StateGraph> {
     let id = node.id.clone();
     let data = node.data.clone();
     let conditions = if_else_conditions(node)?;
-    Ok(graph.add_node_fn(&id.clone(), move |context| {
+    Ok(graph.add_node_fn(&id.clone(), move |_context| {
         let id = id.clone();
         let data = data.clone();
-        let route = if_else_route(&conditions, &context.state);
-        let condition = data
-            .pointer(&format!("/conditions/{route}/condition"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let label = data
-            .pointer(&format!("/conditions/{route}/label"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        let route = routing_input(&state, &id).map(|input| if_else_route(&conditions, &input));
+        let route_key = workflow_route_key(&id);
         let on_event = on_event.clone();
         async move {
+            let route = route?;
+            let condition = data
+                .pointer(&format!("/conditions/{route}/condition"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let label = data
+                .pointer(&format!("/conditions/{route}/label"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
             let event = json!({
                 "nodeId": id,
                 "type": "if_else",
@@ -34,7 +37,8 @@ pub(super) fn add_if_else_control_node(
             Ok(NodeOutput::new()
                 .with_update("workflow.last_node", json!(id))
                 .with_update("workflow.node", event.clone())
-                .with_update("workflow.trace", event))
+                .with_update("workflow.trace", event)
+                .with_update(&route_key, json!(route)))
         }
     }))
 }
@@ -43,34 +47,37 @@ pub(super) fn add_switch_control_node(
     graph: StateGraph,
     node: &WorkflowNode,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
 ) -> Result<StateGraph> {
     let id = node.id.clone();
     let data = node.data.clone();
     let cases = switch_cases(node)?;
-    Ok(graph.add_node_fn(&id.clone(), move |context| {
+    Ok(graph.add_node_fn(&id.clone(), move |_context| {
         let id = id.clone();
         let data = data.clone();
-        let route = switch_route(&cases, &context.state);
-        let branch = if route == "default" {
-            data.get("defaultCase")
-        } else {
-            let case_id = route.strip_prefix("case:").expect("switch route is valid");
-            data.get("cases").and_then(Value::as_array).and_then(|items| {
-                items
-                    .iter()
-                    .find(|item| item.get("id").and_then(Value::as_str) == Some(case_id))
-            })
-        };
-        let label = branch
-            .and_then(|branch| branch.get("label"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let condition = branch
-            .and_then(|branch| branch.get("condition"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        let route = routing_input(&state, &id).map(|input| switch_route(&cases, &input));
+        let route_key = workflow_route_key(&id);
         let on_event = on_event.clone();
         async move {
+            let route = route?;
+            let branch = if route == "default" {
+                data.get("defaultCase")
+            } else {
+                let case_id = route.strip_prefix("case:").expect("switch route is valid");
+                data.get("cases").and_then(Value::as_array).and_then(|items| {
+                    items
+                        .iter()
+                        .find(|item| item.get("id").and_then(Value::as_str) == Some(case_id))
+                })
+            };
+            let label = branch
+                .and_then(|branch| branch.get("label"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let condition = branch
+                .and_then(|branch| branch.get("condition"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
             let event = json!({
                 "nodeId": id,
                 "type": "switch",
@@ -83,9 +90,23 @@ pub(super) fn add_switch_control_node(
             Ok(NodeOutput::new()
                 .with_update("workflow.last_node", json!(id))
                 .with_update("workflow.node", event.clone())
-                .with_update("workflow.trace", event))
+                .with_update("workflow.trace", event)
+                .with_update(&route_key, json!(route)))
         }
     }))
+}
+
+fn routing_input(state: &SharedWorkflowState, node_id: &str) -> adk_rust::graph::Result<State> {
+    let input = state
+        .lock()
+        .map_err(|_| graph_node_error(node_id, "workflow state lock is poisoned"))?
+        .node_input(node_id)
+        .map_err(|error| graph_node_error(node_id, error))?;
+    serde_json::from_value(input).map_err(|error| graph_node_error(node_id, error))
+}
+
+fn workflow_route_key(node_id: &str) -> String {
+    format!("workflow.route.{node_id}")
 }
 
 pub(super) fn validate_edges(
@@ -182,11 +203,15 @@ pub(super) fn add_if_else_edges(
     end_ids: &HashSet<String>,
     plan: &mut Vec<PlanEdge>,
 ) -> Result<()> {
-    let targets = routes_from_edges(outgoing, end_ids, |edge| edge.source_handle.clone().unwrap())?;
+    let mut targets = routes_from_edges(outgoing, end_ids, |edge| edge.source_handle.clone().unwrap())?;
     let true_target = targets.get("true").cloned().unwrap_or(EdgeTarget::End);
     let false_target = targets.get("false").cloned().unwrap_or(EdgeTarget::End);
-    let conditions = if_else_conditions(node)?;
-    let router: RouterFn = Arc::new(move |state: &State| if_else_route(&conditions, state));
+    // Independent conditions can both be false. The control node returns END
+    // in that case, so declare it as a valid terminal route.
+    targets.insert(END.to_string(), EdgeTarget::End);
+    let route_key = workflow_route_key(&node.id);
+    let router: RouterFn =
+        Arc::new(move |state: &State| state.get(&route_key).and_then(Value::as_str).unwrap_or(END).to_string());
     graph.edges.push(Edge::Conditional {
         source: node.id.clone(),
         router,
@@ -212,7 +237,6 @@ pub(super) fn add_switch_edges(
     end_ids: &HashSet<String>,
     plan: &mut Vec<PlanEdge>,
 ) -> Result<()> {
-    let cases = switch_cases(node)?;
     let mut targets = HashMap::new();
     for edge in outgoing {
         let handle = edge.source_handle.as_deref().expect("validated source handle");
@@ -225,7 +249,9 @@ pub(super) fn add_switch_edges(
             route: Some(route),
         });
     }
-    let router: RouterFn = Arc::new(move |state: &State| switch_route(&cases, state));
+    let route_key = workflow_route_key(&node.id);
+    let router: RouterFn =
+        Arc::new(move |state: &State| state.get(&route_key).and_then(Value::as_str).unwrap_or(END).to_string());
     graph.edges.push(Edge::Conditional {
         source: node.id.clone(),
         router,
@@ -475,4 +501,105 @@ pub(super) fn switch_route(cases: &[SwitchCase], state: &State) -> String {
         .find(|case| case.condition.matches(state))
         .map(|case| format!("case:{}", case.id))
         .unwrap_or_else(|| "default".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::module::state::{AccessRule, NodeStatePolicy};
+    use adk_rust::graph::{ExecutionConfig, START};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn routes_using_an_authorized_private_namespace() {
+        let bridge = Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({})).unwrap()));
+        {
+            let mut bridge_state = bridge.lock().unwrap();
+            bridge_state.runtime_state().configure_node(
+                "extractor",
+                NodeStatePolicy {
+                    readers: AccessRule::only(["route"]),
+                    ..Default::default()
+                },
+            );
+            bridge_state
+                .node_state("extractor")
+                .set("approved", json!(true))
+                .unwrap();
+        }
+        let route = WorkflowNode {
+            id: "route".to_string(),
+            kind: "if_else".to_string(),
+            data: json!({
+                "conditions": {
+                    "true": {"condition": "approved == true"},
+                    "false": {"condition": "approved == false"},
+                },
+            }),
+        };
+        let selected = Arc::new(AtomicUsize::new(0));
+        let selected_node = Arc::clone(&selected);
+        let mut graph = add_if_else_control_node(StateGraph::with_channels(&[]), &route, None, bridge)
+            .unwrap()
+            .add_node_fn("selected", move |_context| {
+                let selected_node = Arc::clone(&selected_node);
+                async move {
+                    selected_node.fetch_add(1, Ordering::SeqCst);
+                    Ok(NodeOutput::new())
+                }
+            })
+            .add_edge(START, "route");
+        let edges = vec![WorkflowEdge {
+            source: "route".to_string(),
+            target: "selected".to_string(),
+            source_handle: Some("true".to_string()),
+        }];
+        add_if_else_edges(
+            &mut graph,
+            &route,
+            &edges.iter().collect::<Vec<_>>(),
+            &HashSet::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+
+        graph
+            .compile()
+            .unwrap()
+            .invoke(State::new(), ExecutionConfig::new("route-private-state"))
+            .await
+            .unwrap();
+        assert_eq!(selected.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn if_else_ends_when_no_condition_matches() {
+        let route = WorkflowNode {
+            id: "route".to_string(),
+            kind: "if_else".to_string(),
+            data: json!({
+                "conditions": {
+                    "true": {"condition": "score > 80"},
+                    "false": {"condition": "score < 60"},
+                },
+            }),
+        };
+        let bridge = Arc::new(Mutex::new(
+            WorkflowStateBridge::from_initial_state(json!({"score": 70})).unwrap(),
+        ));
+        let mut graph = add_if_else_control_node(StateGraph::with_channels(&[]), &route, None, bridge)
+            .unwrap()
+            .add_edge(START, "route");
+        add_if_else_edges(&mut graph, &route, &[], &HashSet::new(), &mut Vec::new()).unwrap();
+
+        graph
+            .compile()
+            .unwrap()
+            .invoke(State::new(), ExecutionConfig::new("route-no-match"))
+            .await
+            .unwrap();
+    }
 }

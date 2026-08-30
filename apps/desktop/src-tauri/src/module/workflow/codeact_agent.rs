@@ -43,6 +43,8 @@ pub(super) async fn add_codeact_agent_node(
     node: &WorkflowNode,
     config: &IWorkrun,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
+    state_config: WorkflowNodeStateConfig,
 ) -> Result<StateGraph> {
     let id = node.id.clone();
     let description = string_data(node, "description").unwrap_or_default();
@@ -89,13 +91,15 @@ pub(super) async fn add_codeact_agent_node(
 
     let agent = agent.build()?;
     Ok(graph.add_node(StreamingAgentNode::new(
-        AdkAgentNode::new(Arc::new(agent)).with_input_mapper(state_as_agent_input),
+        AdkAgentNode::new(Arc::new(agent)).with_input_mapper(agent_input_mapper(Arc::clone(&state), id.clone())),
         id,
         "codeact_agent",
         label,
         on_event,
         Some(tool_trace),
         None,
+        state,
+        state_config.global_keys,
     )))
 }
 

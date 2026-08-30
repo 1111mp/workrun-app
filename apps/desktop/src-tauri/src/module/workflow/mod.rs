@@ -20,6 +20,7 @@ use codeact_agent::*;
 use human_review::*;
 use process::*;
 use routing::*;
+use state_bridge::*;
 use tool::*;
 use tool_approval::*;
 
@@ -29,6 +30,7 @@ use crate::{
     module::{
         mcp_server::McpServerRegistry,
         process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
+        state::{AccessRule, NodeStatePolicy},
         tool_registry::{ToolDefinition, ToolRegistry, ToolSource},
     },
 };
@@ -53,7 +55,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -63,12 +65,13 @@ use std::{
 use tauri::ipc::Channel;
 
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
+pub(super) type SharedWorkflowState = Arc<Mutex<WorkflowStateBridge>>;
 
 pub async fn resolve_tool_approval(request_id: &str, fingerprint: &str, approved: bool) -> Result<()> {
     ToolApprovalRegistry::global().resolve(request_id, fingerprint, approved)
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowDsl {
     #[serde(default)]
@@ -80,7 +83,7 @@ pub struct WorkflowDsl {
     pub edges: Vec<WorkflowEdge>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNode {
     pub id: String,
     #[serde(rename = "type")]
@@ -89,13 +92,66 @@ pub struct WorkflowNode {
     pub data: Value,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowEdge {
     pub source: String,
     pub target: String,
     #[serde(default)]
     pub source_handle: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WorkflowNodeStateConfig {
+    #[serde(default)]
+    pub(super) access: WorkflowNodeStateAccess,
+    #[serde(default)]
+    pub(super) global_keys: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WorkflowNodeStateAccess {
+    #[serde(default)]
+    readers: BTreeSet<String>,
+}
+
+pub(super) fn node_state_config(
+    node: &WorkflowNode,
+    executable_ids: &HashSet<String>,
+) -> Result<WorkflowNodeStateConfig> {
+    // The DSL controls namespace-level access and global publication only.
+    // Nodes may still emit arbitrary private keys at runtime.
+    let Some(value) = node.data.get("state") else {
+        return Ok(WorkflowNodeStateConfig::default());
+    };
+    let config: WorkflowNodeStateConfig = serde_json::from_value(value.clone())
+        .map_err(|error| anyhow!("node `{}` field `data.state` is invalid: {error}", node.id))?;
+    for id in &config.access.readers {
+        if id == &node.id || !executable_ids.contains(id) {
+            bail!("node `{}` state access references invalid node `{id}`", node.id);
+        }
+    }
+    if config.global_keys.iter().any(|key| key.trim().is_empty()) {
+        bail!("node `{}` state.globalKeys must contain non-empty keys", node.id);
+    }
+    if config.global_keys.iter().any(|key| key.starts_with("workflow.")) {
+        bail!(
+            "node `{}` state.globalKeys cannot use reserved `workflow.` keys",
+            node.id
+        );
+    }
+    Ok(config)
+}
+
+pub(super) fn node_state_policy(config: &WorkflowNodeStateConfig) -> NodeStatePolicy {
+    NodeStatePolicy {
+        readers: AccessRule::only(config.access.readers.clone()),
+        ..Default::default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,7 +183,8 @@ pub struct WorkflowRunResult {
 pub struct CompiledWorkflow {
     graph: adk_rust::graph::CompiledGraph,
     plan: WorkflowPlan,
-    checkpoint_db_url: String,
+    state: SharedWorkflowState,
+    state_checkpointer: Arc<WorkflowStateCheckpointer>,
 }
 
 impl CompiledWorkflow {
@@ -137,15 +194,30 @@ impl CompiledWorkflow {
         self,
         initial_state: State,
         thread_id: &str,
-        _resume: bool,
+        resume: bool,
         mut on_event: F,
     ) -> Result<WorkflowRunResult>
     where
         F: FnMut(StreamEvent),
     {
-        let checkpointer = SqliteCheckpointer::new(&self.checkpoint_db_url).await?;
-        let has_checkpoint = checkpointer.load(thread_id).await?.is_some();
-        let initial_state = if has_checkpoint { State::new() } else { initial_state };
+        let initial_state = if resume {
+            // Loading through the wrapper restores both the ADK graph state and
+            // the access-controlled State snapshot embedded in its metadata.
+            if self.state_checkpointer.load(thread_id).await?.is_none() {
+                bail!("cannot resume workflow: checkpoint for thread `{thread_id}` was not found");
+            }
+            State::new()
+        } else {
+            // A regular run starts from its supplied input, while preserving
+            // prior checkpoints as execution history for this thread.
+            let input = serde_json::to_value(&initial_state)?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("workflow state lock is poisoned"))?;
+            state.initialize_global(input)?;
+            state.graph_state()
+        };
 
         let stream = self
             .graph
@@ -168,7 +240,7 @@ impl CompiledWorkflow {
             on_event(with_measured_node_duration(event, &mut node_started_at));
         }
 
-        let state = match final_state {
+        let graph_state = match final_state {
             Some(state) => state,
             None if interrupted => self
                 .graph
@@ -177,6 +249,14 @@ impl CompiledWorkflow {
                 .ok_or_else(|| anyhow!("interrupted workflow checkpoint is unavailable"))?,
             None => bail!("workflow stream ended without a final state"),
         };
+        // ACLs constrain node execution, not the final observer result. Keep
+        // every node's output with its source namespace and workflow trace.
+        let state = serde_json::from_value(
+            self.state
+                .lock()
+                .map_err(|_| anyhow!("workflow state lock is poisoned"))?
+                .final_output(&graph_state),
+        )?;
         Ok(WorkflowRunResult {
             plan: self.plan,
             state,
@@ -193,7 +273,10 @@ impl CompiledWorkflow {
         thread_id: &str,
         updates: impl IntoIterator<Item = (String, Value)>,
     ) -> Result<()> {
-        self.graph.update_state(thread_id, updates).await.map_err(Into::into)
+        self.state_checkpointer
+            .update_state(thread_id, updates)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -274,6 +357,16 @@ pub async fn compile(
     let start_id = starts[0].id.as_str();
 
     validate_edges(&dsl.edges, &nodes, &executable_ids, &end_ids, start_id)?;
+    let state = Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({}))?));
+    // Install static namespace policies before any node can create dynamic keys.
+    for node in &executable {
+        let state_config = node_state_config(node, &executable_ids)?;
+        state
+            .lock()
+            .map_err(|_| anyhow!("workflow state lock is poisoned"))?
+            .runtime_state()
+            .configure_node(&node.id, node_state_policy(&state_config));
+    }
 
     let mut graph = StateGraph::with_channels(&["workflow.last_node", "workflow.node", "workflow.trace"]);
     // Trace is append-only, which makes parallel branches observable instead of
@@ -306,16 +399,47 @@ pub async fn compile(
             // A2A is a first-class ADK Agent. Wrapping it in AgentNode makes
             // the remote call a real graph execution step, not a side effect
             // performed by the Tauri command.
-            "remote_agent" => graph.add_node(remote_a2a_graph_node(node, on_event.clone())?),
-            "process" => add_process_node(graph, node, on_event.clone()),
-            "human_review" => add_human_review_node(graph, node, on_event.clone())?,
+            "remote_agent" => graph.add_node(remote_a2a_graph_node(
+                node,
+                on_event.clone(),
+                Arc::clone(&state),
+                node_state_config(node, &executable_ids)?,
+            )?),
+            "process" => add_process_node(
+                graph,
+                node,
+                on_event.clone(),
+                Arc::clone(&state),
+                node_state_config(node, &executable_ids)?,
+            ),
+            "human_review" => add_human_review_node(graph, node, on_event.clone(), Arc::clone(&state))?,
             "ask_user_question" => add_ask_user_question_node(graph, node, on_event.clone())?,
-            "if_else" => add_if_else_control_node(graph, node, on_event.clone())?,
-            "switch" => add_switch_control_node(graph, node, on_event.clone())?,
+            "if_else" => add_if_else_control_node(graph, node, on_event.clone(), Arc::clone(&state))?,
+            "switch" => add_switch_control_node(graph, node, on_event.clone(), Arc::clone(&state))?,
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
-            "agent" => add_local_agent_node(graph, node, config, on_event.clone()).await?,
-            "codeact_agent" => add_codeact_agent_node(graph, node, config, on_event.clone()).await?,
+            "agent" => {
+                add_local_agent_node(
+                    graph,
+                    node,
+                    config,
+                    on_event.clone(),
+                    Arc::clone(&state),
+                    node_state_config(node, &executable_ids)?,
+                )
+                .await?
+            },
+            "codeact_agent" => {
+                add_codeact_agent_node(
+                    graph,
+                    node,
+                    config,
+                    on_event.clone(),
+                    Arc::clone(&state),
+                    node_state_config(node, &executable_ids)?,
+                )
+                .await?
+            },
             _ => add_control_node(graph, node),
         };
     }
@@ -358,6 +482,8 @@ pub async fn compile(
         }
     }
 
+    let fingerprint = serde_json::to_string(&dsl)?;
+    let workflow_id = dsl.id.clone();
     let plan = WorkflowPlan {
         workflow_id: dsl.id,
         workflow_name: dsl.name,
@@ -365,13 +491,22 @@ pub async fn compile(
         edges: plan_edges,
     };
     let db_url = DBManager::db_url().await?;
-    let checkpointer = SqliteCheckpointer::new(&db_url).await?;
-    let graph = graph.compile()?.with_checkpointer(checkpointer);
+    let checkpointer: Arc<dyn Checkpointer> = Arc::new(SqliteCheckpointer::new(&db_url).await?);
+    let state_checkpointer = Arc::new(WorkflowStateCheckpointer::new(
+        checkpointer,
+        Arc::clone(&state),
+        workflow_id,
+        fingerprint,
+    ));
+    let graph = graph
+        .compile()?
+        .with_checkpointer_arc(Arc::clone(&state_checkpointer) as Arc<dyn Checkpointer>);
 
     Ok(CompiledWorkflow {
         graph,
         plan,
-        checkpoint_db_url: db_url,
+        state,
+        state_checkpointer,
     })
 }
 
@@ -530,6 +665,47 @@ fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::R
 mod tests {
     use super::*;
     use std::{thread, time::Duration};
+
+    #[test]
+    fn node_state_config_defaults_private_and_allowlists_global_keys() {
+        let node = WorkflowNode {
+            id: "extractor".to_string(),
+            kind: "process".to_string(),
+            data: json!({"state": {"access": {"readers": ["reviewer"]}, "globalKeys": ["summary"]}}),
+        };
+        let executable = HashSet::from(["extractor".to_string(), "reviewer".to_string()]);
+
+        let config = node_state_config(&node, &executable).unwrap();
+        let policy = node_state_policy(&config);
+
+        assert_eq!(config.global_keys, BTreeSet::from(["summary".to_string()]));
+        assert_eq!(policy.readers, AccessRule::only(["reviewer"]));
+        assert_eq!(policy.writers, AccessRule::only([] as [&str; 0]));
+    }
+
+    #[test]
+    fn node_state_config_rejects_self_or_unknown_access() {
+        let node = WorkflowNode {
+            id: "extractor".to_string(),
+            kind: "process".to_string(),
+            data: json!({"state": {"access": {"readers": ["extractor", "missing"]}}}),
+        };
+        let executable = HashSet::from(["extractor".to_string()]);
+
+        assert!(node_state_config(&node, &executable).is_err());
+    }
+
+    #[test]
+    fn node_state_config_reserves_workflow_keys_for_graph_infrastructure() {
+        let node = WorkflowNode {
+            id: "extractor".to_string(),
+            kind: "process".to_string(),
+            data: json!({"state": {"globalKeys": ["workflow.trace"]}}),
+        };
+        let executable = HashSet::from(["extractor".to_string()]);
+
+        assert!(node_state_config(&node, &executable).is_err());
+    }
 
     #[test]
     fn measures_node_duration_from_stream_events() {

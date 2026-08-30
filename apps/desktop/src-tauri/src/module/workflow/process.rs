@@ -4,12 +4,16 @@ pub(super) fn add_process_node(
     graph: StateGraph,
     node: &WorkflowNode,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
+    state_config: WorkflowNodeStateConfig,
 ) -> StateGraph {
     graph.add_node(ProcessWorkflowNode {
         id: node.id.clone(),
         process_node_id: string_data(node, "processNodeId").unwrap_or_default(),
         name: string_data(node, "name").unwrap_or_else(|| node.id.clone()),
         on_event,
+        state,
+        global_keys: state_config.global_keys,
     })
 }
 
@@ -18,6 +22,8 @@ struct ProcessWorkflowNode {
     process_node_id: String,
     name: String,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
+    global_keys: BTreeSet<String>,
 }
 
 #[async_trait::async_trait]
@@ -26,11 +32,18 @@ impl Node for ProcessWorkflowNode {
         &self.id
     }
 
-    async fn execute(&self, context: &NodeContext) -> adk_rust::graph::Result<NodeOutput> {
+    async fn execute(&self, _context: &NodeContext) -> adk_rust::graph::Result<NodeOutput> {
         if self.process_node_id.trim().is_empty() {
             return Err(graph_node_error(&self.id, "process node needs data.processNodeId"));
         }
-        let input = serde_json::to_value(&context.state).map_err(|error| graph_node_error(&self.id, error))?;
+        // `node_input` clones the authorized snapshot, so this guard is dropped
+        // before the potentially long-running process invocation below.
+        let input = self
+            .state
+            .lock()
+            .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
+            .node_input(&self.id)
+            .map_err(|error| graph_node_error(&self.id, error))?;
         let output_node_id = self.id.clone();
         let name = self.name.clone();
         let on_event = self.on_event.clone();
@@ -49,6 +62,17 @@ impl Node for ProcessWorkflowNode {
         )
         .await
         .map_err(|error| graph_node_error(&self.id, error))?;
+        // Result keys are private by default; only this node's configured
+        // `globalKeys` are promoted by the bridge.
+        let update = crate::module::state::NodeStateUpdate::from_object(
+            run.result.as_object().expect("validated Process Node result").clone(),
+        );
+        let global_updates = self
+            .state
+            .lock()
+            .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
+            .apply_node_update(&self.id, update, &self.global_keys)
+            .map_err(|error| graph_node_error(&self.id, error))?;
         let event = json!({
             "nodeId": self.id,
             "type": "process",
@@ -62,13 +86,11 @@ impl Node for ProcessWorkflowNode {
         if let Some(on_event) = &self.on_event {
             let _ = on_event.send(StreamEvent::custom(&self.id, "workflow.node_result", event.clone()));
         }
-        let mut output = NodeOutput::new()
+        let output = NodeOutput::new()
             .with_update("workflow.last_node", json!(self.id))
             .with_update("workflow.node", event.clone())
-            .with_update("workflow.trace", event);
-        for (key, value) in run.result.as_object().expect("validated Process Node result") {
-            output = output.with_update(key, value.clone());
-        }
+            .with_update("workflow.trace", event)
+            .with_updates(global_updates);
         Ok(output)
     }
 }

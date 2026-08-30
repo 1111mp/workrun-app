@@ -11,6 +11,8 @@ pub(super) async fn add_local_agent_node(
     node: &WorkflowNode,
     config: &IWorkrun,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
+    state_config: WorkflowNodeStateConfig,
 ) -> Result<StateGraph> {
     let id = node.id.clone();
     let description = string_data(node, "description").unwrap_or_default();
@@ -71,13 +73,15 @@ pub(super) async fn add_local_agent_node(
     }
     let agent = agent.build()?;
     Ok(graph.add_node(StreamingAgentNode::new(
-        AdkAgentNode::new(Arc::new(agent)).with_input_mapper(state_as_agent_input),
+        AdkAgentNode::new(Arc::new(agent)).with_input_mapper(agent_input_mapper(Arc::clone(&state), id.clone())),
         id,
         "agent",
         label,
         on_event,
         Some(tool_trace),
         output_key,
+        state,
+        state_config.global_keys,
     )))
 }
 
@@ -134,6 +138,8 @@ pub(super) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result
 pub(super) fn remote_a2a_graph_node(
     node: &WorkflowNode,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
+    state_config: WorkflowNodeStateConfig,
 ) -> Result<StreamingAgentNode> {
     let url = string_data(node, "url")
         .filter(|url| !url.trim().is_empty())
@@ -146,13 +152,15 @@ pub(super) fn remote_a2a_graph_node(
         .map_err(|error| anyhow!("remote_agent node `{}` is invalid: {error}", node.id))?;
     let id = node.id.clone();
     Ok(StreamingAgentNode::new(
-        AdkAgentNode::new(Arc::new(remote)).with_input_mapper(state_as_agent_input),
+        AdkAgentNode::new(Arc::new(remote)).with_input_mapper(agent_input_mapper(Arc::clone(&state), id.clone())),
         id,
         "remote_agent",
         url,
         on_event,
         None,
         None,
+        state,
+        state_config.global_keys,
     ))
 }
 
@@ -168,6 +176,8 @@ pub(super) struct StreamingAgentNode {
     streamed_events: Mutex<HashMap<(String, usize), Vec<Value>>>,
     tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
     output_key: Option<String>,
+    state: SharedWorkflowState,
+    global_keys: BTreeSet<String>,
 }
 
 impl StreamingAgentNode {
@@ -179,6 +189,8 @@ impl StreamingAgentNode {
         on_event: Option<Channel<StreamEvent>>,
         tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
         output_key: Option<String>,
+        state: SharedWorkflowState,
+        global_keys: BTreeSet<String>,
     ) -> Self {
         Self {
             id,
@@ -189,6 +201,8 @@ impl StreamingAgentNode {
             streamed_events: Mutex::new(HashMap::new()),
             tool_trace,
             output_key,
+            state,
+            global_keys,
         }
     }
 
@@ -229,7 +243,7 @@ impl Node for StreamingAgentNode {
             .as_ref()
             .and_then(|tool_trace| tool_trace.lock().ok().map(|tool_trace| tool_trace.clone()))
             .unwrap_or_default();
-        Ok(NodeOutput::new().with_updates(agent_output_updates(
+        let mut updates = agent_output_updates(
             &events,
             &self.id,
             &self.kind,
@@ -237,13 +251,45 @@ impl Node for StreamingAgentNode {
             self.on_event.as_ref(),
             &tool_calls,
             self.output_key.as_deref(),
-        )))
+        );
+        let values = updates
+            .iter()
+            .filter(|(key, _)| !key.starts_with("workflow."))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        updates.retain(|key, _| key.starts_with("workflow."));
+        let global_updates = self
+            .state
+            .lock()
+            .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
+            .apply_node_update(
+                &self.id,
+                crate::module::state::NodeStateUpdate::from_object(values),
+                &self.global_keys,
+            )
+            .map_err(|error| graph_node_error(&self.id, error))?;
+        updates.extend(global_updates);
+        Ok(NodeOutput::new().with_updates(updates))
     }
 
     fn execute_stream<'a>(
         &'a self,
         context: &'a NodeContext,
     ) -> std::pin::Pin<Box<dyn futures::Stream<Item = adk_rust::graph::Result<StreamEvent>> + Send + 'a>> {
+        // The synchronous ADK mapper cannot return an error. Validate the
+        // bridge input first so a key collision fails before a model call.
+        if let Err(error) = self
+            .state
+            .lock()
+            .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))
+            .and_then(|mut state| {
+                state
+                    .node_input(self.id.clone())
+                    .map_err(|error| graph_node_error(&self.id, error))
+            })
+        {
+            return Box::pin(async_stream::stream! { yield Err(error); });
+        }
         let key = Self::cache_key(context);
         let stream = self.inner.execute_stream(context);
         let node = self;
@@ -292,11 +338,20 @@ impl Node for StreamingAgentNode {
     }
 }
 
-pub(super) fn state_as_agent_input(state: &State) -> Content {
-    // A2A carries text parts. JSON preserves the full shared workflow state,
-    // while still allowing remote agents to treat it as a normal user message.
-    let input = serde_json::to_string(state).unwrap_or_else(|_| "{}".to_string());
-    Content::new("user").with_text(input)
+pub(super) fn agent_input_mapper(
+    state: SharedWorkflowState,
+    node_id: String,
+) -> impl Fn(&State) -> Content + Send + Sync + 'static {
+    move |_| {
+        // ADK graph state is not the execution input authority: the bridge
+        // projects only the values this node is allowed to read.
+        let input = state
+            .lock()
+            .ok()
+            .and_then(|mut state| state.node_input(node_id.clone()).ok())
+            .unwrap_or(Value::Null);
+        Content::new("user").with_text(serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string()))
+    }
 }
 
 pub(super) fn agent_output_updates(

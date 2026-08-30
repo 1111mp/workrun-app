@@ -34,6 +34,18 @@ type WorkflowSkillRef = {
   name: string;
 };
 
+/**
+ * Per-node State settings. A node always owns its own namespace; `readers`
+ * only grants other executable nodes a read-only view of that namespace.
+ */
+type WorkflowNodeStateConfig = {
+  access?: {
+    readers?: string[];
+  };
+  /** Keys emitted by this node that should be published to shared global State. */
+  globalKeys?: string[];
+};
+
 type WorkflowSettings = {
   name: string;
   description: string;
@@ -44,7 +56,7 @@ type WorkflowSettings = {
 };
 
 // ---------- Agent Node ----------
-type WorkflowAgentNodeData = {
+type WorkflowAgentNodeData = WorkflowNodeStateConfig & {
   name: string;
   modelProfileId: string;
   description: string;
@@ -73,7 +85,7 @@ type WorkflowCodeActEnvironmentBinding = {
   name: string;
   value: string;
 };
-type WorkflowCodeActAgentNodeData = {
+type WorkflowCodeActAgentNodeData = WorkflowNodeStateConfig & {
   name: string;
   modelProfileId: string;
   description: string;
@@ -94,7 +106,7 @@ type WorkflowCodeActAgentNode = WorkflowBaseNode & {
 };
 
 // ---------- Remote Agent Node ----------
-type WorkflowRemoteAgentNodeData = {
+type WorkflowRemoteAgentNodeData = WorkflowNodeStateConfig & {
   name: string;
   url: string;
   description: string;
@@ -105,7 +117,7 @@ type WorkflowRemoteAgentNode = WorkflowBaseNode & {
 };
 
 // ---------- Process Node ----------
-type WorkflowProcessNodeData = {
+type WorkflowProcessNodeData = WorkflowNodeStateConfig & {
   name: string;
   processNodeId: string;
   description: string;
@@ -139,7 +151,7 @@ type WorkflowIfElseBranch = {
   condition: string;
 };
 
-type WorkflowIfElseNodeData = {
+type WorkflowIfElseNodeData = WorkflowNodeStateConfig & {
   label?: string;
   /** Conditions evaluated independently for the two outgoing branches. */
   conditions: {
@@ -167,7 +179,7 @@ type WorkflowSwitchDefault = {
   /** Description of the unmatched cases; this is not evaluated. */
   condition: string;
 };
-type WorkflowSwitchNodeData = {
+type WorkflowSwitchNodeData = WorkflowNodeStateConfig & {
   label?: string;
   cases: WorkflowSwitchCase[];
   /** Fallback branch used when no case condition matches. */
@@ -179,7 +191,7 @@ type WorkflowSwitchNode = WorkflowBaseNode & {
 };
 
 // ---------- Human Review Node ----------
-type WorkflowHumanReviewNodeData = {
+type WorkflowHumanReviewNodeData = WorkflowNodeStateConfig & {
   title: string;
   description: string;
   /** State key whose value is presented to the reviewer. */
@@ -202,7 +214,7 @@ type WorkflowAskUserQuestionOption = {
   label: string;
   description?: string;
 };
-type WorkflowAskUserQuestionNodeData = {
+type WorkflowAskUserQuestionNodeData = WorkflowNodeStateConfig & {
   title: string;
   description: string;
   options: WorkflowAskUserQuestionOption[];

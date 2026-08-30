@@ -410,6 +410,7 @@ function WorkflowEditorContent({
       >
         <WorkflowNodeInspector
           node={selectedNode}
+          executableNodes={nodes.filter((node) => isExecutableNode(node.type))}
           modelProfiles={modelCatalog}
           onClose={clearSelection}
           onDataChange={updateNodeData}
@@ -422,6 +423,7 @@ function WorkflowEditorContent({
         />
         <WorkflowRunPanel
           settings={workflowSettings}
+          nodes={nodes}
           onRun={workflowRun.startWorkflowRun}
           onResume={workflowRun.resumeWorkflowRun}
         />
@@ -592,6 +594,19 @@ function WorkflowEditorContent({
         </AlertDialog>
       </WorkflowCanvas>
     </SidebarProvider>
+  );
+}
+
+function isExecutableNode(type: string | undefined) {
+  return (
+    type === 'agent' ||
+    type === 'codeact_agent' ||
+    type === 'remote_agent' ||
+    type === 'process' ||
+    type === 'if_else' ||
+    type === 'switch' ||
+    type === 'human_review' ||
+    type === 'ask_user_question'
   );
 }
 

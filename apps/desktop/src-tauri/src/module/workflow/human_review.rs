@@ -37,6 +37,7 @@ pub(super) fn add_human_review_node(
     graph: StateGraph,
     node: &WorkflowNode,
     on_event: Option<Channel<StreamEvent>>,
+    state: SharedWorkflowState,
 ) -> Result<StateGraph> {
     let id = node.id.clone();
     let config = human_review_config(node)?;
@@ -51,6 +52,7 @@ pub(super) fn add_human_review_node(
             approval_key: config.approval_key.clone(),
         };
         let on_event = on_event.clone();
+        let state = Arc::clone(&state);
         async move {
             // A resumed dynamic interrupt re-executes this node. Its
             // conditional edges route the persisted decision to the matching
@@ -74,17 +76,22 @@ pub(super) fn add_human_review_node(
                     .with_update("workflow.trace", event));
             }
 
+            let input = state
+                .lock()
+                .map_err(|_| graph_node_error(&id, "workflow state lock is poisoned"))?
+                .node_input(&id)
+                .map_err(|error| graph_node_error(&id, error))?;
             let context_values = config
                 .context_keys
                 .iter()
-                .map(|key| (key.clone(), context.get(key).cloned().unwrap_or(Value::Null)))
+                .map(|key| (key.clone(), input.get(key).cloned().unwrap_or(Value::Null)))
                 .collect::<serde_json::Map<_, _>>();
             let payload = json!({
                 "nodeId": id,
                 "title": config.title,
                 "description": config.description,
                 "contentKey": config.content_key.clone(),
-                "content": config.content_key.as_ref().and_then(|key| context.get(key).cloned()),
+                "content": config.content_key.as_ref().and_then(|key| input.get(key).cloned()),
                 "context": context_values,
                 "editable": config.editable,
             });
@@ -188,6 +195,7 @@ mod tests {
             StateGraph::with_channels(&["workflow.human_review.review.approved"]),
             &review,
             None,
+            Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({})).unwrap())),
         )
         .unwrap()
         .add_node_fn("after_review", move |_context| {

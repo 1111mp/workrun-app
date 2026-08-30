@@ -1,11 +1,12 @@
-//! Workflow-independent state with public, node-private, and runtime-private
-//! namespaces.
+//! Access-controlled workflow state. Policy belongs to a whole node namespace.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+/// Rules grant access in addition to the namespace owner. Ownership is
+/// derived from the namespace id and is never recorded here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "node_ids")]
 pub enum AccessRule {
@@ -14,12 +15,11 @@ pub enum AccessRule {
 }
 
 impl AccessRule {
-    pub fn only(node_ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self::Only(node_ids.into_iter().map(Into::into).collect())
+    pub fn only(ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::Only(ids.into_iter().map(Into::into).collect())
     }
-
-    fn allows(&self, node_id: &str) -> bool {
-        matches!(self, Self::Any) || matches!(self, Self::Only(ids) if ids.contains(node_id))
+    fn allows(&self, id: &str) -> bool {
+        matches!(self, Self::Any) || matches!(self, Self::Only(ids) if ids.contains(id))
     }
 }
 
@@ -31,30 +31,27 @@ pub struct NodeStatePolicy {
     pub policy_editors: AccessRule,
 }
 
-impl NodeStatePolicy {
-    pub fn private_to(node_id: impl Into<String>) -> Self {
-        let node_id = node_id.into();
+impl Default for NodeStatePolicy {
+    fn default() -> Self {
         Self {
-            readers: AccessRule::only([node_id.clone()]),
-            writers: AccessRule::only([node_id.clone()]),
-            policy_editors: AccessRule::only([node_id]),
+            readers: AccessRule::only([] as [&str; 0]),
+            writers: AccessRule::only([] as [&str; 0]),
+            policy_editors: AccessRule::only([] as [&str; 0]),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NodeStateEntry {
-    value: Value,
+struct NodeNamespace {
     policy: NodeStatePolicy,
+    values: BTreeMap<String, Value>,
 }
 
-/// State storage. `global` is intentionally public and mutable to every node;
-/// sensitive data belongs in a node-private entry or the runtime namespace.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
     global: BTreeMap<String, Value>,
-    nodes: BTreeMap<String, BTreeMap<String, NodeStateEntry>>,
+    nodes: BTreeMap<String, NodeNamespace>,
     runtime: BTreeMap<String, Value>,
 }
 
@@ -62,28 +59,105 @@ impl State {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Bind state access to one workflow node.
-    pub fn node(&mut self, node_id: impl Into<String>) -> NodeState<'_> {
+    pub fn node(&mut self, id: impl Into<String>) -> NodeState<'_> {
         NodeState {
             state: self,
-            node_id: node_id.into(),
+            id: id.into(),
         }
     }
-
-    /// Create the trusted view used by workflow infrastructure.
     pub fn runtime(&mut self) -> RuntimeState<'_> {
         RuntimeState { state: self }
     }
 
-    fn apply_patch(&mut self, actor: Actor<'_>, patch: &StatePatch) -> Result<(), StateError> {
-        // A node result often writes more than one key. Work on a clone so a
-        // denied later operation never leaves an earlier one applied.
-        let mut candidate = self.clone();
-        for operation in &patch.operations {
-            candidate.apply_operation(actor, operation)?;
+    fn configure_node(&mut self, id: &str, policy: NodeStatePolicy) {
+        self.nodes.entry(id.to_string()).or_insert(NodeNamespace {
+            policy,
+            values: BTreeMap::new(),
+        });
+    }
+
+    fn node_get(&self, actor: Actor<'_>, id: &str, key: &str) -> Result<Option<&Value>, StateError> {
+        let Some(space) = self.nodes.get(id) else {
+            return Ok(None);
+        };
+        Self::require(actor, id, StateAction::Read, &space.policy.readers)?;
+        Ok(space.values.get(key))
+    }
+
+    fn node_set(&mut self, actor: Actor<'_>, id: &str, key: &str, value: Value) -> Result<(), StateError> {
+        if !self.nodes.contains_key(id) {
+            match actor {
+                Actor::Runtime => self.configure_node(id, NodeStatePolicy::default()),
+                Actor::Node(actor_id) if actor_id == id => self.configure_node(id, NodeStatePolicy::default()),
+                Actor::Node(actor_id) => {
+                    return Err(StateError::NamespaceNotFound {
+                        actor: actor_id.to_string(),
+                        node_id: id.to_string(),
+                    });
+                },
+            }
         }
-        *self = candidate;
+        let space = self.nodes.get_mut(id).expect("namespace was created");
+        Self::require(actor, id, StateAction::Write, &space.policy.writers)?;
+        space.values.insert(key.to_string(), value);
+        Ok(())
+    }
+
+    fn node_create(&mut self, actor: Actor<'_>, id: &str, key: &str, value: Value) -> Result<(), StateError> {
+        if self.nodes.get(id).is_some_and(|space| space.values.contains_key(key)) {
+            return Err(StateError::AlreadyExists {
+                node_id: id.to_string(),
+                key: key.to_string(),
+            });
+        }
+        self.node_set(actor, id, key, value)
+    }
+
+    fn node_update_policy(&mut self, actor: Actor<'_>, id: &str, policy: NodeStatePolicy) -> Result<(), StateError> {
+        let space = self.nodes.get_mut(id).ok_or_else(|| StateError::NamespaceNotFound {
+            actor: actor.name().to_string(),
+            node_id: id.to_string(),
+        })?;
+        Self::require(actor, id, StateAction::EditPolicy, &space.policy.policy_editors)?;
+        space.policy = policy;
+        Ok(())
+    }
+
+    fn node_remove(&mut self, actor: Actor<'_>, id: &str, key: &str) -> Result<(), StateError> {
+        let space = self.nodes.get_mut(id).ok_or_else(|| StateError::NamespaceNotFound {
+            actor: actor.name().to_string(),
+            node_id: id.to_string(),
+        })?;
+        Self::require(actor, id, StateAction::Delete, &space.policy.writers)?;
+        if space.values.remove(key).is_none() {
+            return Err(StateError::NotFound {
+                node_id: id.to_string(),
+                key: key.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn require(actor: Actor<'_>, id: &str, action: StateAction, rule: &AccessRule) -> Result<(), StateError> {
+        if matches!(actor, Actor::Runtime)
+            || matches!(actor, Actor::Node(actor_id) if actor_id == id || rule.allows(actor_id))
+        {
+            Ok(())
+        } else {
+            Err(StateError::Denied {
+                actor: actor.name().to_string(),
+                node_id: id.to_string(),
+                action,
+            })
+        }
+    }
+
+    fn apply(&mut self, actor: Actor<'_>, patch: &StatePatch) -> Result<(), StateError> {
+        let mut next = self.clone();
+        for operation in &patch.operations {
+            next.apply_operation(actor, operation)?;
+        }
+        *self = next;
         Ok(())
     }
 
@@ -98,133 +172,7 @@ impl State {
                 Ok(())
             },
             StateOperation::NodeSet { node_id, key, value } => self.node_set(actor, node_id, key, value.clone()),
-            StateOperation::NodeCreate {
-                node_id,
-                key,
-                value,
-                policy,
-            } => self.node_create(actor, node_id, key.clone(), value.clone(), policy.clone()),
             StateOperation::NodeRemove { node_id, key } => self.node_remove(actor, node_id, key),
-            StateOperation::NodeUpdatePolicy { node_id, key, policy } => {
-                self.node_update_policy(actor, node_id, key, policy.clone())
-            },
-        }
-    }
-
-    fn node_get(&self, actor: Actor<'_>, node_id: &str, key: &str) -> Result<Option<&Value>, StateError> {
-        let Some(entry) = self.nodes.get(node_id).and_then(|entries| entries.get(key)) else {
-            return Ok(None);
-        };
-        Self::require(actor, node_id, key, StateAction::Read, &entry.policy.readers)?;
-        Ok(Some(&entry.value))
-    }
-
-    fn node_set(&mut self, actor: Actor<'_>, node_id: &str, key: &str, value: Value) -> Result<(), StateError> {
-        let entry = self
-            .nodes
-            .get_mut(node_id)
-            .and_then(|entries| entries.get_mut(key))
-            .ok_or_else(|| StateError::NotFound {
-                node_id: node_id.to_string(),
-                key: key.to_string(),
-            })?;
-        Self::require(actor, node_id, key, StateAction::Write, &entry.policy.writers)?;
-        entry.value = value;
-        Ok(())
-    }
-
-    fn node_create(
-        &mut self,
-        actor: Actor<'_>,
-        node_id: &str,
-        key: String,
-        value: Value,
-        policy: Option<NodeStatePolicy>,
-    ) -> Result<(), StateError> {
-        if let Actor::Node(actor_id) = actor
-            && actor_id != node_id
-        {
-            return Err(StateError::CreateDenied {
-                actor: actor_id.to_string(),
-                node_id: node_id.to_string(),
-            });
-        }
-        let entries = self.nodes.entry(node_id.to_string()).or_default();
-        if entries.contains_key(&key) {
-            return Err(StateError::AlreadyExists {
-                node_id: node_id.to_string(),
-                key,
-            });
-        }
-        entries.insert(
-            key,
-            NodeStateEntry {
-                value,
-                policy: policy.unwrap_or_else(|| NodeStatePolicy::private_to(node_id)),
-            },
-        );
-        Ok(())
-    }
-
-    fn node_update_policy(
-        &mut self,
-        actor: Actor<'_>,
-        node_id: &str,
-        key: &str,
-        policy: NodeStatePolicy,
-    ) -> Result<(), StateError> {
-        let entry = self
-            .nodes
-            .get_mut(node_id)
-            .and_then(|entries| entries.get_mut(key))
-            .ok_or_else(|| StateError::NotFound {
-                node_id: node_id.to_string(),
-                key: key.to_string(),
-            })?;
-        Self::require(
-            actor,
-            node_id,
-            key,
-            StateAction::EditPolicy,
-            &entry.policy.policy_editors,
-        )?;
-        entry.policy = policy;
-        Ok(())
-    }
-
-    fn node_remove(&mut self, actor: Actor<'_>, node_id: &str, key: &str) -> Result<(), StateError> {
-        let entries = self.nodes.get_mut(node_id).ok_or_else(|| StateError::NotFound {
-            node_id: node_id.to_string(),
-            key: key.to_string(),
-        })?;
-        let entry = entries.get(key).ok_or_else(|| StateError::NotFound {
-            node_id: node_id.to_string(),
-            key: key.to_string(),
-        })?;
-        Self::require(actor, node_id, key, StateAction::Delete, &entry.policy.writers)?;
-        entries.remove(key);
-        if entries.is_empty() {
-            self.nodes.remove(node_id);
-        }
-        Ok(())
-    }
-
-    fn require(
-        actor: Actor<'_>,
-        node_id: &str,
-        key: &str,
-        action: StateAction,
-        rule: &AccessRule,
-    ) -> Result<(), StateError> {
-        if matches!(actor, Actor::Runtime) || matches!(actor, Actor::Node(id) if rule.allows(id)) {
-            Ok(())
-        } else {
-            Err(StateError::Denied {
-                actor: actor.name().to_string(),
-                node_id: node_id.to_string(),
-                key: key.to_string(),
-                action,
-            })
         }
     }
 
@@ -232,28 +180,57 @@ impl State {
         Value::Object(self.global.clone().into_iter().collect())
     }
 
-    fn node_input_snapshot(&self, requester: &str) -> Value {
+    /// Build the complete user-visible workflow result. This is an observer
+    /// view, not a node execution view: all node namespaces are included while
+    /// runtime-only data and access policies remain internal.
+    pub fn workflow_snapshot(&self) -> Value {
         let nodes = self
             .nodes
             .iter()
-            .filter_map(|(owner, entries)| {
-                let visible = entries
-                    .iter()
-                    .filter(|(_, entry)| entry.policy.readers.allows(requester))
-                    .map(|(key, entry)| (key.clone(), entry.value.clone()))
-                    .collect::<serde_json::Map<_, _>>();
-                (!visible.is_empty()).then_some((owner.clone(), Value::Object(visible)))
+            .map(|(id, namespace)| {
+                (
+                    id.clone(),
+                    Value::Object(namespace.values.clone().into_iter().collect()),
+                )
             })
-            .collect();
+            .collect::<serde_json::Map<_, _>>();
         serde_json::json!({
             "global": self.global_snapshot(),
-            "nodes": Value::Object(nodes),
+            "nodes": nodes,
         })
+    }
+
+    /// Build the value passed to a node as a flat JSON object. Namespace
+    /// boundaries stay internal; ambiguous keys fail instead of silently
+    /// choosing a source.
+    fn input_snapshot(&self, requester: &str) -> Result<Value, StateError> {
+        let mut input = self.global.clone();
+        let mut sources = self
+            .global
+            .keys()
+            .map(|key| (key.clone(), "global".to_string()))
+            .collect::<BTreeMap<_, _>>();
+        for (owner, space) in &self.nodes {
+            if owner != requester && !space.policy.readers.allows(requester) {
+                continue;
+            }
+            let source = format!("node.{owner}");
+            for (key, value) in &space.values {
+                if let Some(first_source) = sources.insert(key.clone(), source.clone()) {
+                    return Err(StateError::InputKeyConflict {
+                        key: key.clone(),
+                        first_source,
+                        second_source: source,
+                    });
+                }
+                input.insert(key.clone(), value.clone());
+            }
+        }
+        Ok(Value::Object(input.into_iter().collect()))
     }
 }
 
-/// An explicit set of writes produced by a workflow node. Applying a patch is
-/// atomic: if any operation is denied, no operation in the patch is committed.
+/// Node-output writes. Policy is intentionally not representable here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatePatch {
@@ -264,22 +241,18 @@ impl StatePatch {
     pub fn new() -> Self {
         Self::default()
     }
-
     pub fn is_empty(&self) -> bool {
         self.operations.is_empty()
     }
-
     pub fn global_set(mut self, key: impl Into<String>, value: Value) -> Self {
         self.operations
             .push(StateOperation::GlobalSet { key: key.into(), value });
         self
     }
-
     pub fn global_remove(mut self, key: impl Into<String>) -> Self {
         self.operations.push(StateOperation::GlobalRemove { key: key.into() });
         self
     }
-
     pub fn node_set(mut self, node_id: impl Into<String>, key: impl Into<String>, value: Value) -> Self {
         self.operations.push(StateOperation::NodeSet {
             node_id: node_id.into(),
@@ -288,23 +261,6 @@ impl StatePatch {
         });
         self
     }
-
-    pub fn node_create(
-        mut self,
-        node_id: impl Into<String>,
-        key: impl Into<String>,
-        value: Value,
-        policy: Option<NodeStatePolicy>,
-    ) -> Self {
-        self.operations.push(StateOperation::NodeCreate {
-            node_id: node_id.into(),
-            key: key.into(),
-            value,
-            policy,
-        });
-        self
-    }
-
     pub fn node_remove(mut self, node_id: impl Into<String>, key: impl Into<String>) -> Self {
         self.operations.push(StateOperation::NodeRemove {
             node_id: node_id.into(),
@@ -312,119 +268,103 @@ impl StatePatch {
         });
         self
     }
+}
 
-    pub fn node_update_policy(
-        mut self,
-        node_id: impl Into<String>,
-        key: impl Into<String>,
-        policy: NodeStatePolicy,
-    ) -> Self {
-        self.operations.push(StateOperation::NodeUpdatePolicy {
-            node_id: node_id.into(),
-            key: key.into(),
-            policy,
-        });
+/// Raw values emitted by a node. The workflow decides which configured keys
+/// are public; every other value is written to the emitting node's namespace.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NodeStateUpdate(BTreeMap<String, Value>);
+
+impl NodeStateUpdate {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.0.insert(key.into(), value);
         self
+    }
+
+    pub fn from_object(value: serde_json::Map<String, Value>) -> Self {
+        Self(value.into_iter().collect())
+    }
+
+    /// Values that must also be visible to graph-level routing after this node
+    /// publishes them to the global namespace.
+    pub fn global_values(&self, global_keys: &BTreeSet<String>) -> BTreeMap<String, Value> {
+        self.0
+            .iter()
+            .filter(|(key, _)| global_keys.contains(*key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
+    pub fn into_patch(self, node_id: &str, global_keys: &BTreeSet<String>) -> StatePatch {
+        self.0.into_iter().fold(StatePatch::new(), |patch, (key, value)| {
+            if global_keys.contains(&key) {
+                patch.global_set(key, value)
+            } else {
+                patch.node_set(node_id, key, value)
+            }
+        })
     }
 }
 
-/// One intended state mutation within a [`StatePatch`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum StateOperation {
-    GlobalSet {
-        key: String,
-        value: Value,
-    },
-    GlobalRemove {
-        key: String,
-    },
-    NodeSet {
-        node_id: String,
-        key: String,
-        value: Value,
-    },
-    NodeCreate {
-        node_id: String,
-        key: String,
-        value: Value,
-        policy: Option<NodeStatePolicy>,
-    },
-    NodeRemove {
-        node_id: String,
-        key: String,
-    },
-    NodeUpdatePolicy {
-        node_id: String,
-        key: String,
-        policy: NodeStatePolicy,
-    },
+    GlobalSet { key: String, value: Value },
+    GlobalRemove { key: String },
+    NodeSet { node_id: String, key: String, value: Value },
+    NodeRemove { node_id: String, key: String },
 }
 
-/// State API bound to one node identity. It intentionally has no runtime accessors.
 pub struct NodeState<'a> {
     state: &'a mut State,
-    node_id: String,
+    id: String,
 }
 
 impl NodeState<'_> {
     pub fn global_get(&self, key: &str) -> Option<&Value> {
         self.state.global.get(key)
     }
-
     pub fn global_set(&mut self, key: impl Into<String>, value: Value) {
         self.state.global.insert(key.into(), value);
     }
-
+    pub fn global_remove(&mut self, key: &str) -> Option<Value> {
+        self.state.global.remove(key)
+    }
     pub fn get(&self, key: &str) -> Result<Option<&Value>, StateError> {
-        self.state.node_get(Actor::Node(&self.node_id), &self.node_id, key)
+        self.state.node_get(Actor::Node(&self.id), &self.id, key)
     }
-
+    /// Upsert any key in this node's namespace.
     pub fn set(&mut self, key: &str, value: Value) -> Result<(), StateError> {
-        self.state
-            .node_set(Actor::Node(&self.node_id), &self.node_id, key, value)
+        self.state.node_set(Actor::Node(&self.id), &self.id, key, value)
     }
-
-    pub fn create(
-        &mut self,
-        key: impl Into<String>,
-        value: Value,
-        policy: Option<NodeStatePolicy>,
-    ) -> Result<(), StateError> {
-        self.state
-            .node_create(Actor::Node(&self.node_id), &self.node_id, key.into(), value, policy)
+    pub fn create(&mut self, key: &str, value: Value) -> Result<(), StateError> {
+        self.state.node_create(Actor::Node(&self.id), &self.id, key, value)
     }
-
     pub fn get_from(&self, node_id: &str, key: &str) -> Result<Option<&Value>, StateError> {
-        self.state.node_get(Actor::Node(&self.node_id), node_id, key)
+        self.state.node_get(Actor::Node(&self.id), node_id, key)
     }
-
     pub fn set_for(&mut self, node_id: &str, key: &str, value: Value) -> Result<(), StateError> {
-        self.state.node_set(Actor::Node(&self.node_id), node_id, key, value)
+        self.state.node_set(Actor::Node(&self.id), node_id, key, value)
     }
-
-    pub fn update_policy(&mut self, key: &str, policy: NodeStatePolicy) -> Result<(), StateError> {
-        self.state
-            .node_update_policy(Actor::Node(&self.node_id), &self.node_id, key, policy)
+    pub fn update_policy(&mut self, policy: NodeStatePolicy) -> Result<(), StateError> {
+        self.state.node_update_policy(Actor::Node(&self.id), &self.id, policy)
     }
-
     pub fn remove(&mut self, key: &str) -> Result<(), StateError> {
-        self.state.node_remove(Actor::Node(&self.node_id), &self.node_id, key)
+        self.state.node_remove(Actor::Node(&self.id), &self.id, key)
     }
-
-    /// Apply a node result after validating every requested operation against
-    /// this node's access rights.
     pub fn apply(&mut self, patch: &StatePatch) -> Result<(), StateError> {
-        self.state.apply_patch(Actor::Node(&self.node_id), patch)
+        self.state.apply(Actor::Node(&self.id), patch)
     }
-
-    /// Export the public global namespace and every node entry this node may read.
-    pub fn input_snapshot(&self) -> Value {
-        self.state.node_input_snapshot(&self.node_id)
+    pub fn input_snapshot(&self) -> Result<Value, StateError> {
+        self.state.input_snapshot(&self.id)
     }
 }
 
-/// Trusted State API for workflow infrastructure.
 pub struct RuntimeState<'a> {
     state: &'a mut State,
 }
@@ -433,63 +373,44 @@ impl RuntimeState<'_> {
     pub fn global_snapshot(&self) -> Value {
         self.state.global_snapshot()
     }
-
     pub fn global_get(&self, key: &str) -> Option<&Value> {
         self.state.global.get(key)
     }
-
     pub fn global_set(&mut self, key: impl Into<String>, value: Value) {
         self.state.global.insert(key.into(), value);
     }
-
     pub fn global_remove(&mut self, key: &str) -> Option<Value> {
         self.state.global.remove(key)
     }
-
     pub fn runtime_get(&self, key: &str) -> Option<&Value> {
         self.state.runtime.get(key)
     }
-
     pub fn runtime_set(&mut self, key: impl Into<String>, value: Value) {
         self.state.runtime.insert(key.into(), value);
     }
-
     pub fn runtime_remove(&mut self, key: &str) -> Option<Value> {
         self.state.runtime.remove(key)
     }
-
+    pub fn configure_node(&mut self, node_id: &str, policy: NodeStatePolicy) {
+        self.state.configure_node(node_id, policy)
+    }
     pub fn node_get(&self, node_id: &str, key: &str) -> Result<Option<&Value>, StateError> {
         self.state.node_get(Actor::Runtime, node_id, key)
     }
-
     pub fn node_set(&mut self, node_id: &str, key: &str, value: Value) -> Result<(), StateError> {
         self.state.node_set(Actor::Runtime, node_id, key, value)
     }
-
-    pub fn node_create(
-        &mut self,
-        node_id: &str,
-        key: impl Into<String>,
-        value: Value,
-        policy: Option<NodeStatePolicy>,
-    ) -> Result<(), StateError> {
-        self.state
-            .node_create(Actor::Runtime, node_id, key.into(), value, policy)
+    pub fn node_create(&mut self, node_id: &str, key: &str, value: Value) -> Result<(), StateError> {
+        self.state.node_create(Actor::Runtime, node_id, key, value)
     }
-
-    pub fn node_update_policy(&mut self, node_id: &str, key: &str, policy: NodeStatePolicy) -> Result<(), StateError> {
-        self.state.node_update_policy(Actor::Runtime, node_id, key, policy)
+    pub fn node_update_policy(&mut self, node_id: &str, policy: NodeStatePolicy) -> Result<(), StateError> {
+        self.state.node_update_policy(Actor::Runtime, node_id, policy)
     }
-
     pub fn node_remove(&mut self, node_id: &str, key: &str) -> Result<(), StateError> {
         self.state.node_remove(Actor::Runtime, node_id, key)
     }
-
-    /// Apply trusted infrastructure changes atomically. Runtime-only keys are
-    /// deliberately absent from StatePatch so node output can never address
-    /// them.
     pub fn apply(&mut self, patch: &StatePatch) -> Result<(), StateError> {
-        self.state.apply_patch(Actor::Runtime, patch)
+        self.state.apply(Actor::Runtime, patch)
     }
 }
 
@@ -498,7 +419,6 @@ enum Actor<'a> {
     Runtime,
     Node(&'a str),
 }
-
 impl<'a> Actor<'a> {
     fn name(self) -> &'a str {
         match self {
@@ -515,196 +435,189 @@ pub enum StateAction {
     Delete,
     EditPolicy,
 }
-
 impl std::fmt::Display for StateAction {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Read => write!(formatter, "read"),
-            Self::Write => write!(formatter, "write"),
-            Self::Delete => write!(formatter, "delete"),
-            Self::EditPolicy => write!(formatter, "edit policy for"),
+            Self::Read => write!(f, "read"),
+            Self::Write => write!(f, "write"),
+            Self::Delete => write!(f, "delete"),
+            Self::EditPolicy => write!(f, "edit policy for"),
         }
     }
 }
 
 #[derive(Debug, Error)]
 pub enum StateError {
-    #[error("{actor} may not create state in node `{node_id}`")]
-    CreateDenied { actor: String, node_id: String },
-    #[error("{actor} may not {action} node `{node_id}` state key `{key}`")]
+    #[error("{actor} may not {action} node `{node_id}` state")]
     Denied {
         actor: String,
         node_id: String,
-        key: String,
         action: StateAction,
     },
     #[error("node `{node_id}` state key `{key}` already exists")]
     AlreadyExists { node_id: String, key: String },
     #[error("node `{node_id}` state key `{key}` does not exist")]
     NotFound { node_id: String, key: String },
+    #[error("node `{node_id}` state does not exist")]
+    NamespaceNotFound { actor: String, node_id: String },
+    #[error("node input key `{key}` conflicts between `{first_source}` and `{second_source}`")]
+    InputKeyConflict {
+        key: String,
+        first_source: String,
+        second_source: String,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn every_node_can_read_and_write_global_state() {
-        let mut state = State::new();
-        state.node("writer").global_set("prompt", json!("hello"));
-        assert_eq!(state.node("reader").global_get("prompt"), Some(&json!("hello")));
+    fn shared() -> NodeStatePolicy {
+        NodeStatePolicy {
+            readers: AccessRule::only(["reviewer"]),
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn node_state_is_private_by_default() {
-        let mut state = State::new();
-        state.node("extractor").create("draft", json!("private"), None).unwrap();
-
-        let mut owner = state.node("extractor");
-        assert_eq!(owner.get("draft").unwrap(), Some(&json!("private")));
-        owner.set("draft", json!("updated")).unwrap();
-        assert_eq!(owner.get("draft").unwrap(), Some(&json!("updated")));
-        drop(owner);
-
-        let mut reviewer = state.node("reviewer");
-        assert!(matches!(
-            reviewer.get_from("extractor", "draft"),
-            Err(StateError::Denied { .. })
-        ));
-        assert!(matches!(
-            reviewer.set_for("extractor", "draft", json!("changed")),
-            Err(StateError::Denied { .. })
-        ));
+    fn global_is_open() {
+        let mut s = State::new();
+        s.node("a").global_set("input", json!(1));
+        assert_eq!(s.node("b").global_get("input"), Some(&json!(1)));
     }
-
     #[test]
-    fn policy_can_grant_a_specific_downstream_node_access() {
-        let mut state = State::new();
-        let policy = NodeStatePolicy {
-            readers: AccessRule::only(["extractor", "reviewer"]),
-            writers: AccessRule::only(["extractor"]),
-            policy_editors: AccessRule::only(["extractor"]),
-        };
-        state
-            .node("extractor")
-            .create("customer", json!({"id": 1}), Some(policy))
-            .unwrap();
-
-        let mut reviewer = state.node("reviewer");
-        assert_eq!(
-            reviewer.get_from("extractor", "customer").unwrap(),
-            Some(&json!({"id": 1}))
-        );
-        assert!(matches!(
-            reviewer.set_for("extractor", "customer", json!({"id": 2})),
-            Err(StateError::Denied { .. })
-        ));
+    fn owner_can_upsert_arbitrary_keys() {
+        let mut s = State::new();
+        let mut a = s.node("a");
+        a.set("first", json!(1)).unwrap();
+        a.set("second", json!(2)).unwrap();
+        a.set("first", json!(3)).unwrap();
+        assert_eq!(a.get("first").unwrap(), Some(&json!(3)));
     }
-
     #[test]
-    fn only_policy_editors_can_change_a_policy() {
-        let mut state = State::new();
-        state.node("owner").create("value", json!(1), None).unwrap();
+    fn namespace_is_private_by_default() {
+        let mut s = State::new();
+        s.node("a").set("secret", json!(1)).unwrap();
         assert!(matches!(
-            state.node("other").get_from("owner", "value"),
+            s.node("b").get_from("a", "secret"),
             Err(StateError::Denied {
                 action: StateAction::Read,
                 ..
             })
         ));
-        state
-            .runtime()
-            .node_update_policy("owner", "value", NodeStatePolicy::private_to("owner"))
-            .unwrap();
     }
-
     #[test]
-    fn runtime_can_access_every_namespace() {
-        let mut state = State::new();
-        state.node("agent").create("secret", json!(true), None).unwrap();
-        let mut runtime = state.runtime();
-        runtime.global_set("input", json!("hi"));
-        runtime.runtime_set("approval-token", json!("secret"));
-        assert_eq!(runtime.global_get("input"), Some(&json!("hi")));
-        assert_eq!(runtime.runtime_get("approval-token"), Some(&json!("secret")));
-        assert_eq!(runtime.node_get("agent", "secret").unwrap(), Some(&json!(true)));
+    fn policy_applies_to_current_and_future_keys() {
+        let mut s = State::new();
+        s.runtime().configure_node("extractor", shared());
+        s.node("extractor").set("first", json!(1)).unwrap();
+        s.node("extractor").set("second", json!(2)).unwrap();
+        let reviewer = s.node("reviewer");
+        assert_eq!(reviewer.get_from("extractor", "first").unwrap(), Some(&json!(1)));
+        assert_eq!(reviewer.get_from("extractor", "second").unwrap(), Some(&json!(2)));
     }
-
     #[test]
-    fn state_round_trips_with_its_policies() {
-        let mut state = State::new();
-        state.node("writer").global_set("input", json!("hi"));
-        state
-            .runtime()
-            .node_create(
-                "agent",
-                "secret",
-                json!(true),
-                Some(NodeStatePolicy::private_to("agent")),
+    fn writers_apply_to_all_keys() {
+        let mut s = State::new();
+        s.runtime().configure_node(
+            "owner",
+            NodeStatePolicy {
+                readers: AccessRule::Any,
+                writers: AccessRule::only(["editor"]),
+                ..Default::default()
+            },
+        );
+        s.node("editor").set_for("owner", "new", json!(true)).unwrap();
+        assert_eq!(s.node("owner").get("new").unwrap(), Some(&json!(true)));
+    }
+    #[test]
+    fn patch_is_atomic() {
+        let mut s = State::new();
+        s.node("owner").set("secret", json!(1)).unwrap();
+        let patch = StatePatch::new()
+            .global_set("status", json!("bad"))
+            .node_set("owner", "secret", json!(2));
+        assert!(s.node("other").apply(&patch).is_err());
+        assert_eq!(s.node("reader").global_get("status"), None);
+        assert_eq!(s.node("owner").get("secret").unwrap(), Some(&json!(1)));
+    }
+    #[test]
+    fn patch_writes_arbitrary_owner_keys() {
+        let mut s = State::new();
+        s.node("writer")
+            .apply(
+                &StatePatch::new()
+                    .node_set("writer", "draft", json!(1))
+                    .node_set("writer", "meta", json!(2)),
             )
             .unwrap();
-
-        let serialized = serde_json::to_value(&state).unwrap();
-        let mut restored: State = serde_json::from_value(serialized).unwrap();
-        assert_eq!(restored.node("agent").get("secret").unwrap(), Some(&json!(true)));
+        assert_eq!(s.node("writer").get("meta").unwrap(), Some(&json!(2)));
     }
-
     #[test]
-    fn a_patch_commits_all_authorized_node_output() {
-        let mut state = State::new();
-        let patch = StatePatch::new().global_set("status", json!("ready")).node_create(
-            "writer",
-            "draft",
-            json!("private"),
-            None,
+    fn snapshot_includes_authorized_namespace() {
+        let mut s = State::new();
+        s.node("extractor").global_set("prompt", json!("hi"));
+        s.runtime().configure_node("extractor", shared());
+        s.node("extractor").set("draft", json!(1)).unwrap();
+        assert_eq!(
+            s.node("reviewer").input_snapshot().unwrap(),
+            json!({"prompt":"hi","draft":1})
         );
-
-        state.node("writer").apply(&patch).unwrap();
-
-        assert_eq!(state.node("reader").global_get("status"), Some(&json!("ready")));
-        assert_eq!(state.node("writer").get("draft").unwrap(), Some(&json!("private")));
     }
-
     #[test]
-    fn a_denied_patch_does_not_commit_any_earlier_operation() {
-        let mut state = State::new();
-        state.node("owner").create("secret", json!(1), None).unwrap();
-        let patch = StatePatch::new()
-            .global_set("status", json!("should-not-appear"))
-            .node_set("owner", "secret", json!(2));
+    fn snapshot_rejects_colliding_authorized_keys() {
+        let mut s = State::new();
+        s.node("extractor").global_set("status", json!("global"));
+        s.runtime().configure_node("extractor", shared());
+        s.node("extractor").set("status", json!("private")).unwrap();
 
         assert!(matches!(
-            state.node("other").apply(&patch),
-            Err(StateError::Denied { .. })
+            s.node("reviewer").input_snapshot(),
+            Err(StateError::InputKeyConflict { key, .. }) if key == "status"
         ));
-        assert_eq!(state.node("reader").global_get("status"), None);
-        assert_eq!(state.node("owner").get("secret").unwrap(), Some(&json!(1)));
     }
-
     #[test]
-    fn a_writer_can_remove_a_private_key() {
-        let mut state = State::new();
-        state.node("owner").create("draft", json!("temporary"), None).unwrap();
-
-        state
-            .node("owner")
-            .apply(&StatePatch::new().node_remove("owner", "draft"))
-            .unwrap();
-
-        assert_eq!(state.node("owner").get("draft").unwrap(), None);
-    }
-
-    #[test]
-    fn patches_round_trip_for_persistence_or_transport() {
-        let patch = StatePatch::new().global_set("status", json!("ready")).node_create(
-            "writer",
-            "draft",
-            json!("private"),
-            None,
+    fn serializes_namespace_policy() {
+        let mut s = State::new();
+        s.runtime().configure_node("extractor", shared());
+        s.node("extractor").set("draft", json!(1)).unwrap();
+        let mut restored: State = serde_json::from_value(serde_json::to_value(s).unwrap()).unwrap();
+        assert_eq!(
+            restored.node("reviewer").get_from("extractor", "draft").unwrap(),
+            Some(&json!(1))
         );
+    }
 
-        let restored: StatePatch = serde_json::from_value(serde_json::to_value(patch).unwrap()).unwrap();
-        assert_eq!(restored.operations.len(), 2);
+    #[test]
+    fn node_update_publishes_only_allowlisted_keys() {
+        let update = NodeStateUpdate::new()
+            .set("summary", json!("public"))
+            .set("raw", json!("private"));
+        let mut state = State::new();
+        let patch = update.into_patch("extractor", &BTreeSet::from(["summary".to_string()]));
+
+        state.node("extractor").apply(&patch).unwrap();
+
+        assert_eq!(state.node("reader").global_get("summary"), Some(&json!("public")));
+        assert_eq!(state.node("extractor").get("raw").unwrap(), Some(&json!("private")));
+    }
+
+    #[test]
+    fn workflow_snapshot_includes_every_node_value_without_runtime_data() {
+        let mut state = State::new();
+        state.node("extractor").set("raw", json!("secret to nodes")).unwrap();
+        state.node("reviewer").set("decision", json!("approved")).unwrap();
+        state.runtime().runtime_set("credential", json!("never shown"));
+
+        assert_eq!(
+            state.workflow_snapshot(),
+            json!({
+                "global": {},
+                "nodes": {
+                    "extractor": {"raw": "secret to nodes"},
+                    "reviewer": {"decision": "approved"},
+                },
+            })
+        );
     }
 }

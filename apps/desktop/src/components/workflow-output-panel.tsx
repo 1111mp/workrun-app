@@ -37,6 +37,7 @@ import {
   MessageScrollerViewport,
   Spinner,
 } from '@workspace/ui/components';
+import type { Node } from '@xyflow/react';
 import {
   ArrowUpIcon,
   CheckCircle2Icon,
@@ -44,6 +45,9 @@ import {
   CircleAlertIcon,
   CircleIcon,
   ClipboardIcon,
+  DatabaseIcon,
+  Globe2Icon,
+  Layers3Icon,
   RotateCcwIcon,
   TerminalIcon,
 } from 'lucide-react';
@@ -59,6 +63,7 @@ import type {
 
 type WorkflowOutputPanelProps = {
   run: WorkflowRunView;
+  workflowNodes: Node[];
   isRunning: boolean;
   onRunAgain: () => void;
   onClose: () => void;
@@ -93,8 +98,20 @@ function durationLabel(run: WorkflowRunView) {
   return `${((end - run.startedAt) / 1000).toFixed(1)}s`;
 }
 
-function nodeDisplayName(run: WorkflowRunView, nodeId: string) {
-  return run.nodes.find((node) => node.id === nodeId)?.name ?? nodeId;
+function nodeDisplayName(
+  run: WorkflowRunView,
+  workflowNodes: Node[],
+  nodeId: string,
+) {
+  const name = run.nodes.find((node) => node.id === nodeId)?.name;
+  if (name) return name;
+
+  const node = workflowNodes.find((node) => node.id === nodeId);
+  const data = node?.data;
+  if (typeof data?.name === 'string' && data.name.trim()) return data.name;
+  if (typeof data?.label === 'string' && data.label.trim()) return data.label;
+  if (typeof data?.title === 'string' && data.title.trim()) return data.title;
+  return 'Unknown node';
 }
 
 type WorkflowTraceEntry = {
@@ -108,7 +125,8 @@ type WorkflowTraceEntry = {
 function workflowTrace(
   finalState: WorkflowRunView['finalState'],
 ): WorkflowTraceEntry[] {
-  const trace = finalState?.['workflow.trace'];
+  const workflow = recordValue(finalState?.workflow);
+  const trace = workflow?.['workflow.trace'] ?? finalState?.['workflow.trace'];
   if (!Array.isArray(trace)) return [];
 
   return trace.filter(
@@ -117,6 +135,119 @@ function workflowTrace(
       entry !== null &&
       typeof (entry as Record<string, unknown>).nodeId === 'string' &&
       typeof (entry as Record<string, unknown>).type === 'string',
+  );
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function FinalState({
+  state,
+  nodeDisplayName,
+  execution,
+}: {
+  state: Record<string, unknown>;
+  nodeDisplayName: (nodeId: string) => string;
+  execution: WorkflowRunExecution[];
+}) {
+  const global = recordValue(state.global) ?? {};
+  const nodes = recordValue(state.nodes) ?? {};
+  const executionOrder = new Map(
+    execution.map((entry, index) => [entry.nodeId, index]),
+  );
+  const nodeEntries = Object.entries(nodes)
+    .filter(
+      (entry): entry is [string, Record<string, unknown>] =>
+        recordValue(entry[1]) !== undefined,
+    )
+    .sort(
+      ([leftId], [rightId]) =>
+        (executionOrder.get(leftId) ?? Number.MAX_SAFE_INTEGER) -
+        (executionOrder.get(rightId) ?? Number.MAX_SAFE_INTEGER),
+    );
+
+  return (
+    <div className='flex flex-col gap-4 p-3'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <span className='text-muted-foreground flex items-center gap-1.5 text-xs font-medium'>
+          <Globe2Icon className='size-3.5' />
+          {Object.keys(global).length} global key
+          {Object.keys(global).length === 1 ? '' : 's'}
+        </span>
+        <span className='bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium'>
+          {nodeEntries.length} node{nodeEntries.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <StateSection label='Global state' value={global} scope='global' />
+      {nodeEntries.length > 0 ? (
+        <div className='flex flex-col gap-2'>
+          <div className='text-muted-foreground flex items-center gap-1.5 px-1 text-xs font-medium'>
+            <Layers3Icon className='size-3.5' />
+            Node state
+          </div>
+          {nodeEntries.map(([nodeId, value]) => (
+            <StateSection
+              key={nodeId}
+              label={nodeDisplayName(nodeId)}
+              value={value}
+              scope='node'
+            />
+          ))}
+        </div>
+      ) : (
+        <p className='bg-muted/50 text-muted-foreground rounded-lg px-3 py-2 text-sm'>
+          No node wrote state in this run.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function StateSection({
+  label,
+  value,
+  scope,
+}: {
+  label: string;
+  value: Record<string, unknown>;
+  scope: 'global' | 'node';
+}) {
+  const keyCount = Object.keys(value).length;
+  return (
+    <Collapsible
+      defaultOpen={scope === 'global'}
+      className='bg-card overflow-hidden rounded-lg border shadow-sm'
+    >
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant='ghost'
+            className='group w-full justify-between rounded-none px-3 hover:bg-muted/70'
+          />
+        }
+      >
+        <span className='flex min-w-0 items-center gap-2'>
+          {scope === 'global' ? (
+            <Globe2Icon className='text-primary size-4 shrink-0' />
+          ) : (
+            <DatabaseIcon className='text-muted-foreground size-4 shrink-0' />
+          )}
+          <span className='truncate text-sm font-medium'>{label}</span>
+        </span>
+        <span className='text-muted-foreground flex shrink-0 items-center gap-2 text-xs'>
+          {keyCount} key{keyCount === 1 ? '' : 's'}
+          <ChevronDownIcon className='size-4 transition-transform group-data-panel-open/button:rotate-180' />
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <pre className='bg-muted/60 max-h-80 overflow-auto border-t px-3 py-2.5 font-mono text-xs leading-5'>
+          {JSON.stringify(value, null, 2)}
+        </pre>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -493,6 +624,7 @@ function ThinkingProcess({
 
 function WorkflowRunOutput({
   run,
+  workflowNodes,
   isRunning,
   onRunAgain,
   onClose,
@@ -502,7 +634,8 @@ function WorkflowRunOutput({
   const [message, setMessage] = useState('');
   const duration = durationLabel(run);
   const output = run.messages.map((message) => message.content).join('\n\n');
-  const displayNodeName = (nodeId: string) => nodeDisplayName(run, nodeId);
+  const displayNodeName = (nodeId: string) =>
+    nodeDisplayName(run, workflowNodes, nodeId);
   const execution: WorkflowRunExecution[] =
     run.execution.length > 0
       ? run.execution
@@ -772,21 +905,36 @@ function WorkflowRunOutput({
                       );
                     })
                 )}
-                {!isChat && run.finalState && (
+                {run.finalState && (
                   <MessageScrollerItem messageId='final-state'>
-                    <Collapsible className='border-border border-t pt-2'>
+                    <Collapsible className='bg-card overflow-hidden rounded-xl border shadow-sm'>
                       <CollapsibleTrigger
-                        render={<Button variant='ghost' className='w-fit' />}
+                        render={
+                          <Button
+                            variant='ghost'
+                            className='group h-auto w-full justify-between rounded-none px-3 py-3 hover:bg-muted/60'
+                          />
+                        }
                       >
-                        <Marker>
-                          <MarkerContent>Final state</MarkerContent>
-                        </Marker>
-                        <ChevronDownIcon className='group-data-panel-open/button:rotate-180' />
+                        <span className='flex items-center gap-2.5'>
+                          <span className='bg-primary/10 text-primary flex size-8 items-center justify-center rounded-lg'>
+                            <DatabaseIcon className='size-4' />
+                          </span>
+                          <span className='flex flex-col items-start'>
+                            <span className='text-sm font-semibold'>Final state</span>
+                            <span className='text-muted-foreground text-xs'>
+                              Workflow data at completion
+                            </span>
+                          </span>
+                        </span>
+                        <ChevronDownIcon className='text-muted-foreground size-4 transition-transform group-data-panel-open/button:rotate-180' />
                       </CollapsibleTrigger>
                       <CollapsibleContent>
-                        <pre className='bg-muted mt-3 max-h-96 overflow-auto rounded-md p-3 text-xs'>
-                          {JSON.stringify(run.finalState, null, 2)}
-                        </pre>
+                        <FinalState
+                          state={run.finalState}
+                          nodeDisplayName={displayNodeName}
+                          execution={execution}
+                        />
                       </CollapsibleContent>
                     </Collapsible>
                   </MessageScrollerItem>

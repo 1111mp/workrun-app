@@ -29,9 +29,17 @@ export type WorkflowPlan = {
   edges: WorkflowPlanEdge[];
 };
 
+/** Complete observer view returned when a workflow stops. Node ACLs affect
+ * execution inputs only; every node namespace is available for display. */
+export type WorkflowFinalState = {
+  global: Record<string, unknown>;
+  nodes: Record<string, Record<string, unknown>>;
+  workflow: Record<string, unknown>;
+};
+
 export type WorkflowRunResult = {
   plan: WorkflowPlan;
-  state: Record<string, unknown>;
+  state: WorkflowFinalState;
   interrupted: boolean;
 };
 

@@ -16,6 +16,7 @@ import {
   Switch,
   Textarea,
 } from '@workspace/ui/components';
+import type { Node } from '@xyflow/react';
 import { PlayIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -27,6 +28,7 @@ type RunValues = Record<string, string | boolean>;
 
 type WorkflowRunPanelProps = {
   settings: WorkflowSettings;
+  nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
   onResume: () => void;
 };
@@ -188,6 +190,7 @@ function WorkflowRunForm({
 
 function WorkflowRunPanel({
   settings,
+  nodes,
   onRun,
   onResume,
 }: WorkflowRunPanelProps) {
@@ -221,6 +224,7 @@ function WorkflowRunPanel({
         {settings.mode === 'chat' ? (
           <WorkflowRunOutput
             run={run}
+            workflowNodes={nodes}
             isRunning={isRunning}
             isChat
             onRunAgain={() => {
@@ -234,6 +238,7 @@ function WorkflowRunPanel({
         ) : showOutput ? (
           <WorkflowRunOutput
             run={run}
+            workflowNodes={nodes}
             isRunning={isRunning}
             onRunAgain={() => {
               if (run.status === 'failed' || run.status === 'interrupted')

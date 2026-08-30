@@ -62,6 +62,7 @@ function useWorkflowRun(
       resetRunView: state.resetRunView,
       setRunPanelOpen: state.setRunPanelOpen,
       setShowRunOutput: state.setShowRunOutput,
+      setRunView: state.setRunView,
       lastRunInput: state.lastRunInput,
       startWorkflowRun: state.startWorkflowRun,
       resumeWorkflowRun: state.resumeWorkflowRun,
@@ -168,6 +169,10 @@ function useWorkflowRun(
     onSuccess: (result) => {
       runAfterDrain(() => {
         if (result.interrupted) {
+          store.setRunView((current) => ({
+            ...current,
+            finalState: result.state,
+          }));
           if (!store.humanReview && !store.askUserQuestion) {
             toast.info('Workflow interrupted', {
               toasterId: 'global',
@@ -177,7 +182,7 @@ function useWorkflowRun(
           return;
         }
         store.finishWorkflowRun(result.state);
-        const lastNode = result.state['workflow.last_node'];
+        const lastNode = result.state.workflow['workflow.last_node'];
         toast.success('Workflow completed', {
           toasterId: 'global',
           description:
