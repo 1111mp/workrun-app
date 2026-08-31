@@ -306,6 +306,8 @@ impl PythonRuntime {
             .arg("--no-package")
             .arg("--no-readme")
             .arg("--no-workspace")
+            .arg("--vcs")
+            .arg("none")
             .arg("--python")
             .arg("3.12")
             .current_dir(project_path)

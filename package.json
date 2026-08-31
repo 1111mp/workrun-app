@@ -17,23 +17,23 @@
   },
   "dependencies": {
     "lodash-es": "^4.18.1",
-    "lucide-react": "^1.33.0"
+    "lucide-react": "^1.37.0"
   },
   "devDependencies": {
     "@types/lodash-es": "^4.17.12",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react-dom": "^19.2.5",
     "cross-env": "^10.1.0",
     "husky": "^9.1.7",
-    "oxfmt": "^0.64.0",
-    "oxlint": "^1.79.0",
+    "oxfmt": "^0.65.0",
+    "oxlint": "^1.80.0",
     "oxlint-tsgolint": "^7.0.2001",
-    "turbo": "^2.10.11",
+    "turbo": "^2.10.12",
     "typescript": "~7.0.2"
   },
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "pnpm@11.22.0"
+  "packageManager": "pnpm@11.24.0"
 }

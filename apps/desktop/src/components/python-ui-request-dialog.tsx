@@ -1,5 +1,6 @@
 import type { RJSFSchema, UiSchema } from '@rjsf/utils';
 import { customizeValidator } from '@rjsf/validator-ajv8';
+import { open } from '@tauri-apps/plugin-dialog';
 import Form from '@workspace/json-schema-form';
 import {
   AlertDialog,
@@ -81,6 +82,12 @@ function PythonUiRequestDialog() {
             isSchema(request.uiSchema) ? (request.uiSchema as UiSchema) : {}
           }
           validator={validator}
+          formContext={{
+            selectPath: async ({ directory }: { directory: boolean }) => {
+              const path = await open({ directory, multiple: false });
+              return typeof path === 'string' ? path : null;
+            },
+          }}
           disabled={responding}
           showErrorList={false}
           onError={() => setLiveValidationRequestId(request.requestId)}

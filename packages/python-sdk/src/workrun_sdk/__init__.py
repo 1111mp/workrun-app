@@ -3,7 +3,7 @@
 from . import process
 from ._client import InteractionCancelled, WorkrunConnectionError
 from .tool import tool
-from .ui import boolean, choice, collect, confirm, form, number, shutdown, text
+from .ui import boolean, choice, collect, confirm, form, number, path, shutdown, text
 
 __all__ = [
     "InteractionCancelled",
@@ -14,6 +14,7 @@ __all__ = [
     "confirm",
     "form",
     "number",
+    "path",
     "process",
     "shutdown",
     "text",

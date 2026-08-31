@@ -7,6 +7,7 @@ import type {
 
 import CheckboxWidget from '../checkbox-widget';
 import CheckboxesWidget from '../checkboxes-widget';
+import PathWidget from '../path-widget';
 import RadioWidget from '../radio-widget';
 import RangeWidget from '../range-widget';
 import SelectWidget from '../select-widget';
@@ -20,6 +21,8 @@ export function generateWidgets<
   return {
     CheckboxWidget,
     CheckboxesWidget,
+    PathWidget,
+    path: PathWidget,
     RadioWidget,
     RangeWidget,
     SelectWidget,

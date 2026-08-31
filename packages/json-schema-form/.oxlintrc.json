@@ -1,0 +1,6 @@
+{
+  "extends": ["../../.oxlintrc.json"],
+  "rules": {
+    "react-hooks/static-components": "off"
+  }
+}

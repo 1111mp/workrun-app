@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from workrun_sdk import choice, collect, number, text, ui
+from workrun_sdk import choice, collect, number, path, text, ui
 
 
 def test_collect_builds_schema_and_ui_schema(monkeypatch) -> None:
@@ -96,3 +96,27 @@ def test_collect_builds_schema_and_ui_schema(monkeypatch) -> None:
             }
         },
     }
+
+
+def test_path_builds_a_native_path_picker_field() -> None:
+    file_path = path(
+        "File",
+        required=True,
+        placeholder="Select a file",
+        button_label="Browse…",
+    )
+    directory_path = path("Directory", directory=True)
+
+    assert file_path == ui.Field(
+        schema={"type": "string", "title": "File"},
+        ui_schema={
+            "ui:widget": "path",
+            "ui:options": {"directory": False, "buttonLabel": "Browse…"},
+            "ui:placeholder": "Select a file",
+        },
+        required=True,
+    )
+    assert directory_path == ui.Field(
+        schema={"type": "string", "title": "Directory"},
+        ui_schema={"ui:widget": "path", "ui:options": {"directory": True}},
+    )

@@ -107,6 +107,28 @@ def number(
     return Field(schema=schema, ui_schema=ui_schema or None, required=required)
 
 
+def path(
+    label: str,
+    *,
+    directory: bool = False,
+    description: str | None = None,
+    required: bool = False,
+    placeholder: str | None = None,
+    button_label: str | None = None,
+) -> Field:
+    """Create a native file or directory path picker for :func:`collect`."""
+    schema: JsonObject = {"type": "string", "title": label}
+    if description is not None:
+        schema["description"] = description
+    ui_options: JsonObject = {"directory": directory}
+    if button_label is not None:
+        ui_options["buttonLabel"] = button_label
+    ui_schema = _ui_schema(widget="path", options=ui_options) or {}
+    if placeholder is not None:
+        ui_schema["ui:placeholder"] = placeholder
+    return Field(schema=schema, ui_schema=ui_schema, required=required)
+
+
 def choice(
     label: str,
     options: Mapping[str, str],
