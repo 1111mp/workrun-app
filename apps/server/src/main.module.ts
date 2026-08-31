@@ -4,6 +4,7 @@ import { getConnectionToken, MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '@thallesp/nestjs-better-auth';
 import { Connection } from 'mongoose';
 
+import { envValidationSchema } from './env.validation';
 import { createAuth } from './lib/auth';
 import { LoggerMiddleware } from './middlewares/logger.middleware';
 import { AppModule } from './modules/app/app.module';
@@ -11,23 +12,22 @@ import { FileModule } from './modules/file/file.module';
 import { UserModule } from './modules/user/user.module';
 import { WorkflowModule } from './modules/workflow/workflow.module';
 
-const envFilePath = ['.env'];
-if (process.env.NODE_ENV === 'development') {
-  envFilePath.unshift('.env.development');
-} else {
-  envFilePath.unshift('.env.production');
-}
-
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath,
+      envFilePath: [
+        `.env.${process.env.NODE_ENV ?? 'development'}.local`,
+        `.env.${process.env.NODE_ENV ?? 'development'}`,
+        '.env.local',
+        '.env',
+      ],
+      validationSchema: envValidationSchema,
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
-        uri: configService.get('MONGODB_URI'),
+        uri: configService.get<string>('MONGODB_URI'),
         retryWrites: false,
         retryAttempts: 10,
         retryDelay: 1000,
