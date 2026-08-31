@@ -57,6 +57,10 @@ pub struct ProcessNodeDefinition {
     pub updated_at: String,
     /// Project-relative Python script that implements the Process Node work.
     pub entry: PathBuf,
+    /// Absolute directory under which this App's id-named project is stored.
+    /// Older catalog entries use the workspace default directory instead.
+    #[serde(default)]
+    pub project_root: Option<PathBuf>,
     #[serde(default)]
     pub kind: ProcessNodeKind,
     #[serde(default)]
@@ -80,6 +84,9 @@ pub struct CreateProcessNodeRequest {
     pub description: String,
     #[serde(default)]
     pub kind: ProcessNodeKind,
+    /// Optional absolute directory under which to create this App project.
+    #[serde(default)]
+    pub project_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -119,6 +126,13 @@ pub struct ProcessNode {
     pub install_status: ProcessNodeInstallStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessNodeWorkflowReference {
+    pub id: String,
+    pub name: String,
 }
 
 /// Result produced when a Process Node is executed inside a workflow. Logs are

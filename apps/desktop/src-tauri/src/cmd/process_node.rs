@@ -4,7 +4,7 @@ use crate::{
     module::{
         process_node::{
             CreateProcessNodeRequest, ProcessNode, ProcessNodeCreateProgress, ProcessNodeDefinition,
-            ProcessNodeRegistry,
+            ProcessNodeRegistry, ProcessNodeWorkflowReference,
         },
         python_runtime::PythonOutputChunk,
     },
@@ -35,6 +35,13 @@ pub async fn process_node_open_project(id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub async fn process_node_default_root() -> CmdResult<String> {
+    ProcessNodeRegistry::root_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .stringify_err()
+}
+
+#[tauri::command]
 pub async fn process_node_create(
     app: AppHandle,
     request: CreateProcessNodeRequest,
@@ -48,6 +55,18 @@ pub async fn process_node_create(
 #[tauri::command]
 pub async fn process_node_update(definition: ProcessNodeDefinition) -> CmdResult<ProcessNode> {
     ProcessNodeRegistry::update(definition).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn process_node_delete(id: String, delete_project_files: bool) -> CmdResult {
+    ProcessNodeRegistry::delete(&id, delete_project_files)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn process_node_workflow_references(id: String) -> CmdResult<Vec<ProcessNodeWorkflowReference>> {
+    ProcessNodeRegistry::workflow_references(&id).await.stringify_err()
 }
 
 /// Synchronize dependencies and run an installed Process Node's catalog entrypoint.

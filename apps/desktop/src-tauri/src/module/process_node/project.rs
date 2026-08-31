@@ -1,4 +1,4 @@
-use super::types::*;
+use super::{types::*, validate_definition};
 use crate::module::{python_runtime::PythonRuntime, tool_registry::ToolRiskLevel};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
@@ -29,6 +29,7 @@ impl ProcessNodeRegistry {
             created_at: now.clone(),
             updated_at: now,
             entry: PathBuf::from("main.py"),
+            project_root: request.project_root,
             kind: request.kind,
             tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
             tool_risk_level: ToolRiskLevel::Low,
@@ -36,11 +37,32 @@ impl ProcessNodeRegistry {
             inputs: BTreeMap::new(),
             outputs: BTreeMap::new(),
         };
-        let project_path = Self::root_dir()?.join(&definition.id);
+        validate_definition(&definition)?;
+        let project_path = Self::project_path(&definition)?;
+        match tokio::fs::metadata(&project_path).await {
+            Ok(_) => bail!(
+                "Process Node project directory already exists: {}",
+                project_path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect Process Node project {}", project_path.display()));
+            },
+        }
         let _ = progress.send(ProcessNodeCreateProgress {
             stage: ProcessNodeCreateStage::CreatingProject,
         });
-        tokio::fs::create_dir_all(&project_path)
+        let project_parent = project_path
+            .parent()
+            .context("Process Node project directory has no parent")?;
+        tokio::fs::create_dir_all(project_parent).await.with_context(|| {
+            format!(
+                "failed to create Process Node project parent {}",
+                project_parent.display()
+            )
+        })?;
+        tokio::fs::create_dir(&project_path)
             .await
             .with_context(|| format!("failed to create Process Node project {}", project_path.display()))?;
 

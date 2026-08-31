@@ -11,7 +11,10 @@ type WorkflowStoreProviderProps = {
   store: WorkflowStoreApi;
 };
 
-function WorkflowStoreProvider({ children, store }: WorkflowStoreProviderProps) {
+function WorkflowStoreProvider({
+  children,
+  store,
+}: WorkflowStoreProviderProps) {
   return (
     <WorkflowStoreContext.Provider value={store}>
       {children}
@@ -22,7 +25,9 @@ function WorkflowStoreProvider({ children, store }: WorkflowStoreProviderProps) 
 function useWorkflowStoreApi() {
   const store = useContext(WorkflowStoreContext);
   if (!store) {
-    throw new Error('useWorkflowStoreApi must be used within WorkflowStoreProvider');
+    throw new Error(
+      'useWorkflowStoreApi must be used within WorkflowStoreProvider',
+    );
   }
   return store;
 }

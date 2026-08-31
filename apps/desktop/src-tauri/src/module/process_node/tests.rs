@@ -11,6 +11,7 @@ fn definition() -> ProcessNodeDefinition {
         created_at: "2026-01-01T00:00:00+00:00".into(),
         updated_at: "2026-01-01T00:00:00+00:00".into(),
         entry: "main.py".into(),
+        project_root: None,
         kind: ProcessNodeKind::Workflow,
         tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
         tool_risk_level: ToolRiskLevel::Low,
@@ -99,6 +100,25 @@ fn legacy_catalog_entries_default_to_workflow_apps() {
 
     let parsed: ProcessNodeDefinition = serde_json::from_value(value).unwrap();
     assert_eq!(parsed.kind, ProcessNodeKind::Workflow);
+}
+
+#[test]
+fn project_root_must_be_absolute() {
+    let mut node = definition();
+    node.project_root = Some("projects/my-app".into());
+    assert!(validate_definition(&node).is_err());
+
+    node.project_root = Some(std::env::temp_dir().join("my-app"));
+    assert!(validate_definition(&node).is_ok());
+}
+
+#[test]
+fn project_path_is_nested_under_the_configured_root() {
+    let mut node = definition();
+    let root = std::env::temp_dir().join("workrun-apps");
+    node.project_root = Some(root.clone());
+
+    assert_eq!(ProcessNodeRegistry::project_path(&node).unwrap(), root.join(&node.id));
 }
 
 #[tokio::test]

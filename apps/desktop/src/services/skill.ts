@@ -62,17 +62,13 @@ export function inspectSkill(name: string) {
 export function createSkill(request: SkillWriteRequest) {
   return invoke<AdkSkillDocument>('skill_create', {
     request: toAdkSkillWriteRequest(request),
-  }).then(
-    toSkillDetails,
-  );
+  }).then(toSkillDetails);
 }
 
 export function updateSkill(request: SkillWriteRequest) {
   return invoke<AdkSkillDocument>('skill_update', {
     request: toAdkSkillWriteRequest(request),
-  }).then(
-    toSkillDetails,
-  );
+  }).then(toSkillDetails);
 }
 
 export function deleteSkill(name: string) {
@@ -111,6 +107,8 @@ function toAdkSkillWriteRequest(request: SkillWriteRequest) {
   const { metadata, ...skill } = request;
   return {
     ...skill,
-    metadata: metadata?.trim() ? (JSON.parse(metadata) as Record<string, unknown>) : {},
+    metadata: metadata?.trim()
+      ? (JSON.parse(metadata) as Record<string, unknown>)
+      : {},
   };
 }

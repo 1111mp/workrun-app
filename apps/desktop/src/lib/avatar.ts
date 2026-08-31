@@ -4,5 +4,8 @@ import clayDefinition from '@dicebear/styles/clay.json' with { type: 'json' };
 const clayStyle = new Style(clayDefinition);
 
 export function localProfileAvatarUrl(avatarId: string) {
-  return new DicebearAvatar(clayStyle, { seed: avatarId }).toDataUri();
+  return new DicebearAvatar(clayStyle, {
+    animationVariant: 'medium',
+    seed: avatarId,
+  }).toDataUri();
 }

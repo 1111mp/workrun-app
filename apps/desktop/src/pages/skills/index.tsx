@@ -172,7 +172,11 @@ function SkillsPage() {
                   </div>
                 </div>
               </div>
-              <Button onClick={() => void openDirectory()} type='button' variant='outline'>
+              <Button
+                onClick={() => void openDirectory()}
+                type='button'
+                variant='outline'
+              >
                 <FolderOpenIcon data-icon='inline-start' />
                 {t('settings.skills.openDirectory')}
               </Button>
@@ -444,7 +448,9 @@ function SkillEditor({
                   <Input
                     id='skill-version'
                     placeholder='1.0.0'
-                    onChange={(event) => update({ version: event.target.value })}
+                    onChange={(event) =>
+                      update({ version: event.target.value })
+                    }
                     value={draft.version}
                   />
                   <FieldDescription>
@@ -458,7 +464,9 @@ function SkillEditor({
                   <Input
                     id='skill-license'
                     placeholder='MIT'
-                    onChange={(event) => update({ license: event.target.value })}
+                    onChange={(event) =>
+                      update({ license: event.target.value })
+                    }
                     value={draft.license}
                   />
                   <FieldDescription>
@@ -525,7 +533,9 @@ function SkillEditor({
                     onChange={(event) =>
                       update({ references: event.target.value })
                     }
-                    placeholder={'references/technicians.json\nreferences/coverage.csv'}
+                    placeholder={
+                      'references/technicians.json\nreferences/coverage.csv'
+                    }
                     value={draft.references}
                   />
                   <FieldDescription>
@@ -537,7 +547,10 @@ function SkillEditor({
             <FieldSet>
               <FieldLegend>{t('settings.skills.activation')}</FieldLegend>
               <FieldGroup className='gap-4'>
-                <Field orientation='horizontal' className='bg-background rounded-xl border p-4'>
+                <Field
+                  orientation='horizontal'
+                  className='bg-background rounded-xl border p-4'
+                >
                   <Switch
                     checked={draft.trigger}
                     id='skill-trigger'
@@ -569,9 +582,7 @@ function SkillEditor({
             </FieldSet>
             <FieldSet>
               <FieldLegend>{t('settings.skills.metadata')}</FieldLegend>
-              <Field
-                data-invalid={!metadataIsValid || undefined}
-              >
+              <Field data-invalid={!metadataIsValid || undefined}>
                 <Textarea
                   aria-invalid={!metadataIsValid}
                   className='min-h-28 font-mono text-xs leading-5'

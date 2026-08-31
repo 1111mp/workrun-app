@@ -1,10 +1,7 @@
 import { tauriFetchImpl } from '@daveyplate/better-auth-tauri';
 import { createAuthClient } from 'better-auth/react';
 
-const teamAuthClients = new Map<
-  string,
-  ReturnType<typeof createAuthClient>
->();
+const teamAuthClients = new Map<string, ReturnType<typeof createAuthClient>>();
 
 function createTeamAuthClient(serverUrl: string) {
   const cachedClient = teamAuthClients.get(serverUrl);

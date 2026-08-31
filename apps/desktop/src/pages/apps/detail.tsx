@@ -2,6 +2,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   AlertDescription,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
   AlertTitle,
   Button,
   Card,
@@ -10,6 +19,7 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
+  Checkbox,
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -22,6 +32,13 @@ import {
   FieldLegend,
   FieldSet,
   Input,
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+  Kbd,
+  KbdGroup,
   Select,
   SelectContent,
   SelectGroup,
@@ -47,7 +64,9 @@ import { useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 
 import {
+  deleteProcessNode,
   inspectProcessNode,
+  listProcessNodeWorkflowReferences,
   updateProcessNode,
   type ProcessNodeDefinition,
 } from '@/services/process-node';
@@ -482,6 +501,14 @@ function ProcessNodeDetailEditor({
     toDraft(processNode.definition),
   );
   const [formError, setFormError] = useState<string>();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteProjectFiles, setDeleteProjectFiles] = useState(false);
+
+  const workflowReferences = useQuery({
+    queryKey: ['apps', processNode.definition.id, 'workflow-references'],
+    queryFn: () => listProcessNodeWorkflowReferences(processNode.definition.id),
+    enabled: deleteOpen,
+  });
 
   const save = useMutation({
     mutationFn: async () => {
@@ -500,6 +527,25 @@ function ProcessNodeDetailEditor({
     },
     onError: (error) => {
       setFormError(error instanceof Error ? error.message : String(error));
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () =>
+      deleteProcessNode(processNode.definition.id, deleteProjectFiles),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['apps'] });
+      toast.success(
+        deleteProjectFiles ? 'App and project files deleted' : 'App removed',
+        { toasterId: 'global' },
+      );
+      void navigate('/apps', { replace: true });
+    },
+    onError: (error) => {
+      toast.error('Could not delete App', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
     },
   });
 
@@ -537,18 +583,24 @@ function ProcessNodeDetailEditor({
               </p>
             </div>
           </div>
-          <Button
-            className='relative shrink-0'
-            disabled={save.isPending}
-            onClick={() => save.mutate()}
-          >
-            {save.isPending ? (
-              <Spinner data-icon='inline-start' />
-            ) : (
-              <SaveIcon data-icon='inline-start' />
-            )}
-            Save changes
-          </Button>
+          <div className='relative flex shrink-0 flex-wrap gap-2'>
+            <Button
+              variant='destructive'
+              disabled={save.isPending}
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2Icon data-icon='inline-start' />
+              Delete App
+            </Button>
+            <Button disabled={save.isPending} onClick={() => save.mutate()}>
+              {save.isPending ? (
+                <Spinner data-icon='inline-start' />
+              ) : (
+                <SaveIcon data-icon='inline-start' />
+              )}
+              Save changes
+            </Button>
+          </div>
         </section>
 
         {formError ? (
@@ -558,6 +610,86 @@ function ProcessNodeDetailEditor({
             <AlertDescription>{formError}</AlertDescription>
           </Alert>
         ) : null}
+
+        <AlertDialog
+          open={deleteOpen}
+          onOpenChange={(open) => {
+            if (!remove.isPending) setDeleteOpen(open);
+          }}
+        >
+          <AlertDialogContent className='max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-2xl! overflow-y-auto'>
+            <AlertDialogHeader>
+              <AlertDialogMedia className='bg-destructive/10 text-destructive dark:bg-destructive/20 dark:text-destructive'>
+                <Trash2Icon />
+              </AlertDialogMedia>
+              <AlertDialogTitle>
+                Delete {processNode.definition.name}?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                This removes the App from Workrun. Local project files are kept
+                by default.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {workflowReferences.isLoading ? (
+              <p className='text-muted-foreground text-sm'>
+                Checking workflow usage…
+              </p>
+            ) : workflowReferences.data?.length ? (
+              <Item variant='muted' size='sm'>
+                <ItemMedia variant='icon'>
+                  <CircleAlertIcon />
+                </ItemMedia>
+                <ItemContent>
+                  <ItemTitle>
+                    {workflowReferences.data.length} affected workflow
+                    {workflowReferences.data.length === 1 ? '' : 's'}
+                  </ItemTitle>
+                  <ItemDescription>
+                    Select another App before running these workflows again.
+                  </ItemDescription>
+                  <KbdGroup>
+                    {workflowReferences.data.map((workflow) => (
+                      <Kbd key={workflow.id} title={workflow.name}>
+                        {workflow.name}
+                      </Kbd>
+                    ))}
+                  </KbdGroup>
+                </ItemContent>
+              </Item>
+            ) : null}
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='delete-process-node-files'
+                checked={deleteProjectFiles}
+                disabled={remove.isPending}
+                onCheckedChange={setDeleteProjectFiles}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor='delete-process-node-files'>
+                  Permanently delete local project files
+                </FieldLabel>
+                <FieldDescription>{processNode.projectPath}</FieldDescription>
+              </FieldContent>
+            </Field>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={remove.isPending}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                variant='destructive'
+                disabled={remove.isPending || workflowReferences.isLoading}
+                onClick={() => remove.mutate()}
+              >
+                {remove.isPending ? (
+                  <Spinner data-icon='inline-start' />
+                ) : (
+                  <Trash2Icon data-icon='inline-start' />
+                )}
+                {deleteProjectFiles ? 'Delete App and files' : 'Delete App'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <Card className='shadow-sm'>
           <CardHeader>

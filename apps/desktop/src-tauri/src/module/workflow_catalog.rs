@@ -28,7 +28,14 @@ pub struct WorkflowCatalogStore;
 
 impl WorkflowCatalogStore {
     pub async fn list() -> Result<Vec<StoredWorkflow>> {
-        Ok(Self::read().await?.workflows)
+        let mut catalog = Self::read().await?;
+        catalog.workflows.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.updated_at.cmp(&left.updated_at))
+        });
+        Ok(catalog.workflows)
     }
 
     pub async fn inspect(id: &str) -> Result<StoredWorkflow> {

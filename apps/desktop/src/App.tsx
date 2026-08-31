@@ -2,8 +2,8 @@ import { Toaster, TooltipProvider } from '@workspace/ui/components';
 import { RouterProvider } from 'react-router';
 
 import { UpdateDialog } from '@/components';
-import { TeamAuthTauriHandler } from '@/components/team-auth-tauri-handler';
 import { PythonUiRequestDialog } from '@/components/python-ui-request-dialog';
+import { TeamAuthTauriHandler } from '@/components/team-auth-tauri-handler';
 import { useTheme } from '@/hooks';
 import { OnboardingPage } from '@/pages/onboarding';
 import { router } from '@/routes';

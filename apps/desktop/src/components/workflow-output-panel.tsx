@@ -225,7 +225,7 @@ function StateSection({
         render={
           <Button
             variant='ghost'
-            className='group w-full justify-between rounded-none px-3 hover:bg-muted/70'
+            className='group hover:bg-muted/70 w-full justify-between rounded-none px-3'
           />
         }
       >
@@ -912,7 +912,7 @@ function WorkflowRunOutput({
                         render={
                           <Button
                             variant='ghost'
-                            className='group h-auto w-full justify-between rounded-none px-3 py-3 hover:bg-muted/60'
+                            className='group hover:bg-muted/60 h-auto w-full justify-between rounded-none px-3 py-3'
                           />
                         }
                       >
@@ -921,7 +921,9 @@ function WorkflowRunOutput({
                             <DatabaseIcon className='size-4' />
                           </span>
                           <span className='flex flex-col items-start'>
-                            <span className='text-sm font-semibold'>Final state</span>
+                            <span className='text-sm font-semibold'>
+                              Final state
+                            </span>
                             <span className='text-muted-foreground text-xs'>
                               Workflow data at completion
                             </span>

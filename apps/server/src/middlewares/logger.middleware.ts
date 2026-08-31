@@ -7,6 +7,7 @@ export class LoggerMiddleware implements NestMiddleware {
 
   use(req: Request, res: Response, next: NextFunction) {
     req.startTime = Date.now();
+
     this.logger.log(
       `${process.pid} ${req.method} ${req.originalUrl} ${req.ip}`,
     );

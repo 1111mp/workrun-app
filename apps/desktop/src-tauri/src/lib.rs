@@ -108,8 +108,11 @@ pub fn run() {
             cmd::process_node::process_node_tool_list,
             cmd::process_node::process_node_inspect,
             cmd::process_node::process_node_open_project,
+            cmd::process_node::process_node_default_root,
             cmd::process_node::process_node_create,
             cmd::process_node::process_node_update,
+            cmd::process_node::process_node_delete,
+            cmd::process_node::process_node_workflow_references,
             cmd::process_node::process_node_run,
             // workflow
             cmd::workflow::workflow_compile,

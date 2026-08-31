@@ -40,10 +40,16 @@ pub(super) fn validate_definition(definition: &ProcessNodeDefinition) -> Result<
     {
         bail!("Process Node entry must be a non-empty relative file path");
     }
+    if let Some(project_root) = &definition.project_root
+        && (!project_root.is_absolute() || project_root.as_os_str().is_empty())
+    {
+        bail!("Process Node project root must be an absolute path");
+    }
     validate_schemas("inputs", &definition.inputs)?;
     validate_schemas("outputs", &definition.outputs)?;
     Ok(())
 }
+
 pub(super) fn validate_node_id(id: &str) -> Result<()> {
     let uuid = Uuid::parse_str(id).with_context(|| format!("Process Node id must be a UUID, got {id:?}"))?;
     if uuid.hyphenated().to_string() != id {

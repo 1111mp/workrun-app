@@ -183,6 +183,11 @@ function getCodeActMounts(data: Record<string, unknown>) {
   });
 }
 
+const mountAccessOptions = [
+  { label: 'Read only', value: 'read_only' },
+  { label: 'Read/write', value: 'read_write' },
+];
+
 function getCodeActEnvironment(data: Record<string, unknown>) {
   const value = data.environment;
   if (!Array.isArray(value)) return [];
@@ -399,6 +404,7 @@ function CodeActRuntimeFields({
                 <Field className='w-28'>
                   <Label>Access</Label>
                   <Select
+                    items={mountAccessOptions}
                     value={mount.access}
                     onValueChange={(access) =>
                       updateMount(index, {
@@ -411,8 +417,11 @@ function CodeActRuntimeFields({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        <SelectItem value='read_only'>Read only</SelectItem>
-                        <SelectItem value='read_write'>Read/write</SelectItem>
+                        {mountAccessOptions.map(({ label, value }) => (
+                          <SelectItem key={value} value={value}>
+                            {label}
+                          </SelectItem>
+                        ))}
                       </SelectGroup>
                     </SelectContent>
                   </Select>
@@ -1344,9 +1353,10 @@ function WorkflowNodeInspector({
       }}
     >
       <DrawerContent className='sm:[--drawer-content-width:32rem]'>
-        <DrawerHeader className='bg-muted/30 border-b px-5 py-5 pr-14'>
-          <DrawerTitle className='text-base'>Edit {title}</DrawerTitle>
-          <DrawerDescription>
+        <DrawerHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>
+          <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[16px_16px]' />
+          <DrawerTitle className='relative text-lg'>Edit {title}</DrawerTitle>
+          <DrawerDescription className='relative mt-1 leading-5'>
             Changes apply to the workflow immediately.
           </DrawerDescription>
         </DrawerHeader>

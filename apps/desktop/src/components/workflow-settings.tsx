@@ -1,5 +1,10 @@
 import {
   Button,
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
   Field,
   FieldContent,
   FieldDescription,
@@ -14,11 +19,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
   Switch,
   Textarea,
 } from '@workspace/ui/components';
@@ -95,15 +95,20 @@ function WorkflowSettingsPanel({
   };
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className='w-full gap-0 sm:max-w-xl'>
-        <SheetHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>
+    <Drawer
+      open={open}
+      onOpenChange={onOpenChange}
+      swipeDirection='right'
+      horizontalSnapPoints={['31rem', '48rem', '64rem']}
+    >
+      <DrawerContent className='gap-0 sm:[--drawer-content-width:36rem]'>
+        <DrawerHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>
           <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[16px_16px]' />
-          <SheetTitle className='relative text-lg'>More settings</SheetTitle>
-          <SheetDescription className='relative mt-1 leading-5'>
+          <DrawerTitle className='relative text-lg'>More settings</DrawerTitle>
+          <DrawerDescription className='relative mt-1 leading-5'>
             Define a description and the parameters each run accepts.
-          </SheetDescription>
-        </SheetHeader>
+          </DrawerDescription>
+        </DrawerHeader>
         <div className='min-h-0 flex-1 overflow-y-auto px-5 py-6'>
           <FieldGroup className='gap-7'>
             <FieldSet className='bg-card gap-4 rounded-xl border p-4 shadow-xs'>
@@ -270,8 +275,8 @@ function WorkflowSettingsPanel({
             </FieldSet>
           </FieldGroup>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DrawerContent>
+    </Drawer>
   );
 }
 

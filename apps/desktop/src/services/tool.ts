@@ -1,6 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 
-import type { ToolExecutionPolicy, ToolRiskLevel } from '@/services/process-node';
+import type {
+  ToolExecutionPolicy,
+  ToolRiskLevel,
+} from '@/services/process-node';
 
 export type ToolSource = 'process' | 'mcp';
 

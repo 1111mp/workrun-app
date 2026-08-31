@@ -1,5 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   Button,
   Card,
@@ -22,7 +23,7 @@ import {
   Spinner,
   Textarea,
 } from '@workspace/ui/components';
-import { ArrowLeftIcon, SaveIcon } from 'lucide-react';
+import { ArrowLeftIcon, PencilIcon, SaveIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { useNavigate } from 'react-router';
@@ -31,6 +32,7 @@ import { z } from 'zod';
 
 import {
   createProcessNode,
+  getProcessNodeDefaultRoot,
   type ProcessNodeCreateStage,
 } from '@/services/process-node';
 
@@ -38,6 +40,7 @@ const createAppSchema = z.object({
   name: z.string().trim().min(1, 'Enter a name.'),
   description: z.string(),
   kind: z.enum(['workflow', 'tool']),
+  projectRoot: z.string().trim(),
 });
 
 type CreateProcessNodeForm = z.infer<typeof createAppSchema>;
@@ -59,14 +62,21 @@ function CreateProcessNodePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createStage, setCreateStage] = useState<ProcessNodeCreateStage>();
+  const { data: defaultProjectRoot } = useQuery({
+    queryKey: ['apps', 'default-project-root'],
+    queryFn: getProcessNodeDefaultRoot,
+  });
   const form = useForm<CreateProcessNodeForm>({
     resolver: zodResolver(createAppSchema),
-    defaultValues: { name: '', description: '', kind: 'workflow' },
+    defaultValues: { name: '', description: '', kind: 'workflow', projectRoot: '' },
   });
 
   const create = useMutation({
     mutationFn: (request: CreateProcessNodeForm) =>
-      createProcessNode(request, (progress) => setCreateStage(progress.stage)),
+      createProcessNode(
+        { ...request, projectRoot: request.projectRoot || undefined },
+        (progress) => setCreateStage(progress.stage),
+      ),
     onMutate: () => setCreateStage('creatingProject'),
     onSuccess: (node) => {
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
@@ -188,6 +198,49 @@ function CreateProcessNodePage() {
                           ))}
                         </SelectContent>
                       </Select>
+                    </Field>
+                  )}
+                />
+                <Controller
+                  name='projectRoot'
+                  control={form.control}
+                  render={({ field, fieldState }) => (
+                    <Field data-invalid={fieldState.invalid}>
+                      <FieldLabel>Project root directory</FieldLabel>
+                      <FieldDescription>
+                        The App project will be created in a new folder named
+                        after its id under this directory.
+                      </FieldDescription>
+                      <div className='bg-muted flex items-center rounded-md border'>
+                        <span className='text-muted-foreground min-w-0 flex-1 truncate px-3 py-2 text-sm'>
+                          {field.value || defaultProjectRoot || 'Loading…'}
+                        </span>
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='icon-sm'
+                          className='mr-1 shrink-0'
+                          aria-label='Change project root directory'
+                          title='Change project root directory'
+                          onClick={() => {
+                            void open({
+                              directory: true,
+                              multiple: false,
+                              title: 'Select project root directory',
+                              defaultPath: field.value || defaultProjectRoot,
+                            }).then((directory) => {
+                              if (typeof directory === 'string') {
+                                field.onChange(directory);
+                              }
+                            });
+                          }}
+                        >
+                          <PencilIcon />
+                        </Button>
+                      </div>
+                      {fieldState.invalid ? (
+                        <FieldError errors={[fieldState.error]} />
+                      ) : null}
                     </Field>
                   )}
                 />

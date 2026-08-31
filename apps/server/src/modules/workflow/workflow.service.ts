@@ -5,18 +5,19 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 
 import { BetterAuthUser } from '../user/schemas/better-auth-user.schema';
-import { CreateAppDto } from './dto/create-app.dto';
-import { UpdateAppDto } from './dto/update-app.dto';
-import { App, type AppDocument } from './schemas/app.schema';
+import { CreateWorkflowDto } from './dto/create-workflow.dto';
+import { UpdateWorkflowDto } from './dto/update-workflow.dto';
+import { Workflow, type WorkflowDocument } from './schemas/workflow.schema';
 
 @Injectable()
-export class AppService {
+export class WorkflowService {
   constructor(
-    @InjectModel(App.name) private readonly appModel: Model<AppDocument>,
+    @InjectModel(Workflow.name)
+    private readonly workflowModel: Model<WorkflowDocument>,
   ) {}
 
-  create(ownerId: string, dto: CreateAppDto) {
-    return this.appModel.create({
+  create(ownerId: string, dto: CreateWorkflowDto) {
+    return this.workflowModel.create({
       ...dto,
       id: randomUUID(),
       ownerId: this.toOwnerId(ownerId),
@@ -24,7 +25,7 @@ export class AppService {
   }
 
   findAll(ownerId: string) {
-    return this.appModel
+    return this.workflowModel
       .find({ ownerId: this.toOwnerId(ownerId), isDelete: false })
       .sort({ updatedAt: -1 })
       .populate<{ ownerId: BetterAuthUser }>({
@@ -35,19 +36,19 @@ export class AppService {
   }
 
   async findOne(ownerId: string, id: string) {
-    const app = await this.appModel
+    const workflow = await this.workflowModel
       .findOne({ id, ownerId: this.toOwnerId(ownerId), isDelete: false })
       .populate<{ ownerId: BetterAuthUser }>({
         path: 'ownerId',
         select: 'name email emailVerified image createdAt updatedAt',
       })
       .lean();
-    if (!app) throw new NotFoundException(`App ${id} was not found`);
-    return app;
+    if (!workflow) throw new NotFoundException(`Workflow ${id} was not found`);
+    return workflow;
   }
 
-  async update(ownerId: string, id: string, dto: UpdateAppDto) {
-    const app = await this.appModel
+  async update(ownerId: string, id: string, dto: UpdateWorkflowDto) {
+    const workflow = await this.workflowModel
       .findOneAndUpdate(
         { id, ownerId: this.toOwnerId(ownerId), isDelete: false },
         dto,
@@ -58,20 +59,20 @@ export class AppService {
         select: 'name email emailVerified image createdAt updatedAt',
       })
       .lean();
-    if (!app) throw new NotFoundException(`App ${id} was not found`);
-    return app;
+    if (!workflow) throw new NotFoundException(`Workflow ${id} was not found`);
+    return workflow;
   }
 
   async remove(ownerId: string, id: string) {
-    const app = await this.appModel
+    const workflow = await this.workflowModel
       .findOneAndUpdate(
         { id, ownerId: this.toOwnerId(ownerId), isDelete: false },
         { isDelete: true, deletedAt: new Date() },
         { new: true },
       )
       .lean();
-    if (!app) throw new NotFoundException(`App ${id} was not found`);
-    return app;
+    if (!workflow) throw new NotFoundException(`Workflow ${id} was not found`);
+    return workflow;
   }
 
   private toOwnerId(ownerId: string) {

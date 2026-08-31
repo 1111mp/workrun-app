@@ -9,6 +9,7 @@ import { LoggerMiddleware } from './middlewares/logger.middleware';
 import { AppModule } from './modules/app/app.module';
 import { FileModule } from './modules/file/file.module';
 import { UserModule } from './modules/user/user.module';
+import { WorkflowModule } from './modules/workflow/workflow.module';
 
 const envFilePath = ['.env'];
 if (process.env.NODE_ENV === 'development') {
@@ -46,6 +47,7 @@ if (process.env.NODE_ENV === 'development') {
     AppModule,
     UserModule,
     FileModule,
+    WorkflowModule,
   ],
   providers: [Logger],
 })

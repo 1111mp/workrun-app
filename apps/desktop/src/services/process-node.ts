@@ -15,6 +15,7 @@ export type ProcessNodeDefinition = {
   createdAt: string;
   updatedAt: string;
   entry: string;
+  projectRoot?: string;
   kind: ProcessNodeKind;
   toolExecutionPolicy: ToolExecutionPolicy;
   toolRiskLevel?: ToolRiskLevel;
@@ -30,9 +31,14 @@ export type ProcessNode = {
   installError?: string;
 };
 
+export type ProcessNodeWorkflowReference = {
+  id: string;
+  name: string;
+};
+
 export type CreateProcessNodeRequest = Pick<
   ProcessNodeDefinition,
-  'name' | 'description' | 'kind'
+  'name' | 'description' | 'kind' | 'projectRoot'
 >;
 
 export type ProcessNodeCreateStage =
@@ -73,6 +79,10 @@ export function openProcessNodeProject(id: string) {
   return invoke('process_node_open_project', { id });
 }
 
+export function getProcessNodeDefaultRoot() {
+  return invoke<string>('process_node_default_root');
+}
+
 export function createProcessNode(
   request: CreateProcessNodeRequest,
   onProgress: (progress: ProcessNodeCreateProgress) => void,
@@ -84,6 +94,17 @@ export function createProcessNode(
 
 export function updateProcessNode(definition: ProcessNodeDefinition) {
   return invoke<ProcessNode>('process_node_update', { definition });
+}
+
+export function deleteProcessNode(id: string, deleteProjectFiles: boolean) {
+  return invoke('process_node_delete', { id, deleteProjectFiles });
+}
+
+export function listProcessNodeWorkflowReferences(id: string) {
+  return invoke<ProcessNodeWorkflowReference[]>(
+    'process_node_workflow_references',
+    { id },
+  );
 }
 
 /** Synchronize and run an installed Process Node using its catalog entrypoint. */
