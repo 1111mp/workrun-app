@@ -8,6 +8,14 @@ use serde_json::Value;
 use std::collections::HashMap;
 use tauri::ipc::Channel;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubworkflowContext {
+    workflow_id: String,
+    thread_id: String,
+    path: Vec<String>,
+}
+
 /// Validate and compile the exact `{ nodes, edges }` document emitted by React
 /// Flow. The returned plan is useful for a pre-run graph preview.
 #[tauri::command]
@@ -67,8 +75,20 @@ pub async fn workflow_resolve_human_review(
     node_id: String,
     approved: bool,
     edits: HashMap<String, String>,
+    workflow_context: Option<SubworkflowContext>,
 ) -> CmdResult<()> {
-    let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
+    let (dsl, thread_id) = match workflow_context {
+        Some(context) => {
+            let parent_node_id = context
+                .path
+                .first()
+                .ok_or("subworkflow context is missing its parent node")?;
+            let mut dsl = workflow::subworkflow_dsl(&context.workflow_id).await.stringify_err()?;
+            workflow::inject_subworkflow_context(&mut dsl, &context.thread_id, parent_node_id);
+            (dsl, context.thread_id)
+        },
+        None => (serde_json::from_value(dsl).stringify_err()?, thread_id),
+    };
     let approval_key = workflow::human_review_approval_key(&dsl, &node_id).stringify_err()?;
     let editable_key = workflow::human_review_editable_key(&dsl, &node_id).stringify_err()?;
     if edits.len() > usize::from(editable_key.is_some()) || edits.keys().any(|key| Some(key) != editable_key.as_ref()) {
@@ -92,8 +112,20 @@ pub async fn workflow_resolve_ask_user_question(
     thread_id: String,
     node_id: String,
     option_id: String,
+    workflow_context: Option<SubworkflowContext>,
 ) -> CmdResult<()> {
-    let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
+    let (dsl, thread_id) = match workflow_context {
+        Some(context) => {
+            let parent_node_id = context
+                .path
+                .first()
+                .ok_or("subworkflow context is missing its parent node")?;
+            let mut dsl = workflow::subworkflow_dsl(&context.workflow_id).await.stringify_err()?;
+            workflow::inject_subworkflow_context(&mut dsl, &context.thread_id, parent_node_id);
+            (dsl, context.thread_id)
+        },
+        None => (serde_json::from_value(dsl).stringify_err()?, thread_id),
+    };
     let answer_key = workflow::ask_user_question_answer_key(&dsl, &node_id).stringify_err()?;
     let option_id = workflow::ask_user_question_option_id(&dsl, &node_id, &option_id).stringify_err()?;
     let config = Config::workrun().await.latest_arc();

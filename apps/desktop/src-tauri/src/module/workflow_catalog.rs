@@ -49,7 +49,7 @@ impl WorkflowCatalogStore {
     }
 
     pub async fn create(document: Value) -> Result<StoredWorkflow> {
-        validate_document(&document)?;
+        validate_document(&document, None)?;
         let now = Utc::now().to_rfc3339();
         let workflow = StoredWorkflow {
             id: Uuid::now_v7().to_string(),
@@ -65,7 +65,7 @@ impl WorkflowCatalogStore {
 
     pub async fn update(id: &str, document: Value) -> Result<StoredWorkflow> {
         validate_id(id)?;
-        validate_document(&document)?;
+        validate_document(&document, Some(id))?;
         let mut catalog = Self::read().await?;
         let workflow = catalog
             .workflows
@@ -116,7 +116,7 @@ fn validate_catalog(catalog: &WorkflowCatalog) -> Result<()> {
     let mut ids = HashSet::with_capacity(catalog.workflows.len());
     for workflow in &catalog.workflows {
         validate_id(&workflow.id)?;
-        validate_document(&workflow.document)?;
+        validate_document(&workflow.document, Some(&workflow.id))?;
         if !ids.insert(&workflow.id) {
             bail!("workflow catalog contains duplicate id {:?}", workflow.id)
         }
@@ -124,7 +124,7 @@ fn validate_catalog(catalog: &WorkflowCatalog) -> Result<()> {
     Ok(())
 }
 
-fn validate_document(document: &Value) -> Result<()> {
+fn validate_document(document: &Value, workflow_id: Option<&str>) -> Result<()> {
     let Some(document) = document.as_object() else {
         bail!("Workflow document must be an object")
     };
@@ -133,6 +133,20 @@ fn validate_document(document: &Value) -> Result<()> {
         || !document.get("settings").is_some_and(Value::is_object)
     {
         bail!("Workflow document must contain nodes, edges, and settings")
+    }
+    if let Some(workflow_id) = workflow_id
+        && document["nodes"].as_array().is_some_and(|nodes| {
+            nodes.iter().any(|node| {
+                node.get("type").and_then(Value::as_str) == Some("subworkflow")
+                    && node
+                        .get("data")
+                        .and_then(|data| data.get("workflowId"))
+                        .and_then(Value::as_str)
+                        == Some(workflow_id)
+            })
+        })
+    {
+        bail!("Workflow cannot include itself as a subworkflow")
     }
     Ok(())
 }
@@ -145,14 +159,36 @@ mod tests {
     #[test]
     fn validates_a_complete_workflow_document() {
         assert!(
-            validate_document(&json!({
-                "nodes": [],
-                "edges": [],
-                "settings": { "name": "Example" },
-            }))
+            validate_document(
+                &json!({
+                    "nodes": [],
+                    "edges": [],
+                    "settings": { "name": "Example" },
+                }),
+                None
+            )
             .is_ok()
         );
-        assert!(validate_document(&json!({ "nodes": [] })).is_err());
+        assert!(validate_document(&json!({ "nodes": [] }), None).is_err());
+    }
+
+    #[test]
+    fn rejects_a_workflow_that_references_itself() {
+        let id = Uuid::now_v7().to_string();
+        assert!(
+            validate_document(
+                &json!({
+                    "nodes": [{
+                        "type": "subworkflow",
+                        "data": { "workflowId": id },
+                    }],
+                    "edges": [],
+                    "settings": {},
+                }),
+                Some(&id),
+            )
+            .is_err()
+        );
     }
 
     #[test]

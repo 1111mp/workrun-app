@@ -402,13 +402,15 @@ function finish(
 
 function displayName(node?: Node) {
   const data = node?.data;
-  return typeof data?.name === 'string' && data.name.trim()
-    ? data.name
-    : typeof data?.label === 'string' && data.label.trim()
-      ? data.label
-      : typeof data?.title === 'string' && data.title.trim()
-        ? data.title
-        : (node?.id ?? '');
+  return typeof data?.workflowName === 'string' && data.workflowName.trim()
+    ? data.workflowName
+    : typeof data?.name === 'string' && data.name.trim()
+      ? data.name
+      : typeof data?.label === 'string' && data.label.trim()
+        ? data.label
+        : typeof data?.title === 'string' && data.title.trim()
+          ? data.title
+          : (node?.id ?? '');
 }
 
 function truncate(value: string) {

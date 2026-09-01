@@ -13,6 +13,7 @@ pub(super) struct AskUserQuestionConfig {
     pub(super) description: String,
     pub(super) options: Vec<AskUserQuestionOption>,
     pub(super) answer_key: String,
+    pub(super) workflow_context: Option<Value>,
 }
 
 pub(super) fn ask_user_question_state_key(node_id: &str) -> String {
@@ -59,6 +60,7 @@ pub(super) fn ask_user_question_config(node: &WorkflowNode) -> Result<AskUserQue
         description: string_data(node, "description").unwrap_or_default(),
         options,
         answer_key: ask_user_question_state_key(&node.id),
+        workflow_context: node.data.get("workflowContext").cloned(),
     })
 }
 
@@ -76,6 +78,7 @@ pub(super) fn add_ask_user_question_node(
             description: config.description.clone(),
             options: config.options.clone(),
             answer_key: config.answer_key.clone(),
+            workflow_context: config.workflow_context.clone(),
         };
         let on_event = on_event.clone();
         async move {
@@ -108,6 +111,7 @@ pub(super) fn add_ask_user_question_node(
                     "label": option.label,
                     "description": option.description,
                 })).collect::<Vec<_>>(),
+                "workflowContext": config.workflow_context,
             });
             if let Some(on_event) = on_event {
                 let _ = on_event.send(StreamEvent::custom(

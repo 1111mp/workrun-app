@@ -23,7 +23,9 @@ import {
   ProcessNode,
   RemoteAgentNode,
   StartNode,
+  SubworkflowNode,
   SwitchNode,
+  TerminateNode,
 } from '@/components/nodes';
 import { WorkflowSidebar } from '@/components/workflow-sidebar';
 import { useWorkflowStoreApi, useWorkrunStore } from '@/stores';
@@ -40,6 +42,8 @@ const nodeTypes = {
   group: GroupNode,
   human_review: HumanReviewNode,
   ask_user_question: AskUserQuestionNode,
+  subworkflow: SubworkflowNode,
+  terminate: TerminateNode,
 };
 
 function createNodeData(type: WorkflowNodeType) {
@@ -86,6 +90,13 @@ function createNodeData(type: WorkflowNodeType) {
         processNodeId: '',
         description: 'Select an app to run in this workflow',
       };
+    case 'subworkflow':
+      return {
+        workflowId: '',
+        workflowName: '',
+      };
+    case 'terminate':
+      return { label: 'Terminate workflow' };
     case 'if_else':
       return {
         label: 'If / Else',

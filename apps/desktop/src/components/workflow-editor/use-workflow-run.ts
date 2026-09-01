@@ -29,6 +29,31 @@ type WorkflowRunRequest = {
   resume: boolean;
 };
 
+type SubworkflowContext = {
+  workflowId: string;
+  threadId: string;
+  path: string[];
+};
+
+function getSubworkflowContext(value: unknown): SubworkflowContext | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { workflowId, threadId, path } = value as Record<string, unknown>;
+  return typeof workflowId === 'string' &&
+    typeof threadId === 'string' &&
+    Array.isArray(path) &&
+    path.every((part) => typeof part === 'string')
+    ? { workflowId, threadId, path }
+    : undefined;
+}
+
+function unconfiguredSubworkflow(nodes: Node[]) {
+  return nodes.find((node) => {
+    if (node.type !== 'subworkflow') return false;
+    const workflowId = node.data?.workflowId;
+    return typeof workflowId !== 'string' || !workflowId.trim();
+  });
+}
+
 function charactersPerFrame(pendingCharacters: number) {
   if (pendingCharacters <= 0) return 0;
   return Math.min(1 + Math.floor(Math.sqrt(pendingCharacters) * 0.6), 32);
@@ -205,6 +230,18 @@ function useWorkflowRun(
     onSettled: () => runAfterDrain(store.clearRunningNode),
   });
   const startWorkflowRun = (input: Record<string, unknown>) => {
+    const subworkflow = unconfiguredSubworkflow(nodes);
+    if (subworkflow) {
+      const workflowName = subworkflow.data?.workflowName;
+      toast.error('Select a workflow for the subworkflow node', {
+        toasterId: 'global',
+        description:
+          typeof workflowName === 'string' && workflowName.trim()
+            ? `Choose the saved workflow for ${workflowName}.`
+            : 'Open the subworkflow node settings and choose a saved workflow.',
+      });
+      return;
+    }
     if (pendingFrame.current !== undefined) {
       cancelAnimationFrame(pendingFrame.current);
       pendingFrame.current = undefined;
@@ -268,12 +305,14 @@ function useWorkflowRun(
 
     setIsResolvingHumanReview(true);
     try {
+      const workflowContext = getSubworkflowContext(review?.workflowContext);
       await resolveHumanReview(
         toWorkflowDsl(workflowId, nodes, edges, settings),
         threadId,
         nodeId,
         approved,
         edits,
+        workflowContext,
       );
       store.clearHumanReview();
       resumeWorkflowRun();
@@ -298,11 +337,15 @@ function useWorkflowRun(
 
     setIsResolvingAskUserQuestion(true);
     try {
+      const workflowContext = getSubworkflowContext(
+        store.askUserQuestion?.workflowContext,
+      );
       await resolveAskUserQuestion(
         toWorkflowDsl(workflowId, nodes, edges, settings),
         threadId,
         nodeId,
         optionId,
+        workflowContext,
       );
       store.clearAskUserQuestion();
       resumeWorkflowRun();

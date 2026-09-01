@@ -66,6 +66,7 @@ const initialSettings: WorkflowSettings = {
   description: '',
   mode: 'task',
   inputSchema: { fields: [] },
+  outputSchema: { fields: [] },
 };
 
 export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>

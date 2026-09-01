@@ -11,8 +11,11 @@ mod human_review;
 mod process;
 mod routing;
 mod state_bridge;
+mod subworkflow;
 mod tool;
 mod tool_approval;
+
+pub(super) const WORKFLOW_TERMINATED_KEY: &str = "workflow.terminated";
 
 use agent::*;
 use ask_user_question::*;
@@ -21,12 +24,17 @@ use human_review::*;
 use process::*;
 use routing::*;
 use state_bridge::*;
+use subworkflow::*;
+
+pub use subworkflow::inject_workflow_context as inject_subworkflow_context;
+pub use subworkflow::workflow_dsl as subworkflow_dsl;
 use tool::*;
 use tool_approval::*;
 
+#[cfg(not(test))]
+use crate::core::db::DBManager;
 use crate::{
     config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog},
-    core::db::DBManager,
     module::{
         mcp_server::McpServerRegistry,
         process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
@@ -78,9 +86,25 @@ pub struct WorkflowDsl {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub input_schema: WorkflowInterfaceSchema,
+    #[serde(default)]
+    pub output_schema: WorkflowInterfaceSchema,
     pub nodes: Vec<WorkflowNode>,
     #[serde(default)]
     pub edges: Vec<WorkflowEdge>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowInterfaceSchema {
+    #[serde(default)]
+    pub fields: Vec<WorkflowInterfaceField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowInterfaceField {
+    pub key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,6 +331,17 @@ pub async fn compile(
     config: &IWorkrun,
     on_event: Option<Channel<StreamEvent>>,
 ) -> Result<CompiledWorkflow> {
+    let path = (!dsl.id.is_empty()).then(|| vec![dsl.id.clone()]).unwrap_or_default();
+    compile_with_path(dsl, config, on_event, path).await
+}
+
+pub(super) async fn compile_with_path(
+    dsl: WorkflowDsl,
+    config: &IWorkrun,
+    on_event: Option<Channel<StreamEvent>>,
+    workflow_path: Vec<String>,
+) -> Result<CompiledWorkflow> {
+    validate_output_schema(&dsl.output_schema)?;
     let nodes: HashMap<_, _> = dsl.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
     if nodes.len() != dsl.nodes.len() {
         bail!("workflow contains duplicate node ids");
@@ -332,6 +367,8 @@ pub async fn compile(
                 | "switch"
                 | "human_review"
                 | "ask_user_question"
+                | "subworkflow"
+                | "terminate"
                 | "group"
         ) {
             bail!("node `{}` has unsupported type `{}`", node.id, node.kind);
@@ -368,7 +405,12 @@ pub async fn compile(
             .configure_node(&node.id, node_state_policy(&state_config));
     }
 
-    let mut graph = StateGraph::with_channels(&["workflow.last_node", "workflow.node", "workflow.trace"]);
+    let mut graph = StateGraph::with_channels(&[
+        "workflow.last_node",
+        "workflow.node",
+        "workflow.trace",
+        WORKFLOW_TERMINATED_KEY,
+    ]);
     // Trace is append-only, which makes parallel branches observable instead of
     // having the last branch overwrite its predecessor.
     graph.schema.channels.insert(
@@ -416,6 +458,16 @@ pub async fn compile(
             "ask_user_question" => add_ask_user_question_node(graph, node, on_event.clone())?,
             "if_else" => add_if_else_control_node(graph, node, on_event.clone(), Arc::clone(&state))?,
             "switch" => add_switch_control_node(graph, node, on_event.clone(), Arc::clone(&state))?,
+            "subworkflow" => add_subworkflow_node(
+                graph,
+                node,
+                config,
+                on_event.clone(),
+                Arc::clone(&state),
+                node_state_config(node, &executable_ids)?,
+                workflow_path.clone(),
+            )?,
+            "terminate" => add_terminate_node(graph, node, on_event.clone()),
             // Build the LLM only at execution time. This keeps `compile` pure
             // and lets users open/validate workflows before configuring keys.
             "agent" => {
@@ -490,7 +542,7 @@ pub async fn compile(
         executable_nodes: executable.into_iter().map(|node| node.id.clone()).collect(),
         edges: plan_edges,
     };
-    let db_url = DBManager::db_url().await?;
+    let db_url = workflow_checkpointer_db_url().await?;
     let checkpointer: Arc<dyn Checkpointer> = Arc::new(SqliteCheckpointer::new(&db_url).await?);
     let state_checkpointer = Arc::new(WorkflowStateCheckpointer::new(
         checkpointer,
@@ -510,6 +562,37 @@ pub async fn compile(
     })
 }
 
+async fn workflow_checkpointer_db_url() -> Result<String> {
+    #[cfg(test)]
+    {
+        let path = std::env::temp_dir().join(format!("workrun-workflow-test-{}.sqlite", uuid::Uuid::now_v7()));
+        std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        Ok(format!("sqlite://{}", path.display()))
+    }
+
+    #[cfg(not(test))]
+    {
+        DBManager::db_url().await
+    }
+}
+
+fn validate_output_schema(schema: &WorkflowInterfaceSchema) -> Result<()> {
+    let mut keys = HashSet::new();
+    for field in &schema.fields {
+        let key = field.key.trim();
+        if key.is_empty() {
+            bail!("workflow output keys must be non-empty")
+        }
+        if key.starts_with("workflow.") {
+            bail!("workflow output key `{key}` uses the reserved `workflow.` prefix")
+        }
+        if !keys.insert(key) {
+            bail!("workflow output key `{key}` is declared more than once")
+        }
+    }
+    Ok(())
+}
+
 fn is_executable(node: &WorkflowNode) -> bool {
     matches!(
         node.kind.as_str(),
@@ -521,7 +604,35 @@ fn is_executable(node: &WorkflowNode) -> bool {
             | "switch"
             | "human_review"
             | "ask_user_question"
+            | "subworkflow"
+            | "terminate"
     )
+}
+
+fn add_terminate_node(graph: StateGraph, node: &WorkflowNode, on_event: Option<Channel<StreamEvent>>) -> StateGraph {
+    let id = node.id.clone();
+    let label = string_data(node, "label").filter(|label| !label.trim().is_empty());
+    graph.add_node_fn(&id.clone(), move |_ctx| {
+        let id = id.clone();
+        let label = label.clone();
+        let on_event = on_event.clone();
+        async move {
+            let event = json!({
+                "nodeId": id,
+                "type": "terminate",
+                "label": label.unwrap_or_else(|| "Terminate workflow".to_string()),
+            });
+            if let Some(on_event) = on_event {
+                let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+            }
+            Ok(NodeOutput::new()
+                .with_update(WORKFLOW_TERMINATED_KEY, Value::Bool(true))
+                .with_update("workflow.last_node", json!(id))
+                .with_update("workflow.node", event.clone())
+                .with_update("workflow.trace", event)
+                .with_goto([END]))
+        }
+    })
 }
 
 /// Return the one state key a review node is authorized to update when a
@@ -664,7 +775,11 @@ fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{module::workflow_catalog::WorkflowCatalogStore, utils::dirs::PORTABLE_FLAG};
+    use std::sync::OnceLock;
     use std::{thread, time::Duration};
+
+    static SUBWORKFLOW_CATALOG_TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
     #[test]
     fn node_state_config_defaults_private_and_allowlists_global_keys() {
@@ -681,6 +796,37 @@ mod tests {
         assert_eq!(config.global_keys, BTreeSet::from(["summary".to_string()]));
         assert_eq!(policy.readers, AccessRule::only(["reviewer"]));
         assert_eq!(policy.writers, AccessRule::only([] as [&str; 0]));
+    }
+
+    #[test]
+    fn validates_declared_workflow_outputs() {
+        assert!(
+            validate_output_schema(&WorkflowInterfaceSchema {
+                fields: vec![WorkflowInterfaceField {
+                    key: "summary".to_string(),
+                }],
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_output_schema(&WorkflowInterfaceSchema {
+                fields: vec![WorkflowInterfaceField { key: " ".to_string() }],
+            })
+            .is_err()
+        );
+        assert!(
+            validate_output_schema(&WorkflowInterfaceSchema {
+                fields: vec![
+                    WorkflowInterfaceField {
+                        key: "summary".to_string(),
+                    },
+                    WorkflowInterfaceField {
+                        key: "summary".to_string(),
+                    },
+                ],
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -743,8 +889,11 @@ mod tests {
             .run_stream(input, "test", false, |event| events.push(event))
             .await
             .unwrap();
-        assert_eq!(result.state["workflow.last_node"], json!("check"));
-        assert_eq!(result.state["workflow.trace"][0]["result"]["route"], json!("true"));
+        assert_eq!(result.state["workflow"]["workflow.last_node"], json!("check"));
+        assert_eq!(
+            result.state["workflow"]["workflow.trace"][0]["result"]["route"],
+            json!("true")
+        );
         assert!(events.iter().any(|event| matches!(
             event,
             StreamEvent::NodeStart { node, .. } if node == "check"
@@ -804,7 +953,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            result.state["workflow.trace"]
+            result.state["workflow"]["workflow.trace"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -969,16 +1118,100 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.state["workflow.trace"][0]["type"], json!("switch"));
+        assert_eq!(result.state["workflow"]["workflow.trace"][0]["type"], json!("switch"));
         assert_eq!(
-            result.state["workflow.trace"][0]["result"]["route"],
+            result.state["workflow"]["workflow.trace"][0]["result"]["route"],
             json!("case:adult")
         );
-        assert_eq!(result.state["workflow.trace"][0]["result"]["label"], json!("Adult"));
         assert_eq!(
-            result.state["workflow.trace"][0]["result"]["condition"],
+            result.state["workflow"]["workflow.trace"][0]["result"]["label"],
+            json!("Adult")
+        );
+        assert_eq!(
+            result.state["workflow"]["workflow.trace"][0]["result"]["condition"],
             json!("age >= 18"),
         );
+    }
+
+    #[tokio::test]
+    async fn terminate_node_stops_later_nodes() {
+        let dsl: WorkflowDsl = serde_json::from_value(json!({
+            "nodes": [
+                {"id": "start", "type": "start"},
+                {"id": "stop", "type": "terminate"},
+                {"id": "would-run", "type": "process", "data": {}},
+                {"id": "end", "type": "end"}
+            ],
+            "edges": [
+                {"source": "start", "target": "stop"},
+                {"source": "stop", "target": "would-run"},
+                {"source": "would-run", "target": "end"}
+            ]
+        }))
+        .unwrap();
+
+        let result = compile(dsl, &Default::default(), None)
+            .await
+            .unwrap()
+            .run_stream(State::new(), "terminate", false, |_| {})
+            .await
+            .unwrap();
+
+        assert_eq!(result.state["workflow"][WORKFLOW_TERMINATED_KEY], json!(true));
+        assert_eq!(
+            result.state["workflow"]["workflow.trace"],
+            json!([{ "nodeId": "stop", "type": "terminate", "label": "Terminate workflow" }]),
+        );
+    }
+
+    #[tokio::test]
+    async fn termination_in_a_subworkflow_stops_the_parent_workflow() {
+        let lock = SUBWORKFLOW_CATALOG_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        PORTABLE_FLAG.get_or_init(|| true);
+        let child = WorkflowCatalogStore::create(json!({
+            "nodes": [
+                {"id": "start", "type": "start", "data": {}},
+                {"id": "stop", "type": "terminate", "data": {}},
+                {"id": "end", "type": "end", "data": {}}
+            ],
+            "edges": [{"source": "start", "target": "stop"}],
+            "settings": {"name": "Stopping child", "inputSchema": {"fields": []}, "outputSchema": {"fields": []}}
+        }))
+        .await
+        .unwrap();
+
+        let parent: WorkflowDsl = serde_json::from_value(json!({
+            "id": "parent", "nodes": [
+                {"id": "start", "type": "start"},
+                {"id": "child", "type": "subworkflow", "data": {"workflowId": child.id}},
+                {"id": "would-run", "type": "process", "data": {}},
+                {"id": "end", "type": "end"}
+            ],
+            "edges": [
+                {"source": "start", "target": "child"},
+                {"source": "child", "target": "would-run"},
+                {"source": "would-run", "target": "end"}
+            ]
+        }))
+        .unwrap();
+
+        let result = compile(parent, &Default::default(), None)
+            .await
+            .unwrap()
+            .run_stream(State::new(), "nested-termination", false, |_| {})
+            .await
+            .unwrap();
+
+        drop(lock);
+        assert_eq!(result.state["workflow"][WORKFLOW_TERMINATED_KEY], json!(true));
+        assert_eq!(
+            result.state["workflow"]["workflow.trace"][0]["type"],
+            json!("subworkflow")
+        );
+        assert_eq!(result.state["workflow"]["workflow.trace"][0]["terminated"], json!(true));
     }
 
     #[tokio::test]

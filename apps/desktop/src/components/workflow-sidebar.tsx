@@ -15,11 +15,13 @@ import {
   CircleHelpIcon,
   CodeXmlIcon,
   CircleStopIcon,
+  OctagonXIcon,
   GitBranchIcon,
   Globe2Icon,
   Layers3Icon,
   ShieldCheckIcon,
   TerminalIcon,
+  WorkflowIcon,
   SplitIcon,
   type LucideIcon,
 } from 'lucide-react';
@@ -69,6 +71,13 @@ const nodeGroups: {
         icon: TerminalIcon,
         iconClassName: 'text-lime-500',
       },
+      {
+        type: 'subworkflow',
+        label: 'Subworkflow',
+        description: 'Run another saved workflow',
+        icon: WorkflowIcon,
+        iconClassName: 'text-indigo-500',
+      },
     ],
   },
   {
@@ -80,6 +89,13 @@ const nodeGroups: {
         description: 'Workflow exit point',
         icon: CircleStopIcon,
         iconClassName: 'text-rose-500',
+      },
+      {
+        type: 'terminate',
+        label: 'Terminate workflow',
+        description: 'End this workflow and every parent workflow',
+        icon: OctagonXIcon,
+        iconClassName: 'text-red-600',
       },
       {
         type: 'if_else',

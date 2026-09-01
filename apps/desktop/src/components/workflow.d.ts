@@ -13,6 +13,8 @@ type WorkflowNodeType =
   | 'switch'
   | 'human_review'
   | 'ask_user_question'
+  | 'subworkflow'
+  | 'terminate'
   | 'group';
 
 type WorkflowMode = 'task' | 'chat';
@@ -51,6 +53,9 @@ type WorkflowSettings = {
   description: string;
   mode: WorkflowMode;
   inputSchema: {
+    fields: WorkflowInput[];
+  };
+  outputSchema?: {
     fields: WorkflowInput[];
   };
 };
@@ -125,6 +130,25 @@ type WorkflowProcessNodeData = WorkflowNodeStateConfig & {
 type WorkflowProcessNode = WorkflowBaseNode & {
   type: 'process';
   data: WorkflowProcessNodeData;
+};
+
+// ---------- Subworkflow Node ----------
+type WorkflowSubworkflowNodeData = WorkflowNodeStateConfig & {
+  workflowId: string;
+  workflowName?: string;
+};
+type WorkflowSubworkflowNode = WorkflowBaseNode & {
+  type: 'subworkflow';
+  data: WorkflowSubworkflowNodeData;
+};
+
+// ---------- Terminate Workflow Node ----------
+type WorkflowTerminateNodeData = {
+  label?: string;
+};
+type WorkflowTerminateNode = WorkflowBaseNode & {
+  type: 'terminate';
+  data: WorkflowTerminateNodeData;
 };
 
 // ---------- Start Node ----------
@@ -240,8 +264,11 @@ type WorkflowNode =
   | WorkflowCodeActAgentNode
   | WorkflowRemoteAgentNode
   | WorkflowProcessNode
+  | WorkflowSubworkflowNode
+  | WorkflowTerminateNode
   | WorkflowHumanReviewNode
   | WorkflowAskUserQuestionNode
+  | WorkflowTerminateNode
   // control nodes
   | WorkflowStartNode
   | WorkflowEndNode
@@ -262,6 +289,7 @@ type Workflow = {
   description?: string;
   mode: WorkflowMode;
   inputSchema: WorkflowSettings['inputSchema'];
+  outputSchema: NonNullable<WorkflowSettings['outputSchema']>;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
 };

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+  Badge,
   Button,
   Combobox,
   ComboboxChip,
@@ -42,9 +43,11 @@ import { type ReactNode } from 'react';
 import { listProcessNodes } from '@/services/process-node';
 import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
+import { listWorkflows } from '@/services/workflow';
 
 type WorkflowNodeInspectorProps = {
   node: Node | null;
+  workflowId?: string;
   executableNodes: Node[];
   onClose: () => void;
   onDataChange: (nodeId: string, patch: Record<string, unknown>) => void;
@@ -56,6 +59,7 @@ const nodeTitles: Record<string, string> = {
   codeact_agent: 'CodeAct Agent',
   remote_agent: 'Remote Agent',
   process: 'App',
+  subworkflow: 'Subworkflow',
   if_else: 'If / Else',
   switch: 'Switch',
   human_review: 'Human Review',
@@ -63,6 +67,14 @@ const nodeTitles: Record<string, string> = {
   group: 'Group',
   start: 'Start',
   end: 'End',
+  terminate: 'Terminate workflow',
+};
+
+const workflowOutputTypeLabels: Record<WorkflowInputType, string> = {
+  string: 'Short text',
+  textarea: 'Long text',
+  number: 'Number',
+  boolean: 'Yes / no',
 };
 
 const modelProviderLabels: Record<ModelDefinition['provider'], string> = {
@@ -129,6 +141,7 @@ function supportsNodeState(type: string | undefined) {
     type === 'codeact_agent' ||
     type === 'remote_agent' ||
     type === 'process' ||
+    type === 'subworkflow' ||
     type === 'if_else' ||
     type === 'switch' ||
     type === 'human_review' ||
@@ -141,7 +154,8 @@ function supportsGlobalPublication(type: string | undefined) {
     type === 'agent' ||
     type === 'codeact_agent' ||
     type === 'remote_agent' ||
-    type === 'process'
+    type === 'process' ||
+    type === 'subworkflow'
   );
 }
 
@@ -550,6 +564,7 @@ function CodeActRuntimeFields({
 
 function WorkflowNodeInspector({
   node,
+  workflowId,
   executableNodes,
   onClose,
   onDataChange,
@@ -573,6 +588,11 @@ function WorkflowNodeInspector({
     queryKey: ['skills'],
     queryFn: listSkills,
     enabled: node?.type === 'agent',
+  });
+  const workflows = useQuery({
+    queryKey: ['workflows'],
+    queryFn: listWorkflows,
+    enabled: node?.type === 'subworkflow',
   });
 
   const updateData = (patch: Record<string, unknown>) => {
@@ -947,6 +967,164 @@ function WorkflowNodeInspector({
                 value={getText(data, 'description')}
                 onChange={(description) => updateData({ description })}
               />
+            </InspectorSection>
+          </FieldGroup>
+        );
+      }
+      case 'subworkflow': {
+        const selectedWorkflowId = getText(data, 'workflowId');
+        const selectedWorkflow = workflows.data?.find(
+          (workflow) => workflow.id === selectedWorkflowId,
+        );
+        const childOutputs =
+          selectedWorkflow?.document.settings.outputSchema?.fields ?? [];
+        const publishedOutputKeys = new Set(
+          getNodeStateConfig(data).globalKeys,
+        );
+        const publishedOutputCount = childOutputs.filter((output) =>
+          publishedOutputKeys.has(output.key),
+        ).length;
+        return (
+          <FieldGroup className='gap-7'>
+            <InspectorSection
+              title='Referenced workflow'
+              description='This node runs the selected saved workflow as an isolated child graph.'
+            >
+              <Field>
+                <Label htmlFor='subworkflow-id'>Workflow</Label>
+                <FieldDescription>
+                  Changes to the referenced workflow apply the next time this
+                  workflow runs.
+                </FieldDescription>
+                <Select
+                  value={selectedWorkflowId}
+                  onValueChange={(nextWorkflowId) => {
+                    const workflow = workflows.data?.find(
+                      (candidate) => candidate.id === nextWorkflowId,
+                    );
+                    updateData({
+                      workflowId: nextWorkflowId,
+                      workflowName: workflow?.document.settings.name ?? '',
+                    });
+                  }}
+                >
+                  <SelectTrigger id='subworkflow-id' className='w-full'>
+                    <span className='flex flex-1 truncate text-left'>
+                      {selectedWorkflow?.document.settings.name ||
+                        (workflows.isLoading
+                          ? 'Loading workflows…'
+                          : 'Select a saved workflow')}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {workflows.data
+                        ?.filter((workflow) => workflow.id !== workflowId)
+                        .map((workflow) => (
+                          <SelectItem key={workflow.id} value={workflow.id}>
+                            {workflow.document.settings.name ||
+                              'Untitled workflow'}
+                          </SelectItem>
+                        ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {selectedWorkflowId && !selectedWorkflow ? (
+                  <FieldDescription className='text-destructive'>
+                    The selected workflow is unavailable. Choose another
+                    workflow.
+                  </FieldDescription>
+                ) : null}
+              </Field>
+              {selectedWorkflow ? (
+                <div className='border-primary/30 overflow-hidden rounded-xl border shadow-xs'>
+                  <div className='border-primary/15 bg-primary/5 flex items-start justify-between gap-3 border-b px-4 py-3'>
+                    <div>
+                      <p className='text-sm font-medium'>
+                        Child workflow outputs
+                      </p>
+                      <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                        Values returned by{' '}
+                        {selectedWorkflow.document.settings.name ||
+                          'this workflow'}
+                        .
+                      </p>
+                    </div>
+                    <Badge variant='secondary' className='shrink-0'>
+                      {childOutputs.length} outputs
+                    </Badge>
+                  </div>
+                  <div className='space-y-3 p-4'>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='bg-muted/40 rounded-lg border px-3 py-2.5'>
+                        <p className='text-muted-foreground text-[11px]'>
+                          Default location
+                        </p>
+                        <p className='mt-1 text-xs font-medium'>
+                          This node’s private State
+                        </p>
+                      </div>
+                      <div className='border-primary/25 bg-primary/5 rounded-lg border px-3 py-2.5'>
+                        <p className='text-primary text-[11px]'>
+                          Shared to Global State
+                        </p>
+                        <p className='mt-1 text-xs font-medium'>
+                          {publishedOutputCount} of {childOutputs.length}{' '}
+                          outputs
+                        </p>
+                      </div>
+                    </div>
+                    {childOutputs.length > 0 ? (
+                      <div className='divide-y rounded-lg border'>
+                        {childOutputs.map((output) => (
+                          <div
+                            key={output.id}
+                            className='flex min-w-0 items-center justify-between gap-3 px-3 py-2.5'
+                          >
+                            <div className='min-w-0'>
+                              <p className='truncate text-xs font-medium'>
+                                {output.label || 'Untitled output'}
+                              </p>
+                              <p className='text-muted-foreground mt-0.5 truncate text-[11px]'>
+                                <span className='font-mono'>{output.key}</span>
+                                <span className='mx-1.5'>·</span>
+                                {workflowOutputTypeLabels[output.type]}
+                              </p>
+                            </div>
+                            <div className='flex shrink-0 items-center gap-1.5'>
+                              <Badge
+                                variant={
+                                  publishedOutputKeys.has(output.key)
+                                    ? 'default'
+                                    : 'outline'
+                                }
+                              >
+                                {publishedOutputKeys.has(output.key)
+                                  ? 'Global'
+                                  : 'Private'}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className='rounded-lg border border-dashed px-3 py-4'>
+                        <p className='text-sm font-medium'>
+                          No declared outputs
+                        </p>
+                        <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                          Add outputs in the child workflow’s settings to make
+                          its result contract visible here.
+                        </p>
+                      </div>
+                    )}
+                    <p className='text-muted-foreground text-xs leading-5'>
+                      Private outputs can be read by nodes allowed in State
+                      access. Publish only the values the whole workflow needs.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
             </InspectorSection>
           </FieldGroup>
         );
@@ -1333,6 +1511,32 @@ function WorkflowNodeInspector({
             </InspectorSection>
           </FieldGroup>
         );
+      case 'terminate':
+        return (
+          <FieldGroup className='gap-7'>
+            <InspectorSection
+              title='Terminate task'
+              description='Immediately ends this workflow and propagates the termination through every parent workflow.'
+            >
+              <FieldDescription>
+                Do not connect this node to End. It stops all later workflow
+                steps, including steps after the containing subworkflow.
+              </FieldDescription>
+              <FieldDescription>
+                Work that is already running in parallel cannot be cancelled.
+              </FieldDescription>
+            </InspectorSection>
+            <InspectorSection title='Node details'>
+              <TextField
+                id='terminate-label'
+                label='Name'
+                description='A short name shown on the workflow canvas.'
+                value={getText(data, 'label')}
+                onChange={(label) => updateData({ label })}
+              />
+            </InspectorSection>
+          </FieldGroup>
+        );
       default:
         return null;
     }
@@ -1401,6 +1605,7 @@ function NodeStateFields({
     .map((candidate) => ({
       id: candidate.id,
       name:
+        getText(candidate.data, 'workflowName') ||
         getText(candidate.data, 'name') ||
         getText(candidate.data, 'title') ||
         nodeTitles[candidate.type ?? ''] ||

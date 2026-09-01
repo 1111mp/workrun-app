@@ -94,6 +94,39 @@ function WorkflowSettingsPanel({
     });
   };
 
+  const outputFields = settings.outputSchema?.fields ?? [];
+  const updateOutput = (outputId: string, patch: Partial<WorkflowInput>) =>
+    onSettingsChange({
+      outputSchema: {
+        fields: outputFields.map((output) =>
+          output.id === outputId ? { ...output, ...patch } : output,
+        ),
+      },
+    });
+  const addOutput = () => {
+    const index = outputFields.length + 1;
+    onSettingsChange({
+      outputSchema: {
+        fields: [
+          ...outputFields,
+          {
+            id: crypto.randomUUID(),
+            key: `output_${index}`,
+            label: `Output ${index}`,
+            type: 'string',
+            required: false,
+          },
+        ],
+      },
+    });
+  };
+  const removeOutput = (outputId: string) =>
+    onSettingsChange({
+      outputSchema: {
+        fields: outputFields.filter((output) => output.id !== outputId),
+      },
+    });
+
   return (
     <Drawer
       open={open}
@@ -267,6 +300,58 @@ function WorkflowSettingsPanel({
                             A run cannot start without this value.
                           </FieldDescription>
                         </FieldContent>
+                      </Field>
+                    </FieldGroup>
+                  </FieldSet>
+                ))}
+              </FieldGroup>
+            </FieldSet>
+            <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
+              <div className='flex items-center justify-between gap-2'>
+                <FieldLegend>Workflow outputs</FieldLegend>
+                <Button type='button' size='sm' variant='outline' onClick={addOutput}>
+                  <PlusIcon data-icon='inline-start' />
+                  Add output
+                </Button>
+              </div>
+              <FieldDescription>
+                Declare the global State keys this workflow exposes when used as
+                a subworkflow. The node producing each value must publish that
+                key to Global State.
+              </FieldDescription>
+              <FieldGroup className='gap-4'>
+                {outputFields.map((output) => (
+                  <FieldSet key={output.id} className='bg-background gap-4 rounded-xl border p-4 shadow-xs'>
+                    <div className='flex items-center justify-between gap-2'>
+                      <FieldLegend variant='label'>
+                        {output.label || 'Untitled output'}
+                      </FieldLegend>
+                      <Button
+                        type='button'
+                        size='icon-sm'
+                        variant='ghost'
+                        aria-label={`Remove ${output.label || 'output'}`}
+                        onClick={() => removeOutput(output.id)}
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </div>
+                    <FieldGroup className='grid gap-4 sm:grid-cols-2'>
+                      <Field>
+                        <FieldLabel htmlFor={`workflow-output-label-${output.id}`}>Label</FieldLabel>
+                        <Input
+                          id={`workflow-output-label-${output.id}`}
+                          value={output.label}
+                          onChange={(event) => updateOutput(output.id, { label: event.target.value })}
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor={`workflow-output-key-${output.id}`}>State key</FieldLabel>
+                        <Input
+                          id={`workflow-output-key-${output.id}`}
+                          value={output.key}
+                          onChange={(event) => updateOutput(output.id, { key: event.target.value })}
+                        />
                       </Field>
                     </FieldGroup>
                   </FieldSet>

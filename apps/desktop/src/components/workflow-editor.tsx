@@ -410,6 +410,7 @@ function WorkflowEditorContent({
       >
         <WorkflowNodeInspector
           node={selectedNode}
+          workflowId={workflow?.id}
           executableNodes={nodes.filter((node) => isExecutableNode(node.type))}
           modelProfiles={modelCatalog}
           onClose={clearSelection}
@@ -606,7 +607,8 @@ function isExecutableNode(type: string | undefined) {
     type === 'if_else' ||
     type === 'switch' ||
     type === 'human_review' ||
-    type === 'ask_user_question'
+    type === 'ask_user_question' ||
+    type === 'subworkflow'
   );
 }
 

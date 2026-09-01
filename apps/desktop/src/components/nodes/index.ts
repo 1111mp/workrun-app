@@ -9,3 +9,5 @@ export * from './remote-agent-node';
 export * from './process-node';
 export * from './start-node';
 export * from './switch-node';
+export * from './subworkflow-node';
+export * from './terminate-node';

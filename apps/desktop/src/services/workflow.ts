@@ -144,6 +144,7 @@ export function toWorkflowDsl(
     description: settings.description || undefined,
     mode: settings.mode,
     inputSchema: settings.inputSchema,
+    outputSchema: settings.outputSchema ?? { fields: [] },
     nodes: nodes.map(({ id, type, data }) => ({
       id,
       type: type as WorkflowNodeType,
@@ -199,6 +200,7 @@ export function createWorkflowDocument(
       description: '',
       mode: 'task',
       inputSchema: { fields: [] },
+      outputSchema: { fields: [] },
     },
   };
 }
@@ -287,6 +289,7 @@ export function resolveHumanReview(
   nodeId: string,
   approved: boolean,
   edits: Record<string, string> = {},
+  workflowContext?: { workflowId: string; threadId: string; path: string[] },
 ) {
   return invoke('workflow_resolve_human_review', {
     dsl,
@@ -294,6 +297,7 @@ export function resolveHumanReview(
     nodeId,
     approved,
     edits,
+    workflowContext,
   });
 }
 
@@ -302,11 +306,13 @@ export function resolveAskUserQuestion(
   threadId: string,
   nodeId: string,
   optionId: string,
+  workflowContext?: { workflowId: string; threadId: string; path: string[] },
 ) {
   return invoke('workflow_resolve_ask_user_question', {
     dsl,
     threadId,
     nodeId,
     optionId,
+    workflowContext,
   });
 }

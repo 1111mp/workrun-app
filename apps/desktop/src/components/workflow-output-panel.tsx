@@ -108,6 +108,8 @@ function nodeDisplayName(
 
   const node = workflowNodes.find((node) => node.id === nodeId);
   const data = node?.data;
+  if (typeof data?.workflowName === 'string' && data.workflowName.trim())
+    return data.workflowName;
   if (typeof data?.name === 'string' && data.name.trim()) return data.name;
   if (typeof data?.label === 'string' && data.label.trim()) return data.label;
   if (typeof data?.title === 'string' && data.title.trim()) return data.title;
@@ -127,9 +129,13 @@ function workflowTrace(
 ): WorkflowTraceEntry[] {
   const workflow = recordValue(finalState?.workflow);
   const trace = workflow?.['workflow.trace'] ?? finalState?.['workflow.trace'];
-  if (!Array.isArray(trace)) return [];
+  return traceEntries(trace);
+}
 
-  return trace.filter(
+function traceEntries(value: unknown): WorkflowTraceEntry[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.filter(
     (entry): entry is WorkflowTraceEntry =>
       typeof entry === 'object' &&
       entry !== null &&
@@ -260,6 +266,35 @@ function processLog(entry: WorkflowTraceEntry) {
     .join('\n\n');
 }
 
+function ProcessOutput({ log }: { log: string }) {
+  if (!log) return null;
+
+  return (
+    <div className='mt-3'>
+      <p className='text-muted-foreground mb-1 text-xs font-medium'>
+        Process output
+      </p>
+      <div className='bg-muted h-52 overflow-hidden rounded-md'>
+        <LazyLog
+          text={log}
+          selectableLines
+          wrapLines
+          enableLineNumbers
+          rowHeight={20}
+          style={{
+            backgroundColor: 'transparent',
+            color: 'var(--foreground)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.75rem',
+            lineHeight: '1.25rem',
+            padding: '0.75rem',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ToolCalls({ calls }: { calls: unknown[] }) {
   if (calls.length === 0) return null;
 
@@ -310,6 +345,52 @@ function ToolCallValue({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function traceNodeName(entry: WorkflowTraceEntry) {
+  if (typeof entry.workflowName === 'string' && entry.workflowName.trim())
+    return entry.workflowName;
+  if (typeof entry.nodeName === 'string' && entry.nodeName.trim())
+    return entry.nodeName;
+  return 'Workflow step';
+}
+
+function traceTypeLabel(type: string) {
+  return type === 'subworkflow' ? 'Subworkflow' : type.replaceAll('_', ' ');
+}
+
+function SubworkflowExecution({ entry }: { entry: WorkflowTraceEntry }) {
+  const entries = traceEntries(entry.execution);
+  if (entries.length === 0) return null;
+
+  return (
+    <Collapsible className='mt-3 rounded-md border'>
+      <CollapsibleTrigger
+        render={<Button variant='ghost' className='w-full justify-between' />}
+      >
+        <span className='text-sm'>Subworkflow steps · {entries.length}</span>
+        <ChevronDownIcon className='group-data-panel-open/button:rotate-180' />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='flex flex-col gap-3 border-t p-3'>
+        {entries.map((child, index) => {
+          const log = processLog(child);
+          return (
+            <div
+              key={`${child.nodeId}-${index}`}
+              className='border-border/70 border-l pl-3'
+            >
+              <p className='text-sm font-medium'>
+                {index + 1}. {traceNodeName(child)} ·{' '}
+                {traceTypeLabel(child.type)}
+              </p>
+              <TraceResult entry={child} />
+              <ProcessOutput log={log} />
+            </div>
+          );
+        })}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function TraceResult({
   entry,
   showAgentResponse = true,
@@ -347,6 +428,25 @@ function TraceResult({
             ? `Selected: ${label}.`
             : 'Answer received.'}
       </p>
+    );
+  }
+
+  if (entry.type === 'subworkflow') {
+    return (
+      <>
+        <p className='text-muted-foreground mt-2 text-sm'>
+          {entry.status === 'running'
+            ? 'Running subworkflow…'
+            : 'Subworkflow completed.'}
+        </p>
+        <SubworkflowExecution entry={entry} />
+      </>
+    );
+  }
+
+  if (entry.type === 'terminate') {
+    return (
+      <p className='text-muted-foreground mt-2 text-sm'>Workflow terminated.</p>
     );
   }
 

@@ -8,6 +8,7 @@ pub(super) struct HumanReviewConfig {
     pub(super) context_keys: Vec<String>,
     pub(super) editable: bool,
     pub(super) approval_key: String,
+    pub(super) workflow_context: Option<Value>,
 }
 
 pub(super) fn review_approval_key(node_id: &str) -> String {
@@ -30,6 +31,7 @@ pub(super) fn human_review_config(node: &WorkflowNode) -> Result<HumanReviewConf
             .and_then(Value::as_bool)
             .unwrap_or(legacy_editable_key.is_some()),
         approval_key: review_approval_key(&node.id),
+        workflow_context: node.data.get("workflowContext").cloned(),
     })
 }
 
@@ -50,6 +52,7 @@ pub(super) fn add_human_review_node(
             context_keys: config.context_keys.clone(),
             editable: config.editable,
             approval_key: config.approval_key.clone(),
+            workflow_context: config.workflow_context.clone(),
         };
         let on_event = on_event.clone();
         let state = Arc::clone(&state);
@@ -94,6 +97,7 @@ pub(super) fn add_human_review_node(
                 "content": config.content_key.as_ref().and_then(|key| input.get(key).cloned()),
                 "context": context_values,
                 "editable": config.editable,
+                "workflowContext": config.workflow_context,
             });
             if let Some(on_event) = on_event {
                 let _ = on_event.send(StreamEvent::custom(
