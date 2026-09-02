@@ -49,6 +49,7 @@ pub(super) async fn add_codeact_agent_node(
     let id = node.id.clone();
     let description = string_data(node, "description").unwrap_or_default();
     let instruction = string_data(node, "instruction").unwrap_or_default();
+    let output_schema = agent_output_schema(node)?;
     let profile_id = string_data(node, "modelProfileId")
         .ok_or_else(|| anyhow!("codeact_agent node `{id}` needs data.modelProfileId"))?;
     let tool_ids = string_array_data(node, "toolIds")?;
@@ -75,6 +76,9 @@ pub(super) async fn add_codeact_agent_node(
         .runtime(build_runtime(node)?)
         .max_iterations(max_iterations)
         .tool_timeout(std::time::Duration::from_secs(tool_timeout_seconds.into()));
+    if let Some(schema) = output_schema.clone() {
+        agent = agent.output_schema(schema);
+    }
 
     for tool in tools {
         let tool_bindings = state_bindings.remove(&tool.id).unwrap_or_default();
@@ -105,8 +109,10 @@ pub(super) async fn add_codeact_agent_node(
         on_event,
         Some(tool_trace),
         None,
+        output_schema,
         state,
         state_config.global_keys,
+        state_config.sensitive_fields,
     )))
 }
 

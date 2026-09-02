@@ -113,6 +113,30 @@ pub(super) fn redact_json(value: &Value) -> Value {
     value
 }
 
+/// Produces one visible node-output value. Explicit paths supplement the
+/// automatic PII and secret detection because some sensitive business data is
+/// not recognizable from its name or contents.
+pub(super) fn visible_node_state_value(value: &Value, key: &str, sensitive_fields: &BTreeSet<String>) -> Value {
+    let mut visible = redact_json(value);
+    for path in sensitive_fields {
+        let path = if path == key {
+            ""
+        } else if let Some(path) = path.strip_prefix(key).and_then(|path| path.strip_prefix('.')) {
+            path
+        } else {
+            continue;
+        };
+        if path.is_empty() {
+            if !visible.is_null() {
+                visible = Value::String(SENSITIVE_FIELD_REDACTION.to_string());
+            }
+        } else {
+            redact_value_at_path(&mut visible, path);
+        }
+    }
+    visible
+}
+
 pub(super) fn visible_input_state(value: &Value, sensitive_fields: &BTreeSet<String>) -> Value {
     let mut visible = redact_json(value);
     if let Some(fields) = visible.as_object_mut() {
@@ -202,6 +226,26 @@ fn redact_json_in_place(value: &mut Value) {
         Value::Array(values) => values.iter_mut().for_each(redact_json_in_place),
         Value::String(text) => *text = redact_text(text),
         _ => {},
+    }
+}
+
+fn redact_value_at_path(value: &mut Value, path: &str) {
+    let mut segments = path.split('.').peekable();
+    let mut current = value;
+    while let Some(segment) = segments.next() {
+        let Value::Object(object) = current else {
+            return;
+        };
+        let Some(next) = object.get_mut(segment) else {
+            return;
+        };
+        if segments.peek().is_none() {
+            if !next.is_null() {
+                *next = Value::String(SENSITIVE_FIELD_REDACTION.to_string());
+            }
+            return;
+        }
+        current = next;
     }
 }
 

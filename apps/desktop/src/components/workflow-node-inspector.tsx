@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Badge,
   Button,
+  Checkbox,
   Combobox,
   ComboboxChip,
   ComboboxChips,
@@ -174,10 +175,26 @@ function getToolArgumentPaths(schema: Record<string, unknown>) {
   return [...paths].sort();
 }
 
+function getOutputSchemaPaths(data: Record<string, unknown>) {
+  // Keep manual paths available while an in-progress schema is not valid JSON.
+  const source = getText(data, 'outputSchema').trim();
+  if (!source) return [];
+  try {
+    const schema: unknown = JSON.parse(source);
+    return typeof schema === 'object' &&
+      schema !== null &&
+      !Array.isArray(schema)
+      ? getToolArgumentPaths(schema as Record<string, unknown>)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function getNodeStateConfig(data: Record<string, unknown>) {
   const value = data.state;
   if (typeof value !== 'object' || value === null) {
-    return { readers: [], rawReaders: [], globalKeys: [] };
+    return { readers: [], rawReaders: [], globalKeys: [], sensitiveFields: [] };
   }
   const state = value as Record<string, unknown>;
   const access =
@@ -188,6 +205,7 @@ function getNodeStateConfig(data: Record<string, unknown>) {
     readers: getStringArray(access, 'readers'),
     rawReaders: getStringArray(access, 'rawReaders'),
     globalKeys: getStringArray(state, 'globalKeys'),
+    sensitiveFields: getStringArray(state, 'sensitiveFields'),
   };
 }
 
@@ -741,7 +759,7 @@ function WorkflowNodeInspector({
                 onChange={(instruction) => updateData({ instruction })}
                 className='min-h-36 font-mono text-xs'
               />
-              {!isCodeActAgent && (
+              {!isCodeActAgent && !getText(data, 'outputSchema').trim() && (
                 <TextField
                   id='agent-output-key'
                   label='Output key'
@@ -751,6 +769,17 @@ function WorkflowNodeInspector({
                   placeholder='Output key'
                 />
               )}
+              <TextareaField
+                id='agent-output-schema'
+                label='Structured output schema (advanced)'
+                description='Optional JSON Schema. Its root must be an object; final properties are written to this node’s State. It replaces Output key for Local Agents.'
+                value={getText(data, 'outputSchema')}
+                onChange={(outputSchema) => updateData({ outputSchema })}
+                placeholder={
+                  '{\n  "type": "object",\n  "properties": {\n    "summary": { "type": "string" }\n  },\n  "required": ["summary"]\n}'
+                }
+                className='min-h-44 font-mono text-xs'
+              />
             </InspectorSection>
             {!isCodeActAgent && (
               <InspectorSection
@@ -1835,6 +1864,14 @@ function NodeStateFields({
   const config = getNodeStateConfig(node.data);
   const readers = config.readers.filter((id) => id !== node.id);
   const rawReaders = config.rawReaders.filter((id) => readers.includes(id));
+  const outputSchemaPaths = getOutputSchemaPaths(node.data);
+  const outputSchemaPathSet = new Set(outputSchemaPaths);
+  const selectedSchemaPaths = outputSchemaPaths.filter((path) =>
+    config.sensitiveFields.includes(path),
+  );
+  const additionalSensitivePaths = config.sensitiveFields.filter(
+    (path) => !outputSchemaPathSet.has(path),
+  );
   const availableReaders = executableNodes
     .filter((candidate) => candidate.id !== node.id)
     .map((candidate) => ({
@@ -1853,11 +1890,19 @@ function NodeStateFields({
         rawReaders: rawReaders.filter((id) => nextReaders.includes(id)),
       },
       globalKeys: config.globalKeys,
+      sensitiveFields: config.sensitiveFields,
     });
   const setRawReaders = (nextRawReaders: string[]) =>
     onChange({
       access: { readers, rawReaders: nextRawReaders },
       globalKeys: config.globalKeys,
+      sensitiveFields: config.sensitiveFields,
+    });
+  const setSensitiveFields = (sensitiveFields: string[]) =>
+    onChange({
+      access: { readers, rawReaders },
+      globalKeys: config.globalKeys,
+      sensitiveFields,
     });
 
   return (
@@ -1891,6 +1936,63 @@ function NodeStateFields({
             onChange={setRawReaders}
           />
         </Field>
+        {outputSchemaPaths.length > 0 ? (
+          <FieldSet className='gap-3'>
+            <FieldLegend variant='label'>Schema fields</FieldLegend>
+            <FieldDescription>
+              Select structured output paths to redact in visible State.
+            </FieldDescription>
+            <FieldGroup className='gap-2'>
+              {outputSchemaPaths.map((path) => {
+                const id = `${node.id}-sensitive-schema-${path}`;
+                return (
+                  <Field key={path} orientation='horizontal'>
+                    <Checkbox
+                      id={id}
+                      checked={selectedSchemaPaths.includes(path)}
+                      onCheckedChange={(checked) =>
+                        setSensitiveFields(
+                          checked
+                            ? [...config.sensitiveFields, path]
+                            : config.sensitiveFields.filter(
+                                (field) => field !== path,
+                              ),
+                        )
+                      }
+                    />
+                    <Label htmlFor={id} className='font-mono text-xs'>
+                      {path}
+                    </Label>
+                  </Field>
+                );
+              })}
+            </FieldGroup>
+          </FieldSet>
+        ) : null}
+        <TextField
+          id={`${node.id}-sensitive-state-fields`}
+          label={
+            outputSchemaPaths.length > 0
+              ? 'Additional sensitive state paths'
+              : 'Sensitive state fields'
+          }
+          description={
+            outputSchemaPaths.length > 0
+              ? 'Use dot-separated paths for dynamic outputs not declared by the schema.'
+              : 'Always redact these output paths in visible State. Raw state readers and authorized Agent tools can still use the original values.'
+          }
+          value={additionalSensitivePaths.join(', ')}
+          placeholder='customer.email, customer.phone'
+          onChange={(value) =>
+            setSensitiveFields([
+              ...selectedSchemaPaths,
+              ...value
+                .split(',')
+                .map((path) => path.trim())
+                .filter(Boolean),
+            ])
+          }
+        />
       </InspectorSection>
       {supportsGlobalPublication(node.type) ? (
         <InspectorSection
@@ -1910,6 +2012,7 @@ function NodeStateFields({
                   .split(',')
                   .map((key) => key.trim())
                   .filter(Boolean),
+                sensitiveFields: config.sensitiveFields,
               })
             }
           />

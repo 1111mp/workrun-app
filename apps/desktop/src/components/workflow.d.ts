@@ -56,6 +56,8 @@ type WorkflowNodeStateConfig = {
   };
   /** Keys emitted by this node that should be published to shared global State. */
   globalKeys?: string[];
+  /** Dot-separated output paths always redacted in this node's visible State. */
+  sensitiveFields?: string[];
 };
 
 type WorkflowSettings = {
@@ -82,6 +84,8 @@ type WorkflowAgentNodeData = WorkflowNodeStateConfig & {
   instruction: string;
   /** Optional state key that receives the agent's complete final text. */
   outputKey?: string;
+  /** Optional JSON Schema string for structured Agent output. */
+  outputSchema?: string;
   temperature?: number;
   topP?: number;
   skillRefs?: WorkflowSkillRef[];
@@ -112,6 +116,8 @@ type WorkflowCodeActAgentNodeData = WorkflowNodeStateConfig & {
   instruction: string;
   toolIds?: string[];
   toolStateBindings?: WorkflowToolStateBinding[];
+  /** Optional JSON Schema string for structured Agent output. */
+  outputSchema?: string;
   maxIterations?: number;
   maxToolCalls?: number;
   toolTimeoutSeconds?: number;

@@ -160,6 +160,8 @@ pub(super) struct WorkflowNodeStateConfig {
     pub(super) access: WorkflowNodeStateAccess,
     #[serde(default)]
     pub(super) global_keys: BTreeSet<String>,
+    #[serde(default)]
+    pub(super) sensitive_fields: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -200,7 +202,17 @@ pub(super) fn node_state_config(
             node.id
         );
     }
+    if config.sensitive_fields.iter().any(|path| !is_state_path(path)) {
+        bail!(
+            "node `{}` state.sensitiveFields must contain dot-separated paths",
+            node.id
+        );
+    }
     Ok(config)
+}
+
+fn is_state_path(path: &str) -> bool {
+    path.trim() == path && !path.is_empty() && !path.split('.').any(str::is_empty)
 }
 
 pub(super) fn node_state_policy(config: &WorkflowNodeStateConfig) -> NodeStatePolicy {
@@ -913,6 +925,33 @@ mod tests {
     }
 
     #[test]
+    fn node_state_config_accepts_sensitive_output_paths() {
+        let node = WorkflowNode {
+            id: "extractor".to_string(),
+            kind: "process".to_string(),
+            data: json!({"state": {"sensitiveFields": ["customer.email"]}}),
+        };
+        let executable = HashSet::from(["extractor".to_string()]);
+
+        assert_eq!(
+            node_state_config(&node, &executable).unwrap().sensitive_fields,
+            BTreeSet::from(["customer.email".to_string()])
+        );
+    }
+
+    #[test]
+    fn node_state_config_rejects_invalid_sensitive_output_paths() {
+        let node = WorkflowNode {
+            id: "extractor".to_string(),
+            kind: "process".to_string(),
+            data: json!({"state": {"sensitiveFields": ["customer..email"]}}),
+        };
+        let executable = HashSet::from(["extractor".to_string()]);
+
+        assert!(node_state_config(&node, &executable).is_err());
+    }
+
+    #[test]
     fn measures_node_duration_from_stream_events() {
         let mut node_started_at = HashMap::new();
         let started = with_measured_node_duration(StreamEvent::node_start("node", 0), &mut node_started_at);
@@ -1139,7 +1178,7 @@ mod tests {
             "result": {"uppercase": "HELLO"},
         })];
 
-        let updates = agent_output_updates(&[], "agent", "agent", "model", None, &tool_calls, None);
+        let updates = agent_output_updates(&[], "agent", "agent", "model", None, &tool_calls, None, None).unwrap();
 
         assert_eq!(
             updates["workflow.trace"]["toolCalls"],
@@ -1159,13 +1198,61 @@ mod tests {
         let mut second = Event::new("second");
         second.llm_response.content = Some(Content::new("model").with_text("example.com"));
 
-        let updates = agent_output_updates(&[first, second], "agent", "agent", "model", None, &[], Some("answer"));
+        let updates = agent_output_updates(
+            &[first, second],
+            "agent",
+            "agent",
+            "model",
+            None,
+            &[],
+            Some("answer"),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(updates["answer"], "Contact [EMAIL REDACTED]");
         assert_eq!(
             updates["workflow.trace"]["messages"],
             json!([{"role": "assistant", "content": "Contact [EMAIL REDACTED]"}])
         );
+    }
+
+    #[test]
+    fn structured_agent_output_writes_object_properties_to_state() {
+        let mut event = Event::new("response");
+        event.llm_response.content = Some(Content::new("model").with_text(r#"{"summary":"Done","score":92}"#));
+
+        let updates = agent_output_updates(
+            &[event],
+            "agent",
+            "agent",
+            "model",
+            None,
+            &[],
+            None,
+            Some(&json!({"type": "object", "properties": {"summary": {}, "score": {}}})),
+        )
+        .unwrap();
+
+        assert_eq!(updates["summary"], json!("Done"));
+        assert_eq!(updates["score"], json!(92));
+    }
+
+    #[test]
+    fn structured_agent_output_schema_requires_object_root_and_safe_state_keys() {
+        let node = WorkflowNode {
+            id: "agent".to_string(),
+            kind: "agent".to_string(),
+            data: json!({"outputSchema": r#"{"type":"array","items":{"type":"string"}}"#}),
+        };
+        assert!(agent_output_schema(&node).is_err());
+
+        let node = WorkflowNode {
+            id: "agent".to_string(),
+            kind: "agent".to_string(),
+            data: json!({"outputSchema": r#"{"type":"object","properties":{"workflow.trace":{"type":"string"}}}"#}),
+        };
+        assert!(agent_output_schema(&node).is_err());
     }
 
     #[tokio::test]

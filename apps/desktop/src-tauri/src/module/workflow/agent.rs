@@ -18,6 +18,10 @@ pub(super) async fn add_local_agent_node(
     let description = string_data(node, "description").unwrap_or_default();
     let instruction = string_data(node, "instruction").unwrap_or_default();
     let output_key = string_data(node, "outputKey").filter(|key| !key.trim().is_empty());
+    let output_schema = agent_output_schema(node)?;
+    if output_key.is_some() && output_schema.is_some() {
+        bail!("agent node `{id}` cannot set both data.outputKey and data.outputSchema");
+    }
     let profile_id =
         string_data(node, "modelProfileId").ok_or_else(|| anyhow!("agent node `{id}` needs data.modelProfileId"))?;
     let temperature = number_data(node, "temperature", 0.0, 2.0)?;
@@ -58,6 +62,9 @@ pub(super) async fn add_local_agent_node(
     if let Some(top_p) = top_p {
         agent = agent.top_p(top_p);
     }
+    if let Some(schema) = output_schema.clone() {
+        agent = agent.output_schema(schema);
+    }
     let tool_calls = Arc::new(AtomicU32::new(0));
     let tool_trace = Arc::new(Mutex::new(Vec::new()));
     for tool in tools {
@@ -88,9 +95,48 @@ pub(super) async fn add_local_agent_node(
         on_event,
         Some(tool_trace),
         output_key,
+        output_schema,
         state,
         state_config.global_keys,
+        state_config.sensitive_fields,
     )))
+}
+
+pub(super) fn agent_output_schema(node: &WorkflowNode) -> Result<Option<Value>> {
+    let Some(value) = node.data.get("outputSchema") else {
+        return Ok(None);
+    };
+    let source = value
+        .as_str()
+        .ok_or_else(|| anyhow!("agent node `{}` field `outputSchema` must be a JSON string", node.id))?;
+    if source.trim().is_empty() {
+        return Ok(None);
+    }
+    let schema = serde_json::from_str::<Value>(source)
+        .map_err(|error| anyhow!("agent node `{}` field `outputSchema` is invalid JSON: {error}", node.id))?;
+    let root = schema
+        .as_object()
+        .ok_or_else(|| anyhow!("agent node `{}` outputSchema must be a JSON object", node.id))?;
+    if root.get("type").and_then(Value::as_str) != Some("object") {
+        bail!("agent node `{}` outputSchema root type must be `object`", node.id);
+    }
+    let properties = root
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("agent node `{}` outputSchema must declare object properties", node.id))?;
+    for key in properties.keys() {
+        if !is_output_state_key_safe(key) {
+            bail!(
+                "agent node `{}` outputSchema has invalid State property `{key}`",
+                node.id
+            );
+        }
+    }
+    Ok(Some(schema))
+}
+
+fn is_output_state_key_safe(key: &str) -> bool {
+    key.trim() == key && !key.is_empty() && !key.contains('.') && key != "messages" && !key.starts_with("workflow.")
 }
 
 fn personal_skill_names(node: &WorkflowNode) -> Result<Vec<String>> {
@@ -167,8 +213,10 @@ pub(super) fn remote_a2a_graph_node(
         on_event,
         None,
         None,
+        None,
         state,
         state_config.global_keys,
+        state_config.sensitive_fields,
     ))
 }
 
@@ -184,8 +232,10 @@ pub(super) struct StreamingAgentNode {
     streamed_events: Mutex<HashMap<(String, usize), Vec<Value>>>,
     tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
     output_key: Option<String>,
+    output_schema: Option<Value>,
     state: SharedWorkflowState,
     global_keys: BTreeSet<String>,
+    sensitive_fields: BTreeSet<String>,
 }
 
 impl StreamingAgentNode {
@@ -197,8 +247,10 @@ impl StreamingAgentNode {
         on_event: Option<Channel<StreamEvent>>,
         tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
         output_key: Option<String>,
+        output_schema: Option<Value>,
         state: SharedWorkflowState,
         global_keys: BTreeSet<String>,
+        sensitive_fields: BTreeSet<String>,
     ) -> Self {
         Self {
             id,
@@ -209,8 +261,10 @@ impl StreamingAgentNode {
             streamed_events: Mutex::new(HashMap::new()),
             tool_trace,
             output_key,
+            output_schema,
             state,
             global_keys,
+            sensitive_fields,
         }
     }
 
@@ -259,7 +313,9 @@ impl Node for StreamingAgentNode {
             self.on_event.as_ref(),
             &tool_calls,
             self.output_key.as_deref(),
-        );
+            self.output_schema.as_ref(),
+        )
+        .map_err(|error| graph_node_error(&self.id, error))?;
         let values = updates
             .iter()
             .filter(|(key, _)| !key.starts_with("workflow."))
@@ -270,10 +326,11 @@ impl Node for StreamingAgentNode {
             .state
             .lock()
             .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
-            .apply_node_update(
+            .apply_node_update_with_sensitive_fields(
                 &self.id,
                 crate::module::state::NodeStateUpdate::from_object(values),
                 &self.global_keys,
+                &self.sensitive_fields,
             )
             .map_err(|error| graph_node_error(&self.id, error))?;
         updates.extend(global_updates);
@@ -389,8 +446,10 @@ pub(super) fn agent_output_updates(
     on_event: Option<&Channel<StreamEvent>>,
     tool_calls: &[Value],
     output_key: Option<&str>,
-) -> HashMap<String, Value> {
-    let response = redact_text(&agent_response_text(events));
+    output_schema: Option<&Value>,
+) -> Result<HashMap<String, Value>> {
+    let raw_response = agent_response_text(events);
+    let response = redact_text(&raw_response);
     let messages = (!response.is_empty())
         .then(|| json!({ "role": "assistant", "content": response }))
         .into_iter()
@@ -428,5 +487,16 @@ pub(super) fn agent_output_updates(
     if let (Some(output_key), Some(content)) = (output_key, output_content) {
         updates.insert(output_key.to_string(), Value::String(content));
     }
-    updates
+    if output_schema.is_some() {
+        let structured = serde_json::from_str::<Value>(&raw_response)
+            .map_err(|error| anyhow!("structured Agent output is not valid JSON: {error}"))?;
+        let values = structured
+            .as_object()
+            .ok_or_else(|| anyhow!("structured Agent output must be a JSON object"))?;
+        if let Some(key) = values.keys().find(|key| !is_output_state_key_safe(key)) {
+            bail!("structured Agent output has invalid State property `{key}`");
+        }
+        updates.extend(values.clone());
+    }
+    Ok(updates)
 }

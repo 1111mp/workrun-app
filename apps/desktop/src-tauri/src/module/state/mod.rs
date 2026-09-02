@@ -314,8 +314,13 @@ impl NodeStateUpdate {
         Self(value.into_iter().collect())
     }
 
-    pub fn map_values(&self, mut map: impl FnMut(&Value) -> Value) -> Self {
-        Self(self.0.iter().map(|(key, value)| (key.clone(), map(value))).collect())
+    pub fn map_entries(&self, mut map: impl FnMut(&str, &Value) -> Value) -> Self {
+        Self(
+            self.0
+                .iter()
+                .map(|(key, value)| (key.clone(), map(key, value)))
+                .collect(),
+        )
     }
 
     /// Values that must also be visible to graph-level routing after this node

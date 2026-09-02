@@ -1,6 +1,6 @@
 //! Boundary between Workrun's access-controlled State and ADK's graph state.
 
-use super::{ToolStateBinding, redact_json, visible_input_state};
+use super::{ToolStateBinding, visible_input_state, visible_node_state_value};
 use crate::{
     config::{decrypt_data_with_key, encrypt_data_with_key},
     module::state::{NodeState, NodeStatePolicy, NodeStateUpdate, RuntimeState, State as WorkrunState, StateError},
@@ -175,7 +175,17 @@ impl WorkflowStateBridge {
         update: NodeStateUpdate,
         global_keys: &BTreeSet<String>,
     ) -> Result<HashMap<String, Value>, StateError> {
-        let visible_update = update.map_values(redact_json);
+        self.apply_node_update_with_sensitive_fields(node_id, update, global_keys, &BTreeSet::new())
+    }
+
+    pub fn apply_node_update_with_sensitive_fields(
+        &mut self,
+        node_id: &str,
+        update: NodeStateUpdate,
+        global_keys: &BTreeSet<String>,
+        sensitive_fields: &BTreeSet<String>,
+    ) -> Result<HashMap<String, Value>, StateError> {
+        let visible_update = update.map_entries(|key, value| visible_node_state_value(value, key, sensitive_fields));
         for key in update.global_values(global_keys).keys() {
             self.global_owners.insert(key.clone(), node_id.to_string());
         }
@@ -573,6 +583,84 @@ mod tests {
                 .tool_args("reviewer", &json!({"email": "[EMAIL REDACTED]"}), &[])
                 .unwrap(),
             json!({"email": "alice@example.com"})
+        );
+    }
+
+    #[test]
+    fn explicit_sensitive_fields_redact_visible_private_state_only() {
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge.configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["agent", "reviewer"]),
+                raw_readers: AccessRule::only(["agent"]),
+                ..Default::default()
+            },
+        );
+        bridge
+            .apply_node_update_with_sensitive_fields(
+                "extractor",
+                NodeStateUpdate::new().set("customer", json!({"name": "Alice", "membershipNumber": "VIP-481516"})),
+                &BTreeSet::new(),
+                &BTreeSet::from(["customer.membershipNumber".to_string()]),
+            )
+            .unwrap();
+
+        assert_eq!(
+            bridge.node_input("reviewer").unwrap()["customer"]["membershipNumber"],
+            json!("[SENSITIVE REDACTED]")
+        );
+        assert_eq!(
+            bridge.agent_input("agent").unwrap()["customer"]["membershipNumber"],
+            json!("[SENSITIVE REDACTED]")
+        );
+        assert_eq!(
+            bridge.node_input("agent").unwrap()["customer"]["membershipNumber"],
+            json!("VIP-481516")
+        );
+        assert_eq!(
+            bridge
+                .tool_args(
+                    "agent",
+                    &json!({"customer": {"membershipNumber": "[SENSITIVE REDACTED]"}}),
+                    &[],
+                )
+                .unwrap(),
+            json!({"customer": {"membershipNumber": "VIP-481516"}})
+        );
+    }
+
+    #[test]
+    fn explicit_sensitive_fields_redact_published_global_state() {
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge.configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["agent", "reviewer"]),
+                raw_readers: AccessRule::only(["agent"]),
+                ..Default::default()
+            },
+        );
+        let global_updates = bridge
+            .apply_node_update_with_sensitive_fields(
+                "extractor",
+                NodeStateUpdate::new().set("customer", json!({"name": "Alice", "membershipNumber": "VIP-481516"})),
+                &BTreeSet::from(["customer".to_string()]),
+                &BTreeSet::from(["customer.membershipNumber".to_string()]),
+            )
+            .unwrap();
+
+        assert_eq!(
+            global_updates["customer"]["membershipNumber"],
+            json!("[SENSITIVE REDACTED]")
+        );
+        assert_eq!(
+            bridge.node_input("reviewer").unwrap()["customer"]["membershipNumber"],
+            json!("[SENSITIVE REDACTED]")
+        );
+        assert_eq!(
+            bridge.node_input("agent").unwrap()["customer"]["membershipNumber"],
+            json!("VIP-481516")
         );
     }
 
