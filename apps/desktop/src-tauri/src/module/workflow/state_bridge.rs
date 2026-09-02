@@ -1,6 +1,10 @@
 //! Boundary between Workrun's access-controlled State and ADK's graph state.
 
-use crate::module::state::{NodeState, NodeStateUpdate, RuntimeState, State as WorkrunState, StateError};
+use super::{redact_json, visible_input_state};
+use crate::{
+    config::{decrypt_data_with_key, encrypt_data_with_key},
+    module::state::{NodeState, NodeStatePolicy, NodeStateUpdate, RuntimeState, State as WorkrunState, StateError},
+};
 use adk_rust::{
     graph::checkpoint::RetentionPolicy,
     graph::{Checkpoint, Checkpointer, GraphError, Result as GraphResult, State as GraphState},
@@ -10,18 +14,22 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
 
 const STATE_CHECKPOINT_METADATA_KEY: &str = "workrun.workflow_state";
-const STATE_CHECKPOINT_VERSION: u16 = 1;
+const STATE_CHECKPOINT_VERSION: u16 = 2;
 
 /// Owns the access-controlled workflow state and exports only its public
 /// `global` namespace to ADK's shared graph state.
 pub struct WorkflowStateBridge {
-    state: WorkrunState,
+    raw_state: WorkrunState,
+    visible_state: WorkrunState,
+    input_raw_readers: BTreeSet<String>,
+    input_sensitive_fields: BTreeSet<String>,
+    global_owners: BTreeMap<String, String>,
 }
 
 /// Private workflow state persisted alongside one ADK graph checkpoint.
@@ -31,7 +39,12 @@ pub struct WorkflowStateCheckpoint {
     version: u16,
     workflow_id: String,
     workflow_fingerprint: String,
-    state: WorkrunState,
+    visible_state: WorkrunState,
+    encrypted_raw_state: String,
+    input_raw_readers: BTreeSet<String>,
+    input_sensitive_fields: BTreeSet<String>,
+    #[serde(default)]
+    global_owners: BTreeMap<String, String>,
 }
 
 /// A checkpointer wrapper that atomically embeds Workrun State in ADK's
@@ -41,30 +54,54 @@ pub struct WorkflowStateCheckpointer {
     bridge: Arc<Mutex<WorkflowStateBridge>>,
     workflow_id: String,
     workflow_fingerprint: String,
+    encryption_key: Arc<Vec<u8>>,
 }
 
 impl WorkflowStateBridge {
     /// Import the run input into the public global namespace. The new workflow
     /// contract requires an object because every input field is a global key.
     pub fn from_initial_state(initial_state: Value) -> Result<Self> {
+        Self::from_initial_state_with_policy(initial_state, BTreeSet::new(), BTreeSet::new())
+    }
+
+    pub fn from_initial_state_with_policy(
+        initial_state: Value,
+        input_raw_readers: BTreeSet<String>,
+        input_sensitive_fields: BTreeSet<String>,
+    ) -> Result<Self> {
         let fields = initial_state
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("workflow initial state must be a JSON object"))?;
-        let mut state = WorkrunState::new();
-        let mut runtime = state.runtime();
+        let visible = visible_input_state(&initial_state, &input_sensitive_fields);
+        let visible_fields = visible.as_object().expect("visible input remains an object");
+        let mut raw_state = WorkrunState::new();
+        let mut visible_state = WorkrunState::new();
+        let mut raw_runtime = raw_state.runtime();
+        let mut visible_runtime = visible_state.runtime();
         for (key, value) in fields {
-            runtime.global_set(key.clone(), value.clone());
+            raw_runtime.global_set(key.clone(), value.clone());
+            visible_runtime.global_set(key.clone(), visible_fields.get(key).cloned().unwrap_or(Value::Null));
         }
-        Ok(Self { state })
+        Ok(Self {
+            raw_state,
+            visible_state,
+            input_raw_readers,
+            input_sensitive_fields,
+            global_owners: BTreeMap::new(),
+        })
     }
 
     pub fn initialize_global(&mut self, initial_state: Value) -> Result<()> {
         let fields = initial_state
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("workflow initial state must be a JSON object"))?;
-        let mut runtime = self.state.runtime();
+        let visible = visible_input_state(&initial_state, &self.input_sensitive_fields);
+        let visible_fields = visible.as_object().expect("visible input remains an object");
+        let mut raw_runtime = self.raw_state.runtime();
+        let mut visible_runtime = self.visible_state.runtime();
         for (key, value) in fields {
-            runtime.global_set(key.clone(), value.clone());
+            raw_runtime.global_set(key.clone(), value.clone());
+            visible_runtime.global_set(key.clone(), visible_fields.get(key).cloned().unwrap_or(Value::Null));
         }
         Ok(())
     }
@@ -72,7 +109,7 @@ impl WorkflowStateBridge {
     /// ADK receives a flat copy of global state for routing and interrupts.
     /// Node-private and runtime data are never placed in graph state.
     pub fn graph_state(&mut self) -> GraphState {
-        self.state
+        self.visible_state
             .runtime()
             .global_snapshot()
             .as_object()
@@ -86,7 +123,40 @@ impl WorkflowStateBridge {
     /// may read. Namespace names are deliberately not exposed to executors.
     /// A duplicated key is reported with both sources rather than overwritten.
     pub fn node_input(&mut self, node_id: impl Into<String>) -> Result<Value, StateError> {
-        self.state.node(node_id).input_snapshot()
+        let node_id = node_id.into();
+        let raw_global_keys = self.raw_global_keys_for(&node_id);
+        self.visible_state
+            .scoped_mixed_input(&self.raw_state, &node_id, &raw_global_keys)
+    }
+
+    /// Agent prompts never receive raw values, even when their tools are an
+    /// authorized raw reader.
+    pub fn agent_input(&self, node_id: &str) -> Result<Value, StateError> {
+        self.visible_state.scoped_visible_input(node_id)
+    }
+
+    /// Resolve values hidden from an Agent immediately before its tool runs.
+    /// Only argument keys already selected by the Agent are replaced, so raw
+    /// State cannot expand a tool call beyond its declared schema.
+    pub fn tool_args(&self, node_id: &str, args: &Value) -> Result<Value, StateError> {
+        let visible = self.visible_state.scoped_visible_input(node_id)?;
+        let mixed =
+            self.visible_state
+                .scoped_mixed_input(&self.raw_state, node_id, &self.raw_global_keys_for(node_id))?;
+        let mut resolved = args.clone();
+        let (Some(args), Some(visible), Some(mixed)) =
+            (resolved.as_object_mut(), visible.as_object(), mixed.as_object())
+        else {
+            return Ok(resolved);
+        };
+        for (key, value) in args {
+            if visible.get(key) != mixed.get(key)
+                && let Some(raw_value) = mixed.get(key)
+            {
+                *value = raw_value.clone();
+            }
+        }
+        Ok(resolved)
     }
 
     /// Apply one node's result. Only keys explicitly configured for publication
@@ -98,32 +168,54 @@ impl WorkflowStateBridge {
         update: NodeStateUpdate,
         global_keys: &BTreeSet<String>,
     ) -> Result<HashMap<String, Value>, StateError> {
-        let global_values = update.global_values(global_keys);
-        let patch = update.into_patch(node_id, global_keys);
-        self.state.node(node_id).apply(&patch)?;
-        Ok(global_values.into_iter().collect())
+        let visible_update = update.map_values(redact_json);
+        for key in update.global_values(global_keys).keys() {
+            self.global_owners.insert(key.clone(), node_id.to_string());
+        }
+        let visible_global_values = visible_update.global_values(global_keys);
+        let raw_patch = update.into_patch(node_id, global_keys);
+        let visible_patch = visible_update.into_patch(node_id, global_keys);
+        self.raw_state.node(node_id).apply(&raw_patch)?;
+        self.visible_state.node(node_id).apply(&visible_patch)?;
+        Ok(visible_global_values.into_iter().collect())
+    }
+
+    pub fn configure_node(&mut self, node_id: &str, policy: NodeStatePolicy) {
+        self.raw_state.runtime().configure_node(node_id, policy.clone());
+        self.visible_state.runtime().configure_node(node_id, policy);
+    }
+
+    fn raw_global_keys_for(&self, requester: &str) -> BTreeSet<String> {
+        self.visible_state
+            .runtime_global_keys()
+            .into_iter()
+            .filter(|key| match self.global_owners.get(key) {
+                Some(owner) => self.visible_state.namespace_allows_raw(owner, requester),
+                None => self.input_raw_readers.contains(requester),
+            })
+            .collect()
     }
 
     /// Give a workflow node its restricted State view.
     pub fn node_state(&mut self, node_id: impl Into<String>) -> NodeState<'_> {
-        self.state.node(node_id)
+        self.raw_state.node(node_id)
     }
 
     /// Give trusted workflow infrastructure its full State view.
     pub fn runtime_state(&mut self) -> RuntimeState<'_> {
-        self.state.runtime()
+        self.raw_state.runtime()
     }
 
     /// Global-only output for graph synchronization and narrow API consumers.
     pub fn public_output(&mut self) -> Value {
-        self.state.runtime().global_snapshot()
+        self.visible_state.runtime().global_snapshot()
     }
 
     /// Complete user-visible workflow output. Node ACLs apply only while a
     /// workflow executes; the final observer view includes every node value.
     /// Runtime state and policy details remain internal.
     pub fn final_output(&self, graph_state: &GraphState) -> Value {
-        let mut output = self.state.workflow_snapshot();
+        let mut output = self.visible_state.workflow_snapshot();
         let workflow = graph_state
             .iter()
             .filter(|(key, _)| key.starts_with("workflow."))
@@ -133,19 +225,37 @@ impl WorkflowStateBridge {
         output
     }
 
-    fn checkpoint(&self, workflow_id: &str, workflow_fingerprint: &str) -> WorkflowStateCheckpoint {
-        WorkflowStateCheckpoint {
+    fn checkpoint(
+        &self,
+        workflow_id: &str,
+        workflow_fingerprint: &str,
+        encryption_key: &[u8],
+    ) -> Result<WorkflowStateCheckpoint> {
+        let raw_json = serde_json::to_string(&self.raw_state)?;
+        let encrypted_raw_state =
+            encrypt_data_with_key(&raw_json, encryption_key).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(WorkflowStateCheckpoint {
             version: STATE_CHECKPOINT_VERSION,
             workflow_id: workflow_id.to_string(),
             workflow_fingerprint: workflow_fingerprint.to_string(),
-            state: self.state.clone(),
-        }
+            visible_state: self.visible_state.clone(),
+            encrypted_raw_state,
+            input_raw_readers: self.input_raw_readers.clone(),
+            input_sensitive_fields: self.input_sensitive_fields.clone(),
+            global_owners: self.global_owners.clone(),
+        })
     }
 
-    fn from_checkpoint(checkpoint: WorkflowStateCheckpoint) -> Self {
-        Self {
-            state: checkpoint.state,
-        }
+    fn from_checkpoint(checkpoint: WorkflowStateCheckpoint, encryption_key: &[u8]) -> Result<Self> {
+        let raw_json = decrypt_data_with_key(&checkpoint.encrypted_raw_state, encryption_key)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(Self {
+            raw_state: serde_json::from_str(&raw_json)?,
+            visible_state: checkpoint.visible_state,
+            input_raw_readers: checkpoint.input_raw_readers,
+            input_sensitive_fields: checkpoint.input_sensitive_fields,
+            global_owners: checkpoint.global_owners,
+        })
     }
 }
 
@@ -155,13 +265,18 @@ impl WorkflowStateCheckpointer {
         bridge: Arc<Mutex<WorkflowStateBridge>>,
         workflow_id: impl Into<String>,
         workflow_fingerprint: impl Into<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        #[cfg(test)]
+        let encryption_key = vec![0x57; 32];
+        #[cfg(not(test))]
+        let encryption_key = crate::utils::dirs::get_encryption_key()?;
+        Ok(Self {
             inner,
             bridge,
             workflow_id: workflow_id.into(),
             workflow_fingerprint: workflow_fingerprint.into(),
-        }
+            encryption_key: Arc::new(encryption_key),
+        })
     }
 
     fn checkpoint_metadata(&self) -> GraphResult<Value> {
@@ -169,8 +284,12 @@ impl WorkflowStateCheckpointer {
             .bridge
             .lock()
             .map_err(|_| GraphError::CheckpointError("workflow state lock is poisoned".to_string()))?;
-        serde_json::to_value(bridge.checkpoint(&self.workflow_id, &self.workflow_fingerprint))
-            .map_err(|error| GraphError::CheckpointError(error.to_string()))
+        serde_json::to_value(
+            bridge
+                .checkpoint(&self.workflow_id, &self.workflow_fingerprint, &self.encryption_key)
+                .map_err(|error| GraphError::CheckpointError(error.to_string()))?,
+        )
+        .map_err(|error| GraphError::CheckpointError(error.to_string()))
     }
 
     fn restore(&self, checkpoint: &Checkpoint) -> GraphResult<()> {
@@ -195,7 +314,8 @@ impl WorkflowStateCheckpointer {
             .bridge
             .lock()
             .map_err(|_| GraphError::CheckpointError("workflow state lock is poisoned".to_string()))?;
-        *bridge = WorkflowStateBridge::from_checkpoint(saved);
+        *bridge = WorkflowStateBridge::from_checkpoint(saved, &self.encryption_key)
+            .map_err(|error| GraphError::CheckpointError(error.to_string()))?;
         Ok(())
     }
 
@@ -211,19 +331,31 @@ impl WorkflowStateCheckpointer {
             return Ok(());
         };
         let updates = updates.into_iter().collect::<Vec<_>>();
+        let mut persisted_updates = Vec::with_capacity(updates.len());
         {
             let mut bridge = self
                 .bridge
                 .lock()
                 .map_err(|_| GraphError::CheckpointError("workflow state lock is poisoned".to_string()))?;
-            let mut runtime = bridge.runtime_state();
             for (key, value) in &updates {
-                if !key.starts_with("workflow.") {
-                    runtime.global_set(key.clone(), value.clone());
+                if key.starts_with("workflow.") {
+                    persisted_updates.push((key.clone(), value.clone()));
+                } else {
+                    bridge.raw_state.runtime().global_set(key.clone(), value.clone());
+                    let visible = visible_input_state(
+                        &Value::Object([(key.clone(), value.clone())].into_iter().collect()),
+                        &bridge.input_sensitive_fields,
+                    );
+                    let visible_value = visible.get(key).cloned().unwrap_or(Value::Null);
+                    bridge
+                        .visible_state
+                        .runtime()
+                        .global_set(key.clone(), visible_value.clone());
+                    persisted_updates.push((key.clone(), visible_value));
                 }
             }
         }
-        for (key, value) in updates {
+        for (key, value) in persisted_updates {
             checkpoint.state.insert(key, value);
         }
         // Checkpointers append history rather than replacing an existing row.
@@ -305,7 +437,7 @@ mod tests {
     #[test]
     fn node_input_projects_only_authorized_private_state() {
         let mut bridge = WorkflowStateBridge::from_initial_state(json!({"prompt": "hello"})).unwrap();
-        bridge.runtime_state().configure_node(
+        bridge.configure_node(
             "extractor",
             NodeStatePolicy {
                 readers: AccessRule::only(["reviewer"]),
@@ -313,8 +445,11 @@ mod tests {
             },
         );
         bridge
-            .node_state("extractor")
-            .create("customer", json!({"id": 1}))
+            .apply_node_update(
+                "extractor",
+                NodeStateUpdate::new().set("customer", json!({"id": 1})),
+                &BTreeSet::new(),
+            )
             .unwrap();
 
         assert_eq!(
@@ -325,6 +460,95 @@ mod tests {
             })
         );
         assert_eq!(bridge.node_input("other").unwrap(), json!({"prompt": "hello"}));
+    }
+
+    #[test]
+    fn raw_readers_replace_only_the_authorized_owner_namespace() {
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({"prompt": "hello"})).unwrap();
+        bridge.configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["reviewer", "observer"]),
+                raw_readers: AccessRule::only(["reviewer"]),
+                ..Default::default()
+            },
+        );
+        bridge
+            .apply_node_update(
+                "extractor",
+                NodeStateUpdate::new().set("email", json!("alice@example.com")),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            bridge.node_input("reviewer").unwrap()["email"],
+            json!("alice@example.com")
+        );
+        assert_eq!(
+            bridge.node_input("observer").unwrap()["email"],
+            json!("[EMAIL REDACTED]")
+        );
+        assert_eq!(
+            bridge.agent_input("reviewer").unwrap()["email"],
+            json!("[EMAIL REDACTED]")
+        );
+        assert_eq!(
+            bridge
+                .tool_args("reviewer", &json!({"email": "[EMAIL REDACTED]"}))
+                .unwrap(),
+            json!({"email": "alice@example.com"})
+        );
+    }
+
+    #[test]
+    fn raw_readers_follow_owner_values_published_to_global_state() {
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge.configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["route", "observer"]),
+                raw_readers: AccessRule::only(["route"]),
+                ..Default::default()
+            },
+        );
+        bridge
+            .apply_node_update(
+                "extractor",
+                NodeStateUpdate::new().set("email", json!("alice@example.com")),
+                &BTreeSet::from(["email".to_string()]),
+            )
+            .unwrap();
+
+        assert_eq!(bridge.node_input("route").unwrap()["email"], json!("alice@example.com"));
+        assert_eq!(
+            bridge.node_input("observer").unwrap()["email"],
+            json!("[EMAIL REDACTED]")
+        );
+        assert_eq!(bridge.agent_input("route").unwrap()["email"], json!("[EMAIL REDACTED]"));
+    }
+
+    #[test]
+    fn input_raw_readers_apply_to_nodes_and_tools_but_not_agent_prompts() {
+        let mut bridge = WorkflowStateBridge::from_initial_state_with_policy(
+            json!({"apiKey": "sk-1234567890abcdefghijkl"}),
+            BTreeSet::from(["worker".to_string()]),
+            BTreeSet::from(["apiKey".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            bridge.node_input("worker").unwrap()["apiKey"],
+            json!("sk-1234567890abcdefghijkl")
+        );
+        assert_eq!(
+            bridge.agent_input("worker").unwrap()["apiKey"],
+            json!("[SENSITIVE REDACTED]")
+        );
+        assert_eq!(
+            bridge.node_input("other").unwrap()["apiKey"],
+            json!("[SENSITIVE REDACTED]")
+        );
     }
 
     #[test]
@@ -399,7 +623,8 @@ mod tests {
             Arc::clone(&bridge),
             "workflow-1",
             "fingerprint-1",
-        );
+        )
+        .unwrap();
         let checkpoint = Checkpoint::new(
             "thread-1",
             HashMap::from([("global".to_string(), json!({"prompt": "hello"}))]),
@@ -424,16 +649,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn checkpoint_persists_raw_state_only_as_ciphertext() {
+        let bridge = Arc::new(Mutex::new(
+            WorkflowStateBridge::from_initial_state(json!({"email": "alice@example.com"})).unwrap(),
+        ));
+        let inner: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+        let checkpointer =
+            WorkflowStateCheckpointer::new(Arc::clone(&inner), Arc::clone(&bridge), "workflow-1", "fingerprint-1")
+                .unwrap();
+        checkpointer
+            .save(&Checkpoint::new("thread-1", GraphState::new(), 0, vec![]))
+            .await
+            .unwrap();
+
+        let stored = inner.load("thread-1").await.unwrap().unwrap();
+        let metadata = stored.metadata.get(STATE_CHECKPOINT_METADATA_KEY).unwrap();
+        assert!(!metadata.to_string().contains("alice@example.com"));
+        assert_eq!(metadata["visibleState"]["global"]["email"], json!("[EMAIL REDACTED]"));
+
+        *bridge.lock().unwrap() = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        checkpointer.load("thread-1").await.unwrap();
+        assert_eq!(
+            bridge.lock().unwrap().raw_state.runtime().global_get("email"),
+            Some(&json!("alice@example.com"))
+        );
+    }
+
+    #[tokio::test]
     async fn checkpoint_fails_closed_when_its_workflow_identity_differs() {
         let bridge = Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({})).unwrap()));
         let inner: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
         let writer =
-            WorkflowStateCheckpointer::new(Arc::clone(&inner), Arc::clone(&bridge), "workflow-1", "fingerprint-1");
+            WorkflowStateCheckpointer::new(Arc::clone(&inner), Arc::clone(&bridge), "workflow-1", "fingerprint-1")
+                .unwrap();
         writer
             .save(&Checkpoint::new("thread-1", GraphState::new(), 0, vec![]))
             .await
             .unwrap();
-        let reader = WorkflowStateCheckpointer::new(inner, bridge, "workflow-2", "fingerprint-1");
+        let reader = WorkflowStateCheckpointer::new(inner, bridge, "workflow-2", "fingerprint-1").unwrap();
 
         assert!(
             reader
@@ -455,7 +708,8 @@ mod tests {
             Arc::clone(&bridge),
             "workflow-1",
             "fingerprint-1",
-        );
+        )
+        .unwrap();
         checkpointer
             .save(&Checkpoint::new(
                 "thread-1",
@@ -487,7 +741,7 @@ mod tests {
     async fn external_updates_append_a_new_sqlite_checkpoint() {
         let bridge = Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({})).unwrap()));
         let inner: Arc<dyn Checkpointer> = Arc::new(SqliteCheckpointer::in_memory().await.unwrap());
-        let checkpointer = WorkflowStateCheckpointer::new(inner, bridge, "workflow-1", "fingerprint-1");
+        let checkpointer = WorkflowStateCheckpointer::new(inner, bridge, "workflow-1", "fingerprint-1").unwrap();
 
         checkpointer
             .save(&Checkpoint::new(

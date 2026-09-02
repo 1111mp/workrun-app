@@ -7,7 +7,7 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useSearchParams, useParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 
 import { WorkflowEditor } from '@/components';
 import { inspectWorkflow } from '@/services/workflow';
@@ -15,6 +15,7 @@ import { inspectWorkflow } from '@/services/workflow';
 function WorkflowPage() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
+
   const workflow = useQuery({
     queryKey: ['workflows', id],
     queryFn: () => inspectWorkflow(id!),

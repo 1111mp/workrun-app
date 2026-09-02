@@ -71,7 +71,10 @@ pub(super) fn add_human_review_node(
                     },
                 });
                 if let Some(on_event) = on_event {
-                    let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+                    send_guarded_event(
+                        &on_event,
+                        StreamEvent::custom(&id, "workflow.node_result", event.clone()),
+                    );
                 }
                 return Ok(NodeOutput::new()
                     .with_update("workflow.last_node", json!(id))
@@ -100,11 +103,10 @@ pub(super) fn add_human_review_node(
                 "workflowContext": config.workflow_context,
             });
             if let Some(on_event) = on_event {
-                let _ = on_event.send(StreamEvent::custom(
-                    &id,
-                    "workflow.human_review_required",
-                    payload.clone(),
-                ));
+                send_guarded_event(
+                    &on_event,
+                    StreamEvent::custom(&id, "workflow.human_review_required", payload.clone()),
+                );
             }
             Ok(NodeOutput::interrupt_with_data("Human review required", payload))
         }

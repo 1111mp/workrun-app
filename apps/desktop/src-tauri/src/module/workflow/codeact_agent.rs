@@ -68,6 +68,8 @@ pub(super) async fn add_codeact_agent_node(
         .description(description)
         .instruction(instruction)
         .model(create_model(&model, config)?)
+        .input_guardrails(input_guardrails())
+        .output_guardrails(output_guardrails())
         .runtime(build_runtime(node)?)
         .max_iterations(max_iterations)
         .tool_timeout(std::time::Duration::from_secs(tool_timeout_seconds.into()));
@@ -84,6 +86,7 @@ pub(super) async fn add_codeact_agent_node(
             on_event.clone(),
             Arc::clone(&tool_calls),
             Arc::clone(&tool_trace),
+            Arc::clone(&state),
             max_tool_calls,
             tool_timeout_seconds.into(),
         )));

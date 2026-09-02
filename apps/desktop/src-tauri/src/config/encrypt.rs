@@ -17,7 +17,13 @@ tokio::task_local! {
 /// Encrypt data
 pub fn encrypt_data(data: &str) -> Result<String, Box<dyn std::error::Error>> {
     let encryption_key = get_encryption_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&encryption_key)?;
+    encrypt_data_with_key(data, &encryption_key)
+}
+
+/// Encrypt data with an already-resolved key. Runtime state checkpoints use
+/// this form so one key is shared across every save and restore in a run.
+pub fn encrypt_data_with_key(data: &str, encryption_key: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    let cipher = Aes256Gcm::new_from_slice(encryption_key)?;
 
     // Generate random nonce
     let mut nonce = [0u8; NONCE_LENGTH];
@@ -37,7 +43,12 @@ pub fn encrypt_data(data: &str) -> Result<String, Box<dyn std::error::Error>> {
 /// Decrypt data
 pub fn decrypt_data(encrypted: &str) -> Result<String, Box<dyn std::error::Error>> {
     let encryption_key = get_encryption_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&encryption_key)?;
+    decrypt_data_with_key(encrypted, &encryption_key)
+}
+
+/// Decrypt data with the key captured by the checkpoint owner.
+pub fn decrypt_data_with_key(encrypted: &str, encryption_key: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    let cipher = Aes256Gcm::new_from_slice(encryption_key)?;
     // Decode from base64
     let data = STANDARD.decode(encrypted)?;
     if data.len() < NONCE_LENGTH {

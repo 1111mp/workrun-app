@@ -419,6 +419,16 @@ function WorkflowEditorContent({
         <WorkflowSettingsPanel
           open={settingsOpen}
           settings={workflowSettings}
+          executableNodes={nodes
+            .filter((node) => isExecutableNode(node.type))
+            .map((node) => ({
+              id: node.id,
+              name:
+                (typeof node.data.name === 'string' && node.data.name) ||
+                (typeof node.data.label === 'string' && node.data.label) ||
+                node.type ||
+                node.id,
+            }))}
           onOpenChange={setSettingsOpen}
           onSettingsChange={updateWorkflowSettings}
         />

@@ -124,7 +124,10 @@ impl Node for SubworkflowNode {
             "terminated": terminated,
         });
         if let Some(on_event) = &self.on_event {
-            let _ = on_event.send(StreamEvent::custom(&self.id, "workflow.node_result", event.clone()));
+            send_guarded_event(
+                on_event,
+                StreamEvent::custom(&self.id, "workflow.node_result", event.clone()),
+            );
         }
         let output = NodeOutput::new()
             .with_update(&resume_key, false)

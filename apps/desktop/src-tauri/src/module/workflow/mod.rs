@@ -7,6 +7,7 @@
 mod agent;
 mod ask_user_question;
 mod codeact_agent;
+mod guardrails;
 mod human_review;
 mod process;
 mod routing;
@@ -20,6 +21,7 @@ pub(super) const WORKFLOW_TERMINATED_KEY: &str = "workflow.terminated";
 use agent::*;
 use ask_user_question::*;
 use codeact_agent::*;
+use guardrails::*;
 use human_review::*;
 use process::*;
 use routing::*;
@@ -75,6 +77,18 @@ use tauri::ipc::Channel;
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 pub(super) type SharedWorkflowState = Arc<Mutex<WorkflowStateBridge>>;
 
+pub(super) fn send_guarded_event(channel: &Channel<StreamEvent>, event: StreamEvent) {
+    let _ = channel.send(redact_stream_event(event));
+}
+
+pub(crate) fn redact_event_for_transport(event: StreamEvent) -> StreamEvent {
+    redact_stream_event(event)
+}
+
+pub(crate) fn redact_state_for_transport(state: &State) -> State {
+    redact_state(state)
+}
+
 pub async fn resolve_tool_approval(request_id: &str, fingerprint: &str, approved: bool) -> Result<()> {
     ToolApprovalRegistry::global().resolve(request_id, fingerprint, approved)
 }
@@ -100,6 +114,10 @@ pub struct WorkflowDsl {
 pub struct WorkflowInterfaceSchema {
     #[serde(default)]
     pub fields: Vec<WorkflowInterfaceField>,
+    #[serde(default)]
+    pub raw_readers: BTreeSet<String>,
+    #[serde(default)]
+    pub sensitive_fields: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +159,8 @@ pub(super) struct WorkflowNodeStateConfig {
 pub(super) struct WorkflowNodeStateAccess {
     #[serde(default)]
     readers: BTreeSet<String>,
+    #[serde(default)]
+    raw_readers: BTreeSet<String>,
 }
 
 pub(super) fn node_state_config(
@@ -154,10 +174,13 @@ pub(super) fn node_state_config(
     };
     let config: WorkflowNodeStateConfig = serde_json::from_value(value.clone())
         .map_err(|error| anyhow!("node `{}` field `data.state` is invalid: {error}", node.id))?;
-    for id in &config.access.readers {
+    for id in config.access.readers.union(&config.access.raw_readers) {
         if id == &node.id || !executable_ids.contains(id) {
             bail!("node `{}` state access references invalid node `{id}`", node.id);
         }
+    }
+    if !config.access.raw_readers.is_subset(&config.access.readers) {
+        bail!("node `{}` state.access.rawReaders must be a subset of readers", node.id);
     }
     if config.global_keys.iter().any(|key| key.trim().is_empty()) {
         bail!("node `{}` state.globalKeys must contain non-empty keys", node.id);
@@ -174,6 +197,7 @@ pub(super) fn node_state_config(
 pub(super) fn node_state_policy(config: &WorkflowNodeStateConfig) -> NodeStatePolicy {
     NodeStatePolicy {
         readers: AccessRule::only(config.access.readers.clone()),
+        raw_readers: AccessRule::only(config.access.raw_readers.clone()),
         ..Default::default()
     }
 }
@@ -385,6 +409,11 @@ pub(super) async fn compile_with_path(
 
     let executable = dsl.nodes.iter().filter(|node| is_executable(node)).collect::<Vec<_>>();
     let executable_ids = executable.iter().map(|node| node.id.clone()).collect::<HashSet<_>>();
+    for id in &dsl.input_schema.raw_readers {
+        if !executable_ids.contains(id) {
+            bail!("workflow input rawReaders references invalid node `{id}`");
+        }
+    }
     let end_ids = dsl
         .nodes
         .iter()
@@ -394,14 +423,17 @@ pub(super) async fn compile_with_path(
     let start_id = starts[0].id.as_str();
 
     validate_edges(&dsl.edges, &nodes, &executable_ids, &end_ids, start_id)?;
-    let state = Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({}))?));
+    let state = Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state_with_policy(
+        json!({}),
+        dsl.input_schema.raw_readers.clone(),
+        dsl.input_schema.sensitive_fields.clone(),
+    )?));
     // Install static namespace policies before any node can create dynamic keys.
     for node in &executable {
         let state_config = node_state_config(node, &executable_ids)?;
         state
             .lock()
             .map_err(|_| anyhow!("workflow state lock is poisoned"))?
-            .runtime_state()
             .configure_node(&node.id, node_state_policy(&state_config));
     }
 
@@ -549,7 +581,7 @@ pub(super) async fn compile_with_path(
         Arc::clone(&state),
         workflow_id,
         fingerprint,
-    ));
+    )?);
     let graph = graph
         .compile()?
         .with_checkpointer_arc(Arc::clone(&state_checkpointer) as Arc<dyn Checkpointer>);
@@ -623,7 +655,10 @@ fn add_terminate_node(graph: StateGraph, node: &WorkflowNode, on_event: Option<C
                 "label": label.unwrap_or_else(|| "Terminate workflow".to_string()),
             });
             if let Some(on_event) = on_event {
-                let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+                send_guarded_event(
+                    &on_event,
+                    StreamEvent::custom(&id, "workflow.node_result", event.clone()),
+                );
             }
             Ok(NodeOutput::new()
                 .with_update(WORKFLOW_TERMINATED_KEY, Value::Bool(true))
@@ -805,12 +840,14 @@ mod tests {
                 fields: vec![WorkflowInterfaceField {
                     key: "summary".to_string(),
                 }],
+                ..Default::default()
             })
             .is_ok()
         );
         assert!(
             validate_output_schema(&WorkflowInterfaceSchema {
                 fields: vec![WorkflowInterfaceField { key: " ".to_string() }],
+                ..Default::default()
             })
             .is_err()
         );
@@ -824,6 +861,7 @@ mod tests {
                         key: "summary".to_string(),
                     },
                 ],
+                ..Default::default()
             })
             .is_err()
         );
@@ -837,6 +875,18 @@ mod tests {
             data: json!({"state": {"access": {"readers": ["extractor", "missing"]}}}),
         };
         let executable = HashSet::from(["extractor".to_string()]);
+
+        assert!(node_state_config(&node, &executable).is_err());
+    }
+
+    #[test]
+    fn node_state_config_requires_raw_readers_to_be_visible_readers() {
+        let node = WorkflowNode {
+            id: "extractor".to_string(),
+            kind: "process".to_string(),
+            data: json!({"state": {"access": {"readers": ["reviewer"], "rawReaders": ["other"]}}}),
+        };
+        let executable = HashSet::from(["extractor".to_string(), "reviewer".to_string(), "other".to_string()]);
 
         assert!(node_state_config(&node, &executable).is_err());
     }
@@ -1090,6 +1140,22 @@ mod tests {
                 "input": {"text": "hello"},
                 "result": {"uppercase": "HELLO"},
             }]),
+        );
+    }
+
+    #[test]
+    fn redacts_agent_output_across_stream_chunk_boundaries() {
+        let mut first = Event::new("first");
+        first.llm_response.content = Some(Content::new("model").with_text("Contact alice@"));
+        let mut second = Event::new("second");
+        second.llm_response.content = Some(Content::new("model").with_text("example.com"));
+
+        let updates = agent_output_updates(&[first, second], "agent", "agent", "model", None, &[], Some("answer"));
+
+        assert_eq!(updates["answer"], "Contact [EMAIL REDACTED]");
+        assert_eq!(
+            updates["workflow.trace"]["messages"],
+            json!([{"role": "assistant", "content": "Contact [EMAIL REDACTED]"}])
         );
     }
 

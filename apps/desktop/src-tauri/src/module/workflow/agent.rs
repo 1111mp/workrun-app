@@ -36,7 +36,10 @@ pub(super) async fn add_local_agent_node(
     let mut agent = LlmAgentBuilder::new(id.clone())
         .description(description)
         .instruction(instruction)
-        .model(create_model(&model, config)?);
+        .model(create_model(&model, config)?)
+        .input_guardrails(input_guardrails())
+        .output_guardrails(output_guardrails())
+        .tool_guardrails(tool_guardrails());
     if !skills.is_empty() {
         agent = agent
             .with_skills(adk_rust::skill::SkillIndex::new(skills.clone()))
@@ -67,6 +70,7 @@ pub(super) async fn add_local_agent_node(
             on_event.clone(),
             Arc::clone(&tool_calls),
             Arc::clone(&tool_trace),
+            Arc::clone(&state),
             max_tool_calls,
             tool_timeout_seconds.into(),
         )));
@@ -282,9 +286,9 @@ impl Node for StreamingAgentNode {
             .state
             .lock()
             .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))
-            .and_then(|mut state| {
+            .and_then(|state| {
                 state
-                    .node_input(self.id.clone())
+                    .agent_input(&self.id)
                     .map_err(|error| graph_node_error(&self.id, error))
             })
         {
@@ -306,11 +310,13 @@ impl Node for StreamingAgentNode {
                         {
                             events.push(data.clone());
                         }
-                        // ADK 2.0 applies state only from `Updates` emitted by
-                        // this wrapper. Keep the inner agent's streamed tokens,
-                        // but replace its updates with the workflow trace below.
-                        if !matches!(event, StreamEvent::Updates { .. }) {
-                            yield Ok(event);
+                        // ADK 2.1 emits raw SSE chunks before output guardrails run.
+                        // Hold message and agent payload events until the complete
+                        // response can be redacted across chunk boundaries.
+                        if !matches!(event, StreamEvent::Updates { .. } | StreamEvent::Message { .. })
+                            && !matches!(&event, StreamEvent::Custom { event_type, .. } if event_type == "agent_event")
+                        {
+                            yield Ok(redact_stream_event(event));
                         }
                     }
                     Err(error) => {
@@ -318,6 +324,15 @@ impl Node for StreamingAgentNode {
                         return;
                     }
                 }
+            }
+
+            let parsed_events = events
+                .iter()
+                .filter_map(|event| serde_json::from_value::<Event>(event.clone()).ok())
+                .collect::<Vec<_>>();
+            let response = redact_text(&agent_response_text(&parsed_events));
+            if !response.is_empty() {
+                yield Ok(StreamEvent::message(node.name(), &response, true));
             }
 
             if let Err(error) = node.store_streamed_events(key, events) {
@@ -348,10 +363,18 @@ pub(super) fn agent_input_mapper(
         let input = state
             .lock()
             .ok()
-            .and_then(|mut state| state.node_input(node_id.clone()).ok())
+            .and_then(|state| state.agent_input(&node_id).ok())
             .unwrap_or(Value::Null);
         Content::new("user").with_text(serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string()))
     }
+}
+
+fn agent_response_text(events: &[adk_rust::Event]) -> String {
+    events
+        .iter()
+        .filter_map(|event| event.content())
+        .flat_map(|content| content.parts.iter().filter_map(|part| part.text()))
+        .collect()
 }
 
 pub(super) fn agent_output_updates(
@@ -363,19 +386,10 @@ pub(super) fn agent_output_updates(
     tool_calls: &[Value],
     output_key: Option<&str>,
 ) -> HashMap<String, Value> {
-    let messages = events
-        .iter()
-        .filter_map(|event| event.content())
-        .map(|content| {
-            content
-                .parts
-                .iter()
-                .filter_map(|part| part.text())
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .filter(|text| !text.is_empty())
-        .map(|content| json!({ "role": "assistant", "content": content }))
+    let response = redact_text(&agent_response_text(events));
+    let messages = (!response.is_empty())
+        .then(|| json!({ "role": "assistant", "content": response }))
+        .into_iter()
         .collect::<Vec<_>>();
     let mut event = json!({
         "nodeId": node_id,
@@ -384,10 +398,14 @@ pub(super) fn agent_output_updates(
         "messages": messages,
     });
     if !tool_calls.is_empty() {
-        event["toolCalls"] = Value::Array(tool_calls.to_vec());
+        event["toolCalls"] = redact_json(&Value::Array(tool_calls.to_vec()));
     }
+    let event = redact_json(&event);
     if let Some(on_event) = on_event {
-        let _ = on_event.send(StreamEvent::custom(node_id, "workflow.node_result", event.clone()));
+        send_guarded_event(
+            on_event,
+            StreamEvent::custom(node_id, "workflow.node_result", event.clone()),
+        );
     }
     let mut updates = HashMap::from([
         ("workflow.last_node".to_string(), json!(node_id)),

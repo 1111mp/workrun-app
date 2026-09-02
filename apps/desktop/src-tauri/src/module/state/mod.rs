@@ -27,6 +27,7 @@ impl AccessRule {
 #[serde(rename_all = "camelCase")]
 pub struct NodeStatePolicy {
     pub readers: AccessRule,
+    pub raw_readers: AccessRule,
     pub writers: AccessRule,
     pub policy_editors: AccessRule,
 }
@@ -35,6 +36,7 @@ impl Default for NodeStatePolicy {
     fn default() -> Self {
         Self {
             readers: AccessRule::only([] as [&str; 0]),
+            raw_readers: AccessRule::only([] as [&str; 0]),
             writers: AccessRule::only([] as [&str; 0]),
             policy_editors: AccessRule::only([] as [&str; 0]),
         }
@@ -204,7 +206,24 @@ impl State {
     /// boundaries stay internal; ambiguous keys fail instead of silently
     /// choosing a source.
     fn input_snapshot(&self, requester: &str) -> Result<Value, StateError> {
+        self.input_snapshot_with_raw(self, requester, &BTreeSet::new(), false)
+    }
+
+    /// Build a scoped view from visible State, replacing only namespaces whose
+    /// owners explicitly granted this requester raw access.
+    fn input_snapshot_with_raw(
+        &self,
+        raw: &Self,
+        requester: &str,
+        raw_global_keys: &BTreeSet<String>,
+        allow_raw_namespaces: bool,
+    ) -> Result<Value, StateError> {
         let mut input = self.global.clone();
+        for key in raw_global_keys {
+            if let Some(value) = raw.global.get(key) {
+                input.insert(key.clone(), value.clone());
+            }
+        }
         let mut sources = self
             .global
             .keys()
@@ -215,7 +234,12 @@ impl State {
                 continue;
             }
             let source = format!("node.{owner}");
-            for (key, value) in &space.values {
+            let values = if allow_raw_namespaces && owner != requester && space.policy.raw_readers.allows(requester) {
+                raw.nodes.get(owner).map(|space| &space.values).unwrap_or(&space.values)
+            } else {
+                &space.values
+            };
+            for (key, value) in values {
                 if let Some(first_source) = sources.insert(key.clone(), source.clone()) {
                     return Err(StateError::InputKeyConflict {
                         key: key.clone(),
@@ -288,6 +312,10 @@ impl NodeStateUpdate {
 
     pub fn from_object(value: serde_json::Map<String, Value>) -> Self {
         Self(value.into_iter().collect())
+    }
+
+    pub fn map_values(&self, mut map: impl FnMut(&Value) -> Value) -> Self {
+        Self(self.0.iter().map(|(key, value)| (key.clone(), map(value))).collect())
     }
 
     /// Values that must also be visible to graph-level routing after this node
@@ -411,6 +439,31 @@ impl RuntimeState<'_> {
     }
     pub fn apply(&mut self, patch: &StatePatch) -> Result<(), StateError> {
         self.state.apply(Actor::Runtime, patch)
+    }
+}
+
+impl State {
+    pub fn runtime_global_keys(&self) -> BTreeSet<String> {
+        self.global.keys().cloned().collect()
+    }
+
+    pub fn scoped_visible_input(&self, requester: &str) -> Result<Value, StateError> {
+        self.input_snapshot(requester)
+    }
+
+    pub fn scoped_mixed_input(
+        &self,
+        raw: &Self,
+        requester: &str,
+        raw_global_keys: &BTreeSet<String>,
+    ) -> Result<Value, StateError> {
+        self.input_snapshot_with_raw(raw, requester, raw_global_keys, true)
+    }
+
+    pub fn namespace_allows_raw(&self, owner: &str, requester: &str) -> bool {
+        self.nodes
+            .get(owner)
+            .is_some_and(|space| space.policy.raw_readers.allows(requester))
     }
 }
 

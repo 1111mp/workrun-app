@@ -122,7 +122,7 @@ function getStringArray(data: Record<string, unknown>, key: string) {
 function getNodeStateConfig(data: Record<string, unknown>) {
   const value = data.state;
   if (typeof value !== 'object' || value === null) {
-    return { readers: [], globalKeys: [] };
+    return { readers: [], rawReaders: [], globalKeys: [] };
   }
   const state = value as Record<string, unknown>;
   const access =
@@ -131,6 +131,7 @@ function getNodeStateConfig(data: Record<string, unknown>) {
       : {};
   return {
     readers: getStringArray(access, 'readers'),
+    rawReaders: getStringArray(access, 'rawReaders'),
     globalKeys: getStringArray(state, 'globalKeys'),
   };
 }
@@ -1600,6 +1601,7 @@ function NodeStateFields({
 }) {
   const config = getNodeStateConfig(node.data);
   const readers = config.readers.filter((id) => id !== node.id);
+  const rawReaders = config.rawReaders.filter((id) => readers.includes(id));
   const availableReaders = executableNodes
     .filter((candidate) => candidate.id !== node.id)
     .map((candidate) => ({
@@ -1613,7 +1615,15 @@ function NodeStateFields({
     }));
   const setReaders = (nextReaders: string[]) =>
     onChange({
-      access: { readers: nextReaders },
+      access: {
+        readers: nextReaders,
+        rawReaders: rawReaders.filter((id) => nextReaders.includes(id)),
+      },
+      globalKeys: config.globalKeys,
+    });
+  const setRawReaders = (nextRawReaders: string[]) =>
+    onChange({
+      access: { readers, rawReaders: nextRawReaders },
       globalKeys: config.globalKeys,
     });
 
@@ -1634,6 +1644,20 @@ function NodeStateFields({
             onChange={setReaders}
           />
         </Field>
+        <Field>
+          <Label>Raw state readers</Label>
+          <FieldDescription>
+            Selected readers receive this node’s original values. Agent prompts
+            remain redacted; only their tools can use these values.
+          </FieldDescription>
+          <NodeCombobox
+            nodes={availableReaders.filter((candidate) =>
+              readers.includes(candidate.id),
+            )}
+            selectedIds={rawReaders}
+            onChange={setRawReaders}
+          />
+        </Field>
       </InspectorSection>
       {supportsGlobalPublication(node.type) ? (
         <InspectorSection
@@ -1648,7 +1672,7 @@ function NodeStateFields({
             placeholder='summary, score'
             onChange={(value) =>
               onChange({
-                access: { readers },
+                access: { readers, rawReaders },
                 globalKeys: value
                   .split(',')
                   .map((key) => key.trim())

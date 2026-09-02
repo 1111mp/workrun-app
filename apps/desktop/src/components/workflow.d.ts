@@ -43,6 +43,8 @@ type WorkflowSkillRef = {
 type WorkflowNodeStateConfig = {
   access?: {
     readers?: string[];
+    /** Readers that may receive this node's original, unredacted namespace. */
+    rawReaders?: string[];
   };
   /** Keys emitted by this node that should be published to shared global State. */
   globalKeys?: string[];
@@ -54,6 +56,10 @@ type WorkflowSettings = {
   mode: WorkflowMode;
   inputSchema: {
     fields: WorkflowInput[];
+    /** Nodes whose tools or ordinary execution may read original run inputs. */
+    rawReaders?: string[];
+    /** Input keys replaced in visible State regardless of automatic detection. */
+    sensitiveFields?: string[];
   };
   outputSchema?: {
     fields: WorkflowInput[];

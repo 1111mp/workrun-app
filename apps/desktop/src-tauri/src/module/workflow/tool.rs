@@ -12,6 +12,7 @@ pub(super) struct ManagedTool {
     on_event: Option<Channel<StreamEvent>>,
     tool_calls: Arc<AtomicU32>,
     tool_trace: Arc<Mutex<Vec<Value>>>,
+    state: SharedWorkflowState,
     max_tool_calls: u32,
     timeout_seconds: u64,
 }
@@ -24,6 +25,7 @@ impl ManagedTool {
         on_event: Option<Channel<StreamEvent>>,
         tool_calls: Arc<AtomicU32>,
         tool_trace: Arc<Mutex<Vec<Value>>>,
+        state: SharedWorkflowState,
         max_tool_calls: u32,
         timeout_seconds: u64,
     ) -> Self {
@@ -34,6 +36,7 @@ impl ManagedTool {
             on_event,
             tool_calls,
             tool_trace,
+            state,
             max_tool_calls,
             timeout_seconds,
         }
@@ -66,6 +69,8 @@ impl Tool for ManagedTool {
             )));
         }
 
+        ensure_tool_args_safe(&args)?;
+
         validate_tool_value(&self.definition.input_schema, &args, "input")?;
 
         if self.definition.execution_policy == ToolExecutionPolicy::AskEveryTime {
@@ -76,23 +81,26 @@ impl Tool for ManagedTool {
             let approved = ToolApprovalRegistry::global()
                 .request_approval(request_id.clone(), fingerprint.clone(), || {
                     if let Some(on_event) = &self.on_event {
-                        let _ = on_event.send(StreamEvent::custom(
-                            &self.agent_node_id,
-                            "agent.tool_approval_required",
-                            json!({
-                                "requestId": request_id,
-                                "functionCallId": function_call_id,
-                                "fingerprint": fingerprint,
-                                "tool": self.name(),
-                                "name": self.definition.display_name,
-                                "description": self.definition.description,
-                                "input": args,
-                                "riskLevel": self.definition.risk_level,
-                                "permissions": self.definition.permissions,
-                                "source": self.definition.source,
-                                "sourceName": self.definition.source_name,
-                            }),
-                        ));
+                        send_guarded_event(
+                            on_event,
+                            StreamEvent::custom(
+                                &self.agent_node_id,
+                                "agent.tool_approval_required",
+                                json!({
+                                    "requestId": request_id,
+                                    "functionCallId": function_call_id,
+                                    "fingerprint": fingerprint,
+                                    "tool": self.name(),
+                                    "name": self.definition.display_name,
+                                    "description": self.definition.description,
+                                    "input": args,
+                                    "riskLevel": self.definition.risk_level,
+                                    "permissions": self.definition.permissions,
+                                    "source": self.definition.source,
+                                    "sourceName": self.definition.source_name,
+                                }),
+                            ),
+                        );
                     }
                 })
                 .await?;
@@ -103,65 +111,85 @@ impl Tool for ManagedTool {
         }
 
         if let Some(on_event) = &self.on_event {
-            let _ = on_event.send(StreamEvent::custom(
-                &self.agent_node_id,
-                "agent.tool_call",
-                json!({
-                    "tool": self.name(),
-                    "name": self.definition.display_name,
-                    "input": args,
-                }),
-            ));
+            send_guarded_event(
+                on_event,
+                StreamEvent::custom(
+                    &self.agent_node_id,
+                    "agent.tool_call",
+                    json!({
+                        "tool": self.name(),
+                        "name": self.definition.display_name,
+                        "input": args,
+                    }),
+                ),
+            );
         }
+        let execution_args = self
+            .state
+            .lock()
+            .map_err(|_| adk_rust::AdkError::tool("workflow state lock is poisoned"))?
+            .tool_args(&self.agent_node_id, &args)
+            .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+        validate_tool_value(&self.definition.input_schema, &execution_args, "input")?;
         let timeout = std::time::Duration::from_secs(self.timeout_seconds);
         let result = match &self.executor {
             ManagedToolExecutor::Process => {
-                let node_id = self.agent_node_id.clone();
-                let name = self.definition.name.clone();
-                let on_event = self.on_event.clone();
-                tokio::time::timeout(
+                let run = tokio::time::timeout(
                     timeout,
                     ProcessNodeRegistry::run_for_tool(
                         &self.definition.id,
-                        &args,
-                        Arc::new(move |chunk| {
-                            if let Some(on_event) = &on_event {
-                                let _ = on_event.send(StreamEvent::custom(
-                                    &node_id,
-                                    "agent.tool_output",
-                                    json!({ "tool": name, "stream": chunk.stream, "data": chunk.data }),
-                                ));
-                            }
-                        }),
+                        &execution_args,
+                        // Buffer process output so secrets split across chunks
+                        // cannot pass through the event channel undetected.
+                        Arc::new(|_| {}),
                     ),
                 )
                 .await
                 .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?
-                .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?
-                .result
+                .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+                if let Some(on_event) = &self.on_event {
+                    for (stream, data) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
+                        if !data.is_empty() {
+                            send_guarded_event(
+                                on_event,
+                                StreamEvent::custom(
+                                    &self.agent_node_id,
+                                    "agent.tool_output",
+                                    json!({ "tool": self.name(), "stream": stream, "data": data }),
+                                ),
+                            );
+                        }
+                    }
+                }
+                run.result
             },
-            ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, args.clone()))
+            ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, execution_args))
                 .await
                 .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
         };
 
         validate_tool_value(&self.definition.output_schema, &result, "output")?;
 
-        let trace = json!({
+        let trace = redact_json(&json!({
             "tool": self.name(),
             "name": self.definition.display_name,
             "input": args,
             "result": result,
-        });
+        }));
         if let Ok(mut tool_trace) = self.tool_trace.lock() {
             tool_trace.push(trace.clone());
         }
 
         if let Some(on_event) = &self.on_event {
-            let _ = on_event.send(StreamEvent::custom(&self.agent_node_id, "agent.tool_result", trace));
+            send_guarded_event(
+                on_event,
+                StreamEvent::custom(&self.agent_node_id, "agent.tool_result", trace),
+            );
         }
 
-        Ok(result)
+        // Tool implementations may use raw values, but their result returns to
+        // the Agent and therefore crosses the visible-state boundary again.
+        Ok(redact_json(&result))
     }
 }
 

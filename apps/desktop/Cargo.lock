@@ -19,6 +19,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da8c2c4894eab69797b17850315ae27535dfa43b4dda43f7ff7c91824af18b8d"
 dependencies = [
  "adk-core",
+ "adk-guardrail",
  "adk-skill",
  "adk-telemetry",
  "adk-tool",
@@ -10797,6 +10798,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workrun"
 version = "0.1.0"
 dependencies = [
+ "adk-agent",
  "adk-rust",
  "aes-gcm",
  "anyhow",
@@ -10818,6 +10820,7 @@ dependencies = [
  "once_cell",
  "open",
  "parking_lot",
+ "regex",
  "rmcp",
  "rustls",
  "semver 1.0.28",
