@@ -92,6 +92,15 @@ pub(super) fn ensure_tool_args_safe(args: &Value) -> adk_rust::Result<()> {
     Ok(())
 }
 
+pub(super) fn ensure_tool_args_resolved(args: &Value) -> adk_rust::Result<()> {
+    if let Some(path) = redacted_argument_path(args, "") {
+        return Err(adk_rust::AdkError::tool(format!(
+            "Tool argument `{path}` is still redacted; grant raw State access or configure a State Binding"
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn redact_text(text: &str) -> String {
     let (text, _) = PII_REDACTOR.redact(text);
     let text = redact_china_pii(&text);
@@ -225,6 +234,29 @@ fn contains_secret_json(value: &Value) -> bool {
         Value::String(text) => contains_secret(text),
         _ => false,
     }
+}
+
+fn redacted_argument_path(value: &Value, path: &str) -> Option<String> {
+    match value {
+        Value::Object(object) => object.iter().find_map(|(key, value)| {
+            let path = if path.is_empty() {
+                key.clone()
+            } else {
+                format!("{path}.{key}")
+            };
+            redacted_argument_path(value, &path)
+        }),
+        Value::Array(values) => values
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| redacted_argument_path(value, &format!("{path}[{index}]"))),
+        Value::String(text) if is_redaction_marker(text) => Some(path.to_string()),
+        _ => None,
+    }
+}
+
+fn is_redaction_marker(value: &str) -> bool {
+    value.starts_with('[') && value.ends_with(']') && value.contains("REDACTED")
 }
 
 fn contains_secret(text: &str) -> bool {
@@ -427,6 +459,17 @@ mod tests {
             .await;
 
         assert!(matches!(decision, ToolCallDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn blocks_tool_arguments_with_nested_redaction_markers() {
+        let error = ensure_tool_args_resolved(&json!({
+            "recipient": {"email": "[EMAIL REDACTED]"}
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("recipient.email"));
+        assert!(ensure_tool_args_resolved(&json!({"recipient": "alice@example.com"})).is_ok());
     }
 
     #[test]

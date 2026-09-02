@@ -1,6 +1,6 @@
 //! Boundary between Workrun's access-controlled State and ADK's graph state.
 
-use super::{redact_json, visible_input_state};
+use super::{ToolStateBinding, redact_json, visible_input_state};
 use crate::{
     config::{decrypt_data_with_key, encrypt_data_with_key},
     module::state::{NodeState, NodeStatePolicy, NodeStateUpdate, RuntimeState, State as WorkrunState, StateError},
@@ -138,22 +138,29 @@ impl WorkflowStateBridge {
     /// Resolve values hidden from an Agent immediately before its tool runs.
     /// Only argument keys already selected by the Agent are replaced, so raw
     /// State cannot expand a tool call beyond its declared schema.
-    pub fn tool_args(&self, node_id: &str, args: &Value) -> Result<Value, StateError> {
+    pub fn tool_args(&self, node_id: &str, args: &Value, bindings: &[ToolStateBinding]) -> Result<Value> {
         let visible = self.visible_state.scoped_visible_input(node_id)?;
         let mixed =
             self.visible_state
                 .scoped_mixed_input(&self.raw_state, node_id, &self.raw_global_keys_for(node_id))?;
         let mut resolved = args.clone();
-        let (Some(args), Some(visible), Some(mixed)) =
-            (resolved.as_object_mut(), visible.as_object(), mixed.as_object())
-        else {
-            return Ok(resolved);
-        };
-        for (key, value) in args {
-            if visible.get(key) != mixed.get(key)
-                && let Some(raw_value) = mixed.get(key)
-            {
-                *value = raw_value.clone();
+        // Same-path recovery only replaces leaves the Agent already selected;
+        // it must not expose sibling raw fields from a containing object.
+        overlay_authorized_raw(&mut resolved, &visible, &mixed);
+        for binding in bindings {
+            let value = value_at_path(&mixed, &binding.state_path).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Tool State Binding source `{}` is unavailable to node `{node_id}`",
+                    binding.state_path
+                )
+            })?;
+            // Explicit bindings still require the Agent to include the target
+            // argument, keeping the eventual call inside its proposed shape.
+            if !set_existing_path(&mut resolved, &binding.argument_path, value.clone()) {
+                anyhow::bail!(
+                    "Tool State Binding target `{}` is missing from the proposed arguments",
+                    binding.argument_path
+                );
             }
         }
         Ok(resolved)
@@ -257,6 +264,74 @@ impl WorkflowStateBridge {
             global_owners: checkpoint.global_owners,
         })
     }
+}
+
+fn overlay_authorized_raw(target: &mut Value, visible: &Value, mixed: &Value) {
+    match target {
+        Value::Object(target) => {
+            for (key, target_value) in target {
+                let (Some(visible_value), Some(mixed_value)) = (visible.get(key), mixed.get(key)) else {
+                    continue;
+                };
+                overlay_authorized_raw(target_value, visible_value, mixed_value);
+            }
+        },
+        Value::Array(target) => {
+            let (Some(visible), Some(mixed)) = (visible.as_array(), mixed.as_array()) else {
+                return;
+            };
+            for (index, target_value) in target.iter_mut().enumerate() {
+                let (Some(visible_value), Some(mixed_value)) = (visible.get(index), mixed.get(index)) else {
+                    continue;
+                };
+                overlay_authorized_raw(target_value, visible_value, mixed_value);
+            }
+        },
+        _ if visible != mixed => *target = mixed.clone(),
+        _ => {},
+    }
+}
+
+fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.').try_fold(value, |value, segment| match value {
+        Value::Object(object) => object.get(segment),
+        Value::Array(array) => segment.parse::<usize>().ok().and_then(|index| array.get(index)),
+        _ => None,
+    })
+}
+
+fn set_existing_path(value: &mut Value, path: &str, replacement: Value) -> bool {
+    let mut segments = path.split('.').peekable();
+    let mut current = value;
+    while let Some(segment) = segments.next() {
+        if segments.peek().is_none() {
+            return match current {
+                Value::Object(object) if object.contains_key(segment) => {
+                    object.insert(segment.to_string(), replacement);
+                    true
+                },
+                Value::Array(array) => segment
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| array.get_mut(index))
+                    .map(|value| *value = replacement)
+                    .is_some(),
+                _ => false,
+            };
+        }
+        current = match current {
+            Value::Object(object) => match object.get_mut(segment) {
+                Some(value) => value,
+                None => return false,
+            },
+            Value::Array(array) => match segment.parse::<usize>().ok().and_then(|index| array.get_mut(index)) {
+                Some(value) => value,
+                None => return false,
+            },
+            _ => return false,
+        };
+    }
+    false
 }
 
 impl WorkflowStateCheckpointer {
@@ -495,9 +570,79 @@ mod tests {
         );
         assert_eq!(
             bridge
-                .tool_args("reviewer", &json!({"email": "[EMAIL REDACTED]"}))
+                .tool_args("reviewer", &json!({"email": "[EMAIL REDACTED]"}), &[])
                 .unwrap(),
             json!({"email": "alice@example.com"})
+        );
+    }
+
+    #[test]
+    fn tool_args_restore_nested_same_path_without_exposing_siblings() {
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge.configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["agent"]),
+                raw_readers: AccessRule::only(["agent"]),
+                ..Default::default()
+            },
+        );
+        bridge
+            .apply_node_update(
+                "extractor",
+                NodeStateUpdate::new().set(
+                    "customer",
+                    json!({"email": "alice@example.com", "phone": "13800138000"}),
+                ),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            bridge
+                .tool_args("agent", &json!({"customer": {"email": "[EMAIL REDACTED]"}}), &[])
+                .unwrap(),
+            json!({"customer": {"email": "alice@example.com"}})
+        );
+    }
+
+    #[test]
+    fn explicit_tool_binding_maps_an_authorized_state_path() {
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge.configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["agent", "observer"]),
+                raw_readers: AccessRule::only(["agent"]),
+                ..Default::default()
+            },
+        );
+        bridge
+            .apply_node_update(
+                "extractor",
+                NodeStateUpdate::new()
+                    .set("customer", json!({"email": "alice@example.com"}))
+                    .set("recipient", json!("fallback@example.com")),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+        let bindings = [ToolStateBinding {
+            tool_id: "send-email".to_string(),
+            argument_path: "recipient".to_string(),
+            state_path: "customer.email".to_string(),
+        }];
+
+        assert_eq!(
+            bridge
+                .tool_args("agent", &json!({"recipient": "[EMAIL REDACTED]"}), &bindings)
+                .unwrap(),
+            json!({"recipient": "alice@example.com"})
+        );
+        assert_eq!(
+            bridge
+                .tool_args("observer", &json!({"recipient": "[EMAIL REDACTED]"}), &bindings)
+                .unwrap(),
+            json!({"recipient": "[EMAIL REDACTED]"})
         );
     }
 

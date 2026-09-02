@@ -77,6 +77,15 @@ use tauri::ipc::Channel;
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 pub(super) type SharedWorkflowState = Arc<Mutex<WorkflowStateBridge>>;
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ToolStateBinding {
+    tool_id: String,
+    argument_path: String,
+    state_path: String,
+}
+
 pub(super) fn send_guarded_event(channel: &Channel<StreamEvent>, event: StreamEvent) {
     let _ = channel.send(redact_stream_event(event));
 }

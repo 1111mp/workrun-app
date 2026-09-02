@@ -36,6 +36,14 @@ type WorkflowSkillRef = {
   name: string;
 };
 
+type WorkflowToolStateBinding = {
+  toolId: string;
+  /** Dot-separated path in the Tool's arguments. */
+  argumentPath: string;
+  /** Dot-separated path in the Agent's scoped State. */
+  statePath: string;
+};
+
 /**
  * Per-node State settings. A node always owns its own namespace; `readers`
  * only grants other executable nodes a read-only view of that namespace.
@@ -78,6 +86,7 @@ type WorkflowAgentNodeData = WorkflowNodeStateConfig & {
   topP?: number;
   skillRefs?: WorkflowSkillRef[];
   toolIds?: string[];
+  toolStateBindings?: WorkflowToolStateBinding[];
   maxToolCalls?: number;
   toolTimeoutSeconds?: number;
 };
@@ -102,6 +111,7 @@ type WorkflowCodeActAgentNodeData = WorkflowNodeStateConfig & {
   description: string;
   instruction: string;
   toolIds?: string[];
+  toolStateBindings?: WorkflowToolStateBinding[];
   maxIterations?: number;
   maxToolCalls?: number;
   toolTimeoutSeconds?: number;

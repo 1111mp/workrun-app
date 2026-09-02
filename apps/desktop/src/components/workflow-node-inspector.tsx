@@ -119,6 +119,61 @@ function getStringArray(data: Record<string, unknown>, key: string) {
     : [];
 }
 
+function getToolStateBindings(data: Record<string, unknown>) {
+  const value = data.toolStateBindings;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((binding): WorkflowToolStateBinding[] => {
+    if (typeof binding !== 'object' || binding === null) return [];
+    const record = binding as Record<string, unknown>;
+    return typeof record.toolId === 'string' &&
+      typeof record.argumentPath === 'string' &&
+      typeof record.statePath === 'string'
+      ? [
+          {
+            toolId: record.toolId,
+            argumentPath: record.argumentPath,
+            statePath: record.statePath,
+          },
+        ]
+      : [];
+  });
+}
+
+function getToolArgumentPaths(schema: Record<string, unknown>) {
+  const paths = new Set<string>();
+  const walk = (value: unknown, prefix: string, depth: number) => {
+    if (depth >= 32 || typeof value !== 'object' || value === null) return;
+    const current = value as Record<string, unknown>;
+    if (typeof current.$ref === 'string' && current.$ref.startsWith('#/')) {
+      const target = current.$ref
+        .slice(2)
+        .split('/')
+        .map((segment) => segment.replaceAll('~1', '/').replaceAll('~0', '~'))
+        .reduce<unknown>((target, segment) => {
+          if (typeof target !== 'object' || target === null) return undefined;
+          return (target as Record<string, unknown>)[segment];
+        }, schema);
+      walk(target, prefix, depth + 1);
+      return;
+    }
+    for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+      const variants = current[keyword];
+      if (Array.isArray(variants)) {
+        variants.forEach((variant) => walk(variant, prefix, depth + 1));
+      }
+    }
+    const properties = current.properties;
+    if (typeof properties !== 'object' || properties === null) return;
+    for (const [name, property] of Object.entries(properties)) {
+      const path = prefix ? `${prefix}.${name}` : name;
+      paths.add(path);
+      walk(property, path, depth + 1);
+    }
+  };
+  walk(schema, '', 0);
+  return [...paths].sort();
+}
+
 function getNodeStateConfig(data: Record<string, unknown>) {
   const value = data.state;
   if (typeof value !== 'object' || value === null) {
@@ -611,6 +666,11 @@ function WorkflowNodeInspector({
       case 'agent':
       case 'codeact_agent': {
         const isCodeActAgent = node.type === 'codeact_agent';
+        const selectedToolIds = getStringArray(data, 'toolIds');
+        const stateBindings = getToolStateBindings(data);
+        const selectedTools = (tools.data ?? []).filter((tool) =>
+          selectedToolIds.includes(tool.id),
+        );
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
@@ -768,11 +828,25 @@ function WorkflowNodeInspector({
                 <Label>Available tools</Label>
                 <ToolCombobox
                   tools={tools.data ?? []}
-                  selectedIds={getStringArray(data, 'toolIds')}
+                  selectedIds={selectedToolIds}
                   isLoading={tools.isLoading}
-                  onChange={(toolIds) => updateData({ toolIds })}
+                  onChange={(toolIds) =>
+                    updateData({
+                      toolIds,
+                      toolStateBindings: stateBindings.filter((binding) =>
+                        toolIds.includes(binding.toolId),
+                      ),
+                    })
+                  }
                 />
               </Field>
+              <ToolStateBindingFields
+                tools={selectedTools}
+                bindings={stateBindings}
+                onChange={(toolStateBindings) =>
+                  updateData({ toolStateBindings })
+                }
+              />
               <FieldGroup className='grid grid-cols-2 gap-4'>
                 {isCodeActAgent && (
                   <Field>
@@ -1587,6 +1661,165 @@ function WorkflowNodeInspector({
         </div>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+function ToolStateBindingFields({
+  tools,
+  bindings,
+  onChange,
+}: {
+  tools: ToolDefinition[];
+  bindings: WorkflowToolStateBinding[];
+  onChange: (bindings: WorkflowToolStateBinding[]) => void;
+}) {
+  const toolArgumentPaths = new Map(
+    tools.map((tool) => [tool.id, getToolArgumentPaths(tool.inputSchema)]),
+  );
+  const bindableTools = tools.filter(
+    (tool) => (toolArgumentPaths.get(tool.id)?.length ?? 0) > 0,
+  );
+  const updateBinding = (
+    index: number,
+    patch: Partial<WorkflowToolStateBinding>,
+  ) =>
+    onChange(
+      bindings.map((binding, bindingIndex) =>
+        bindingIndex === index ? { ...binding, ...patch } : binding,
+      ),
+    );
+
+  return (
+    <FieldSet className='gap-3 rounded-lg border p-3'>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='flex flex-col gap-1'>
+          <FieldLegend>State bindings (advanced)</FieldLegend>
+          <FieldDescription>
+            Same-path values are restored automatically. Add a binding only when
+            a Tool argument uses a different State path.
+          </FieldDescription>
+        </div>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          disabled={bindableTools.length === 0}
+          onClick={() => {
+            const tool = bindableTools[0];
+            if (!tool) return;
+            onChange([
+              ...bindings,
+              {
+                toolId: tool.id,
+                argumentPath: toolArgumentPaths.get(tool.id)?.[0] ?? '',
+                statePath: '',
+              },
+            ]);
+          }}
+        >
+          <PlusIcon data-icon='inline-start' aria-hidden='true' />
+          Add binding
+        </Button>
+      </div>
+      {bindings.length > 0 ? (
+        <FieldGroup className='gap-3'>
+          {bindings.map((binding, index) => {
+            const argumentPaths = toolArgumentPaths.get(binding.toolId) ?? [];
+            return (
+              <Field
+                key={`${binding.toolId}-${binding.argumentPath}-${index}`}
+                className='grid grid-cols-[minmax(8rem,0.8fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_auto] items-end gap-2'
+              >
+                <Field>
+                  <Label>Tool</Label>
+                  <Select
+                    value={binding.toolId}
+                    onValueChange={(toolId) => {
+                      if (!toolId) return;
+                      updateBinding(index, {
+                        toolId,
+                        argumentPath: toolArgumentPaths.get(toolId)?.[0] ?? '',
+                      });
+                    }}
+                  >
+                    <SelectTrigger aria-label={`Binding ${index + 1} Tool`}>
+                      <SelectValue placeholder='Select a Tool'>
+                        {(toolId: string | null) =>
+                          toolId
+                            ? (bindableTools.find((tool) => tool.id === toolId)
+                                ?.displayName ?? 'Unavailable Tool')
+                            : 'Select a Tool'
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {bindableTools.map((tool) => (
+                          <SelectItem key={tool.id} value={tool.id}>
+                            {tool.displayName}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <Label>Argument path</Label>
+                  <Select
+                    value={binding.argumentPath}
+                    onValueChange={(argumentPath) => {
+                      if (!argumentPath) return;
+                      updateBinding(index, { argumentPath });
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label={`Binding ${index + 1} argument path`}
+                    >
+                      <SelectValue placeholder='Select an argument' />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {argumentPaths.map((path) => (
+                          <SelectItem key={path} value={path}>
+                            {path}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <Label htmlFor={`binding-state-${index}`}>State path</Label>
+                  <Input
+                    id={`binding-state-${index}`}
+                    value={binding.statePath}
+                    placeholder='customer.email'
+                    onChange={(event) =>
+                      updateBinding(index, { statePath: event.target.value })
+                    }
+                  />
+                </Field>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-sm'
+                  aria-label={`Remove binding ${index + 1}`}
+                  onClick={() =>
+                    onChange(
+                      bindings.filter(
+                        (_, bindingIndex) => bindingIndex !== index,
+                      ),
+                    )
+                  }
+                >
+                  <Trash2Icon aria-hidden='true' />
+                </Button>
+              </Field>
+            );
+          })}
+        </FieldGroup>
+      ) : null}
+    </FieldSet>
   );
 }
 

@@ -52,10 +52,12 @@ pub(super) async fn add_codeact_agent_node(
     let profile_id = string_data(node, "modelProfileId")
         .ok_or_else(|| anyhow!("codeact_agent node `{id}` needs data.modelProfileId"))?;
     let tool_ids = string_array_data(node, "toolIds")?;
+    let mut state_bindings = tool_state_bindings(node, &tool_ids)?;
     let max_iterations = integer_data(node, "maxIterations", 8, 1, 50)?;
     let max_tool_calls = integer_data(node, "maxToolCalls", 8, 1, 50)?;
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
     let tools = ToolRegistry::resolve(&tool_ids).await?;
+    validate_tool_state_binding_schemas(node, &tools, &state_bindings)?;
     let model = model_catalog()
         .into_iter()
         .find(|model| model.id == profile_id)
@@ -75,6 +77,7 @@ pub(super) async fn add_codeact_agent_node(
         .tool_timeout(std::time::Duration::from_secs(tool_timeout_seconds.into()));
 
     for tool in tools {
+        let tool_bindings = state_bindings.remove(&tool.id).unwrap_or_default();
         let executor = match tool.source {
             ToolSource::Process => ManagedToolExecutor::Process,
             ToolSource::Mcp => ManagedToolExecutor::Mcp(McpServerRegistry::resolve_tool(&tool.id).await?.1),
@@ -87,6 +90,7 @@ pub(super) async fn add_codeact_agent_node(
             Arc::clone(&tool_calls),
             Arc::clone(&tool_trace),
             Arc::clone(&state),
+            tool_bindings,
             max_tool_calls,
             tool_timeout_seconds.into(),
         )));
