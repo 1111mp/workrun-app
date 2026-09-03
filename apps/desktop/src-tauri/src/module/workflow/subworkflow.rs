@@ -20,6 +20,7 @@ pub(super) fn add_subworkflow_node(
         on_event,
         state,
         global_keys: state_config.global_keys,
+        sensitive_fields: state_config.sensitive_fields,
         workflow_path,
     }))
 }
@@ -31,6 +32,7 @@ struct SubworkflowNode {
     on_event: Option<Channel<StreamEvent>>,
     state: SharedWorkflowState,
     global_keys: BTreeSet<String>,
+    sensitive_fields: BTreeSet<String>,
     workflow_path: Vec<String>,
 }
 
@@ -108,10 +110,11 @@ impl Node for SubworkflowNode {
             .state
             .lock()
             .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
-            .apply_node_update(
+            .apply_node_update_with_sensitive_fields(
                 &self.id,
                 NodeStateUpdate::from_object(outputs.clone()),
                 &self.global_keys,
+                &self.sensitive_fields,
             )
             .map_err(|error| graph_node_error(&self.id, error))?;
         let execution = workflow_trace(&result.state, &node_names);
@@ -124,7 +127,10 @@ impl Node for SubworkflowNode {
             "terminated": terminated,
         });
         if let Some(on_event) = &self.on_event {
-            let _ = on_event.send(StreamEvent::custom(&self.id, "workflow.node_result", event.clone()));
+            send_guarded_event(
+                on_event,
+                StreamEvent::custom(&self.id, "workflow.node_result", event.clone()),
+            );
         }
         let output = NodeOutput::new()
             .with_update(&resume_key, false)

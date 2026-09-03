@@ -27,6 +27,7 @@ import { PlusIcon, Trash2Icon } from 'lucide-react';
 type WorkflowSettingsPanelProps = {
   open: boolean;
   settings: WorkflowSettings;
+  executableNodes: { id: string; name: string }[];
   onOpenChange: (open: boolean) => void;
   onSettingsChange: (patch: Partial<WorkflowSettings>) => void;
 };
@@ -53,16 +54,49 @@ const inputTypeLabels = [
 function WorkflowSettingsPanel({
   open,
   settings,
+  executableNodes,
   onOpenChange,
   onSettingsChange,
 }: WorkflowSettingsPanelProps) {
   const updateInput = (inputId: string, patch: Partial<WorkflowInput>) => {
+    const current = settings.inputSchema.fields.find(
+      (input) => input.id === inputId,
+    );
+    const sensitiveFields = settings.inputSchema.sensitiveFields ?? [];
     onSettingsChange({
       inputSchema: {
+        ...settings.inputSchema,
         fields: settings.inputSchema.fields.map((input) =>
           input.id === inputId ? { ...input, ...patch } : input,
         ),
+        sensitiveFields:
+          current && patch.key && sensitiveFields.includes(current.key)
+            ? sensitiveFields.map((key) =>
+                key === current.key ? patch.key! : key,
+              )
+            : sensitiveFields,
       },
+    });
+  };
+
+  const setInputSensitive = (key: string, sensitive: boolean) => {
+    const fields = new Set(settings.inputSchema.sensitiveFields ?? []);
+    if (sensitive) fields.add(key);
+    else fields.delete(key);
+    onSettingsChange({
+      inputSchema: {
+        ...settings.inputSchema,
+        sensitiveFields: [...fields],
+      },
+    });
+  };
+
+  const setInputRawReader = (nodeId: string, allowed: boolean) => {
+    const readers = new Set(settings.inputSchema.rawReaders ?? []);
+    if (allowed) readers.add(nodeId);
+    else readers.delete(nodeId);
+    onSettingsChange({
+      inputSchema: { ...settings.inputSchema, rawReaders: [...readers] },
     });
   };
 
@@ -70,6 +104,7 @@ function WorkflowSettingsPanel({
     const index = settings.inputSchema.fields.length + 1;
     onSettingsChange({
       inputSchema: {
+        ...settings.inputSchema,
         fields: [
           ...settings.inputSchema.fields,
           {
@@ -85,10 +120,17 @@ function WorkflowSettingsPanel({
   };
 
   const removeInput = (inputId: string) => {
+    const removedKey = settings.inputSchema.fields.find(
+      (input) => input.id === inputId,
+    )?.key;
     onSettingsChange({
       inputSchema: {
+        ...settings.inputSchema,
         fields: settings.inputSchema.fields.filter(
           (input) => input.id !== inputId,
+        ),
+        sensitiveFields: (settings.inputSchema.sensitiveFields ?? []).filter(
+          (key) => key !== removedKey,
         ),
       },
     });
@@ -301,15 +343,65 @@ function WorkflowSettingsPanel({
                           </FieldDescription>
                         </FieldContent>
                       </Field>
+                      <Field
+                        orientation='horizontal'
+                        className='bg-muted/20 rounded-lg border p-3'
+                      >
+                        <FieldContent>
+                          <FieldLabel>Sensitive value</FieldLabel>
+                          <FieldDescription>
+                            Always replace this input in visible State.
+                          </FieldDescription>
+                        </FieldContent>
+                        <Switch
+                          checked={(
+                            settings.inputSchema.sensitiveFields ?? []
+                          ).includes(input.key)}
+                          onCheckedChange={(checked) =>
+                            setInputSensitive(input.key, checked)
+                          }
+                        />
+                      </Field>
                     </FieldGroup>
                   </FieldSet>
                 ))}
               </FieldGroup>
+              {executableNodes.length > 0 ? (
+                <FieldGroup className='gap-3 border-t pt-4'>
+                  <FieldLegend variant='label'>Raw input readers</FieldLegend>
+                  <FieldDescription>
+                    Ordinary nodes and Agent tools selected here may use the
+                    original run inputs. Agent prompts remain redacted.
+                  </FieldDescription>
+                  {executableNodes.map((node) => (
+                    <Field
+                      key={node.id}
+                      orientation='horizontal'
+                      className='bg-background rounded-lg border p-3'
+                    >
+                      <FieldLabel>{node.name}</FieldLabel>
+                      <Switch
+                        checked={(
+                          settings.inputSchema.rawReaders ?? []
+                        ).includes(node.id)}
+                        onCheckedChange={(checked) =>
+                          setInputRawReader(node.id, checked)
+                        }
+                      />
+                    </Field>
+                  ))}
+                </FieldGroup>
+              ) : null}
             </FieldSet>
             <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
                 <FieldLegend>Workflow outputs</FieldLegend>
-                <Button type='button' size='sm' variant='outline' onClick={addOutput}>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  onClick={addOutput}
+                >
                   <PlusIcon data-icon='inline-start' />
                   Add output
                 </Button>
@@ -321,7 +413,10 @@ function WorkflowSettingsPanel({
               </FieldDescription>
               <FieldGroup className='gap-4'>
                 {outputFields.map((output) => (
-                  <FieldSet key={output.id} className='bg-background gap-4 rounded-xl border p-4 shadow-xs'>
+                  <FieldSet
+                    key={output.id}
+                    className='bg-background gap-4 rounded-xl border p-4 shadow-xs'
+                  >
                     <div className='flex items-center justify-between gap-2'>
                       <FieldLegend variant='label'>
                         {output.label || 'Untitled output'}
@@ -338,19 +433,33 @@ function WorkflowSettingsPanel({
                     </div>
                     <FieldGroup className='grid gap-4 sm:grid-cols-2'>
                       <Field>
-                        <FieldLabel htmlFor={`workflow-output-label-${output.id}`}>Label</FieldLabel>
+                        <FieldLabel
+                          htmlFor={`workflow-output-label-${output.id}`}
+                        >
+                          Label
+                        </FieldLabel>
                         <Input
                           id={`workflow-output-label-${output.id}`}
                           value={output.label}
-                          onChange={(event) => updateOutput(output.id, { label: event.target.value })}
+                          onChange={(event) =>
+                            updateOutput(output.id, {
+                              label: event.target.value,
+                            })
+                          }
                         />
                       </Field>
                       <Field>
-                        <FieldLabel htmlFor={`workflow-output-key-${output.id}`}>State key</FieldLabel>
+                        <FieldLabel
+                          htmlFor={`workflow-output-key-${output.id}`}
+                        >
+                          State key
+                        </FieldLabel>
                         <Input
                           id={`workflow-output-key-${output.id}`}
                           value={output.key}
-                          onChange={(event) => updateOutput(output.id, { key: event.target.value })}
+                          onChange={(event) =>
+                            updateOutput(output.id, { key: event.target.value })
+                          }
                         />
                       </Field>
                     </FieldGroup>

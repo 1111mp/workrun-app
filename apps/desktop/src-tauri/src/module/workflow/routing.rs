@@ -32,7 +32,10 @@ pub(super) fn add_if_else_control_node(
                 "result": { "route": route, "label": label, "condition": condition },
             });
             if let Some(on_event) = on_event {
-                let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+                send_guarded_event(
+                    &on_event,
+                    StreamEvent::custom(&id, "workflow.node_result", event.clone()),
+                );
             }
             Ok(NodeOutput::new()
                 .with_update("workflow.last_node", json!(id))
@@ -85,7 +88,10 @@ pub(super) fn add_switch_control_node(
                 "result": { "route": route, "label": label, "condition": condition },
             });
             if let Some(on_event) = on_event {
-                let _ = on_event.send(StreamEvent::custom(&id, "workflow.node_result", event.clone()));
+                send_guarded_event(
+                    &on_event,
+                    StreamEvent::custom(&id, "workflow.node_result", event.clone()),
+                );
             }
             Ok(NodeOutput::new()
                 .with_update("workflow.last_node", json!(id))
@@ -518,7 +524,7 @@ mod tests {
         let bridge = Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({})).unwrap()));
         {
             let mut bridge_state = bridge.lock().unwrap();
-            bridge_state.runtime_state().configure_node(
+            bridge_state.configure_node(
                 "extractor",
                 NodeStatePolicy {
                     readers: AccessRule::only(["route"]),
@@ -526,8 +532,11 @@ mod tests {
                 },
             );
             bridge_state
-                .node_state("extractor")
-                .set("approved", json!(true))
+                .apply_node_update(
+                    "extractor",
+                    crate::module::state::NodeStateUpdate::new().set("approved", json!(true)),
+                    &BTreeSet::new(),
+                )
                 .unwrap();
         }
         let route = WorkflowNode {
@@ -573,6 +582,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(selected.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn routing_input_uses_owner_raw_acl_for_a_published_global_value() {
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge.configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["route"]),
+                raw_readers: AccessRule::only(["route"]),
+                ..Default::default()
+            },
+        );
+        bridge
+            .apply_node_update(
+                "extractor",
+                crate::module::state::NodeStateUpdate::new().set("email", json!("alice@example.com")),
+                &BTreeSet::from(["email".to_string()]),
+            )
+            .unwrap();
+        let bridge = Arc::new(Mutex::new(bridge));
+
+        assert_eq!(
+            routing_input(&bridge, "route").unwrap()["email"],
+            json!("alice@example.com")
+        );
     }
 
     #[tokio::test]

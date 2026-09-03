@@ -14,6 +14,7 @@ pub(super) fn add_process_node(
         on_event,
         state,
         global_keys: state_config.global_keys,
+        sensitive_fields: state_config.sensitive_fields,
     })
 }
 
@@ -24,6 +25,7 @@ struct ProcessWorkflowNode {
     on_event: Option<Channel<StreamEvent>>,
     state: SharedWorkflowState,
     global_keys: BTreeSet<String>,
+    sensitive_fields: BTreeSet<String>,
 }
 
 #[async_trait::async_trait]
@@ -44,24 +46,29 @@ impl Node for ProcessWorkflowNode {
             .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
             .node_input(&self.id)
             .map_err(|error| graph_node_error(&self.id, error))?;
-        let output_node_id = self.id.clone();
-        let name = self.name.clone();
-        let on_event = self.on_event.clone();
         let run = ProcessNodeRegistry::run_for_workflow(
             &self.process_node_id,
             &input,
-            Arc::new(move |chunk| {
-                if let Some(on_event) = &on_event {
-                    let _ = on_event.send(StreamEvent::custom(
-                        &output_node_id,
-                        "process.output",
-                        json!({ "name": name, "stream": chunk.stream, "data": chunk.data }),
-                    ));
-                }
-            }),
+            // The registry still captures complete stdout/stderr. Emitting only
+            // after completion prevents split credentials from escaping checks.
+            Arc::new(|_| {}),
         )
         .await
         .map_err(|error| graph_node_error(&self.id, error))?;
+        if let Some(on_event) = &self.on_event {
+            for (stream, data) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
+                if !data.is_empty() {
+                    send_guarded_event(
+                        on_event,
+                        StreamEvent::custom(
+                            &self.id,
+                            "process.output",
+                            json!({ "name": self.name, "stream": stream, "data": data }),
+                        ),
+                    );
+                }
+            }
+        }
         // Result keys are private by default; only this node's configured
         // `globalKeys` are promoted by the bridge.
         let update = crate::module::state::NodeStateUpdate::from_object(
@@ -71,9 +78,9 @@ impl Node for ProcessWorkflowNode {
             .state
             .lock()
             .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
-            .apply_node_update(&self.id, update, &self.global_keys)
+            .apply_node_update_with_sensitive_fields(&self.id, update, &self.global_keys, &self.sensitive_fields)
             .map_err(|error| graph_node_error(&self.id, error))?;
-        let event = json!({
+        let event = redact_json(&json!({
             "nodeId": self.id,
             "type": "process",
             "processNodeId": self.process_node_id,
@@ -82,9 +89,12 @@ impl Node for ProcessWorkflowNode {
             "stderr": run.stderr,
             "exitCode": run.execution.exit_code,
             "result": run.result,
-        });
+        }));
         if let Some(on_event) = &self.on_event {
-            let _ = on_event.send(StreamEvent::custom(&self.id, "workflow.node_result", event.clone()));
+            send_guarded_event(
+                on_event,
+                StreamEvent::custom(&self.id, "workflow.node_result", event.clone()),
+            );
         }
         let output = NodeOutput::new()
             .with_update("workflow.last_node", json!(self.id))

@@ -36,6 +36,14 @@ type WorkflowSkillRef = {
   name: string;
 };
 
+type WorkflowToolStateBinding = {
+  toolId: string;
+  /** Dot-separated path in the Tool's arguments. */
+  argumentPath: string;
+  /** Dot-separated path in the Agent's scoped State. */
+  statePath: string;
+};
+
 /**
  * Per-node State settings. A node always owns its own namespace; `readers`
  * only grants other executable nodes a read-only view of that namespace.
@@ -43,9 +51,13 @@ type WorkflowSkillRef = {
 type WorkflowNodeStateConfig = {
   access?: {
     readers?: string[];
+    /** Readers that may receive this node's original, unredacted namespace. */
+    rawReaders?: string[];
   };
   /** Keys emitted by this node that should be published to shared global State. */
   globalKeys?: string[];
+  /** Dot-separated output paths always redacted in this node's visible State. */
+  sensitiveFields?: string[];
 };
 
 type WorkflowSettings = {
@@ -54,6 +66,10 @@ type WorkflowSettings = {
   mode: WorkflowMode;
   inputSchema: {
     fields: WorkflowInput[];
+    /** Nodes whose tools or ordinary execution may read original run inputs. */
+    rawReaders?: string[];
+    /** Input keys replaced in visible State regardless of automatic detection. */
+    sensitiveFields?: string[];
   };
   outputSchema?: {
     fields: WorkflowInput[];
@@ -68,10 +84,13 @@ type WorkflowAgentNodeData = WorkflowNodeStateConfig & {
   instruction: string;
   /** Optional state key that receives the agent's complete final text. */
   outputKey?: string;
+  /** Optional JSON Schema string for structured Agent output. */
+  outputSchema?: string;
   temperature?: number;
   topP?: number;
   skillRefs?: WorkflowSkillRef[];
   toolIds?: string[];
+  toolStateBindings?: WorkflowToolStateBinding[];
   maxToolCalls?: number;
   toolTimeoutSeconds?: number;
 };
@@ -96,6 +115,9 @@ type WorkflowCodeActAgentNodeData = WorkflowNodeStateConfig & {
   description: string;
   instruction: string;
   toolIds?: string[];
+  toolStateBindings?: WorkflowToolStateBinding[];
+  /** Optional JSON Schema string for structured Agent output. */
+  outputSchema?: string;
   maxIterations?: number;
   maxToolCalls?: number;
   toolTimeoutSeconds?: number;
