@@ -15,6 +15,8 @@ dependencies = [
 [[package]]
 name = "adk-agent"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e150b28775ad28d4a4d0a49267a64298052346b8faf6f93ce075d025faecdcb8"
 dependencies = [
  "adk-core",
  "adk-guardrail",
@@ -38,6 +40,8 @@ dependencies = [
 [[package]]
 name = "adk-anthropic"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c11edf5ec930b32eff86b8f2a5b2ef23abcbd5a8811e280eefdd0308e70fcea"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -58,6 +62,8 @@ dependencies = [
 [[package]]
 name = "adk-artifact"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9f2a1a0e21ea464e1f4b8ad82194b9fc788ddea05f32893673ca264102e0ed5"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -68,6 +74,8 @@ dependencies = [
 [[package]]
 name = "adk-audio"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1033ed86d639cb7302de29480470f2e3d0dd993c231928a2ad11953e0e9906c8"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -89,6 +97,8 @@ dependencies = [
 [[package]]
 name = "adk-auth"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7e4a9e11fe022ba6f901a4cb32750d27251cac55fd4fefebc274b8ed9458ca1"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -106,6 +116,8 @@ dependencies = [
 [[package]]
 name = "adk-awp"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b240861303f39df04726836fabfd6f2ed87a9b0f20e4bf2b95b5ece296183d06"
 dependencies = [
  "adk-core",
  "arc-swap",
@@ -132,6 +144,8 @@ dependencies = [
 [[package]]
 name = "adk-browser"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d9ffd069a81a1abe1655fcffd8723ea067d6d1432569065b4d4f869c58db481"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -147,6 +161,8 @@ dependencies = [
 [[package]]
 name = "adk-code"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "436f59154a23b9f1333f8c580376d3bbda28aeb0fbfdad68bebe4360227fd9fe"
 dependencies = [
  "adk-core",
  "adk-sandbox",
@@ -166,6 +182,8 @@ dependencies = [
 [[package]]
 name = "adk-codeact-monty"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdad71082f70da2b368dc425eb90c1a6c0d525074e5ae5b6e54b1102209e540d"
 dependencies = [
  "adk-agent",
  "adk-code",
@@ -176,6 +194,8 @@ dependencies = [
 [[package]]
 name = "adk-computer-use"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7c05b3fe7a41c574bbdd35b041f909c22707bdcecad6952d87246e783316ba4"
 dependencies = [
  "adk-auth",
  "adk-core",
@@ -197,6 +217,8 @@ dependencies = [
 [[package]]
 name = "adk-core"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "040e96a250780592a2d9fb2e1813bcfa035d191494c383675b785ad36d889388"
 dependencies = [
  "async-trait",
  "chrono",
@@ -213,6 +235,8 @@ dependencies = [
 [[package]]
 name = "adk-eval"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a10bbeb3491636e2095e011a3fd2c28467c2b1b51bb2c2c8858377f6f3a9e51c"
 dependencies = [
  "adk-core",
  "adk-model",
@@ -231,6 +255,8 @@ dependencies = [
 [[package]]
 name = "adk-gemini"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5166b46d15d426d58f4e06838cd66bc535f695e683ea00d6e696539cc5162544"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -257,6 +283,8 @@ dependencies = [
 [[package]]
 name = "adk-graph"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61088da266986040901884ca089ab684c09f1ee82193849aa6407f722553f075"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -278,6 +306,8 @@ dependencies = [
 [[package]]
 name = "adk-guardrail"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71dcb5aedadb877a19124fce03b28d9818bbfb89ea466d91f3781b508bdfaeb8"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -293,6 +323,8 @@ dependencies = [
 [[package]]
 name = "adk-memory"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1128cd422b3e29473c19454502ec9085dcb8ba462fe0537464c1e82f4a846c17"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -305,6 +337,8 @@ dependencies = [
 [[package]]
 name = "adk-model"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b5170b6a23b7df96213d5062c0ecc9fd987c6a8cfed73db97d36b834b1a9e33"
 dependencies = [
  "adk-anthropic",
  "adk-core",
@@ -332,6 +366,8 @@ dependencies = [
 [[package]]
 name = "adk-payments"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccbf46c527d5cf411637ff676414aac8c3770378a7814b685cd4f5b78c189e8e"
 dependencies = [
  "adk-artifact",
  "adk-auth",
@@ -352,6 +388,8 @@ dependencies = [
 [[package]]
 name = "adk-plugin"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d7219fc87b03b06f8f349b1181140e61d002aa325a8db6840c3ce639462b730"
 dependencies = [
  "adk-core",
  "serde_json",
@@ -362,6 +400,8 @@ dependencies = [
 [[package]]
 name = "adk-rag"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3d7dd19dacf201776c38d706bbc67fd80c0d0298afd8b7442499ace089e6cd"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -375,6 +415,8 @@ dependencies = [
 [[package]]
 name = "adk-realtime"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d81b96b26706053a3cbe994219b15577080806d733a37cbe1f6d5ce21639eb3b"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -398,6 +440,8 @@ dependencies = [
 [[package]]
 name = "adk-runner"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31262e6bb997df8daa5bed8cc54bdefb3d92c84014c8715b937eb51731446bb0"
 dependencies = [
  "adk-artifact",
  "adk-core",
@@ -419,6 +463,8 @@ dependencies = [
 [[package]]
 name = "adk-rust"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71cc9684fdcf1bf323482a40c1bf589c944883ae81e9bd50e266a63b6bc2f9c2"
 dependencies = [
  "adk-agent",
  "adk-anthropic",
@@ -459,6 +505,8 @@ dependencies = [
 [[package]]
 name = "adk-rust-macros"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50f3f3d7d5ae81cdb5ca2b8530eec989885c54a2eff7c1acc8fcbeeb9d4c4ff5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -468,6 +516,8 @@ dependencies = [
 [[package]]
 name = "adk-sandbox"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaca26dc4fce7f1dcef2a4ca6d6ca9f35ce4b6a6850b636a66de295d10a09596"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -484,6 +534,8 @@ dependencies = [
 [[package]]
 name = "adk-server"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13d2e345e603b438f6c5476534dadf6c4e6d6bebdcdc53186c87305b0fb9cf73"
 dependencies = [
  "a2a-protocol-types",
  "adk-agent",
@@ -518,6 +570,8 @@ dependencies = [
 [[package]]
 name = "adk-session"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa07a7f4c885720ba4c991dd13be3f7ba8ab9d009589bf52f6b396946e9737ce"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -531,6 +585,8 @@ dependencies = [
 [[package]]
 name = "adk-skill"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e461ffe0bf1ca656e4ddf65c49e6402c2e142a324958bee44e86a359055bf5f"
 dependencies = [
  "adk-core",
  "adk-plugin",
@@ -549,6 +605,8 @@ dependencies = [
 [[package]]
 name = "adk-telemetry"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56a2070444d3220c60513f32f0438d79fdc74a2c987b01be150c47f4c33df9de"
 dependencies = [
  "thiserror 2.0.20",
  "tracing",
@@ -558,6 +616,8 @@ dependencies = [
 [[package]]
 name = "adk-tool"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c2af72d2b23b241d363ed0920724aa0ec6834684f91efa3346383e96dd6fd06"
 dependencies = [
  "adk-code",
  "adk-core",
@@ -1004,6 +1064,8 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 [[package]]
 name = "awp-types"
 version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cae26196b7dcd3e7b2ecea0fd64cf20abce5f814bbc6b9b3210483e1f7e3670"
 dependencies = [
  "chrono",
  "serde",

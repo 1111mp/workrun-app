@@ -14,7 +14,6 @@ mod routing;
 mod state_bridge;
 mod subworkflow;
 mod tool;
-mod tool_approval;
 
 pub(super) const WORKFLOW_TERMINATED_KEY: &str = "workflow.terminated";
 
@@ -31,7 +30,6 @@ use subworkflow::*;
 pub use subworkflow::inject_workflow_context as inject_subworkflow_context;
 pub use subworkflow::workflow_dsl as subworkflow_dsl;
 use tool::*;
-use tool_approval::*;
 
 #[cfg(not(test))]
 use crate::core::db::DBManager;
@@ -46,8 +44,9 @@ use crate::{
 };
 use adk_rust::{
     graph::{
-        AgentNode as AdkAgentNode, Checkpointer, END, Edge, EdgeTarget, ExecutionConfig, GraphError, Node, NodeContext,
-        NodeOutput, START, SqliteCheckpointer, State, StateGraph, StreamEvent, StreamMode,
+        AgentNode as AdkAgentNode, Checkpointer, END, Edge, EdgeTarget, ExecutionConfig, GraphError,
+        GraphToolConfirmationPause, Node, NodeContext, NodeOutput, START, SqliteCheckpointer, State, StateGraph,
+        StreamEvent, StreamMode,
     },
     model::{
         GeminiModel,
@@ -96,10 +95,6 @@ pub(crate) fn redact_event_for_transport(event: StreamEvent) -> StreamEvent {
 
 pub(crate) fn redact_state_for_transport(state: &State) -> State {
     redact_state(state)
-}
-
-pub async fn resolve_tool_approval(request_id: &str, fingerprint: &str, approved: bool) -> Result<()> {
-    ToolApprovalRegistry::global().resolve(request_id, fingerprint, approved)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +244,36 @@ pub struct WorkflowRunResult {
     pub interrupted: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolConfirmationDecisionRequest {
+    pub function_call_id: String,
+    pub fingerprint: String,
+    pub approved: bool,
+}
+
+#[derive(Debug)]
+struct ResumedToolConfirmation {
+    fingerprint: String,
+    decision: adk_rust::ToolConfirmationDecision,
+}
+
+#[async_trait::async_trait]
+impl adk_rust::ToolConfirmationHandler for ResumedToolConfirmation {
+    async fn decide(
+        &self,
+        request: &adk_rust::ToolConfirmationRequest,
+    ) -> adk_rust::Result<adk_rust::ToolConfirmationDecision> {
+        let actual = adk_rust::tool_call_fingerprint(&request.tool_name, &request.args);
+        if actual != self.fingerprint {
+            return Err(adk_rust::AdkError::tool(
+                "Tool confirmation no longer matches the requested arguments",
+            ));
+        }
+        Ok(self.decision)
+    }
+}
+
 pub struct CompiledWorkflow {
     graph: adk_rust::graph::CompiledGraph,
     plan: WorkflowPlan,
@@ -264,6 +289,7 @@ impl CompiledWorkflow {
         initial_state: State,
         thread_id: &str,
         resume: bool,
+        tool_confirmation: Option<ToolConfirmationDecisionRequest>,
         mut on_event: F,
     ) -> Result<WorkflowRunResult>
     where
@@ -288,9 +314,35 @@ impl CompiledWorkflow {
             state.graph_state()
         };
 
-        let stream = self
-            .graph
-            .stream(initial_state, ExecutionConfig::new(thread_id), StreamMode::Messages);
+        let run_config = match tool_confirmation {
+            Some(decision) => {
+                let fingerprint = decision.fingerprint;
+                let function_call_id = decision.function_call_id;
+                let approval = if decision.approved {
+                    adk_rust::ToolConfirmationDecision::Approve
+                } else {
+                    adk_rust::ToolConfirmationDecision::Deny
+                };
+                let run_config = adk_rust::RunConfig::builder()
+                    // Graph resume re-executes the agent node. Providers can assign a
+                    // fresh call ID, so apply the decision only to its original arguments.
+                    .tool_confirmation_handler(Arc::new(ResumedToolConfirmation {
+                        fingerprint: fingerprint.clone(),
+                        decision: approval,
+                    }));
+                run_config
+                    .tool_confirmation_decisions(HashMap::from([(function_call_id.clone(), approval)]))
+                    .tool_confirmation_fingerprints(HashMap::from([(function_call_id, fingerprint)]))
+                    .build()
+            },
+            None => adk_rust::RunConfig::default(),
+        };
+        let stream = self.graph.stream_with_run_config(
+            initial_state,
+            ExecutionConfig::new(thread_id),
+            StreamMode::Messages,
+            run_config,
+        );
 
         tokio::pin!(stream);
 
@@ -305,6 +357,32 @@ impl CompiledWorkflow {
             }
             if matches!(event, StreamEvent::Interrupted { .. }) {
                 interrupted = true;
+            }
+            if let Some(pause) = GraphToolConfirmationPause::from_stream_event(&event) {
+                // ADK owns the checkpoint and call identity; this adaptation only
+                // presents its structured pause through Workrun's existing UI event.
+                let tool_definition = ToolRegistry::list()
+                    .await
+                    .ok()
+                    .and_then(|tools| tools.into_iter().find(|tool| tool.name == pause.request.tool_name));
+                on_event(StreamEvent::custom(
+                    &pause.node,
+                    "agent.tool_approval_required",
+                    json!({
+                        "nodeId": pause.node,
+                        "functionCallId": pause.request.function_call_id,
+                        "fingerprint": adk_rust::tool_call_fingerprint(&pause.request.tool_name, &pause.request.args),
+                        "tool": pause.request.tool_name,
+                        "name": tool_definition.as_ref().map(|tool| &tool.display_name).unwrap_or(&pause.request.tool_name),
+                        "description": tool_definition.as_ref().map(|tool| &tool.description),
+                        "riskLevel": tool_definition.as_ref().map(|tool| tool.risk_level),
+                        "permissions": tool_definition.as_ref().map(|tool| &tool.permissions),
+                        "source": tool_definition.as_ref().map(|tool| tool.source),
+                        "sourceName": tool_definition.as_ref().and_then(|tool| tool.source_name.as_ref()),
+                        "input": pause.request.args,
+                        "checkpointId": pause.checkpoint_id,
+                    }),
+                ));
             }
             on_event(with_measured_node_duration(event, &mut node_started_at));
         }
@@ -984,7 +1062,7 @@ mod tests {
         let result = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(input, "test", false, |event| events.push(event))
+            .run_stream(input, "test", false, None, |event| events.push(event))
             .await
             .unwrap();
         assert_eq!(result.state["workflow"]["workflow.last_node"], json!("check"));
@@ -1017,7 +1095,7 @@ mod tests {
         let error = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(State::new(), "test", false, |_| {})
+            .run_stream(State::new(), "test", false, None, |_| {})
             .await
             .unwrap_err();
 
@@ -1046,7 +1124,7 @@ mod tests {
         let result = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(state, "test", false, |_| {})
+            .run_stream(state, "test", false, None, |_| {})
             .await
             .unwrap();
 
@@ -1148,25 +1226,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolves_one_time_tool_approval() {
-        let request_id = uuid::Uuid::now_v7().to_string();
-        let fingerprint = "tool\u{1f}{\"value\":true}";
-        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
-        let approval_request_id = request_id.clone();
-        let approval = tokio::spawn(async move {
-            ToolApprovalRegistry::global()
-                .request_approval(approval_request_id, fingerprint.into(), || {
-                    let _ = started_sender.send(());
+    async fn resumed_tool_confirmation_accepts_only_the_approved_arguments() {
+        use adk_rust::ToolConfirmationHandler;
+
+        let handler = ResumedToolConfirmation {
+            fingerprint: adk_rust::tool_call_fingerprint("weather", &json!({"city": "杭州"})),
+            decision: adk_rust::ToolConfirmationDecision::Approve,
+        };
+        let request = adk_rust::ToolConfirmationRequest {
+            tool_name: "weather".into(),
+            function_call_id: Some("provider-issued-id".into()),
+            args: json!({"city": "杭州"}),
+        };
+
+        assert_eq!(
+            handler.decide(&request).await.unwrap(),
+            adk_rust::ToolConfirmationDecision::Approve
+        );
+        assert!(
+            handler
+                .decide(&adk_rust::ToolConfirmationRequest {
+                    args: json!({"city": "宁波"}),
+                    ..request
                 })
                 .await
-        });
-        started_receiver.await.unwrap();
+                .is_err()
+        );
 
-        assert!(resolve_tool_approval(&request_id, "mismatch", true).await.is_err());
-        resolve_tool_approval(&request_id, fingerprint, true).await.unwrap();
-
-        assert!(approval.await.unwrap().unwrap());
-        assert!(resolve_tool_approval(&request_id, fingerprint, false).await.is_err());
+        let denied = ResumedToolConfirmation {
+            fingerprint: adk_rust::tool_call_fingerprint("weather", &json!({"city": "杭州"})),
+            decision: adk_rust::ToolConfirmationDecision::Deny,
+        };
+        assert_eq!(
+            denied
+                .decide(&adk_rust::ToolConfirmationRequest {
+                    tool_name: "weather".into(),
+                    function_call_id: Some("new-provider-id".into()),
+                    args: json!({"city": "杭州"}),
+                })
+                .await
+                .unwrap(),
+            adk_rust::ToolConfirmationDecision::Deny
+        );
     }
 
     #[test]
@@ -1189,6 +1290,27 @@ mod tests {
                 "result": {"uppercase": "HELLO"},
             }]),
         );
+    }
+
+    #[test]
+    fn denied_tool_confirmation_cannot_write_model_invented_output() {
+        let mut event = Event::new("denied-tool");
+        event.actions.tool_confirmation_decision = Some(adk_rust::ToolConfirmationDecision::Deny);
+        event.llm_response.content = Some(Content::new("model").with_text("城市：杭州 温度：18°C"));
+
+        let updates = agent_output_updates(
+            &[event],
+            "weather-agent",
+            "agent",
+            "model",
+            None,
+            &[],
+            Some("weather_info"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(updates["weather_info"], "Tool execution was denied by the user.");
     }
 
     #[test]
@@ -1276,7 +1398,7 @@ mod tests {
         let result = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(state, "test", false, |_| {})
+            .run_stream(state, "test", false, None, |_| {})
             .await
             .unwrap();
 
@@ -1315,7 +1437,7 @@ mod tests {
         let result = compile(dsl, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(State::new(), "terminate", false, |_| {})
+            .run_stream(State::new(), "terminate", false, None, |_| {})
             .await
             .unwrap();
 
@@ -1363,7 +1485,7 @@ mod tests {
         let result = compile(parent, &Default::default(), None)
             .await
             .unwrap()
-            .run_stream(State::new(), "nested-termination", false, |_| {})
+            .run_stream(State::new(), "nested-termination", false, None, |_| {})
             .await
             .unwrap();
 

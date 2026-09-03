@@ -320,11 +320,32 @@ function ToolCalls({ calls }: { calls: unknown[] }) {
               : typeof record.tool === 'string'
                 ? record.tool
                 : 'Tool';
+          const denied = record.status === 'denied';
           return (
             <div key={index} className='flex flex-col gap-2'>
-              <p className='text-sm font-medium'>{name}</p>
+              <div className='flex items-center gap-2'>
+                <p className='text-sm font-medium'>{name}</p>
+                {denied ? (
+                  <span className='text-destructive text-xs font-medium'>
+                    Denied by user
+                  </span>
+                ) : null}
+              </div>
               <ToolCallValue label='Input' value={record.input} />
-              <ToolCallValue label='Result' value={record.result} />
+              {denied ? (
+                <div>
+                  <p className='text-muted-foreground text-xs font-medium'>
+                    Status
+                  </p>
+                  <p className='mt-1 text-sm'>
+                    {typeof record.message === 'string'
+                      ? record.message
+                      : 'Denied by user'}
+                  </p>
+                </div>
+              ) : (
+                <ToolCallValue label='Result' value={record.result} />
+              )}
             </div>
           );
         })}

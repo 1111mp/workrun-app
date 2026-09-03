@@ -43,6 +43,12 @@ export type WorkflowRunResult = {
   interrupted: boolean;
 };
 
+export type ToolConfirmationDecision = {
+  functionCallId: string;
+  fingerprint: string;
+  approved: boolean;
+};
+
 /** Ordered runtime events emitted while a workflow is executing. */
 export type WorkflowRunEvent =
   | { type: 'state'; state: Record<string, unknown>; step: number }
@@ -257,6 +263,7 @@ export function runWorkflow(
   initialState: Record<string, unknown> = {},
   threadId?: string,
   resume = false,
+  toolConfirmation?: ToolConfirmationDecision,
   onEvent?: (event: WorkflowRunEvent) => void,
 ) {
   const channel = new Channel<WorkflowRunEvent>();
@@ -267,19 +274,8 @@ export function runWorkflow(
     initialState,
     threadId,
     resume,
+    toolConfirmation,
     onEvent: channel,
-  });
-}
-
-export function resolveToolApproval(
-  requestId: string,
-  fingerprint: string,
-  approved: boolean,
-) {
-  return invoke('workflow_resolve_tool_approval', {
-    requestId,
-    fingerprint,
-    approved,
   });
 }
 

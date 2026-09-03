@@ -3,7 +3,7 @@ resolver = "2"
 members = ["src-tauri"]
 
 [workspace.dependencies]
-adk-rust = { path = "../../../../public/adk-rust/adk-rust", version = "2.2.0" }
+adk-rust = { version = "2.2.0" }
 anyhow = "1.0.104"
 bitflags = { version = "2.13.1" }
 chrono = "0.4.45"

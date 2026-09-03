@@ -88,7 +88,7 @@ impl Node for SubworkflowNode {
             .await
             .map_err(|error| graph_node_error(&self.id, error))?;
         let result = child
-            .run_stream(input, &thread_id, resume, |_| {})
+            .run_stream(input, &thread_id, resume, None, |_| {})
             .await
             .map_err(|error| graph_node_error(&self.id, error))?;
         if result.interrupted {

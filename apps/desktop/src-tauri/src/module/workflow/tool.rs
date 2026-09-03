@@ -182,43 +182,6 @@ impl Tool for ManagedTool {
 
         validate_tool_value(&self.definition.input_schema, &args, "input")?;
 
-        if self.definition.execution_policy == ToolExecutionPolicy::AskEveryTime {
-            let request_id = uuid::Uuid::now_v7().to_string();
-            let function_call_id = context.function_call_id().to_string();
-            let fingerprint = adk_rust::tool_call_fingerprint(self.name(), &args);
-
-            let approved = ToolApprovalRegistry::global()
-                .request_approval(request_id.clone(), fingerprint.clone(), || {
-                    if let Some(on_event) = &self.on_event {
-                        send_guarded_event(
-                            on_event,
-                            StreamEvent::custom(
-                                &self.agent_node_id,
-                                "agent.tool_approval_required",
-                                json!({
-                                    "requestId": request_id,
-                                    "functionCallId": function_call_id,
-                                    "fingerprint": fingerprint,
-                                    "tool": self.name(),
-                                    "name": self.definition.display_name,
-                                    "description": self.definition.description,
-                                    "input": args,
-                                    "riskLevel": self.definition.risk_level,
-                                    "permissions": self.definition.permissions,
-                                    "source": self.definition.source,
-                                    "sourceName": self.definition.source_name,
-                                }),
-                            ),
-                        );
-                    }
-                })
-                .await?;
-
-            if !approved {
-                return Err(adk_rust::AdkError::tool("Tool denied by user"));
-            }
-        }
-
         if let Some(on_event) = &self.on_event {
             send_guarded_event(
                 on_event,

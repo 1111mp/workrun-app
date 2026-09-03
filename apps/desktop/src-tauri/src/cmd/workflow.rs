@@ -1,7 +1,7 @@
 use crate::{
     cmd::{CmdResult, StringifyErr},
     config::Config,
-    module::workflow::{self, WorkflowDsl, WorkflowPlan, WorkflowRunResult},
+    module::workflow::{self, ToolConfirmationDecisionRequest, WorkflowDsl, WorkflowPlan, WorkflowRunResult},
 };
 use adk_rust::graph::State;
 use serde_json::Value;
@@ -35,6 +35,7 @@ pub async fn workflow_run(
     initial_state: Value,
     thread_id: Option<String>,
     resume: Option<bool>,
+    tool_confirmation: Option<ToolConfirmationDecisionRequest>,
     on_event: Channel<adk_rust::graph::StreamEvent>,
 ) -> CmdResult<WorkflowRunResult> {
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
@@ -48,6 +49,7 @@ pub async fn workflow_run(
             state,
             thread_id.as_deref().unwrap_or("workflow-run"),
             resume.unwrap_or(false),
+            tool_confirmation,
             |event| {
                 // The webview may go away while a workflow is still running.
                 // The workflow should complete cleanly even if it has nobody
@@ -59,13 +61,6 @@ pub async fn workflow_run(
         .stringify_err()?;
     result.state = workflow::redact_state_for_transport(&result.state);
     Ok(result)
-}
-
-#[tauri::command]
-pub async fn workflow_resolve_tool_approval(request_id: String, fingerprint: String, approved: bool) -> CmdResult<()> {
-    workflow::resolve_tool_approval(&request_id, &fingerprint, approved)
-        .await
-        .stringify_err()
 }
 
 /// Persist one human-review decision before resuming the workflow checkpoint.

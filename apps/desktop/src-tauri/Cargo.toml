@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 name = "workrun_lib"
 
 [dependencies]
-adk-agent = { path = "../../../../../public/adk-rust/adk-agent", version = "2.2.0", features = ["guardrails"] }
+adk-agent = { version = "2.2.0", features = ["guardrails"] }
 adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama", "skills-progressive-disclosure"] }
 aes-gcm = "0.11.1"
 anyhow = { workspace = true }

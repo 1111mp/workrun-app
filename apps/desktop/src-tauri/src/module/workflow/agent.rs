@@ -49,6 +49,11 @@ pub(super) async fn add_local_agent_node(
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
     let tools = ToolRegistry::resolve(&tool_ids).await?;
     validate_tool_state_binding_schemas(node, &tools, &state_bindings)?;
+    let confirmation_tool_names = tools
+        .iter()
+        .filter(|tool| tool.execution_policy == ToolExecutionPolicy::AskEveryTime)
+        .map(|tool| tool.name.clone())
+        .collect::<Vec<_>>();
     let model = model_catalog()
         .into_iter()
         .find(|model| model.id == profile_id)
@@ -106,6 +111,11 @@ pub(super) async fn add_local_agent_node(
             Arc::new(SelectedToolRegistry { tools: managed_tools }),
             adk_rust::skill::SkillToolsetConfig::default(),
         )));
+    }
+    for tool_name in confirmation_tool_names {
+        // Let the graph checkpoint before the tool starts. Waiting inside
+        // `ManagedTool::execute` would keep this workflow invocation alive.
+        agent = agent.require_tool_confirmation(tool_name);
     }
     let agent = agent.build()?;
     Ok(graph.add_node(StreamingAgentNode::new(
@@ -320,7 +330,6 @@ impl Node for StreamingAgentNode {
             .into_iter()
             .map(|event| serde_json::from_value::<Event>(event).map_err(|error| graph_node_error(&self.id, error)))
             .collect::<adk_rust::graph::Result<Vec<_>>>()?;
-
         let tool_calls = self
             .tool_trace
             .as_ref()
@@ -392,6 +401,12 @@ impl Node for StreamingAgentNode {
                         {
                             events.push(data.clone());
                         }
+                        if matches!(event, StreamEvent::NodeInterrupt { .. }) {
+                            // The executor converts this into a persisted graph pause. Do not
+                            // run the post-processing path after a confirmation request.
+                            yield Ok(event);
+                            return;
+                        }
                         // ADK 2.1 emits raw SSE chunks before output guardrails run.
                         // Hold message and agent payload events until the complete
                         // response can be redacted across chunk boundaries.
@@ -459,6 +474,15 @@ fn agent_response_text(events: &[adk_rust::Event]) -> String {
         .collect()
 }
 
+fn tool_confirmation_was_denied(events: &[adk_rust::Event]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event.actions.tool_confirmation_decision,
+            Some(adk_rust::ToolConfirmationDecision::Deny)
+        )
+    })
+}
+
 pub(super) fn agent_output_updates(
     events: &[adk_rust::Event],
     node_id: &str,
@@ -469,7 +493,14 @@ pub(super) fn agent_output_updates(
     output_key: Option<&str>,
     output_schema: Option<&Value>,
 ) -> Result<HashMap<String, Value>> {
-    let raw_response = agent_response_text(events);
+    let tool_confirmation_denied = tool_confirmation_was_denied(events);
+    // A denied tool call is returned to the model as a function response. Do
+    // not let a later model turn invent the data that the user explicitly denied.
+    let raw_response = if tool_confirmation_denied {
+        "Tool execution was denied by the user.".to_string()
+    } else {
+        agent_response_text(events)
+    };
     let response = redact_text(&raw_response);
     let messages = (!response.is_empty())
         .then(|| json!({ "role": "assistant", "content": response }))

@@ -345,7 +345,10 @@ function applyCustom(
     (item) => item.nodeId === event.node,
   );
   if (!execution) return;
-  if (event.event_type === 'agent.tool_result') {
+  if (
+    event.event_type === 'agent.tool_result' ||
+    event.event_type === 'agent.tool_denied'
+  ) {
     execution.toolCalls = [
       ...(Array.isArray(execution.toolCalls) ? execution.toolCalls : []),
       event.data,

@@ -7,9 +7,9 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   resolveAskUserQuestion,
   resolveHumanReview,
-  resolveToolApproval,
   runWorkflow,
   toWorkflowDsl,
+  type ToolConfirmationDecision,
   type WorkflowRunEvent,
 } from '@/services/workflow';
 import { useWorkflowRunStore } from '@/stores';
@@ -27,6 +27,7 @@ type WorkflowRunRequest = {
   input: Record<string, unknown>;
   threadId: string;
   resume: boolean;
+  toolConfirmation?: ToolConfirmationDecision;
 };
 
 type SubworkflowContext = {
@@ -183,12 +184,13 @@ function useWorkflowRun(
     store.applyRunEvents([event], context());
   };
   const mutation = useMutation({
-    mutationFn: ({ input, threadId, resume }: WorkflowRunRequest) =>
+    mutationFn: ({ input, threadId, resume, toolConfirmation }: WorkflowRunRequest) =>
       runWorkflow(
         toWorkflowDsl(workflowId, nodes, edges, settings),
         input,
         threadId,
         resume,
+        toolConfirmation,
         handleEvent,
       ),
     onSuccess: (result) => {
@@ -198,7 +200,7 @@ function useWorkflowRun(
             ...current,
             finalState: result.state,
           }));
-          if (!store.humanReview && !store.askUserQuestion) {
+          if (!store.toolApproval && !store.humanReview && !store.askUserQuestion) {
             toast.info('Workflow interrupted', {
               toasterId: 'global',
               description: 'Resume to continue from the saved checkpoint.',
@@ -259,7 +261,7 @@ function useWorkflowRun(
     store.startWorkflowRun(input, settings.mode, chatTurnId.current);
     mutation.mutate({ input, threadId, resume: false });
   };
-  const resumeWorkflowRun = () => {
+  const resumeWorkflowRun = (toolConfirmation?: ToolConfirmationDecision) => {
     const threadId = runThreadId.current;
     if (!threadId) return;
     const input = store.lastRunInput ?? {};
@@ -271,7 +273,7 @@ function useWorkflowRun(
     pendingCharacters.current = 0;
     afterDrain.current = [];
     store.resumeWorkflowRun();
-    mutation.mutate({ input, threadId, resume: true });
+    mutation.mutate({ input, threadId, resume: true, toolConfirmation });
   };
   const startRun = () => {
     if (settings.mode === 'chat') {
@@ -286,11 +288,34 @@ function useWorkflowRun(
     }
   };
   const resolvePendingToolApproval = async (approved: boolean) => {
-    const { requestId, fingerprint } = store.toolApproval ?? {};
-    if (typeof requestId !== 'string' || typeof fingerprint !== 'string')
+    const approval = store.toolApproval;
+    const { functionCallId, fingerprint } = approval ?? {};
+    if (typeof functionCallId !== 'string' || typeof fingerprint !== 'string')
       return;
+    const nodeId = approval?.nodeId;
+    if (!approved && typeof nodeId === 'string') {
+      // The native graph only records the decision on resume. Add the UI event
+      // now so the rejected invocation remains visible in this execution.
+      store.applyRunEvents(
+        [
+          {
+            type: 'custom',
+            node: nodeId,
+            event_type: 'agent.tool_denied',
+            data: {
+              tool: approval?.tool,
+              name: approval?.name,
+              input: approval?.input,
+              status: 'denied',
+              message: 'Denied by user',
+            },
+          },
+        ],
+        context(),
+      );
+    }
     store.clearToolApproval();
-    await resolveToolApproval(requestId, fingerprint, approved);
+    resumeWorkflowRun({ functionCallId, fingerprint, approved });
   };
   const resolvePendingHumanReview = async (
     approved: boolean,
