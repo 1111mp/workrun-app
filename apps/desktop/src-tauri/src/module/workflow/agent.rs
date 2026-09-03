@@ -6,6 +6,21 @@ struct SkillReference {
     name: String,
 }
 
+/// Resolves only the tools selected by this workflow node.
+///
+/// `SkillToolset` starts with its discovery tools and asks this registry for a
+/// business tool only after the model has loaded the declaring skill. Keeping
+/// this map node-scoped preserves the workflow's existing tool boundary.
+struct SelectedToolRegistry {
+    tools: HashMap<String, Arc<dyn Tool>>,
+}
+
+impl adk_rust::ToolRegistry for SelectedToolRegistry {
+    fn resolve(&self, tool_name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.get(tool_name).cloned()
+    }
+}
+
 pub(super) async fn add_local_agent_node(
     graph: StateGraph,
     node: &WorkflowNode,
@@ -46,16 +61,6 @@ pub(super) async fn add_local_agent_node(
         .input_guardrails(input_guardrails())
         .output_guardrails(output_guardrails())
         .tool_guardrails(tool_guardrails());
-    if !skills.is_empty() {
-        agent = agent
-            .with_skills(adk_rust::skill::SkillIndex::new(skills.clone()))
-            .with_skill_policy(adk_rust::skill::SelectionPolicy {
-                top_k: 1,
-                min_score: 0.0,
-                ..Default::default()
-            })
-            .with_skill_budget(5_000);
-    }
     if let Some(temperature) = temperature {
         agent = agent.temperature(temperature);
     }
@@ -67,13 +72,15 @@ pub(super) async fn add_local_agent_node(
     }
     let tool_calls = Arc::new(AtomicU32::new(0));
     let tool_trace = Arc::new(Mutex::new(Vec::new()));
+    let mut managed_tools = HashMap::with_capacity(tools.len());
     for tool in tools {
+        let tool_id = tool.id.clone();
         let tool_bindings = state_bindings.remove(&tool.id).unwrap_or_default();
         let executor = match tool.source {
             ToolSource::Process => ManagedToolExecutor::Process,
             ToolSource::Mcp => ManagedToolExecutor::Mcp(McpServerRegistry::resolve_tool(&tool.id).await?.1),
         };
-        agent = agent.tool(Arc::new(ManagedTool::new(
+        let managed_tool: Arc<dyn Tool> = Arc::new(ManagedTool::new(
             tool,
             executor,
             id.clone(),
@@ -84,6 +91,20 @@ pub(super) async fn add_local_agent_node(
             tool_bindings,
             max_tool_calls,
             tool_timeout_seconds.into(),
+        ));
+        managed_tools.insert(tool_id, managed_tool);
+    }
+    if skills.is_empty() {
+        for tool in managed_tools.into_values() {
+            agent = agent.tool(tool);
+        }
+    } else {
+        // Do not attach these tools directly: that would expose their schemas
+        // before `load_skill` activates the skill that authorizes them.
+        agent = agent.toolset(Arc::new(adk_rust::skill::SkillToolset::new(
+            Arc::new(adk_rust::skill::SkillIndex::new(skills)),
+            Arc::new(SelectedToolRegistry { tools: managed_tools }),
+            adk_rust::skill::SkillToolsetConfig::default(),
         )));
     }
     let agent = agent.build()?;

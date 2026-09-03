@@ -3,12 +3,12 @@ resolver = "2"
 members = ["src-tauri"]
 
 [workspace.dependencies]
-adk-rust = { version = "2.1.0" }
+adk-rust = { path = "../../../../public/adk-rust/adk-rust", version = "2.2.0" }
 anyhow = "1.0.104"
 bitflags = { version = "2.13.1" }
 chrono = "0.4.45"
-flexi_logger = "0.31.9"
-log = "0.4.33"
+flexi_logger = "0.31.10"
+log = "0.4.34"
 parking_lot = { version = "0.12.5", features = ["hardware-lock-elision"] }
 semver = "1.0.28"
 serde = { version = "1.0.229" }
@@ -16,9 +16,9 @@ serde_json = { version = "1.0.151" }
 serde_yaml_ng = { version = "0.10.0" }
 sqlx = { version = "0.9.0" }
 tauri = { version = "2.11.5" }
-thiserror = { version = "2.0.19" }
+thiserror = { version = "2.0.20" }
 tokio = { version = "1.53.1", features = ["full"] }
-uuid = { version = "1.24.0" }
+uuid = { version = "1.26.0" }
 
 deelevate = "0.2.0"
 

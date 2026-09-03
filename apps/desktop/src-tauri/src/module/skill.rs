@@ -180,7 +180,9 @@ pub fn allowed_tool_ids(skills: &[SkillDocument], selected_tool_ids: Vec<String>
     }
     Ok(selected_tool_ids
         .into_iter()
-        .filter(|tool_id| restrictions.iter().all(|allowed| allowed.contains(tool_id)))
+        // A node may activate more than one skill during an invocation, so an
+        // allowed tool belongs to any selected skill rather than every skill.
+        .filter(|tool_id| restrictions.is_empty() || restrictions.iter().any(|allowed| allowed.contains(tool_id)))
         .collect())
 }
 
@@ -203,6 +205,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tools, ["search"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn multiple_skills_keep_each_declared_tool_available() {
+        let root = std::env::temp_dir().join(format!("workrun-skill-test-{}", uuid::Uuid::now_v7()));
+        let writer = SkillWriter::new(&root);
+        writer
+            .write(&SkillDraft::new("search", "Search").with_allowed_tools(["search"]))
+            .unwrap();
+        writer
+            .write(&SkillDraft::new("reader", "Read").with_allowed_tools(["read"]))
+            .unwrap();
+        let index = load_skill_index(&root).unwrap();
+        let tools = allowed_tool_ids(
+            &[
+                index.find_by_name("search").unwrap().clone(),
+                index.find_by_name("reader").unwrap().clone(),
+            ],
+            vec!["search".to_string(), "read".to_string(), "write".to_string()],
+        )
+        .unwrap();
+        assert_eq!(tools, ["search", "read"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 

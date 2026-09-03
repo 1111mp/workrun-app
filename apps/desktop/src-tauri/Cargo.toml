@@ -20,12 +20,12 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 name = "workrun_lib"
 
 [dependencies]
-adk-agent = { version = "2.1.0", features = ["guardrails"] }
-adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama", "skills"] }
-aes-gcm = "0.11.0"
+adk-agent = { path = "../../../../../public/adk-rust/adk-agent", version = "2.2.0", features = ["guardrails"] }
+adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama", "skills-progressive-disclosure"] }
+aes-gcm = "0.11.1"
 anyhow = { workspace = true }
 async-stream = "0.3.6"
-async-trait = "0.1.91"
+async-trait = "0.1.92"
 base64 = "0.23.1"
 bitflags = { workspace = true }
 chrono = { workspace = true }
@@ -33,14 +33,14 @@ console-subscriber = { version = "0.5.0", optional = true }
 dark-light = { git = "https://github.com/rust-dark-light/dark-light" }
 dunce = "1.0.5"
 flexi_logger = { workspace = true }
-futures = "0.3.33"
+futures = "0.3.34"
 getrandom = "0.4.3"
-jsonschema = "0.49.9"
+jsonschema = "0.53.0"
 log = { workspace = true }
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
-open = "5.4.1"
+open = "5.4.3"
 parking_lot = { workspace = true }
-regex = "1.12.3"
+regex = "1.13.1"
 rmcp = { version = "=3.1.2", features = ["auth"] }
 rustls = { version = "0.23.43", default-features = false, features = ["aws_lc_rs", "std"] }
 semver = { workspace = true }
@@ -58,18 +58,18 @@ tauri = { workspace = true, features = [
   "tray-icon",
 ] }
 tauri-plugin-autostart = "2.5.1"
-tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-deep-link = "2.4.10"
 tauri-plugin-devtools = "2.1.0"
-tauri-plugin-dialog = "2.7.2"
-tauri-plugin-fs = "2.5.1"
-tauri-plugin-http = "2.5.9"
-tauri-plugin-notification = "2.3.3"
-tauri-plugin-opener = "2.5.4"
+tauri-plugin-dialog = "2.7.3"
+tauri-plugin-fs = "2.5.2"
+tauri-plugin-http = "2.6.0"
+tauri-plugin-notification = "2.4.0"
+tauri-plugin-opener = "2.5.5"
 tauri-plugin-os = "2.3.2"
 tauri-plugin-process = "2.3.1"
-tauri-plugin-shell = "2.3.5"
-tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
-tauri-plugin-updater = "2.10.1"
+tauri-plugin-shell = "2.3.6"
+tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
+tauri-plugin-updater = "2.11.0"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
 tokio = { workspace = true }
