@@ -266,14 +266,12 @@ function processLog(entry: WorkflowTraceEntry) {
     .join('\n\n');
 }
 
-function ProcessOutput({ log }: { log: string }) {
+function ExecutionOutput({ label, log }: { label: string; log: string }) {
   if (!log) return null;
 
   return (
     <div className='mt-3'>
-      <p className='text-muted-foreground mb-1 text-xs font-medium'>
-        Process output
-      </p>
+      <p className='text-muted-foreground mb-1 text-xs font-medium'>{label}</p>
       <div className='bg-muted h-52 overflow-hidden rounded-md'>
         <LazyLog
           text={log}
@@ -293,6 +291,21 @@ function ProcessOutput({ log }: { log: string }) {
       </div>
     </div>
   );
+}
+
+function toolCallOutput(value: unknown) {
+  if (!Array.isArray(value)) return '';
+
+  return value
+    .map((item) => {
+      if (typeof item !== 'object' || item === null) return '';
+      const { stream, data } = item as Record<string, unknown>;
+      return typeof stream === 'string' && typeof data === 'string'
+        ? `${stream}\n${data}`
+        : '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function ToolCalls({ calls }: { calls: unknown[] }) {
@@ -321,6 +334,7 @@ function ToolCalls({ calls }: { calls: unknown[] }) {
                 ? record.tool
                 : 'Tool';
           const denied = record.status === 'denied';
+          const output = toolCallOutput(record.output);
           return (
             <div key={index} className='flex flex-col gap-2'>
               <div className='flex items-center gap-2'>
@@ -346,6 +360,7 @@ function ToolCalls({ calls }: { calls: unknown[] }) {
               ) : (
                 <ToolCallValue label='Result' value={record.result} />
               )}
+              <ExecutionOutput label='Output' log={output} />
             </div>
           );
         })}
@@ -403,7 +418,7 @@ function SubworkflowExecution({ entry }: { entry: WorkflowTraceEntry }) {
                 {traceTypeLabel(child.type)}
               </p>
               <TraceResult entry={child} />
-              <ProcessOutput log={log} />
+              <ExecutionOutput label='Process output' log={log} />
             </div>
           );
         })}
@@ -847,30 +862,7 @@ function WorkflowRunOutput({
                           </MarkerContent>
                         </Marker>
                         <TraceResult entry={entry} />
-                        {log && (
-                          <div className='mt-3'>
-                            <p className='text-muted-foreground mb-1 text-xs font-medium'>
-                              Process output
-                            </p>
-                            <div className='bg-muted h-52 overflow-hidden rounded-md'>
-                              <LazyLog
-                                text={log}
-                                selectableLines
-                                wrapLines
-                                enableLineNumbers
-                                rowHeight={20}
-                                style={{
-                                  backgroundColor: 'transparent',
-                                  color: 'var(--foreground)',
-                                  fontFamily: 'var(--font-mono)',
-                                  fontSize: '0.75rem',
-                                  lineHeight: '1.25rem',
-                                  padding: '0.75rem',
-                                }}
-                              />
-                            </div>
-                          </div>
-                        )}
+                        <ExecutionOutput label='Process output' log={log} />
                       </MessageScrollerItem>
                     );
                   })}
@@ -980,30 +972,10 @@ function WorkflowRunOutput({
                                     entry={entry}
                                     showAgentResponse={false}
                                   />
-                                  {log && (
-                                    <div className='mt-3'>
-                                      <p className='text-muted-foreground mb-1 text-xs font-medium'>
-                                        Process output
-                                      </p>
-                                      <div className='bg-muted h-52 overflow-hidden rounded-md'>
-                                        <LazyLog
-                                          text={log}
-                                          selectableLines
-                                          wrapLines
-                                          enableLineNumbers
-                                          rowHeight={20}
-                                          style={{
-                                            backgroundColor: 'transparent',
-                                            color: 'var(--foreground)',
-                                            fontFamily: 'var(--font-mono)',
-                                            fontSize: '0.75rem',
-                                            lineHeight: '1.25rem',
-                                            padding: '0.75rem',
-                                          }}
-                                        />
-                                      </div>
-                                    </div>
-                                  )}
+                                  <ExecutionOutput
+                                    label='Process output'
+                                    log={log}
+                                  />
                                 </MessageScrollerItem>
                               );
                             })}

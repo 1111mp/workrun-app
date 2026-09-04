@@ -120,13 +120,16 @@
 
     "models": {
       "title": "模型",
-      "description": "同一提供商的全部模型共用一个 API 密钥，修改会自动保存。",
+      "description": "为每个提供商配置凭证；兼容 API 或远程 Ollama 可填写自定义端点，修改会自动保存。",
       "apiKeyPlaceholder": "请输入 API 密钥",
+      "baseUrlPlaceholder": "自定义端点（可选）",
       "modelCount": "应用到 {{count}} 个模型",
       "gemini": "Gemini API 密钥",
       "openAi": "OpenAI API 密钥",
       "anthropic": "Anthropic API 密钥",
-      "deepSeek": "DeepSeek API 密钥"
+      "deepSeek": "DeepSeek API 密钥",
+      "groq": "Groq API 密钥",
+      "ollama": "Ollama 端点"
     },
 
     "skills": {

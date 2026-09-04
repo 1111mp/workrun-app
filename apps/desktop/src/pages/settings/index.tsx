@@ -47,7 +47,7 @@ function SettingsPage() {
             { provider: 'anthropic', apiKey: '', baseUrl: '' },
             { provider: 'deep_seek', apiKey: '', baseUrl: '' },
             { provider: 'groq', apiKey: '', baseUrl: '' },
-            // { provider: 'ollama', apiKey: '', baseUrl: '' },
+            { provider: 'ollama', apiKey: '', baseUrl: '' },
           ],
     },
   });

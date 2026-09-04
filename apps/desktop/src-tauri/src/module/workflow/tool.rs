@@ -222,14 +222,14 @@ impl Tool for ManagedTool {
                 if let Some(on_event) = &self.on_event {
                     for (stream, data) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
                         if !data.is_empty() {
-                            send_guarded_event(
-                                on_event,
-                                StreamEvent::custom(
-                                    &self.agent_node_id,
-                                    "agent.tool_output",
-                                    json!({ "tool": self.name(), "stream": stream, "data": data }),
-                                ),
-                            );
+                            // Tool App stdout/stderr is an explicit local debugging
+                            // surface. Preserve it verbatim for the workflow Output UI;
+                            // the workflow author is responsible for what the tool prints.
+                            let _ = on_event.send(StreamEvent::custom(
+                                &self.agent_node_id,
+                                "agent.tool_output",
+                                json!({ "tool": self.name(), "stream": stream, "data": data }),
+                            ));
                         }
                     }
                 }

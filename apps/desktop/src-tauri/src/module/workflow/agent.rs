@@ -193,6 +193,9 @@ fn personal_skill_names(node: &WorkflowNode) -> Result<Vec<String>> {
 pub(super) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
     let credential = config.credential_for(&model.provider);
     let api_key = credential.and_then(|credential| credential.api_key.as_deref());
+    let base_url = credential
+        .and_then(|credential| credential.base_url.as_deref())
+        .filter(|url| !url.trim().is_empty());
     if model.provider != ModelProvider::Ollama && api_key.is_none_or(|api_key| api_key.trim().is_empty()) {
         bail!("provider for model `{}` has no API key", model.id);
     }
@@ -200,20 +203,36 @@ pub(super) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result
     Ok(match model.provider {
         ModelProvider::Gemini => Arc::new(GeminiModel::new(api_key, &model.model)?),
         ModelProvider::OpenAi | ModelProvider::OpenAiStrict => {
-            Arc::new(OpenAIClient::new(OpenAIConfig::new(api_key, &model.model))?)
+            let config = match base_url {
+                // ADK's compatible mode is required for local and proxy OpenAI endpoints.
+                Some(url) => OpenAIConfig::compatible(api_key, url, &model.model),
+                None => OpenAIConfig::new(api_key, &model.model),
+            };
+            Arc::new(OpenAIClient::new(config)?)
         },
-        ModelProvider::Anthropic => Arc::new(AnthropicClient::new(AnthropicConfig::new(api_key, &model.model))?),
-        ModelProvider::DeepSeek => Arc::new(DeepSeekClient::new(DeepSeekConfig::new(api_key, &model.model))?),
+        ModelProvider::Anthropic => {
+            let config = match base_url {
+                Some(url) => AnthropicConfig::new(api_key, &model.model).with_base_url(url),
+                None => AnthropicConfig::new(api_key, &model.model),
+            };
+            Arc::new(AnthropicClient::new(config)?)
+        },
+        ModelProvider::DeepSeek => {
+            let config = match base_url {
+                Some(url) => DeepSeekConfig::new(api_key, &model.model).with_base_url(url),
+                None => DeepSeekConfig::new(api_key, &model.model),
+            };
+            Arc::new(DeepSeekClient::new(config)?)
+        },
         ModelProvider::Groq => {
-            let config = match credential.and_then(|credential| credential.base_url.as_deref()) {
+            let config = match base_url {
                 Some(url) => GroqConfig::new(api_key, &model.model).with_base_url(url),
                 None => GroqConfig::new(api_key, &model.model),
             };
             Arc::new(GroqClient::new(config)?)
         },
         ModelProvider::Ollama => Arc::new(OllamaModel::new(
-            credential
-                .and_then(|credential| credential.base_url.as_ref())
+            base_url
                 .map(|url| OllamaConfig::with_host(url, &model.model))
                 .unwrap_or_else(|| OllamaConfig::new(&model.model)),
         )?),

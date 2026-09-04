@@ -49,7 +49,13 @@ function ModelProfilesSettings({
               <>
                 {fields.map((field, index) => (
                   <Field key={field.id}>
-                    <FieldLabel htmlFor={`model-api-key-${field.provider}`}>
+                    <FieldLabel
+                      htmlFor={
+                        field.provider === 'ollama'
+                          ? `model-base-url-${field.provider}`
+                          : `model-api-key-${field.provider}`
+                      }
+                    >
                       <Item
                         variant='muted'
                         size='sm'
@@ -64,16 +70,40 @@ function ModelProfilesSettings({
                           {/* <ItemDescription>{description}</ItemDescription> */}
                         </ItemContent>
                         <ItemActions>
-                          <Input
-                            id={`model-api-key-${field.provider}`}
-                            type='password'
-                            autoComplete='off'
-                            placeholder={t('settings.models.apiKeyPlaceholder')}
-                            className='text-muted-foreground border-none bg-transparent! pr-0 text-right outline-none focus-visible:border-none focus-visible:ring-0 disabled:opacity-100'
-                            {...form.register(
-                              `provider_credentials.${index}.apiKey`,
+                          <div className='flex w-80 flex-col gap-1 sm:flex-row'>
+                            {field.provider !== 'ollama' && (
+                              <Input
+                                id={`model-api-key-${field.provider}`}
+                                type='password'
+                                autoComplete='off'
+                                placeholder={t(
+                                  'settings.models.apiKeyPlaceholder',
+                                )}
+                                className='text-muted-foreground border-none bg-transparent! pr-0 text-right outline-none focus-visible:border-none focus-visible:ring-0 disabled:opacity-100'
+                                {...form.register(
+                                  `provider_credentials.${index}.apiKey`,
+                                )}
+                              />
                             )}
-                          />
+                            {field.provider !== 'gemini' && (
+                              <Input
+                                id={`model-base-url-${field.provider}`}
+                                type='url'
+                                inputMode='url'
+                                autoComplete='url'
+                                aria-label={t(
+                                  'settings.models.baseUrlPlaceholder',
+                                )}
+                                placeholder={t(
+                                  'settings.models.baseUrlPlaceholder',
+                                )}
+                                className='text-muted-foreground border-none bg-transparent! pr-0 text-right outline-none focus-visible:border-none focus-visible:ring-0 disabled:opacity-100'
+                                {...form.register(
+                                  `provider_credentials.${index}.baseUrl`,
+                                )}
+                              />
+                            )}
+                          </div>
                           <ChevronRightIcon className='size-4' />
                         </ItemActions>
                       </Item>

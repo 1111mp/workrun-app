@@ -71,55 +71,29 @@ pub fn credential_provider(provider: &ModelProvider) -> ModelProvider {
 
 fn default_model_profiles() -> Vec<ModelProfile> {
     [
+        ("gemini-3.7-flash", "Gemini 3.7 Flash", ModelProvider::Gemini),
+        ("gemini-3.6-flash", "Gemini 3.6 Flash", ModelProvider::Gemini),
+        ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite", ModelProvider::Gemini),
         (
             "gemini-3.1-pro-preview",
             "Gemini 3.1 Pro Preview",
             ModelProvider::Gemini,
         ),
-        (
-            "gemini-3-flash-preview",
-            "Gemini 3 Flash Preview",
-            ModelProvider::Gemini,
-        ),
-        (
-            "gemini-3.1-flash-lite-preview",
-            "Gemini 3.1 Flash Lite Preview",
-            ModelProvider::Gemini,
-        ),
-        ("gemini-2.5-pro", "Gemini 2.5 Pro", ModelProvider::Gemini),
-        ("gemini-2.5-flash", "Gemini 2.5 Flash", ModelProvider::Gemini),
-        ("gpt-5", "GPT-5", ModelProvider::OpenAi),
-        ("gpt-5-mini", "GPT-5 Mini", ModelProvider::OpenAi),
-        ("gpt-5-nano", "GPT-5 Nano", ModelProvider::OpenAi),
-        ("gpt-4.1", "GPT-4.1", ModelProvider::OpenAi),
-        ("claude-opus-4-7", "Claude Opus 4.7", ModelProvider::Anthropic),
-        ("claude-opus-4-6", "Claude Opus 4.6", ModelProvider::Anthropic),
-        ("claude-sonnet-4-6", "Claude Sonnet 4.6", ModelProvider::Anthropic),
-        (
-            "claude-haiku-4-5-20251001",
-            "Claude Haiku 4.5",
-            ModelProvider::Anthropic,
-        ),
-        ("claude-opus-4-20250514", "Claude Opus 4", ModelProvider::Anthropic),
-        ("claude-sonnet-4-20250514", "Claude Sonnet 4", ModelProvider::Anthropic),
-        ("deepseek-r1-0528", "DeepSeek R1 0528", ModelProvider::DeepSeek),
-        ("deepseek-r1", "DeepSeek R1", ModelProvider::DeepSeek),
-        ("deepseek-v3.1", "DeepSeek V3.1", ModelProvider::DeepSeek),
-        ("deepseek-chat", "DeepSeek Chat", ModelProvider::DeepSeek),
-        ("deepseek-vl2", "DeepSeek VL2", ModelProvider::DeepSeek),
-        ("llama-4-scout", "Llama 4 Scout", ModelProvider::Groq),
-        (
-            "llama-3.2-90b-text-preview",
-            "Llama 3.2 90B Text Preview",
-            ModelProvider::Groq,
-        ),
-        (
-            "llama-3.1-70b-versatile",
-            "Llama 3.1 70B Versatile",
-            ModelProvider::Groq,
-        ),
-        ("llama-3.1-8b-instant", "Llama 3.1 8B Instant", ModelProvider::Groq),
-        ("mixtral-8x7b-32768", "Mixtral 8x7B", ModelProvider::Groq),
+        ("gpt-5.6-terra", "GPT-5.6 Terra", ModelProvider::OpenAi),
+        ("gpt-5.6-sol", "GPT-5.6 Sol", ModelProvider::OpenAi),
+        ("gpt-5.6-luna", "GPT-5.6 Luna", ModelProvider::OpenAi),
+        ("gpt-5.6", "GPT-5.6", ModelProvider::OpenAi),
+        ("claude-sonnet-5", "Claude Sonnet 5", ModelProvider::Anthropic),
+        ("claude-opus-5", "Claude Opus 5", ModelProvider::Anthropic),
+        ("claude-fable-5", "Claude Fable 5", ModelProvider::Anthropic),
+        ("claude-haiku-4-5", "Claude Haiku 4.5", ModelProvider::Anthropic),
+        ("deepseek-v4-flash", "DeepSeek V4 Flash", ModelProvider::DeepSeek),
+        ("deepseek-v4-pro", "DeepSeek V4 Pro", ModelProvider::DeepSeek),
+        ("openai/gpt-oss-120b", "GPT-OSS 120B", ModelProvider::Groq),
+        ("openai/gpt-oss-20b", "GPT-OSS 20B", ModelProvider::Groq),
+        // Keep one local profile available so Ollama can be used without a
+        // cloud credential; users can point it at a remote Ollama host in Settings.
+        ("llama3.2", "Llama 3.2 (Ollama)", ModelProvider::Ollama),
     ]
     .into_iter()
     .map(|(model, name, provider)| ModelProfile {
@@ -311,6 +285,7 @@ impl IWorkrun {
                 let mut credential = credential.clone();
                 credential.provider = provider.clone();
                 credential.api_key = credential.api_key.filter(|key| !key.trim().is_empty());
+                credential.base_url = credential.base_url.filter(|url| !url.trim().is_empty());
                 if let Some(existing) = self
                     .provider_credentials
                     .iter_mut()

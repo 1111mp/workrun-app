@@ -349,15 +349,59 @@ function applyCustom(
     event.event_type === 'agent.tool_result' ||
     event.event_type === 'agent.tool_denied'
   ) {
+    const call = event.data as Record<string, unknown>;
+    const toolName = typeof call.tool === 'string' ? call.tool : undefined;
+    const pendingOutput = Array.isArray(execution.pendingToolOutput)
+      ? execution.pendingToolOutput
+      : [];
+    const output = pendingOutput.filter(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        (item as Record<string, unknown>).tool === toolName,
+    );
+    execution.pendingToolOutput = pendingOutput.filter(
+      (item) =>
+        typeof item !== 'object' ||
+        item === null ||
+        (item as Record<string, unknown>).tool !== toolName,
+    );
+
+    // A tool emits stdout/stderr before its result event. Attach buffered logs
+    // here so each invocation owns the diagnostics it produced.
+    const callWithOutput = output.length > 0 ? { ...call, output } : call;
     execution.toolCalls = [
       ...(Array.isArray(execution.toolCalls) ? execution.toolCalls : []),
-      event.data,
+      callWithOutput,
+    ];
+  } else if (event.event_type === 'agent.tool_output') {
+    const { data, stream, tool } = event.data as Record<string, unknown>;
+    if (
+      (stream !== 'stdout' && stream !== 'stderr') ||
+      typeof data !== 'string'
+    )
+      return;
+
+    execution.pendingToolOutput = [
+      ...(Array.isArray(execution.pendingToolOutput)
+        ? execution.pendingToolOutput
+        : []),
+      {
+        tool: typeof tool === 'string' ? tool : 'Tool',
+        stream,
+        data: truncate(data),
+      },
     ];
   } else if (event.event_type === 'workflow.node_result') {
     const messages = execution.messages;
+    const toolCalls = execution.toolCalls;
     Object.assign(execution, event.data);
     if (Array.isArray(messages) && messages.length)
       execution.messages = messages;
+    // The final node snapshot repeats tool calls without their live stdout/stderr.
+    // Keep the live records because they are the only records carrying Tool App logs.
+    if (Array.isArray(toolCalls) && toolCalls.length)
+      execution.toolCalls = toolCalls;
   } else if (event.event_type === 'process.output') {
     const { stream, data, name } = event.data as Record<string, unknown>;
     if (

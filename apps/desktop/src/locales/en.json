@@ -120,15 +120,17 @@
 
     "models": {
       "title": "Models",
-      "description": "Set one API key for all models from the same provider. Changes are saved automatically.",
+      "description": "Set credentials for each provider. You can also use a custom endpoint for compatible APIs or a remote Ollama host. Changes are saved automatically.",
       "apiKeyPlaceholder": "Enter API key",
+      "baseUrlPlaceholder": "Custom endpoint (optional)",
       "modelCount_one": "Applies to {{count}} model",
       "modelCount_other": "Applies to {{count}} models",
       "gemini": "API key for Gemini",
       "openAi": "API key for OpenAI",
       "anthropic": "API key for Anthropic",
       "deepSeek": "API key for DeepSeek",
-      "groq": "API key for Groq"
+      "groq": "API key for Groq",
+      "ollama": "Ollama endpoint"
     },
 
     "skills": {
