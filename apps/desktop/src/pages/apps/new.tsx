@@ -68,7 +68,12 @@ function CreateProcessNodePage() {
   });
   const form = useForm<CreateProcessNodeForm>({
     resolver: zodResolver(createAppSchema),
-    defaultValues: { name: '', description: '', kind: 'workflow', projectRoot: '' },
+    defaultValues: {
+      name: '',
+      description: '',
+      kind: 'workflow',
+      projectRoot: '',
+    },
   });
 
   const create = useMutation({

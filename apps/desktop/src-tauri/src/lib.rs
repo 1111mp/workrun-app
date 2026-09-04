@@ -114,6 +114,12 @@ pub fn run() {
             cmd::process_node::process_node_delete,
             cmd::process_node::process_node_workflow_references,
             cmd::process_node::process_node_run,
+            // Local execution history
+            cmd::run_history::run_history_create,
+            cmd::run_history::run_history_append_events,
+            cmd::run_history::run_history_finalize,
+            cmd::run_history::run_history_list,
+            cmd::run_history::run_history_inspect,
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,

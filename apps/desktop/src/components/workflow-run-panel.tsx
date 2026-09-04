@@ -31,6 +31,8 @@ type WorkflowRunPanelProps = {
   nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
   onResume: () => void;
+  readOnly?: boolean;
+  onHistoricalClose?: () => void;
 };
 
 const chatMessageInput: WorkflowInput = {
@@ -193,6 +195,8 @@ function WorkflowRunPanel({
   nodes,
   onRun,
   onResume,
+  readOnly = false,
+  onHistoricalClose,
 }: WorkflowRunPanelProps) {
   const {
     lastRunInput,
@@ -218,7 +222,10 @@ function WorkflowRunPanel({
       defaultHorizontalSnapPoint='31rem'
       horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
       swipeDirection='right'
-      onOpenChange={onOpenChange}
+      onOpenChange={(open) => {
+        if (!open && readOnly) onHistoricalClose?.();
+        else onOpenChange(open);
+      }}
     >
       <DrawerContent>
         {settings.mode === 'chat' ? (
@@ -227,25 +234,31 @@ function WorkflowRunPanel({
             workflowNodes={nodes}
             isRunning={isRunning}
             isChat
+            readOnly={readOnly}
             onRunAgain={() => {
               if (run.status === 'failed' || run.status === 'interrupted')
                 onResume();
               else if (lastRunInput) onRun(lastRunInput);
             }}
             onSend={onRun}
-            onClose={() => onOpenChange(false)}
+            onClose={() =>
+              readOnly ? onHistoricalClose?.() : onOpenChange(false)
+            }
           />
         ) : showOutput ? (
           <WorkflowRunOutput
             run={run}
             workflowNodes={nodes}
             isRunning={isRunning}
+            readOnly={readOnly}
             onRunAgain={() => {
               if (run.status === 'failed' || run.status === 'interrupted')
                 onResume();
               else if (lastRunInput) onRun(lastRunInput);
             }}
-            onClose={() => onOpenChange(false)}
+            onClose={() =>
+              readOnly ? onHistoricalClose?.() : onOpenChange(false)
+            }
           />
         ) : (
           <>

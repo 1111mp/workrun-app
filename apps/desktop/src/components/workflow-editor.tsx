@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,10 +33,14 @@ import {
   Separator,
   SidebarProvider,
   SidebarTrigger,
+  Tabs,
+  TabsList,
+  TabsTrigger,
   Textarea,
 } from '@workspace/ui/components';
 import {
   ArrowLeftIcon,
+  HistoryIcon,
   SaveIcon,
   Settings2Icon,
   ShieldAlertIcon,
@@ -47,11 +51,19 @@ import Markdown from 'react-markdown';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 
+import { WorkflowHistory } from '@/components/workflow-history';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { getModelCatalog } from '@/services/cmd';
+import {
+  inspectRunRecord,
+  listRunHistoryPage,
+  type RunHistoryCursor,
+  type RunRecord,
+} from '@/services/run-history';
 import {
   createWorkflow,
   createWorkflowDocument,
@@ -59,9 +71,11 @@ import {
   updateWorkflow,
   type StoredWorkflow,
   type WorkflowDocument,
+  type WorkflowRunView,
 } from '@/services/workflow';
 import {
   createWorkflowStore,
+  useWorkflowRunStore,
   useWorkflowStoreApi,
   WorkflowStoreProvider,
 } from '@/stores';
@@ -77,6 +91,7 @@ const WORKFLOW_MODE = [
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
   autoStartRun?: boolean;
+  historicalRun?: RunRecord;
 };
 
 function ReviewMarkdown({ content }: { content: string }) {
@@ -158,7 +173,11 @@ function HumanReviewContent({
   );
 }
 
-function WorkflowEditor({ workflow, autoStartRun }: WorkflowEditorProps) {
+function WorkflowEditor({
+  workflow,
+  autoStartRun,
+  historicalRun,
+}: WorkflowEditorProps) {
   const [draftDocument] = useState<WorkflowDocument>(() =>
     createWorkflowDocument(),
   );
@@ -168,7 +187,11 @@ function WorkflowEditor({ workflow, autoStartRun }: WorkflowEditorProps) {
 
   return (
     <WorkflowStoreProvider store={workflowStore}>
-      <WorkflowEditorContent workflow={workflow} autoStartRun={autoStartRun} />
+      <WorkflowEditorContent
+        workflow={workflow}
+        autoStartRun={autoStartRun}
+        historicalRun={historicalRun}
+      />
     </WorkflowStoreProvider>
   );
 }
@@ -176,8 +199,13 @@ function WorkflowEditor({ workflow, autoStartRun }: WorkflowEditorProps) {
 function WorkflowEditorContent({
   workflow,
   autoStartRun,
+  historicalRun,
 }: WorkflowEditorProps) {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [viewingHistoricalRunId, setViewingHistoricalRunId] = useState<
+    string | undefined
+  >();
   const [savedDocument, setSavedDocument] = useState<string>(() =>
     workflow ? JSON.stringify(workflow.document) : '',
   );
@@ -220,6 +248,19 @@ function WorkflowEditorContent({
     queryKey: ['modelCatalog'],
     queryFn: getModelCatalog,
   });
+  const workflowHistory = useInfiniteQuery({
+    queryKey: ['run-history', 'workflow', workflow?.id],
+    queryFn: ({ pageParam }) =>
+      listRunHistoryPage({
+        targetType: 'workflow',
+        targetId: workflow?.id,
+        pageSize: 20,
+        cursor: pageParam,
+      }),
+    initialPageParam: undefined as RunHistoryCursor | undefined,
+    getNextPageParam: (page) => page.nextCursor,
+    enabled: historyOpen && Boolean(workflow),
+  });
 
   const workflowRun = useWorkflowRun(
     workflow?.id ?? draftId,
@@ -227,6 +268,44 @@ function WorkflowEditorContent({
     edges,
     workflowSettings,
   );
+  const restoreHistoricalRun = useWorkflowRunStore(
+    useShallow((state) => ({
+      setRunPanelOpen: state.setRunPanelOpen,
+      setRunView: state.setRunView,
+      setShowRunOutput: state.setShowRunOutput,
+      resetRunView: state.resetRunView,
+    })),
+  );
+  useEffect(() => {
+    if (!historicalRun) {
+      // The run store is shared across editors. A normal workflow must never
+      // inherit the read-only output that was restored for a historical run.
+      restoreHistoricalRun.resetRunView();
+      restoreHistoricalRun.setShowRunOutput(false);
+      restoreHistoricalRun.setRunPanelOpen(false);
+      return;
+    }
+    restoreHistoricalRun.setRunView(
+      historicalRun.outputView as WorkflowRunView,
+    );
+    restoreHistoricalRun.setShowRunOutput(true);
+    restoreHistoricalRun.setRunPanelOpen(true);
+  }, [historicalRun, restoreHistoricalRun]);
+
+  const openHistoricalRun = async (id: string) => {
+    try {
+      const record = await inspectRunRecord(id);
+      restoreHistoricalRun.setRunView(record.outputView as WorkflowRunView);
+      restoreHistoricalRun.setShowRunOutput(true);
+      restoreHistoricalRun.setRunPanelOpen(true);
+      setViewingHistoricalRunId(id);
+    } catch (error) {
+      toast.error('Could not load run output', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
 
   const humanReviewNodeId =
     typeof workflowRun.humanReview?.nodeId === 'string'
@@ -326,6 +405,18 @@ function WorkflowEditorContent({
         isRunning={workflowRun.isRunning}
         runningNodeId={workflowRun.runningNodeId}
         onRun={workflowRun.startRun}
+        canvasContent={
+          historyOpen && workflow ? (
+            <WorkflowHistory
+              runs={workflowHistory.data?.pages.flatMap((page) => page.items) ?? []}
+              isLoading={workflowHistory.isLoading}
+              hasMore={workflowHistory.hasNextPage}
+              isLoadingMore={workflowHistory.isFetchingNextPage}
+              onLoadMore={() => void workflowHistory.fetchNextPage()}
+              onView={(id) => void openHistoricalRun(id)}
+            />
+          ) : undefined
+        }
         header={
           <header className='flex h-10 shrink-0 items-center gap-2 pt-1 pr-4'>
             <div className='flex flex-1 items-center gap-2 px-4'>
@@ -386,6 +477,18 @@ function WorkflowEditorContent({
                   </Select>
                 </Field>
               </FieldGroup>
+              <Tabs
+                value={historyOpen ? 'history' : 'canvas'}
+                onValueChange={(value) => setHistoryOpen(value === 'history')}
+              >
+                <TabsList aria-label='Workflow view'>
+                  <TabsTrigger value='canvas'>Canvas</TabsTrigger>
+                  <TabsTrigger value='history' disabled={!workflow}>
+                    <HistoryIcon data-icon='inline-start' />
+                    History
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
             <div className='flex items-center gap-2'>
               <Button
@@ -437,6 +540,14 @@ function WorkflowEditorContent({
           nodes={nodes}
           onRun={workflowRun.startWorkflowRun}
           onResume={workflowRun.resumeWorkflowRun}
+          readOnly={Boolean(historicalRun || viewingHistoricalRunId)}
+          onHistoricalClose={() => {
+            if (historicalRun) void navigate(-1);
+            else {
+              setViewingHistoricalRunId(undefined);
+              restoreHistoricalRun.setRunPanelOpen(false);
+            }
+          }}
         />
         <AlertDialog open={Boolean(workflowRun.toolApproval)}>
           <AlertDialogContent>

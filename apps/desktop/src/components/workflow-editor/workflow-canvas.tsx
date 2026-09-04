@@ -191,6 +191,7 @@ function getAbsolutePosition(node: Node, nodes: Node[]) {
 }
 
 type WorkflowCanvasProps = {
+  canvasContent?: ReactNode;
   children: ReactNode;
   header: ReactNode;
   isRunning: boolean;
@@ -200,6 +201,7 @@ type WorkflowCanvasProps = {
 
 function WorkflowCanvas({
   children,
+  canvasContent,
   header,
   isRunning,
   runningNodeId,
@@ -321,8 +323,8 @@ function WorkflowCanvas({
       <WorkflowSidebar onNodeDrop={addPaletteNode} />
       <SidebarInset>
         {header}
-        <div className='flex flex-1'>
-          <ReactFlow
+        <div className='flex flex-1 min-h-0'>
+          {canvasContent ?? <ReactFlow
             colorMode={colorMode}
             fitView
             nodes={nodes}
@@ -387,7 +389,7 @@ function WorkflowCanvas({
                   : 'Run'}
               </Button>
             </Panel>
-          </ReactFlow>
+          </ReactFlow>}
         </div>
         {children}
       </SidebarInset>

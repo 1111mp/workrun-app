@@ -139,6 +139,20 @@ pub fn app_home_dir() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.root())
 }
 
+/// get the resources dir
+pub fn app_resources_dir() -> Result<PathBuf> {
+    // Avoid crashes when Handle is not initialized
+    let app_handle = handle::Handle::app_handle();
+
+    match app_handle.path().resource_dir() {
+        Ok(dir) => Ok(dir.join("resources")),
+        Err(err) => {
+            logging!(error, Type::File, "Failed to get the resource directory: {err}");
+            Err(anyhow::anyhow!("Failed to get the resource directory"))
+        },
+    }
+}
+
 /// `workrun.yaml` file path
 pub fn workrun_path() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.workrun_path())
@@ -152,6 +166,11 @@ pub fn app_logs_dir() -> Result<PathBuf> {
 /// sqlite db dir
 pub fn app_db_dir() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.db_dir())
+}
+
+/// db migration dir
+pub fn db_migration_dir() -> Result<PathBuf> {
+    Ok(app_resources_dir()?.join("migrations"))
 }
 
 /// runtime dir

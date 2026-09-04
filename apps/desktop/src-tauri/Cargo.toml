@@ -47,7 +47,7 @@ semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
-sqlx = { workspace = true, features = ["runtime-tokio", "sqlite"] }
+sqlx = { workspace = true, features = ["chrono", "json", "migrate", "runtime-tokio", "sqlite"] }
 sys-locale = "0.3.2"
 tauri = { workspace = true, features = [
   "devtools",

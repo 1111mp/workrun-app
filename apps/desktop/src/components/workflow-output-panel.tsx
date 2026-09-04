@@ -69,6 +69,7 @@ type WorkflowOutputPanelProps = {
   onClose: () => void;
   isChat?: boolean;
   onSend?: (initialState: Record<string, unknown>) => void;
+  readOnly?: boolean;
 };
 
 function statusLabel(status: WorkflowRunView['status']) {
@@ -766,6 +767,7 @@ function WorkflowRunOutput({
   onClose,
   isChat = false,
   onSend,
+  readOnly = false,
 }: WorkflowOutputPanelProps) {
   const [message, setMessage] = useState('');
   const duration = durationLabel(run);
@@ -788,7 +790,7 @@ function WorkflowRunOutput({
   const sendMessage = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = message.trim();
-    if (!content || isRunning || !onSend) return;
+    if (!content || readOnly || isRunning || !onSend) return;
     onSend({ input: content });
     setMessage('');
   };
@@ -1043,17 +1045,22 @@ function WorkflowRunOutput({
 
       {isChat ? (
         <DrawerFooter>
-          {(run.status === 'interrupted' || run.status === 'failed') && (
-            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
-              <RotateCcwIcon data-icon='inline-start' />
-              {rerunLabel(run.status)}
-            </Button>
-          )}
+          {!readOnly &&
+            (run.status === 'interrupted' || run.status === 'failed') && (
+              <Button
+                variant='outline'
+                disabled={isRunning}
+                onClick={onRunAgain}
+              >
+                <RotateCcwIcon data-icon='inline-start' />
+                {rerunLabel(run.status)}
+              </Button>
+            )}
           <form className='w-full' onSubmit={sendMessage}>
             <InputGroup className='h-auto'>
               <InputGroupTextarea
                 aria-label='Message'
-                disabled={isRunning}
+                disabled={readOnly || isRunning}
                 placeholder='What are we working on today?'
                 value={message}
                 onChange={(event) => setMessage(event.target.value)}
@@ -1069,7 +1076,7 @@ function WorkflowRunOutput({
                   Enter to send · Shift+Enter for new line
                 </InputGroupText>
                 <InputGroupButton
-                  disabled={!message.trim() || isRunning}
+                  disabled={readOnly || !message.trim() || isRunning}
                   size='icon-sm'
                   type='submit'
                   variant='default'
@@ -1083,10 +1090,12 @@ function WorkflowRunOutput({
         </DrawerFooter>
       ) : (
         <DrawerFooter className='flex-row justify-end'>
-          <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
-            <RotateCcwIcon data-icon='inline-start' />
-            {rerunLabel(run.status)}
-          </Button>
+          {!readOnly && (
+            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+              <RotateCcwIcon data-icon='inline-start' />
+              {rerunLabel(run.status)}
+            </Button>
+          )}
           <Button variant='outline' disabled={!output} onClick={copyAll}>
             <ClipboardIcon data-icon='inline-start' />
             Copy all

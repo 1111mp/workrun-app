@@ -21,6 +21,9 @@ export type ProcessNodeRun = {
   isRunning: boolean;
   node: ProcessNode;
   output: ProcessNodeOutput;
+  runId?: string;
+  startedAt?: number;
+  eventSequence?: number;
 };
 
 type AppRunOutputPanelProps = {
@@ -28,6 +31,7 @@ type AppRunOutputPanelProps = {
   onOpenChange: (open: boolean) => void;
   onRunAgain: () => void;
   open: boolean;
+  readOnly?: boolean;
   run?: ProcessNodeRun;
 };
 
@@ -93,28 +97,26 @@ function AppRunOutputPanel({
   onOpenChange,
   onRunAgain,
   open,
+  readOnly = false,
   run,
 }: AppRunOutputPanelProps) {
   const hasOutput = Boolean(run?.output.stdout || run?.output.stderr);
-
-  if (!run) return null;
-
-  const status = run.isRunning
+  const status = run?.isRunning
     ? 'Running'
-    : run.error || run.execution?.exitCode !== 0
+    : run?.error || run?.execution?.exitCode !== 0
       ? 'Run failed'
       : 'Run completed';
-  const StatusIcon = run.isRunning
+  const StatusIcon = run?.isRunning
     ? Spinner
-    : run.error || run.execution?.exitCode !== 0
+    : run?.error || run?.execution?.exitCode !== 0
       ? CircleAlertIcon
       : CheckCircle2Icon;
 
   const copyAll = async () => {
     if (!hasOutput) return;
     const text = [
-      run.output.stdout && `stdout\n${run.output.stdout}`,
-      run.output.stderr && `stderr\n${run.output.stderr}`,
+      run?.output.stdout && `stdout\n${run.output.stdout}`,
+      run?.output.stderr && `stderr\n${run.output.stderr}`,
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -131,42 +133,54 @@ function AppRunOutputPanel({
       onOpenChange={onOpenChange}
     >
       <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>Run output · {run.node.definition.name}</DrawerTitle>
-          <DrawerDescription className='flex items-center gap-1.5'>
-            <StatusIcon className='size-3.5' />
-            {status}
-            {run.execution
-              ? ` · Exit code ${run.execution.exitCode ?? 'unknown'}`
-              : ''}
-          </DrawerDescription>
-        </DrawerHeader>
+        {run ? (
+          <>
+            <DrawerHeader>
+              <DrawerTitle>Run output · {run.node.definition.name}</DrawerTitle>
+              <DrawerDescription className='flex items-center gap-1.5'>
+                <StatusIcon className='size-3.5' />
+                {status}
+                {run.execution
+                  ? ` · Exit code ${run.execution.exitCode ?? 'unknown'}`
+                  : ''}
+              </DrawerDescription>
+            </DrawerHeader>
 
-        <AppRunOutputContent
-          key={`${run.node.definition.id}:${run.output.stderr}`}
-          run={run}
-        />
+            <AppRunOutputContent
+              key={`${run.node.definition.id}:${run.output.stderr}`}
+              run={run}
+            />
 
-        <DrawerFooter className='flex-row justify-end'>
-          <Button variant='outline' disabled={!hasOutput} onClick={onClear}>
-            Clear
-          </Button>
-          <Button variant='outline' disabled={!hasOutput} onClick={copyAll}>
-            <ClipboardIcon data-icon='inline-start' />
-            Copy all
-          </Button>
-          <Button
-            variant='outline'
-            disabled={run.isRunning}
-            onClick={onRunAgain}
-          >
-            Run again
-          </Button>
-          <Button onClick={() => onOpenChange(false)}>Close</Button>
-        </DrawerFooter>
+            <DrawerFooter className='flex-row justify-end'>
+              {!readOnly && (
+                <Button
+                  variant='outline'
+                  disabled={!hasOutput}
+                  onClick={onClear}
+                >
+                  Clear
+                </Button>
+              )}
+              <Button variant='outline' disabled={!hasOutput} onClick={copyAll}>
+                <ClipboardIcon data-icon='inline-start' />
+                Copy all
+              </Button>
+              {!readOnly && (
+                <Button
+                  variant='outline'
+                  disabled={run.isRunning}
+                  onClick={onRunAgain}
+                >
+                  Run again
+                </Button>
+              )}
+              <Button onClick={() => onOpenChange(false)}>Close</Button>
+            </DrawerFooter>
+          </>
+        ) : null}
       </DrawerContent>
     </Drawer>
   );
 }
 
-export { AppRunOutputPanel };
+export { AppRunOutputContent, AppRunOutputPanel };

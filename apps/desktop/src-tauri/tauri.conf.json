@@ -38,7 +38,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources", "icons/icon.png"],
+    "resources": ["resources", "resources/migrations/*", "icons/icon.png"],
     "externalBin": ["binaries/uv"],
     "publisher": "Workrun",
     "copyright": "MIT License",

@@ -60,9 +60,13 @@ import {
   Trash2Icon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 
+import {
+  AppRunOutputPanel,
+  type ProcessNodeRun,
+} from '@/components/app-run-output-panel';
 import {
   deleteProcessNode,
   inspectProcessNode,
@@ -70,6 +74,7 @@ import {
   updateProcessNode,
   type ProcessNodeDefinition,
 } from '@/services/process-node';
+import { inspectRunRecord, type RunRecord } from '@/services/run-history';
 
 import { copyProjectPath, openProjectDirectory } from './project-path';
 
@@ -452,10 +457,17 @@ type ProcessNodeDetails = Awaited<ReturnType<typeof inspectProcessNode>>;
 
 function ProcessNodeDetailPage() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const historyRunId = searchParams.get('runId');
   const node = useQuery({
     queryKey: ['apps', id],
     queryFn: () => inspectProcessNode(id!),
     enabled: Boolean(id),
+  });
+  const historicalRun = useQuery({
+    queryKey: ['run-history', historyRunId],
+    queryFn: () => inspectRunRecord(historyRunId!),
+    enabled: Boolean(historyRunId),
   });
 
   if (node.isError) {
@@ -486,14 +498,22 @@ function ProcessNodeDetailPage() {
     <ProcessNodeDetailEditor
       key={node.data.definition.id}
       processNode={node.data}
+      historicalRun={
+        historicalRun.data?.targetType === 'app' &&
+        historicalRun.data.targetId === node.data.definition.id
+          ? historicalRun.data
+          : undefined
+      }
     />
   );
 }
 
 function ProcessNodeDetailEditor({
   processNode,
+  historicalRun,
 }: {
   processNode: ProcessNodeDetails;
+  historicalRun?: RunRecord;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -836,6 +856,18 @@ function ProcessNodeDetailEditor({
           </CardContent>
         </Card>
       </main>
+      {historicalRun ? (
+        <AppRunOutputPanel
+          open
+          readOnly
+          run={historicalRun.outputView as ProcessNodeRun}
+          onClear={() => undefined}
+          onRunAgain={() => undefined}
+          onOpenChange={(open) => {
+            if (!open) void navigate(-1);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

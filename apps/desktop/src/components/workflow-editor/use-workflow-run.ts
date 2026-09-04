@@ -5,9 +5,15 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import {
+  appendRunEvents,
+  createRunRecord,
+  finalizeRunRecord,
+} from '@/services/run-history';
+import {
   resolveAskUserQuestion,
   resolveHumanReview,
   runWorkflow,
+  toWorkflowDocument,
   toWorkflowDsl,
   type ToolConfirmationDecision,
   type WorkflowRunEvent,
@@ -103,6 +109,8 @@ function useWorkflowRun(
   );
   const chatThreadId = useRef<string | undefined>(undefined);
   const runThreadId = useRef<string | undefined>(undefined);
+  const runId = useRef<string | undefined>(undefined);
+  const runEventSequence = useRef(0);
   const chatTurnId = useRef<string | undefined>(undefined);
   const pendingEvents = useRef<PendingRunEvent[]>([]);
   const pendingCharacters = useRef(0);
@@ -173,6 +181,18 @@ function useWorkflowRun(
     [],
   );
   const handleEvent = (event: WorkflowRunEvent) => {
+    const persistedRunId = runId.current;
+    if (persistedRunId) {
+      // Store transport-sized events before UI animation splits streaming text.
+      // This keeps the original runtime trace available for future diagnostics.
+      void appendRunEvents(persistedRunId, [
+        {
+          sequence: runEventSequence.current++,
+          event,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    }
     if (event.type === 'message') {
       if (event.content) queue(event);
       return;
@@ -184,7 +204,12 @@ function useWorkflowRun(
     store.applyRunEvents([event], context());
   };
   const mutation = useMutation({
-    mutationFn: ({ input, threadId, resume, toolConfirmation }: WorkflowRunRequest) =>
+    mutationFn: ({
+      input,
+      threadId,
+      resume,
+      toolConfirmation,
+    }: WorkflowRunRequest) =>
       runWorkflow(
         toWorkflowDsl(workflowId, nodes, edges, settings),
         input,
@@ -200,15 +225,21 @@ function useWorkflowRun(
             ...current,
             finalState: result.state,
           }));
-          if (!store.toolApproval && !store.humanReview && !store.askUserQuestion) {
+          if (
+            !store.toolApproval &&
+            !store.humanReview &&
+            !store.askUserQuestion
+          ) {
             toast.info('Workflow interrupted', {
               toasterId: 'global',
               description: 'Resume to continue from the saved checkpoint.',
             });
           }
+          void persistFinalRun('interrupted');
           return;
         }
         store.finishWorkflowRun(result.state);
+        void persistFinalRun('completed');
         const lastNode = result.state.workflow['workflow.last_node'];
         toast.success('Workflow completed', {
           toasterId: 'global',
@@ -223,6 +254,7 @@ function useWorkflowRun(
       const message = error instanceof Error ? error.message : String(error);
       runAfterDrain(() => {
         store.failWorkflowRun(message);
+        void persistFinalRun('failed', message);
         toast.error('Workflow failed', {
           toasterId: 'global',
           description: message,
@@ -231,7 +263,26 @@ function useWorkflowRun(
     },
     onSettled: () => runAfterDrain(store.clearRunningNode),
   });
+  const persistFinalRun = (
+    status: 'completed' | 'failed' | 'interrupted',
+    error?: string,
+  ) => {
+    const id = runId.current;
+    if (!id) return;
+    const view = useWorkflowRunStore.getState().runView;
+    const endedAt = view.endedAt ?? Date.now();
+    void finalizeRunRecord(id, {
+      status,
+      endedAt: new Date(endedAt).toISOString(),
+      durationMs: Math.max(0, endedAt - (view.startedAt ?? endedAt)),
+      outputView: view,
+      error,
+    });
+  };
   const startWorkflowRun = (input: Record<string, unknown>) => {
+    void beginWorkflowRun(input);
+  };
+  const beginWorkflowRun = async (input: Record<string, unknown>) => {
     const subworkflow = unconfiguredSubworkflow(nodes);
     if (subworkflow) {
       const workflowName = subworkflow.data?.workflowName;
@@ -258,7 +309,28 @@ function useWorkflowRun(
         ? (chatThreadId.current ?? crypto.randomUUID())
         : crypto.randomUUID();
     runThreadId.current = threadId;
+    runId.current = crypto.randomUUID();
+    runEventSequence.current = 0;
     store.startWorkflowRun(input, settings.mode, chatTurnId.current);
+    try {
+      await createRunRecord({
+        id: runId.current,
+        targetType: 'workflow',
+        targetId: workflowId,
+        targetName: settings.name,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        input,
+        outputView: useWorkflowRunStore.getState().runView,
+        targetSnapshot: toWorkflowDocument(nodes, edges, settings),
+      });
+    } catch (error) {
+      toast.error('Run history could not be saved', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+      runId.current = undefined;
+    }
     mutation.mutate({ input, threadId, resume: false });
   };
   const resumeWorkflowRun = (toolConfirmation?: ToolConfirmationDecision) => {

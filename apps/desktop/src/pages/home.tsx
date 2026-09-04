@@ -16,6 +16,7 @@ import {
 import {
   BookOpenIcon,
   BoxesIcon,
+  HistoryIcon,
   LogOutIcon,
   RefreshCwIcon,
   ServerCogIcon,
@@ -44,6 +45,7 @@ const navigation = [
     labelKey: 'navigation.apps',
     icon: BoxesIcon,
   },
+  { to: '/runs', labelKey: 'Run history', icon: HistoryIcon },
 ];
 
 function HomePage() {

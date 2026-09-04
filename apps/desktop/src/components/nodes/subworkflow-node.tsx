@@ -15,9 +15,17 @@ function SubworkflowNode({
         selected && 'border-indigo-500 shadow-sm shadow-indigo-500/30',
       )}
     >
-      <Handle type='target' position={Position.Left} isConnectable={isConnectable} className='bg-background! size-3! border-2! border-indigo-500!' />
+      <Handle
+        type='target'
+        position={Position.Left}
+        isConnectable={isConnectable}
+        className='bg-background! size-3! border-2! border-indigo-500!'
+      />
       <div className='flex items-center gap-2'>
-        <WorkflowIcon className='size-5 shrink-0 text-indigo-500' aria-hidden='true' />
+        <WorkflowIcon
+          className='size-5 shrink-0 text-indigo-500'
+          aria-hidden='true'
+        />
         <p className='truncate font-medium text-indigo-700 dark:text-indigo-300'>
           {data.workflowName || 'Subworkflow'}
         </p>
@@ -28,7 +36,12 @@ function SubworkflowNode({
       <p className='text-muted-foreground mt-3 truncate border-t border-indigo-500/20 pt-2 text-xs'>
         Isolated workflow scope
       </p>
-      <Handle type='source' position={Position.Right} isConnectable={isConnectable} className='bg-background! size-3! border-2! border-indigo-500!' />
+      <Handle
+        type='source'
+        position={Position.Right}
+        isConnectable={isConnectable}
+        className='bg-background! size-3! border-2! border-indigo-500!'
+      />
     </div>
   );
 }

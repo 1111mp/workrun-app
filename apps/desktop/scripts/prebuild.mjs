@@ -11,12 +11,13 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
 import { extract as extractTar } from 'tar';
 
 // Deliberately pin uv: it is shipped in every Workrun application bundle.
 // Update this value in a dedicated dependency-update change, then let this
 // script fetch and verify the corresponding official release artifact.
-const UV_VERSION = '0.12.3';
+const UV_VERSION = '0.12.9';
 const RELEASE_BASE = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
 const BINARIES_DIR = fileURLToPath(
   new URL('../src-tauri/binaries/', import.meta.url),

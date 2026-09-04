@@ -10,16 +10,23 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { useParams, useSearchParams } from 'react-router';
 
 import { WorkflowEditor } from '@/components';
+import { inspectRunRecord } from '@/services/run-history';
 import { inspectWorkflow } from '@/services/workflow';
 
 function WorkflowPage() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
+  const historyRunId = searchParams.get('runId');
 
   const workflow = useQuery({
     queryKey: ['workflows', id],
     queryFn: () => inspectWorkflow(id!),
     enabled: Boolean(id),
+  });
+  const historicalRun = useQuery({
+    queryKey: ['run-history', historyRunId],
+    queryFn: () => inspectRunRecord(historyRunId!),
+    enabled: Boolean(historyRunId),
   });
 
   if (workflow.isLoading) {
@@ -52,6 +59,12 @@ function WorkflowPage() {
         key={workflow.data.id}
         workflow={workflow.data}
         autoStartRun={searchParams.get('run') === 'true'}
+        historicalRun={
+          historicalRun.data?.targetType === 'workflow' &&
+          historicalRun.data.targetId === workflow.data.id
+            ? historicalRun.data
+            : undefined
+        }
       />
     </ReactFlowProvider>
   );

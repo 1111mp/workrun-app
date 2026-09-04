@@ -37,6 +37,10 @@ export const router = createMemoryRouter(
           lazy: () => import('@/pages/apps/detail'),
         },
         {
+          path: 'runs',
+          lazy: () => import('@/pages/runs'),
+        },
+        {
           path: 'skills',
           lazy: () => import('@/pages/skills'),
         },
