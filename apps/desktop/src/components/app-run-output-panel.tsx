@@ -13,9 +13,11 @@ import { CheckCircle2Icon, CircleAlertIcon, ClipboardIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import type { ProcessNode } from '@/services/process-node';
+import type { RunRecord } from '@/services/run-history';
 
 export type ProcessNodeOutput = Record<'stdout' | 'stderr', string>;
 export type ProcessNodeRun = {
+  cancelled?: boolean;
   error?: string;
   execution?: { exitCode: number | null };
   isRunning: boolean;
@@ -25,6 +27,64 @@ export type ProcessNodeRun = {
   startedAt?: number;
   eventSequence?: number;
 };
+
+const MAX_RESTORED_OUTPUT_CHARS = 200_000;
+
+function appendRestoredOutput(current: string, chunk: string) {
+  const next = current + chunk;
+  if (next.length <= MAX_RESTORED_OUTPUT_CHARS) return next;
+  return `[Earlier output truncated]\n${next.slice(-MAX_RESTORED_OUTPUT_CHARS)}`;
+}
+
+/**
+ * The stored view is only a fast initial snapshot. Replaying the durable event
+ * journal makes a run view complete even after the originating page unmounts.
+ */
+function restoreProcessNodeRun(
+  record: RunRecord,
+  currentNode?: ProcessNode,
+): ProcessNodeRun {
+  const view = record.outputView as Partial<ProcessNodeRun>;
+  // A catalog entry can change after a run. Prefer the current one when the
+  // caller has it, but retain the captured entry for archive-only views.
+  const node = currentNode ?? view.node;
+  if (!node) throw new Error('The saved App definition is unavailable.');
+  const run: ProcessNodeRun = {
+    ...view,
+    node,
+    output: { stdout: '', stderr: '', ...view.output },
+    runId: record.id,
+    startedAt: Date.parse(record.startedAt),
+    isRunning:
+      record.status === 'queued' ||
+      record.status === 'running' ||
+      record.status === 'waiting_for_input',
+    error: record.error ?? view.error,
+  };
+
+  for (const { event } of record.events) {
+    if (!event || typeof event !== 'object') continue;
+    const value = event as Record<string, unknown>;
+    if (
+      value.type === 'output' &&
+      (value.stream === 'stdout' || value.stream === 'stderr') &&
+      typeof value.data === 'string'
+    ) {
+      run.output[value.stream] = appendRestoredOutput(
+        run.output[value.stream],
+        value.data,
+      );
+    } else if (value.type === 'app_done' && value.execution) {
+      run.execution = value.execution as ProcessNodeRun['execution'];
+    } else if (value.type === 'app_cancelled') {
+      run.cancelled = true;
+    } else if (value.type === 'error' && typeof value.message === 'string') {
+      run.error = value.message;
+    }
+  }
+
+  return run;
+}
 
 type AppRunOutputPanelProps = {
   onClear: () => void;
@@ -103,14 +163,18 @@ function AppRunOutputPanel({
   const hasOutput = Boolean(run?.output.stdout || run?.output.stderr);
   const status = run?.isRunning
     ? 'Running'
-    : run?.error || run?.execution?.exitCode !== 0
-      ? 'Run failed'
-      : 'Run completed';
+    : run?.cancelled
+      ? 'Cancelled'
+      : run?.error || run?.execution?.exitCode !== 0
+        ? 'Run failed'
+        : 'Run completed';
   const StatusIcon = run?.isRunning
     ? Spinner
-    : run?.error || run?.execution?.exitCode !== 0
+    : run?.cancelled
       ? CircleAlertIcon
-      : CheckCircle2Icon;
+      : run?.error || run?.execution?.exitCode !== 0
+        ? CircleAlertIcon
+        : CheckCircle2Icon;
 
   const copyAll = async () => {
     if (!hasOutput) return;
@@ -183,4 +247,4 @@ function AppRunOutputPanel({
   );
 }
 
-export { AppRunOutputContent, AppRunOutputPanel };
+export { AppRunOutputContent, AppRunOutputPanel, restoreProcessNodeRun };

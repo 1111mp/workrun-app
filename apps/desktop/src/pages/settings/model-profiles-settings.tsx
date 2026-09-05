@@ -85,7 +85,7 @@ function ModelProfilesSettings({
                                 )}
                               />
                             )}
-                            {field.provider !== 'gemini' && (
+                            {field.provider === 'ollama' && (
                               <Input
                                 id={`model-base-url-${field.provider}`}
                                 type='url'

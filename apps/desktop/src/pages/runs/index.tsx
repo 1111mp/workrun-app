@@ -20,28 +20,23 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import {
-  BoxesIcon,
+  AppWindowIcon,
   HistoryIcon,
   ListFilterIcon,
   RefreshCwIcon,
   SearchIcon,
   WorkflowIcon,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
-import { toast } from 'sonner';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router';
 
 import {
-  AppRunOutputPanel,
-  type ProcessNodeRun,
-} from '@/components/app-run-output-panel';
-import {
-  inspectRunRecord,
   listRunHistoryPage,
   type RunHistoryCursor,
   type RunStatus,
   type RunTargetType,
 } from '@/services/run-history';
+import { useRunWorkspaceStore } from '@/stores';
 
 const targetFilters: { label: string; value?: RunTargetType }[] = [
   { label: 'All' },
@@ -58,18 +53,21 @@ const statusFilters: { label: string; value?: RunStatus }[] = [
 ];
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
+  queued: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   completed:
     'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
   failed: 'border-destructive/30 bg-destructive/10 text-destructive',
+  cancelled: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   interrupted:
     'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
   running: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400',
+  waiting_for_input:
+    'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
 };
 
 function RunsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [appOutputRun, setAppOutputRun] = useState<ProcessNodeRun>();
-  const [appOutputOpen, setAppOutputOpen] = useState(false);
+  const openWorkspaceRun = useRunWorkspaceStore((state) => state.openRun);
   const targetType = searchParams.get('targetType') as RunTargetType | null;
   const targetId = searchParams.get('targetId') ?? undefined;
   const status = searchParams.get('status') as RunStatus | null;
@@ -103,25 +101,11 @@ function RunsPage() {
     setSearchParams(next);
   };
 
-  const viewAppOutput = async (id: string) => {
-    try {
-      const record = await inspectRunRecord(id);
-      if (record.targetType !== 'app') return;
-      setAppOutputRun(record.outputView as ProcessNodeRun);
-      setAppOutputOpen(true);
-    } catch (error) {
-      toast.error('Could not load run output', {
-        toasterId: 'global',
-        description: error instanceof Error ? error.message : String(error),
-      });
-    }
-  };
-
   return (
     <div className='size-full overflow-y-auto'>
       <div className='mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8'>
         <section className='via-card relative overflow-hidden rounded-2xl border border-sky-200/70 bg-linear-to-br from-sky-500/12 to-violet-500/10 shadow-sm dark:border-sky-400/15'>
-          <div className='pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,hsl(214_90%_60%/0.14)_1px,transparent_1px),linear-gradient(to_bottom,hsl(214_90%_60%/0.14)_1px,transparent_1px)] [background-size:28px_28px]' />
+          <div className='pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,hsl(214_90%_60%/0.14)_1px,transparent_1px),linear-gradient(to_bottom,hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[28px_28px]' />
           <div className='relative flex flex-col gap-6 p-5 sm:p-7 lg:flex-row lg:items-end lg:justify-between'>
             <div className='max-w-xl'>
               <div className='text-muted-foreground mb-3 flex items-center gap-2 text-xs font-medium tracking-[0.16em] uppercase'>
@@ -132,7 +116,8 @@ function RunsPage() {
                 Run history
               </h1>
               <p className='text-muted-foreground mt-2 text-sm leading-6'>
-                Browse and replay saved Workflow and App executions from this device.
+                Browse and replay saved Workflow and App executions from this
+                device.
               </p>
             </div>
             <div className='bg-background/70 flex divide-x divide-sky-200/70 rounded-xl border border-sky-200/70 shadow-xs backdrop-blur-sm dark:divide-sky-400/15 dark:border-sky-400/15'>
@@ -212,7 +197,9 @@ function RunsPage() {
           </div>
         ) : null}
         {runs.isError ? (
-          <p className='text-destructive text-sm'>Could not load run history.</p>
+          <p className='text-destructive text-sm'>
+            Could not load run history.
+          </p>
         ) : null}
         {!runs.isPending && historyItems.length === 0 ? (
           <Empty className='min-h-64 border border-dashed'>
@@ -236,14 +223,13 @@ function RunsPage() {
         <ItemGroup className='gap-2'>
           {historyItems.map((run) => {
             const isWorkflow = run.targetType === 'workflow';
-            const Icon = isWorkflow ? WorkflowIcon : BoxesIcon;
-            const target = `/workflows/${run.targetId}?runId=${run.id}`;
+            const Icon = isWorkflow ? WorkflowIcon : AppWindowIcon;
             return (
               <Item
                 key={run.id}
                 variant='outline'
                 size='sm'
-                className='border-l-4 border-l-violet-400/60 bg-violet-500/[0.035] hover:bg-violet-500/[0.065] dark:border-l-violet-400/40'
+                className='border-l-4 border-l-violet-400/60 bg-violet-500/[0.035] hover:bg-violet-500/6.5 dark:border-l-violet-400/40'
               >
                 <ItemMedia
                   variant='icon'
@@ -269,22 +255,9 @@ function RunsPage() {
                   >
                     {run.status}
                   </Badge>
-                  {isWorkflow ? (
-                    <Button
-                      size='sm'
-                      nativeButton={false}
-                      render={<Link to={target} />}
-                    >
-                      View output
-                    </Button>
-                  ) : (
-                    <Button
-                      size='sm'
-                      onClick={() => void viewAppOutput(run.id)}
-                    >
-                      View output
-                    </Button>
-                  )}
+                  <Button size='sm' onClick={() => openWorkspaceRun(run)}>
+                    View output
+                  </Button>
                 </ItemActions>
               </Item>
             );
@@ -298,7 +271,9 @@ function RunsPage() {
               disabled={runs.isFetchingNextPage}
               onClick={() => void runs.fetchNextPage()}
             >
-              {runs.isFetchingNextPage ? <Spinner data-icon='inline-start' /> : null}
+              {runs.isFetchingNextPage ? (
+                <Spinner data-icon='inline-start' />
+              ) : null}
               Load more
             </Button>
           </div>
@@ -308,14 +283,6 @@ function RunsPage() {
           </p>
         ) : null}
       </div>
-      <AppRunOutputPanel
-        open={appOutputOpen}
-        run={appOutputRun}
-        readOnly
-        onOpenChange={setAppOutputOpen}
-        onClear={() => undefined}
-        onRunAgain={() => undefined}
-      />
     </div>
   );
 }

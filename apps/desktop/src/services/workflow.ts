@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { Edge, Node } from '@xyflow/react';
 
 const workflowDocumentStorageKey = 'workrun.workflow.document';
@@ -43,6 +44,24 @@ export type WorkflowRunResult = {
   interrupted: boolean;
 };
 
+export type WorkflowRunEventEnvelope = {
+  runId: string;
+  sequence: number;
+  event: WorkflowRunEvent;
+};
+
+export type BackgroundWorkflowRunRequest = {
+  runId: string;
+  targetId: string;
+  targetName: string;
+  input: Record<string, unknown>;
+  outputView: unknown;
+  targetSnapshot: unknown;
+  dsl: Workflow;
+  initialState: Record<string, unknown>;
+  threadId: string;
+};
+
 export type ToolConfirmationDecision = {
   functionCallId: string;
   fingerprint: string;
@@ -74,6 +93,7 @@ export type WorkflowRunStatus =
   | 'running'
   | 'completed'
   | 'failed'
+  | 'cancelled'
   | 'interrupted';
 
 export type WorkflowRunMessage = {
@@ -276,6 +296,44 @@ export function runWorkflow(
     resume,
     toolConfirmation,
     onEvent: channel,
+  });
+}
+
+export function startBackgroundWorkflowRun(
+  request: BackgroundWorkflowRunRequest,
+) {
+  return invoke('workflow_run_start', { request });
+}
+
+export function resumeBackgroundWorkflowRun(
+  runId: string,
+  toolConfirmation?: ToolConfirmationDecision,
+) {
+  return invoke('workflow_run_resume', {
+    request: { runId, toolConfirmation },
+  });
+}
+
+export function resolveBackgroundWorkflowAction(
+  id: string,
+  claimantId: string,
+  resolution: unknown,
+) {
+  return invoke('workflow_run_resolve_action', {
+    request: { id, claimantId, resolution },
+  });
+}
+
+export function cancelBackgroundWorkflowRun(runId: string) {
+  return invoke('workflow_run_cancel', { runId });
+}
+
+export function subscribeWorkflowRun(
+  runId: string,
+  onEvent: (event: WorkflowRunEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WorkflowRunEventEnvelope>('run-event', ({ payload }) => {
+    if (payload.runId === runId) onEvent(payload.event);
   });
 }
 

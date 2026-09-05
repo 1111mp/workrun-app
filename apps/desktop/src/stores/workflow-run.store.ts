@@ -118,6 +118,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
       set((state) => {
         state.isResuming = false;
         state.lastRunInput = input;
+        // Workflows present their live graph trace as soon as a run starts.
         state.runPanelOpen = true;
         state.showRunOutput = true;
         if (mode === 'chat') {
@@ -250,6 +251,13 @@ function applyRunEvent(
     return;
   }
   if (event.type === 'message') return appendMessage(view, event, context);
+  if (event.type === 'resumed') {
+    // Persisted histories replay from the beginning, so they do not call the
+    // live `resumeWorkflowRun` action. Mark the next node start as a retry of
+    // the paused node rather than creating a duplicate execution entry.
+    state.isResuming = true;
+    return;
+  }
   if (event.type === 'node_end') {
     const node = view.nodes.find((item) => item.id === event.node);
     if (node)
@@ -286,7 +294,17 @@ function applyRunEvent(
   } else if (event.type === 'error') {
     finish(state, 'failed', undefined, event.message);
   } else if (event.type === 'interrupted') {
-    finish(state, 'interrupted', undefined, event.message);
+    const awaitingInput = Boolean(
+      state.toolApproval || state.humanReview || state.askUserQuestion,
+    );
+    // Dynamic interrupts pause the workflow for a user decision; they are not
+    // execution failures and should not leave a destructive error banner behind.
+    finish(
+      state,
+      'interrupted',
+      undefined,
+      awaitingInput ? undefined : event.message,
+    );
   }
 }
 
@@ -328,6 +346,10 @@ function applyCustom(
   state: WorkflowRunStore,
   event: Extract<WorkflowRunEvent, { type: 'custom' }>,
 ) {
+  if (event.event_type === 'workflow.run_cancelled') {
+    finish(state, 'cancelled', undefined, 'Cancelled by user');
+    return;
+  }
   if (typeof event.data !== 'object' || event.data === null) return;
   if (event.event_type === 'agent.tool_approval_required') {
     state.toolApproval = event.data as Record<string, unknown>;
@@ -437,7 +459,14 @@ function finish(
   view.activeNodeId = undefined;
   view.endedAt ??= Date.now();
   if (finalState) view.finalState = finalState;
-  if (error) view.error = error;
+  // A later completion (for example after a human-review resume) supersedes
+  // any error from an earlier execution attempt.
+  view.error = error;
+  // Terminal events may arrive from Run Center rather than the editor's own
+  // decision handler, so they must also dismiss any visible approval dialog.
+  state.toolApproval = undefined;
+  state.humanReview = undefined;
+  state.askUserQuestion = undefined;
   view.thoughts.forEach((item) => {
     if (item.status === 'running')
       item.status = status === 'completed' ? 'completed' : 'failed';

@@ -14,8 +14,8 @@ import {
   DropdownMenuTrigger,
 } from '@workspace/ui/components';
 import {
+  AppWindowIcon,
   BookOpenIcon,
-  BoxesIcon,
   HistoryIcon,
   LogOutIcon,
   RefreshCwIcon,
@@ -30,6 +30,8 @@ import { NavLink, Outlet, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
+import { RunCenter } from '@/components/run-center';
+import { RunEventTracker } from '@/components/run-event-tracker';
 import { TeamSessionGate } from '@/components/team-session-gate';
 import { createTeamAuthClient } from '@/lib/auth-client';
 import {
@@ -43,7 +45,7 @@ const navigation = [
   {
     to: '/apps',
     labelKey: 'navigation.apps',
-    icon: BoxesIcon,
+    icon: AppWindowIcon,
   },
   { to: '/runs', labelKey: 'Run history', icon: HistoryIcon },
 ];
@@ -214,6 +216,8 @@ function HomeLayout() {
       <main className='min-h-0 flex-1'>
         <Outlet />
       </main>
+      <RunEventTracker />
+      <RunCenter />
     </div>
   );
 }

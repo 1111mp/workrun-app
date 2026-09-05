@@ -1,29 +1,14 @@
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-  Badge,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import {
   Button,
   Field,
   FieldGroup,
   FieldLabel,
   Input,
-  Questionnaire,
-  QuestionnaireActions,
-  QuestionnaireChoice,
-  QuestionnaireChoiceDescription,
-  QuestionnaireChoices,
-  QuestionnaireError,
-  QuestionnaireItem,
-  QuestionnaireSubmit,
-  QuestionnaireTitle,
   Select,
   SelectContent,
   SelectGroup,
@@ -36,18 +21,14 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-  Textarea,
 } from '@workspace/ui/components';
 import {
   ArrowLeftIcon,
   HistoryIcon,
   SaveIcon,
   Settings2Icon,
-  ShieldAlertIcon,
-  ShieldCheckIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
@@ -71,6 +52,7 @@ import {
   updateWorkflow,
   type StoredWorkflow,
   type WorkflowDocument,
+  type WorkflowRunEvent,
   type WorkflowRunView,
 } from '@/services/workflow';
 import {
@@ -93,85 +75,6 @@ type WorkflowEditorProps = {
   autoStartRun?: boolean;
   historicalRun?: RunRecord;
 };
-
-function ReviewMarkdown({ content }: { content: string }) {
-  return (
-    <Markdown
-      components={{
-        h1: ({ children }) => (
-          <h1 className='font-heading text-xl font-semibold tracking-tight'>
-            {children}
-          </h1>
-        ),
-        h2: ({ children }) => (
-          <h2 className='font-heading mt-6 text-lg font-semibold first:mt-0'>
-            {children}
-          </h2>
-        ),
-        h3: ({ children }) => (
-          <h3 className='mt-5 text-sm font-semibold'>{children}</h3>
-        ),
-        li: ({ children }) => <li className='leading-6'>{children}</li>,
-        p: ({ children }) => <p className='leading-6'>{children}</p>,
-        ul: ({ children }) => (
-          <ul className='list-disc space-y-1 pl-5'>{children}</ul>
-        ),
-      }}
-    >
-      {content}
-    </Markdown>
-  );
-}
-
-function HumanReviewContent({
-  review,
-  edits,
-  onEdit,
-}: {
-  review: Record<string, unknown> | undefined;
-  edits: Record<string, string>;
-  onEdit: (key: string, value: string) => void;
-}) {
-  const contentKey =
-    typeof review?.contentKey === 'string' ? review.contentKey : undefined;
-  const content = review?.content;
-  const context = review?.context;
-  const editable = review?.editable === true;
-
-  return (
-    <div className='max-h-[calc(88vh-12rem)] min-h-0 overflow-y-auto'>
-      <section className='bg-muted/20 rounded-lg border p-5'>
-        <div className='mb-4 flex items-center gap-2'>
-          <Badge variant='secondary'>审核内容</Badge>
-          {contentKey ? <code className='text-xs'>{contentKey}</code> : null}
-        </div>
-        {editable && contentKey && typeof content === 'string' ? (
-          <Textarea
-            value={edits[contentKey] ?? content}
-            onChange={(event) => onEdit(contentKey, event.target.value)}
-            className='min-h-72 font-mono text-sm leading-6'
-          />
-        ) : typeof content === 'string' ? (
-          <ReviewMarkdown content={content} />
-        ) : (
-          <pre className='bg-muted max-h-[calc(88vh-16rem)] overflow-auto rounded-md p-3 text-xs'>
-            {JSON.stringify(content ?? null, null, 2)}
-          </pre>
-        )}
-      </section>
-      {context && typeof context === 'object' ? (
-        <section className='bg-muted/20 mt-4 rounded-lg border p-5'>
-          <div className='mb-4 flex items-center gap-2'>
-            <Badge variant='secondary'>补充上下文</Badge>
-          </div>
-          <pre className='bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs'>
-            {JSON.stringify(context, null, 2)}
-          </pre>
-        </section>
-      ) : null}
-    </div>
-  );
-}
 
 function WorkflowEditor({
   workflow,
@@ -209,10 +112,6 @@ function WorkflowEditorContent({
   const [savedDocument, setSavedDocument] = useState<string>(() =>
     workflow ? JSON.stringify(workflow.document) : '',
   );
-  const [humanReviewEdits, setHumanReviewEdits] = useState<{
-    nodeId: string | undefined;
-    values: Record<string, string>;
-  }>({ nodeId: undefined, values: {} });
   const autoStartHandled = useRef(false);
 
   const queryClient = useQueryClient();
@@ -262,18 +161,27 @@ function WorkflowEditorContent({
     enabled: historyOpen && Boolean(workflow),
   });
 
+  const runtime = historicalRun?.runtime as Record<string, unknown> | undefined;
+  const restoredRun =
+    typeof runtime?.threadId === 'string'
+      ? { id: historicalRun!.id, threadId: runtime.threadId }
+      : undefined;
+
   const workflowRun = useWorkflowRun(
     workflow?.id ?? draftId,
     nodes,
     edges,
     workflowSettings,
+    restoredRun,
   );
+
   const restoreHistoricalRun = useWorkflowRunStore(
     useShallow((state) => ({
       setRunPanelOpen: state.setRunPanelOpen,
       setRunView: state.setRunView,
       setShowRunOutput: state.setShowRunOutput,
       resetRunView: state.resetRunView,
+      applyRunEvents: state.applyRunEvents,
     })),
   );
   useEffect(() => {
@@ -285,17 +193,31 @@ function WorkflowEditorContent({
       restoreHistoricalRun.setRunPanelOpen(false);
       return;
     }
+  }, [historicalRun, restoreHistoricalRun]);
+
+  useEffect(() => {
+    if (!historicalRun) return;
     restoreHistoricalRun.setRunView(
       historicalRun.outputView as WorkflowRunView,
     );
+    // Native sessions persist the transport trace, so an active run can be
+    // reconstructed after its original editor was closed or unmounted.
+    restoreHistoricalRun.applyRunEvents(
+      historicalRun.events.map(({ event }) => event as WorkflowRunEvent),
+      { mode: workflowSettings.mode, nodes },
+    );
     restoreHistoricalRun.setShowRunOutput(true);
     restoreHistoricalRun.setRunPanelOpen(true);
-  }, [historicalRun, restoreHistoricalRun]);
+  }, [historicalRun, nodes, workflowSettings.mode, restoreHistoricalRun]);
 
   const openHistoricalRun = async (id: string) => {
     try {
       const record = await inspectRunRecord(id);
       restoreHistoricalRun.setRunView(record.outputView as WorkflowRunView);
+      restoreHistoricalRun.applyRunEvents(
+        record.events.map(({ event }) => event as WorkflowRunEvent),
+        { mode: workflowSettings.mode, nodes },
+      );
       restoreHistoricalRun.setShowRunOutput(true);
       restoreHistoricalRun.setRunPanelOpen(true);
       setViewingHistoricalRunId(id);
@@ -307,48 +229,11 @@ function WorkflowEditorContent({
     }
   };
 
-  const humanReviewNodeId =
-    typeof workflowRun.humanReview?.nodeId === 'string'
-      ? workflowRun.humanReview.nodeId
-      : undefined;
-  const currentHumanReviewEdits =
-    humanReviewEdits.nodeId === humanReviewNodeId
-      ? humanReviewEdits.values
-      : {};
-  const resolveHumanReview = async (approved: boolean) => {
-    const resolved = await workflowRun.resolvePendingHumanReview(
-      approved,
-      currentHumanReviewEdits,
-    );
-    if (resolved) setHumanReviewEdits({ nodeId: undefined, values: {} });
-  };
-
   useEffect(() => {
     if (!autoStartRun || autoStartHandled.current) return;
     autoStartHandled.current = true;
     workflowRun.startRun();
   }, [autoStartRun, workflowRun]);
-
-  const askUserQuestionOptions = Array.isArray(
-    workflowRun.askUserQuestion?.options,
-  )
-    ? workflowRun.askUserQuestion.options.flatMap((option) => {
-        if (typeof option !== 'object' || option === null) return [];
-        const value = option as Record<string, unknown>;
-        if (typeof value.id !== 'string' || typeof value.label !== 'string')
-          return [];
-        return [
-          {
-            id: value.id,
-            label: value.label,
-            description:
-              typeof value.description === 'string'
-                ? value.description
-                : undefined,
-          },
-        ];
-      })
-    : [];
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -408,7 +293,9 @@ function WorkflowEditorContent({
         canvasContent={
           historyOpen && workflow ? (
             <WorkflowHistory
-              runs={workflowHistory.data?.pages.flatMap((page) => page.items) ?? []}
+              runs={
+                workflowHistory.data?.pages.flatMap((page) => page.items) ?? []
+              }
               isLoading={workflowHistory.isLoading}
               hasMore={workflowHistory.hasNextPage}
               isLoadingMore={workflowHistory.isFetchingNextPage}
@@ -549,171 +436,6 @@ function WorkflowEditorContent({
             }
           }}
         />
-        <AlertDialog open={Boolean(workflowRun.toolApproval)}>
-          <AlertDialogContent>
-            <AlertDialogHeader className='grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
-              <AlertDialogMedia className='mb-0 size-8'>
-                <ShieldAlertIcon />
-              </AlertDialogMedia>
-              <div className='min-w-0 space-y-1.5'>
-                <AlertDialogTitle>
-                  Allow {(workflowRun.toolApproval?.name as string) ?? 'Tool'}{' '}
-                  to run?
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {typeof workflowRun.toolApproval?.description === 'string'
-                    ? workflowRun.toolApproval.description
-                    : 'The Agent requested a Tool App execution.'}
-                </AlertDialogDescription>
-                <div className='flex flex-wrap gap-1.5 pt-1'>
-                  <Badge variant='outline'>
-                    Source:{' '}
-                    {(workflowRun.toolApproval?.sourceName as string) ??
-                      (workflowRun.toolApproval?.source as string) ??
-                      'Tool App'}
-                  </Badge>
-                  <Badge variant='secondary'>
-                    Risk:{' '}
-                    {(workflowRun.toolApproval?.riskLevel as string) ??
-                      'unknown'}
-                  </Badge>
-                </div>
-              </div>
-            </AlertDialogHeader>
-            <pre className='bg-muted max-h-64 overflow-auto rounded-md p-3 text-xs'>
-              {JSON.stringify(workflowRun.toolApproval?.input ?? {}, null, 2)}
-            </pre>
-            <AlertDialogFooter>
-              <AlertDialogCancel
-                onClick={() =>
-                  void workflowRun.resolvePendingToolApproval(false)
-                }
-              >
-                Cancel
-              </AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() =>
-                  void workflowRun.resolvePendingToolApproval(true)
-                }
-              >
-                Run tool
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-        <AlertDialog open={Boolean(workflowRun.humanReview)}>
-          <AlertDialogContent className='max-h-[88vh] w-[min(94vw,72rem)]! max-w-none!'>
-            <AlertDialogHeader className='grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
-              <AlertDialogMedia className='mb-0 size-8'>
-                <ShieldCheckIcon />
-              </AlertDialogMedia>
-              <div className='min-w-0 space-y-1.5'>
-                <AlertDialogTitle>
-                  {(workflowRun.humanReview?.title as string) ??
-                    'Human review required'}
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {typeof workflowRun.humanReview?.description === 'string'
-                    ? workflowRun.humanReview.description
-                    : 'Review the workflow context before allowing it to continue.'}
-                </AlertDialogDescription>
-                <p className='text-muted-foreground text-sm'>
-                  Approval and rejection follow their matching workflow outputs.
-                  An unconnected output stops this run.
-                </p>
-              </div>
-            </AlertDialogHeader>
-            <HumanReviewContent
-              review={workflowRun.humanReview}
-              edits={currentHumanReviewEdits}
-              onEdit={(key, value) =>
-                setHumanReviewEdits((current) => ({
-                  nodeId: humanReviewNodeId,
-                  values:
-                    current.nodeId === humanReviewNodeId
-                      ? { ...current.values, [key]: value }
-                      : { [key]: value },
-                }))
-              }
-            />
-            <AlertDialogFooter>
-              <AlertDialogCancel
-                disabled={workflowRun.isResolvingHumanReview}
-                onClick={() => void resolveHumanReview(false)}
-              >
-                Reject
-              </AlertDialogCancel>
-              <AlertDialogAction
-                disabled={workflowRun.isResolvingHumanReview}
-                onClick={() => void resolveHumanReview(true)}
-              >
-                {workflowRun.isResolvingHumanReview
-                  ? 'Saving decision…'
-                  : 'Approve & continue'}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-        <AlertDialog open={Boolean(workflowRun.askUserQuestion)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {(workflowRun.askUserQuestion?.title as string) ??
-                  'Choose an option'}
-              </AlertDialogTitle>
-              {typeof workflowRun.askUserQuestion?.description === 'string' ? (
-                <AlertDialogDescription>
-                  {workflowRun.askUserQuestion.description}
-                </AlertDialogDescription>
-              ) : null}
-            </AlertDialogHeader>
-            <Questionnaire
-              items={[
-                {
-                  name: 'answer',
-                  required: true,
-                  choices: askUserQuestionOptions.map((option) => ({
-                    value: option.id,
-                  })),
-                },
-              ]}
-              onSubmit={(event) => {
-                event.preventDefault();
-                const answer = new FormData(event.currentTarget).get('answer');
-                if (typeof answer === 'string')
-                  void workflowRun.resolvePendingAskUserQuestion(answer);
-              }}
-            >
-              <QuestionnaireItem name='answer' required>
-                <QuestionnaireTitle className='sr-only'>
-                  Available options
-                </QuestionnaireTitle>
-                <QuestionnaireChoices>
-                  {askUserQuestionOptions.map((option) => (
-                    <QuestionnaireChoice key={option.id} value={option.id}>
-                      <span>{option.label}</span>
-                      {option.description ? (
-                        <QuestionnaireChoiceDescription>
-                          {option.description}
-                        </QuestionnaireChoiceDescription>
-                      ) : null}
-                    </QuestionnaireChoice>
-                  ))}
-                </QuestionnaireChoices>
-                <QuestionnaireError />
-              </QuestionnaireItem>
-              <QuestionnaireActions>
-                <QuestionnaireSubmit
-                  disabled={workflowRun.isResolvingAskUserQuestion}
-                >
-                  {workflowRun.isResolvingAskUserQuestion
-                    ? 'Saving answer…'
-                    : 'Continue'}
-                </QuestionnaireSubmit>
-              </QuestionnaireActions>
-            </Questionnaire>
-          </AlertDialogContent>
-        </AlertDialog>
       </WorkflowCanvas>
     </SidebarProvider>
   );

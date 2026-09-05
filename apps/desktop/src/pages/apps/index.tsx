@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import {
   Alert,
   AlertAction,
@@ -64,20 +64,19 @@ import { toast } from 'sonner';
 import {
   AppRunOutputContent,
   AppRunOutputPanel,
+  restoreProcessNodeRun,
   type ProcessNodeOutput,
   type ProcessNodeRun,
 } from '@/components/app-run-output-panel';
 import {
   listProcessNodes,
-  runProcessNode,
+  startBackgroundProcessNodeRun,
+  subscribeProcessNodeRun,
   type ProcessNode,
   type ProcessNodeInstallStatus,
   type ProcessNodeOutputChunk,
 } from '@/services/process-node';
 import {
-  appendRunEvents,
-  createRunRecord,
-  finalizeRunRecord,
   inspectRunRecord,
   listRunHistoryPage,
   type RunHistoryCursor,
@@ -91,12 +90,16 @@ const MAX_OUTPUT_CHARS = 200_000;
 type AppFilter = 'all' | ProcessNodeInstallStatus;
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
+  queued: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   completed:
     'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
   failed: 'border-destructive/30 bg-destructive/10 text-destructive',
+  cancelled: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   interrupted:
     'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
   running: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400',
+  waiting_for_input:
+    'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
 };
 
 function appendOutput(current: string, chunk: string) {
@@ -352,7 +355,7 @@ function AppHistoryDrawer({
     try {
       const record = await inspectRunRecord(id);
       if (record.targetType === 'app') {
-        onSelectedRunChange(record.outputView as ProcessNodeRun);
+        onSelectedRunChange(restoreProcessNodeRun(record, node));
       }
     } catch (error) {
       toast.error('Could not load run output', {
@@ -402,23 +405,28 @@ function AppHistoryDrawer({
               </div>
             ) : historyItems.length ? (
               <>
-                <ItemGroup>
+                <ItemGroup className='gap-2'>
                   {historyItems.map((record) => (
-                    <Item key={record.id} variant='outline'>
-                      <ItemContent>
-                        <ItemTitle>
-                          {new Date(record.startedAt).toLocaleString()}
+                    <Item key={record.id} size='sm' variant='outline'>
+                      <ItemContent className='min-w-0 flex-row items-center gap-3'>
+                        <ItemTitle className='shrink-0 tabular-nums'>
+                          <time dateTime={record.startedAt}>
+                            {new Date(record.startedAt).toLocaleString()}
+                          </time>
                         </ItemTitle>
-                        <ItemDescription>
+                        <ItemDescription className='line-clamp-1 text-xs'>
                           {record.durationMs !== undefined
-                            ? `${(record.durationMs / 1000).toFixed(1)}s`
+                            ? `${(record.durationMs / 1000).toFixed(1)}s elapsed`
                             : 'Duration unavailable'}
                         </ItemDescription>
                       </ItemContent>
-                      <ItemActions>
+                      <ItemActions className='ml-auto shrink-0 gap-2'>
                         <Badge
                           variant='outline'
-                          className={RUN_STATUS_STYLES[record.status]}
+                          className={cn(
+                            'px-2 text-xs',
+                            RUN_STATUS_STYLES[record.status],
+                          )}
                         >
                           {record.status}
                         </Badge>
@@ -498,9 +506,7 @@ function AppsPage() {
     useState<ProcessNodeRun>();
   const pendingOutput = useRef<Record<string, ProcessNodeOutput>>({});
   const frames = useRef<Record<string, number | undefined>>({});
-  const runMetadata = useRef<
-    Record<string, { eventSequence: number; runId: string }>
-  >({});
+  const unlistenRuns = useRef<Record<string, () => void>>({});
   const apps = useQuery({
     queryKey: ['apps'],
     queryFn: listProcessNodes,
@@ -511,150 +517,102 @@ function AppsPage() {
       Object.values(frames.current).forEach((frame) => {
         if (frame !== undefined) cancelAnimationFrame(frame);
       });
+      Object.values(unlistenRuns.current).forEach((unlisten) => unlisten());
     },
     [],
   );
 
-  const receiveOutput = (id: string, chunk: ProcessNodeOutputChunk) => {
-    const output = pendingOutput.current[id] ?? { stdout: '', stderr: '' };
-    pendingOutput.current[id] = {
+  const receiveOutput = (runId: string, chunk: ProcessNodeOutputChunk) => {
+    const output = pendingOutput.current[runId] ?? { stdout: '', stderr: '' };
+    pendingOutput.current[runId] = {
       ...output,
       [chunk.stream]: appendOutput(output[chunk.stream], chunk.data),
     };
-    const metadata = runMetadata.current[id];
-    if (metadata) {
-      metadata.eventSequence += 1;
-      void appendRunEvents(metadata.runId, [
-        {
-          sequence: metadata.eventSequence,
-          event: { type: 'output', ...chunk },
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-      setRuns((current) => ({
-        ...current,
-        [id]: { ...current[id], eventSequence: metadata.eventSequence },
-      }));
-    }
-    if (frames.current[id] !== undefined) return;
-    frames.current[id] = requestAnimationFrame(() => {
-      frames.current[id] = undefined;
+    if (frames.current[runId] !== undefined) return;
+    frames.current[runId] = requestAnimationFrame(() => {
+      frames.current[runId] = undefined;
       setRuns((current) => {
-        const run = current[id];
+        const run = current[runId];
         if (!run) return current;
         return {
           ...current,
-          [id]: { ...run, output: pendingOutput.current[id] },
+          [runId]: { ...run, output: pendingOutput.current[runId] },
         };
       });
     });
   };
-
-  const run = useMutation({
-    mutationFn: (node: ProcessNode) =>
-      runProcessNode(node.definition.id, (chunk) =>
-        receiveOutput(node.definition.id, chunk),
-      ),
-    onMutate: async (node) => {
-      const id = node.definition.id;
-      const runId = crypto.randomUUID();
-      const startedAt = Date.now();
-      runMetadata.current[id] = { runId, eventSequence: 0 };
-      pendingOutput.current[id] = { stdout: '', stderr: '' };
-      setRuns((current) => ({
-        ...current,
-        [id]: {
+  const startRun = async (node: ProcessNode) => {
+    const runId = crypto.randomUUID();
+    pendingOutput.current[runId] = { stdout: '', stderr: '' };
+    setRuns((current) => ({
+      ...current,
+      [runId]: {
+        isRunning: true,
+        node,
+        output: pendingOutput.current[runId],
+        runId,
+        startedAt: Date.now(),
+      },
+    }));
+    try {
+      unlistenRuns.current[runId] = await subscribeProcessNodeRun(
+        runId,
+        (event) => {
+          if (event.type === 'output') receiveOutput(runId, event);
+          else if (event.type === 'app_done') {
+            setRuns((current) => ({
+              ...current,
+              [runId]: {
+                ...current[runId],
+                execution: event.execution,
+                isRunning: false,
+              },
+            }));
+            unlistenRuns.current[runId]?.();
+            delete unlistenRuns.current[runId];
+          } else if (event.type === 'app_cancelled') {
+            setRuns((current) => ({
+              ...current,
+              [runId]: { ...current[runId], cancelled: true, isRunning: false },
+            }));
+            unlistenRuns.current[runId]?.();
+            delete unlistenRuns.current[runId];
+          } else if (event.type === 'error') {
+            setRuns((current) => ({
+              ...current,
+              [runId]: {
+                ...current[runId],
+                error: event.message,
+                isRunning: false,
+              },
+            }));
+          }
+        },
+      );
+      await startBackgroundProcessNodeRun({
+        runId,
+        targetId: node.definition.id,
+        targetName: node.definition.name,
+        outputView: {
           isRunning: true,
           node,
-          output: pendingOutput.current[id],
-          runId,
-          startedAt,
-          eventSequence: 0,
+          output: pendingOutput.current[runId],
         },
+        targetSnapshot: node.definition,
+      });
+    } catch (error) {
+      unlistenRuns.current[runId]?.();
+      delete unlistenRuns.current[runId];
+      setRuns((current) => ({
+        ...current,
+        [runId]: { ...current[runId], error: String(error), isRunning: false },
       }));
-      setSelectedRunId(id);
-      try {
-        await createRunRecord({
-          id: runId,
-          targetType: 'app',
-          targetId: id,
-          targetName: node.definition.name,
-          status: 'running',
-          startedAt: new Date(startedAt).toISOString(),
-          outputView: {
-            isRunning: true,
-            node,
-            output: pendingOutput.current[id],
-          },
-          targetSnapshot: node.definition,
-        });
-      } catch (error) {
-        delete runMetadata.current[id];
-        toast.error('Run history could not be saved', {
-          toasterId: 'global',
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
-    },
-    onSuccess: (result, node) => {
-      const id = node.definition.id;
-      setRuns((current) => {
-        const next = {
-          ...current[id],
-          output: pendingOutput.current[id],
-          execution: result.execution,
-          isRunning: false,
-        };
-        if (next.runId) {
-          const endedAt = Date.now();
-          void finalizeRunRecord(next.runId, {
-            status: result.execution.exitCode === 0 ? 'completed' : 'failed',
-            endedAt: new Date(endedAt).toISOString(),
-            durationMs: Math.max(0, endedAt - (next.startedAt ?? endedAt)),
-            outputView: next,
-          });
-        }
-        return { ...current, [id]: next };
-      });
-      if (result.execution.exitCode === 0) {
-        toast.success(`${node.definition.name} completed`, {
-          toasterId: 'global',
-        });
-        return;
-      }
-      toast.error(`${node.definition.name} failed`, {
+      toast.error('App could not start', {
         toasterId: 'global',
-        description: `Exited with code ${result.execution.exitCode ?? 'unknown'}.`,
+        description: error instanceof Error ? error.message : String(error),
       });
-    },
-    onError: (error, node) => {
-      const message = error instanceof Error ? error.message : String(error);
-      const id = node.definition.id;
-      setRuns((current) => {
-        const next = {
-          ...current[id],
-          output: pendingOutput.current[id],
-          error: message,
-          isRunning: false,
-        };
-        if (next.runId) {
-          const endedAt = Date.now();
-          void finalizeRunRecord(next.runId, {
-            status: 'failed',
-            endedAt: new Date(endedAt).toISOString(),
-            durationMs: Math.max(0, endedAt - (next.startedAt ?? endedAt)),
-            outputView: next,
-            error: message,
-          });
-        }
-        return { ...current, [id]: next };
-      });
-      toast.error(`${node.definition.name} could not start`, {
-        toasterId: 'global',
-        description: message,
-      });
-    },
-  });
+    }
+  };
 
   const filteredApps = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -676,6 +634,22 @@ function AppsPage() {
   const installedCount = apps.data?.filter(
     (app) => app.installStatus === 'installed',
   ).length;
+  const latestRunByApp = useMemo(
+    () =>
+      Object.values(runs).reduce<Record<string, ProcessNodeRun>>(
+        (latest, item) => {
+          const id = item.node.definition.id;
+          if (
+            !latest[id] ||
+            (item.startedAt ?? 0) > (latest[id].startedAt ?? 0)
+          )
+            latest[id] = item;
+          return latest;
+        },
+        {},
+      ),
+    [runs],
+  );
   const selectedRun = selectedRunId ? runs[selectedRunId] : undefined;
 
   const selectRun = (id: string) => {
@@ -800,10 +774,13 @@ function AppsPage() {
               <AppItem
                 key={node.definition.id}
                 node={node}
-                run={runs[node.definition.id]}
-                runsArePending={run.isPending}
-                onRun={() => run.mutate(node)}
-                onViewOutput={() => selectRun(node.definition.id)}
+                run={latestRunByApp[node.definition.id]}
+                runsArePending={false}
+                onRun={() => void startRun(node)}
+                onViewOutput={() => {
+                  const latest = latestRunByApp[node.definition.id];
+                  if (latest?.runId) selectRun(latest.runId);
+                }}
                 onOpenHistory={() => {
                   setOutputOpen(false);
                   setHistoryNode(node);
@@ -845,7 +822,7 @@ function AppsPage() {
           setOutputOpen(open);
         }}
         onClear={clearSelectedOutput}
-        onRunAgain={() => selectedRun && run.mutate(selectedRun.node)}
+        onRunAgain={() => selectedRun && void startRun(selectedRun.node)}
       />
       <AppHistoryDrawer
         node={historyNode}

@@ -72,7 +72,10 @@ type WorkflowOutputPanelProps = {
   readOnly?: boolean;
 };
 
-function statusLabel(status: WorkflowRunView['status']) {
+function statusLabel(run: WorkflowRunView) {
+  if (run.status === 'interrupted' && !run.error) return 'Waiting for input';
+
+  const { status } = run;
   switch (status) {
     case 'running':
       return 'Running';
@@ -80,6 +83,8 @@ function statusLabel(status: WorkflowRunView['status']) {
       return 'Completed';
     case 'failed':
       return 'Failed';
+    case 'cancelled':
+      return 'Cancelled';
     case 'interrupted':
       return 'Interrupted';
     default:
@@ -800,7 +805,7 @@ function WorkflowRunOutput({
       <DrawerHeader>
         <DrawerTitle>{isChat ? 'Chat' : 'Run output'}</DrawerTitle>
         <DrawerDescription>
-          {statusLabel(run.status)}
+          {statusLabel(run)}
           {run.activeNodeId ? ` · ${displayNodeName(run.activeNodeId)}` : ''}
           {duration ? ` · ${duration}` : ''}
         </DrawerDescription>

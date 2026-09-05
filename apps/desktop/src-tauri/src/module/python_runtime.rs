@@ -4,10 +4,16 @@
 //! its download cache are kept below Workrun's application data directory, so
 //! they are never written into (or read from) the application bundle.
 
-use crate::utils::dirs;
+use crate::{core::handle, utils::dirs};
 use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use once_cell::sync::Lazy;
+#[cfg(windows)]
+use parking_lot::Mutex;
 use semver::Version;
 use serde::Serialize;
+#[cfg(windows)]
+use std::collections::HashMap;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -33,6 +39,23 @@ enum WorkrunSdkMode {
 
 /// Stateless Python runtime operations backed by Workrun's bundled uv sidecar.
 pub struct PythonRuntime;
+
+#[cfg(windows)]
+struct WindowsJob(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        // KILL_ON_JOB_CLOSE ensures an unexpected native-task drop cannot
+        // leave a Python descendant running after Workrun exits.
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+static WINDOWS_JOBS: Lazy<Mutex<HashMap<u32, WindowsJob>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// A Python interpreter installed and owned by Workrun.
 #[derive(Debug, Serialize)]
@@ -105,6 +128,14 @@ pub struct StreamingPythonExecutionResult {
 }
 
 impl PythonRuntime {
+    #[cfg(windows)]
+    pub fn terminate_process_tree(pid: u32) {
+        if let Some(job) = WINDOWS_JOBS.lock().get(&pid) {
+            unsafe {
+                let _ = windows::Win32::System::JobObjects::TerminateJobObject(job.0, 1);
+            }
+        }
+    }
     fn sdk_mode() -> Result<WorkrunSdkMode> {
         match std::env::var(SDK_MODE_ENV).ok().as_deref() {
             Some("bundled") => Ok(WorkrunSdkMode::Bundled),
@@ -299,7 +330,8 @@ impl PythonRuntime {
     }
 
     /// Initialize a standalone application project with Workrun's bundled uv.
-    pub async fn init_application_project(app: &AppHandle, project_path: &Path) -> Result<()> {
+    pub async fn init_application_project(project_path: &Path) -> Result<()> {
+        let app = handle::Handle::app_handle();
         let output = Self::uv_command(app)?
             .arg("init")
             .arg("--app")
@@ -326,7 +358,8 @@ impl PythonRuntime {
     }
 
     /// Add the bundled Workrun Python SDK as a project dependency without creating an environment.
-    pub async fn add_workrun_sdk_dependency(app: &AppHandle, project_path: &Path) -> Result<()> {
+    pub async fn add_workrun_sdk_dependency(project_path: &Path) -> Result<()> {
+        let app = handle::Handle::app_handle();
         let sdk_wheels_dir = Self::sdk_wheels_dir(app)?;
         let output = Self::uv_command(app)?
             .arg("add")
@@ -515,11 +548,7 @@ impl PythonRuntime {
     ///
     /// Only uv projects are supported here: a `pyproject.toml` is required and
     /// `uv sync` creates or updates `uv.lock` as necessary.
-    pub async fn sync_dependencies(
-        app: &AppHandle,
-        project_dir: &Path,
-        requested_version: &str,
-    ) -> Result<DependencySyncResult> {
+    pub async fn sync_dependencies(project_dir: &Path, requested_version: &str) -> Result<DependencySyncResult> {
         let project_path = dunce::canonicalize(project_dir)
             .with_context(|| format!("failed to resolve project directory {}", project_dir.display()))?;
         if !project_path.is_dir() {
@@ -530,6 +559,8 @@ impl PythonRuntime {
         if !pyproject_path.is_file() {
             bail!("uv project is missing pyproject.toml: {}", pyproject_path.display());
         }
+
+        let app = handle::Handle::app_handle();
 
         let lockfile_path = project_path.join("uv.lock");
         let used_existing_lockfile = lockfile_path.is_file();
@@ -653,6 +684,7 @@ impl PythonRuntime {
             Arc::new(move |chunk| {
                 let _ = output.send(chunk);
             }),
+            None,
         )
         .await
     }
@@ -666,6 +698,7 @@ impl PythonRuntime {
         extra_env: &[(String, String)],
         stdin: Option<&[u8]>,
         on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
+        on_started: Option<Arc<dyn Fn(u32) + Send + Sync>>,
     ) -> Result<StreamingPythonExecutionResult> {
         if !environment.executable_path.is_file() {
             bail!(
@@ -675,7 +708,8 @@ impl PythonRuntime {
         }
 
         let script_path = Self::resolve_project_file(&environment.project_path, script_path, "Python script")?;
-        let mut child = tokio::process::Command::new(&environment.executable_path)
+        let mut command = tokio::process::Command::new(&environment.executable_path);
+        command
             .current_dir(&environment.project_path)
             .arg(&script_path)
             .args(args)
@@ -683,8 +717,28 @@ impl PythonRuntime {
             .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Run Manager can abort an App task when the user cancels it.
+            // Killing on drop prevents its Python child from outliving that run.
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let mut child = command
             .spawn()
             .with_context(|| format!("failed to execute Python script {}", script_path.display()))?;
+        let child_pid = child.id();
+        #[cfg(windows)]
+        Self::assign_windows_job(&child)?;
+        if let (Some(on_started), Some(pid)) = (on_started, child_pid) {
+            on_started(pid);
+        }
         let stdout = child.stdout.take().context("Python process stdout was not captured")?;
         let stderr = child.stderr.take().context("Python process stderr was not captured")?;
         let child_stdin = if stdin.is_some() {
@@ -711,6 +765,10 @@ impl PythonRuntime {
         );
         let status =
             status.with_context(|| format!("failed while executing Python script {}", script_path.display()))?;
+        #[cfg(windows)]
+        if let Some(pid) = child_pid {
+            WINDOWS_JOBS.lock().remove(&pid);
+        }
         stdout_result?;
         stderr_result?;
         stdin_result?;
@@ -719,6 +777,39 @@ impl PythonRuntime {
             script_path,
             exit_code: status.code(),
         })
+    }
+
+    #[cfg(windows)]
+    fn assign_windows_job(child: &tokio::process::Child) -> Result<()> {
+        use std::os::windows::io::RawHandle;
+        use windows::Win32::{
+            Foundation::HANDLE,
+            System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JobObjectExtendedLimitInformation, SetInformationJobObject,
+            },
+        };
+
+        let pid = child
+            .id()
+            .context("Python process exited before Job Object assignment")?;
+        let raw_handle = child.raw_handle().context("Python process handle is unavailable")?;
+        let job = unsafe { CreateJobObjectW(None, None) }.context("failed to create Python Job Object")?;
+        let mut limits = JOB_OBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                Some(&limits as *const _ as _),
+                std::mem::size_of_val(&limits) as u32,
+            )
+            .context("failed to configure Python Job Object")?;
+            AssignProcessToJobObject(job, HANDLE(raw_handle as RawHandle as *mut _))
+                .context("failed to assign Python process to Job Object")?;
+        }
+        WINDOWS_JOBS.lock().insert(pid, WindowsJob(job));
+        Ok(())
     }
 }
 

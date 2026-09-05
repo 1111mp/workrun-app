@@ -44,8 +44,8 @@ pub struct ProjectPythonStreamRunResult {
 
 /// Prepare a project's managed Python environment, synchronize dependencies,
 /// then run the requested script from that environment.
-pub async fn run_project_python(app: &AppHandle, request: RunProjectPythonRequest) -> Result<ProjectPythonRunResult> {
-    let sync = PythonRuntime::sync_dependencies(app, &request.project_path, &request.python_version).await?;
+pub async fn run_project_python(request: RunProjectPythonRequest) -> Result<ProjectPythonRunResult> {
+    let sync = PythonRuntime::sync_dependencies(&request.project_path, &request.python_version).await?;
     let ipc = IpcServer::global().create_session().await?;
     let execution = PythonRuntime::run_python_with_env(
         &sync.environment,
@@ -67,11 +67,10 @@ pub async fn run_project_python(app: &AppHandle, request: RunProjectPythonReques
 
 /// Prepare and run a project while forwarding stdout and stderr to the caller.
 pub async fn run_project_python_streaming(
-    app: &AppHandle,
     request: RunProjectPythonRequest,
     output: Channel<PythonOutputChunk>,
 ) -> Result<ProjectPythonStreamRunResult> {
-    let sync = PythonRuntime::sync_dependencies(app, &request.project_path, &request.python_version).await?;
+    let sync = PythonRuntime::sync_dependencies(&request.project_path, &request.python_version).await?;
     let ipc = IpcServer::global().create_session().await?;
     let execution = PythonRuntime::run_python_streaming_with_env(
         &sync.environment,

@@ -1,18 +1,15 @@
-import { useMutation } from '@tanstack/react-query';
 import type { Edge, Node } from '@xyflow/react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
-import {
-  appendRunEvents,
-  createRunRecord,
-  finalizeRunRecord,
-} from '@/services/run-history';
+import { resolvePendingAction } from '@/services/run-history';
 import {
   resolveAskUserQuestion,
   resolveHumanReview,
-  runWorkflow,
+  resumeBackgroundWorkflowRun,
+  startBackgroundWorkflowRun,
+  subscribeWorkflowRun,
   toWorkflowDocument,
   toWorkflowDsl,
   type ToolConfirmationDecision,
@@ -28,13 +25,6 @@ type BufferedMessageEvent = Omit<MessageEvent, 'content'> & {
 type PendingRunEvent =
   | Exclude<WorkflowRunEvent, MessageEvent>
   | BufferedMessageEvent;
-
-type WorkflowRunRequest = {
-  input: Record<string, unknown>;
-  threadId: string;
-  resume: boolean;
-  toolConfirmation?: ToolConfirmationDecision;
-};
 
 type SubworkflowContext = {
   workflowId: string;
@@ -81,6 +71,7 @@ function useWorkflowRun(
   nodes: Node[],
   edges: Edge[],
   settings: WorkflowSettings,
+  restoredRun?: { id: string; threadId: string },
 ) {
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
@@ -88,6 +79,7 @@ function useWorkflowRun(
   const store = useWorkflowRunStore(
     useShallow((state) => ({
       runningNodeId: state.runningNodeId,
+      runStatus: state.runView.status,
       toolApproval: state.toolApproval,
       humanReview: state.humanReview,
       askUserQuestion: state.askUserQuestion,
@@ -110,17 +102,19 @@ function useWorkflowRun(
   const chatThreadId = useRef<string | undefined>(undefined);
   const runThreadId = useRef<string | undefined>(undefined);
   const runId = useRef<string | undefined>(undefined);
-  const runEventSequence = useRef(0);
+  const unlistenRunEvents = useRef<(() => void) | undefined>(undefined);
   const chatTurnId = useRef<string | undefined>(undefined);
   const pendingEvents = useRef<PendingRunEvent[]>([]);
   const pendingCharacters = useRef(0);
   const pendingFrame = useRef<number | undefined>(undefined);
   const afterDrain = useRef<(() => void)[]>([]);
+
   const context = () => ({
     mode: settings.mode,
     nodes,
     turnId: chatTurnId.current,
   });
+
   const runAfterDrain = (callback: () => void) => {
     if (pendingEvents.current.length) afterDrain.current.push(callback);
     else callback();
@@ -173,26 +167,40 @@ function useWorkflowRun(
     if (pendingFrame.current !== undefined) return;
     pendingFrame.current = requestAnimationFrame(drain);
   };
+
   useEffect(
     () => () => {
       if (pendingFrame.current !== undefined)
         cancelAnimationFrame(pendingFrame.current);
+      unlistenRunEvents.current?.();
     },
     [],
   );
-  const handleEvent = (event: WorkflowRunEvent) => {
-    const persistedRunId = runId.current;
-    if (persistedRunId) {
-      // Store transport-sized events before UI animation splits streaming text.
-      // This keeps the original runtime trace available for future diagnostics.
-      void appendRunEvents(persistedRunId, [
-        {
-          sequence: runEventSequence.current++,
-          event,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+
+  const handleTerminalEvent = (event: WorkflowRunEvent) => {
+    if (event.type === 'done') {
+      runAfterDrain(() => {
+        const lastNode = event.state.workflow?.['workflow.last_node'];
+        toast.success('Workflow completed', {
+          toasterId: 'global',
+          description:
+            typeof lastNode === 'string'
+              ? `Finished at node ${lastNode}.`
+              : undefined,
+        });
+      });
+    } else if (event.type === 'error') {
+      runAfterDrain(() => {
+        toast.error('Workflow failed', {
+          toasterId: 'global',
+          description: event.message,
+        });
+      });
     }
+  };
+
+  const handleEvent = (event: WorkflowRunEvent) => {
+    handleTerminalEvent(event);
     if (event.type === 'message') {
       if (event.content) queue(event);
       return;
@@ -203,85 +211,27 @@ function useWorkflowRun(
     }
     store.applyRunEvents([event], context());
   };
-  const mutation = useMutation({
-    mutationFn: ({
-      input,
-      threadId,
-      resume,
-      toolConfirmation,
-    }: WorkflowRunRequest) =>
-      runWorkflow(
-        toWorkflowDsl(workflowId, nodes, edges, settings),
-        input,
-        threadId,
-        resume,
-        toolConfirmation,
-        handleEvent,
-      ),
-    onSuccess: (result) => {
-      runAfterDrain(() => {
-        if (result.interrupted) {
-          store.setRunView((current) => ({
-            ...current,
-            finalState: result.state,
-          }));
-          if (
-            !store.toolApproval &&
-            !store.humanReview &&
-            !store.askUserQuestion
-          ) {
-            toast.info('Workflow interrupted', {
-              toasterId: 'global',
-              description: 'Resume to continue from the saved checkpoint.',
-            });
-          }
-          void persistFinalRun('interrupted');
-          return;
-        }
-        store.finishWorkflowRun(result.state);
-        void persistFinalRun('completed');
-        const lastNode = result.state.workflow['workflow.last_node'];
-        toast.success('Workflow completed', {
-          toasterId: 'global',
-          description:
-            typeof lastNode === 'string'
-              ? `Finished at node ${lastNode}.`
-              : undefined,
-        });
-      });
-    },
-    onError: (error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      runAfterDrain(() => {
-        store.failWorkflowRun(message);
-        void persistFinalRun('failed', message);
-        toast.error('Workflow failed', {
-          toasterId: 'global',
-          description: message,
-        });
-      });
-    },
-    onSettled: () => runAfterDrain(store.clearRunningNode),
-  });
-  const persistFinalRun = (
-    status: 'completed' | 'failed' | 'interrupted',
-    error?: string,
-  ) => {
-    const id = runId.current;
-    if (!id) return;
-    const view = useWorkflowRunStore.getState().runView;
-    const endedAt = view.endedAt ?? Date.now();
-    void finalizeRunRecord(id, {
-      status,
-      endedAt: new Date(endedAt).toISOString(),
-      durationMs: Math.max(0, endedAt - (view.startedAt ?? endedAt)),
-      outputView: view,
-      error,
+
+  useEffect(() => {
+    if (!restoredRun) return;
+    runId.current = restoredRun.id;
+    runThreadId.current = restoredRun.threadId;
+    let disposed = false;
+    void subscribeWorkflowRun(restoredRun.id, handleEvent).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlistenRunEvents.current = unlisten;
     });
-  };
+    return () => {
+      disposed = true;
+      unlistenRunEvents.current?.();
+      unlistenRunEvents.current = undefined;
+    };
+  }, [restoredRun]);
+
   const startWorkflowRun = (input: Record<string, unknown>) => {
     void beginWorkflowRun(input);
   };
+
   const beginWorkflowRun = async (input: Record<string, unknown>) => {
     const subworkflow = unconfiguredSubworkflow(nodes);
     if (subworkflow) {
@@ -309,34 +259,40 @@ function useWorkflowRun(
         ? (chatThreadId.current ?? crypto.randomUUID())
         : crypto.randomUUID();
     runThreadId.current = threadId;
-    runId.current = crypto.randomUUID();
-    runEventSequence.current = 0;
+    const id = crypto.randomUUID();
+    runId.current = id;
     store.startWorkflowRun(input, settings.mode, chatTurnId.current);
     try {
-      await createRunRecord({
-        id: runId.current,
-        targetType: 'workflow',
+      unlistenRunEvents.current?.();
+      unlistenRunEvents.current = await subscribeWorkflowRun(id, handleEvent);
+      await startBackgroundWorkflowRun({
+        runId: id,
         targetId: workflowId,
         targetName: settings.name,
-        status: 'running',
-        startedAt: new Date().toISOString(),
         input,
         outputView: useWorkflowRunStore.getState().runView,
         targetSnapshot: toWorkflowDocument(nodes, edges, settings),
+        dsl: toWorkflowDsl(workflowId, nodes, edges, settings),
+        initialState: input,
+        threadId,
       });
     } catch (error) {
-      toast.error('Run history could not be saved', {
+      unlistenRunEvents.current?.();
+      unlistenRunEvents.current = undefined;
+      store.failWorkflowRun(
+        error instanceof Error ? error.message : String(error),
+      );
+      toast.error('Workflow could not start', {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
       runId.current = undefined;
     }
-    mutation.mutate({ input, threadId, resume: false });
   };
+
   const resumeWorkflowRun = (toolConfirmation?: ToolConfirmationDecision) => {
-    const threadId = runThreadId.current;
-    if (!threadId) return;
-    const input = store.lastRunInput ?? {};
+    const id = runId.current;
+    if (!id) return;
     if (pendingFrame.current !== undefined) {
       cancelAnimationFrame(pendingFrame.current);
       pendingFrame.current = undefined;
@@ -345,8 +301,16 @@ function useWorkflowRun(
     pendingCharacters.current = 0;
     afterDrain.current = [];
     store.resumeWorkflowRun();
-    mutation.mutate({ input, threadId, resume: true, toolConfirmation });
+    void resumeBackgroundWorkflowRun(id, toolConfirmation).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      store.failWorkflowRun(message);
+      toast.error('Workflow could not resume', {
+        toasterId: 'global',
+        description: message,
+      });
+    });
   };
+
   const startRun = () => {
     if (settings.mode === 'chat') {
       chatThreadId.current = crypto.randomUUID();
@@ -359,6 +323,7 @@ function useWorkflowRun(
       store.setRunPanelOpen(true);
     }
   };
+
   const resolvePendingToolApproval = async (approved: boolean) => {
     const approval = store.toolApproval;
     const { functionCallId, fingerprint } = approval ?? {};
@@ -386,9 +351,25 @@ function useWorkflowRun(
         context(),
       );
     }
+
+    const actionId = approval?.runActionId;
+    if (actionId) {
+      try {
+        if (typeof actionId !== 'string')
+          throw new Error('run action is invalid');
+        await resolvePendingAction(actionId, { approved });
+      } catch (error) {
+        toast.error('Could not resume the run', {
+          toasterId: 'global',
+          description: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+    }
     store.clearToolApproval();
     resumeWorkflowRun({ functionCallId, fingerprint, approved });
   };
+
   const resolvePendingHumanReview = async (
     approved: boolean,
     edits: Record<string, string> = {},
@@ -411,6 +392,12 @@ function useWorkflowRun(
         edits,
         workflowContext,
       );
+      const actionId = review?.runActionId;
+      if (actionId) {
+        if (typeof actionId !== 'string')
+          throw new Error('run action is invalid');
+        await resolvePendingAction(actionId, { approved, edits });
+      }
       store.clearHumanReview();
       resumeWorkflowRun();
       return true;
@@ -425,6 +412,7 @@ function useWorkflowRun(
       setIsResolvingHumanReview(false);
     }
   };
+
   const resolvePendingAskUserQuestion = async (optionId: string) => {
     if (isResolvingAskUserQuestion) return;
     const nodeId = store.askUserQuestion?.nodeId;
@@ -444,6 +432,12 @@ function useWorkflowRun(
         optionId,
         workflowContext,
       );
+      const actionId = store.askUserQuestion?.runActionId;
+      if (actionId) {
+        if (typeof actionId !== 'string')
+          throw new Error('run action is invalid');
+        await resolvePendingAction(actionId, { optionId });
+      }
       store.clearAskUserQuestion();
       resumeWorkflowRun();
     } catch (error) {
@@ -456,8 +450,9 @@ function useWorkflowRun(
       setIsResolvingAskUserQuestion(false);
     }
   };
+
   return {
-    isRunning: mutation.isPending,
+    isRunning: store.runStatus === 'running',
     startRun,
     startWorkflowRun,
     runningNodeId: store.runningNodeId,

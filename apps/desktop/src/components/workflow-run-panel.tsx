@@ -213,6 +213,7 @@ function WorkflowRunPanel({
       setRunPanelOpen: state.setRunPanelOpen,
     })),
   );
+
   const isRunning = run.status === 'running';
   const formKey = `${open}:${JSON.stringify(settings)}`;
 

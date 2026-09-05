@@ -50,6 +50,14 @@ impl DBManager {
         migrator.dangerous_set_table_name("_workrun_sqlx_migrations");
         migrator.run(&db_pool).await?;
 
+        // A native restart invalidates every renderer-owned claim before the
+        // associated run and action are recovered below.
+        sqlx::query(
+            "UPDATE run_pending_actions SET claimed_by = NULL, claimed_at = NULL WHERE status = 'pending' AND claimed_by IS NOT NULL",
+        )
+        .execute(&db_pool)
+        .await?;
+
         Self::mark_incomplete_runs_interrupted(&db_pool).await?;
 
         logging!(info, Type::Setup, "Successfully applied database migrations");
@@ -72,15 +80,24 @@ impl DBManager {
     }
 
     async fn mark_incomplete_runs_interrupted(pool: &sqlx::SqlitePool) -> Result<()> {
-        // A run cannot survive a desktop process restart: its local runtime and
-        // in-memory event stream are gone, so make the incomplete record honest.
+        // A native restart destroys the execution session behind every pause.
+        // A persisted checkpoint cannot safely recreate its in-memory channels,
+        // so never offer a pre-restart question or approval for continuation.
         let recovered_at = chrono::Utc::now().to_rfc3339();
         let recovered = sqlx::query(
-            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status = 'running'",
+            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status IN ('queued', 'running', 'waiting_for_input')",
         )
         .bind(&recovered_at)
         .bind("Execution ended when Workrun restarted.")
         .bind(&recovered_at)
+        .execute(pool)
+        .await?;
+        // A pending action only has meaning while its native session is alive.
+        // Expire it with the recovered run so the global attention queue cannot
+        // offer a decision that can no longer be applied.
+        sqlx::query(
+            "UPDATE run_pending_actions SET status = 'expired' WHERE status = 'pending' AND run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error = 'Execution ended when Workrun restarted.')",
+        )
         .execute(pool)
         .await?;
         if recovered.rows_affected() > 0 {
@@ -99,5 +116,63 @@ impl DBManager {
             .get()
             .cloned()
             .ok_or_else(|| anyhow!("database is not initialized"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DBManager;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn restart_interrupts_waiting_run_and_expires_every_pending_action() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE run_records (id TEXT PRIMARY KEY, status TEXT NOT NULL, ended_at TEXT, error TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE run_pending_actions (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-1', 'waiting_for_input')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, kind) in [
+            ("question", "ask_user_question"),
+            ("review", "human_review"),
+            ("approval", "tool_approval"),
+        ] {
+            sqlx::query("INSERT INTO run_pending_actions (id, run_id, kind, status) VALUES (?, 'run-1', ?, 'pending')")
+                .bind(id)
+                .bind(kind)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        DBManager::mark_incomplete_runs_interrupted(&pool).await.unwrap();
+
+        let status: String = sqlx::query_scalar("SELECT status FROM run_records WHERE id = 'run-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let expired: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM run_pending_actions WHERE run_id = 'run-1' AND status = 'expired'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "interrupted");
+        assert_eq!(expired, 3);
     }
 }

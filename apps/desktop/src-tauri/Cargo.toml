@@ -84,7 +84,7 @@ libc = "0.2.186"
 
 [target."cfg(windows)".dependencies]
 deelevate = { workspace = true }
-windows = { version = "0.62.2", features = ["Win32_Globalization"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [features]
 default = []

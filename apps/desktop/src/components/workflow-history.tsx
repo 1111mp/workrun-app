@@ -19,12 +19,16 @@ import { HistoryIcon, PlayIcon } from 'lucide-react';
 import type { RunRecordSummary, RunStatus } from '@/services/run-history';
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
+  queued: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   completed:
     'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
   failed: 'border-destructive/30 bg-destructive/10 text-destructive',
+  cancelled: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   interrupted:
     'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
   running: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400',
+  waiting_for_input:
+    'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
 };
 
 function WorkflowHistory({

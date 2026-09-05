@@ -34,7 +34,7 @@ use tool::*;
 #[cfg(not(test))]
 use crate::core::db::DBManager;
 use crate::{
-    config::{IWorkrun, ModelDefinition, ModelProvider, model_catalog},
+    config::{Config, IWorkrun, ModelDefinition, ModelProvider, model_catalog},
     module::{
         mcp_server::McpServerRegistry,
         process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
@@ -59,7 +59,7 @@ use adk_rust::{
     prelude::{Content, Event, Llm, LlmAgentBuilder, Tool, ToolContext},
     server::RemoteA2aAgent,
 };
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -250,6 +250,75 @@ pub struct ToolConfirmationDecisionRequest {
     pub function_call_id: String,
     pub fingerprint: String,
     pub approved: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubworkflowContext {
+    workflow_id: String,
+    thread_id: String,
+    path: Vec<String>,
+}
+
+pub async fn resolve_human_review_checkpoint(
+    dsl: Value,
+    thread_id: String,
+    node_id: String,
+    approved: bool,
+    edits: HashMap<String, String>,
+    workflow_context: Option<SubworkflowContext>,
+) -> Result<()> {
+    let (dsl, thread_id) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
+    let approval_key = human_review_approval_key(&dsl, &node_id)?;
+    let editable_key = human_review_editable_key(&dsl, &node_id)?;
+    if edits.len() > usize::from(editable_key.is_some()) || edits.keys().any(|key| Some(key) != editable_key.as_ref()) {
+        bail!("review edits do not match the configured editable key");
+    }
+    let config = Config::workrun().await.latest_arc();
+    let compiled = compile(dsl, &config, None).await?;
+    let mut updates = vec![(approval_key, Value::Bool(approved))];
+    if let Some(editable_key) = editable_key
+        && let Some(value) = edits.get(&editable_key)
+    {
+        updates.push((editable_key, Value::String(value.clone())));
+    }
+    compiled.update_state(&thread_id, updates).await
+}
+
+pub async fn resolve_ask_user_question_checkpoint(
+    dsl: Value,
+    thread_id: String,
+    node_id: String,
+    option_id: String,
+    workflow_context: Option<SubworkflowContext>,
+) -> Result<()> {
+    let (dsl, thread_id) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
+    let answer_key = ask_user_question_answer_key(&dsl, &node_id)?;
+    let option_id = ask_user_question_option_id(&dsl, &node_id, &option_id)?;
+    let config = Config::workrun().await.latest_arc();
+    let compiled = compile(dsl, &config, None).await?;
+    compiled
+        .update_state(&thread_id, [(answer_key, Value::String(option_id))])
+        .await
+}
+
+async fn resolve_checkpoint_context(
+    dsl: Value,
+    thread_id: String,
+    workflow_context: Option<SubworkflowContext>,
+) -> Result<(WorkflowDsl, String)> {
+    match workflow_context {
+        Some(context) => {
+            let parent_node_id = context
+                .path
+                .first()
+                .context("subworkflow context is missing its parent node")?;
+            let mut dsl = subworkflow_dsl(&context.workflow_id).await?;
+            inject_subworkflow_context(&mut dsl, &context.thread_id, parent_node_id);
+            Ok((dsl, context.thread_id))
+        },
+        None => Ok((serde_json::from_value(dsl)?, thread_id)),
+    }
 }
 
 #[derive(Debug)]
