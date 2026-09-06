@@ -52,6 +52,58 @@ type WorkflowRunStore = {
   clearAskUserQuestion: () => void;
 };
 
+type WorkflowRunReplayState = Pick<
+  WorkflowRunStore,
+  | 'runView'
+  | 'runningNodeId'
+  | 'toolApproval'
+  | 'humanReview'
+  | 'askUserQuestion'
+  | 'isResuming'
+>;
+
+type WorkflowRunEventContext = {
+  mode: WorkflowMode;
+  nodes: Node[];
+  turnId?: string;
+};
+
+export function restoreWorkflowRunView(outputView: unknown): WorkflowRunView {
+  const view =
+    outputView && typeof outputView === 'object'
+      ? (outputView as Partial<WorkflowRunView>)
+      : {};
+
+  // Replay records created before all collection fields were persisted.
+  return {
+    ...view,
+    status: view.status ?? 'idle',
+    nodes: Array.isArray(view.nodes) ? view.nodes : [],
+    messages: Array.isArray(view.messages) ? view.messages : [],
+    thoughts: Array.isArray(view.thoughts) ? view.thoughts : [],
+    processLogs: Array.isArray(view.processLogs) ? view.processLogs : [],
+    execution: Array.isArray(view.execution) ? view.execution : [],
+  };
+}
+
+/** Rebuilds a read-only run view without mutating the editor's live store. */
+export function replayWorkflowRunView(
+  outputView: unknown,
+  events: WorkflowRunEvent[],
+  context: WorkflowRunEventContext,
+): WorkflowRunView {
+  const state: WorkflowRunReplayState = {
+    runView: restoreWorkflowRunView(outputView),
+    runningNodeId: null,
+    toolApproval: undefined,
+    humanReview: undefined,
+    askUserQuestion: undefined,
+    isResuming: false,
+  };
+  for (const event of events) applyRunEvent(state, event, context);
+  return state.runView;
+}
+
 /** Transient UI state for the workflow run panel. It is intentionally not persisted. */
 export const useWorkflowRunStore = create<WorkflowRunStore>()(
   immer((set) => ({
@@ -198,9 +250,9 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
 );
 
 function applyRunEvent(
-  state: WorkflowRunStore,
+  state: WorkflowRunReplayState,
   event: WorkflowRunEvent,
-  context: { mode: WorkflowMode; nodes: Node[]; turnId?: string },
+  context: WorkflowRunEventContext,
 ) {
   const view = state.runView;
   if (event.type === 'node_start') {
@@ -343,7 +395,7 @@ function appendMessage(
 }
 
 function applyCustom(
-  state: WorkflowRunStore,
+  state: WorkflowRunReplayState,
   event: Extract<WorkflowRunEvent, { type: 'custom' }>,
 ) {
   if (event.event_type === 'workflow.run_cancelled') {
@@ -449,7 +501,7 @@ function applyCustom(
 }
 
 function finish(
-  state: WorkflowRunStore,
+  state: WorkflowRunReplayState,
   status: WorkflowRunView['status'],
   finalState?: Record<string, unknown>,
   error?: string,

@@ -1,4 +1,5 @@
 import { listen } from '@tauri-apps/api/event';
+import type { Node } from '@xyflow/react';
 import {
   Badge,
   Button,
@@ -9,18 +10,38 @@ import {
   ScrollArea,
 } from '@workspace/ui/components';
 import { PinIcon, XIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import {
   AppRunOutputPanel,
   restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
+import { WorkflowRunOutput } from '@/components/workflow-output-panel';
 import {
   inspectRunRecord,
   type RunRecord,
   type RunStatus,
 } from '@/services/run-history';
+import type { WorkflowRunEvent } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
+import { replayWorkflowRunView } from '@/stores/workflow-run.store';
+
+function workflowSnapshot(snapshot: unknown): {
+  mode: 'task' | 'chat';
+  nodes: Node[];
+} {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { mode: 'task', nodes: [] };
+  }
+  const { nodes, settings } = snapshot as Record<string, unknown>;
+  const mode =
+    settings &&
+    typeof settings === 'object' &&
+    (settings as Record<string, unknown>).mode === 'chat'
+      ? 'chat'
+      : 'task';
+  return { mode, nodes: Array.isArray(nodes) ? (nodes as Node[]) : [] };
+}
 
 const statusTone: Record<RunStatus, string> = {
   queued: 'text-muted-foreground',
@@ -48,6 +69,18 @@ function RunWorkspace() {
   // Keep the previous response while a new tab loads, but never render it for
   // a different run. This avoids a synchronous effect update just to clear UI.
   const activeRecord = record?.id === activeRunId ? record : undefined;
+  const workflowRun = useMemo(() => {
+    if (activeTab?.targetType !== 'workflow' || !activeRecord) return;
+    const snapshot = workflowSnapshot(activeRecord.targetSnapshot);
+    return {
+      ...snapshot,
+      run: replayWorkflowRunView(
+        activeRecord.outputView,
+        activeRecord.events.map(({ event }) => event as WorkflowRunEvent),
+        snapshot,
+      ),
+    };
+  }, [activeRecord, activeTab?.targetType]);
 
   useEffect(() => {
     if (!activeRunId) return;
@@ -90,6 +123,29 @@ function RunWorkspace() {
         onRunAgain={() => undefined}
         onOpenChange={setOpen}
       />
+    );
+  }
+
+  if (activeTab?.targetType === 'workflow' && workflowRun) {
+    return (
+      <Drawer
+        open={open}
+        showSwipeHandle
+        snapPoints={['31rem', 1]}
+        onOpenChange={setOpen}
+      >
+        <DrawerContent>
+          <WorkflowRunOutput
+            readOnly
+            isChat={workflowRun.mode === 'chat'}
+            isRunning={workflowRun.run.status === 'running'}
+            run={workflowRun.run}
+            workflowNodes={workflowRun.nodes}
+            onClose={() => setOpen(false)}
+            onRunAgain={() => undefined}
+          />
+        </DrawerContent>
+      </Drawer>
     );
   }
 

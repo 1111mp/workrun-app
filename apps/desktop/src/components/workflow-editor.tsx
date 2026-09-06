@@ -53,10 +53,10 @@ import {
   type StoredWorkflow,
   type WorkflowDocument,
   type WorkflowRunEvent,
-  type WorkflowRunView,
 } from '@/services/workflow';
 import {
   createWorkflowStore,
+  restoreWorkflowRunView,
   useWorkflowRunStore,
   useWorkflowStoreApi,
   WorkflowStoreProvider,
@@ -69,25 +69,6 @@ const WORKFLOW_MODE = [
   { value: 'task', label: 'Task' },
   { value: 'chat', label: 'Chat' },
 ];
-
-function restoreWorkflowRunView(outputView: unknown): WorkflowRunView {
-  const view =
-    outputView && typeof outputView === 'object'
-      ? (outputView as Partial<WorkflowRunView>)
-      : {};
-
-  // Older replay records stored an empty snapshot; event replay still needs
-  // the collections below to be present before processing its first node event.
-  return {
-    ...view,
-    status: view.status ?? 'idle',
-    nodes: Array.isArray(view.nodes) ? view.nodes : [],
-    messages: Array.isArray(view.messages) ? view.messages : [],
-    thoughts: Array.isArray(view.thoughts) ? view.thoughts : [],
-    processLogs: Array.isArray(view.processLogs) ? view.processLogs : [],
-    execution: Array.isArray(view.execution) ? view.execution : [],
-  };
-}
 
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
