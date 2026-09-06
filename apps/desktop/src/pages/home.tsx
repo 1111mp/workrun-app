@@ -163,7 +163,7 @@ function HomeLayout() {
               </Button>
             }
           />
-          <DropdownMenuContent align='end' className='w-44'>
+          <DropdownMenuContent align='end' className='w-48'>
             <DropdownMenuGroup>
               {displayName ? (
                 <DropdownMenuLabel className='text-muted-foreground truncate px-2 py-1.5 text-sm font-medium'>
