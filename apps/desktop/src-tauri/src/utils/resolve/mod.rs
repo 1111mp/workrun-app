@@ -2,7 +2,7 @@ use crate::{
     config::Config,
     core::{db, logger::Logger, tray::Tray},
     logging, logging_error,
-    module::ipc::IpcServer,
+    module::{ipc::IpcServer, run_manager},
     process::AsyncHandler,
     utils::{init, logging::Type, window_manager::WindowManager},
 };
@@ -22,8 +22,17 @@ pub fn init_work_dir_and_logger() -> Result<()> {
 
 pub fn resolve_server_setup_async() {
     AsyncHandler::spawn(|| async {
-        logging_error!(Type::Setup, db::DBManager::global().init().await);
-        logging_error!(Type::Setup, IpcServer::global().start().await);
+        if let Err(error) = db::DBManager::global().init().await {
+            logging!(error, Type::Setup, "Failed to initialize database: {error:#}");
+            return;
+        }
+        if let Err(error) = IpcServer::global().start().await {
+            logging!(error, Type::Setup, "Failed to initialize IPC server: {error:#}");
+            return;
+        }
+        // Queued Apps can create an IPC session as soon as they are claimed.
+        // Start dispatch only after every native dependency they need is ready.
+        run_manager::start_supervisor();
     });
 }
 

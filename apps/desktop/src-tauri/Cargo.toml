@@ -73,6 +73,7 @@ tauri-plugin-updater = "2.11.0"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 url = "2.5.8"
 uuid = { workspace = true, features = ["v4"] }
 

@@ -123,6 +123,10 @@ export function inspectRunRecord(id: string) {
   return invoke<RunRecord>('run_history_inspect', { id });
 }
 
+export function replayRun(sourceRunId: string) {
+  return invoke<RunRecordSummary>('run_replay', { sourceRunId });
+}
+
 export function listActiveRuns() {
   return invoke<RunRecordSummary[]>('run_history_list_active');
 }

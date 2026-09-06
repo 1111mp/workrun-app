@@ -418,12 +418,18 @@ function ApprovalCoordinator() {
 
   const submit = async (resolution: Payload) => {
     if (!action || submitting) return;
+    // A page reload unmounts this component and releases its claim. Mark the
+    // action as retained before awaiting IPC so that cleanup cannot race the
+    // durable resolution that resumes the workflow.
+    releasedAction.current = action.id;
     setSubmitting(true);
     try {
       await resolveBackgroundWorkflowAction(action.id, claimantId, resolution);
-      releasedAction.current = action.id;
       setAction(undefined);
     } catch (error) {
+      // Keep the action available for a retry if the resolution was not made
+      // durable; the normal unmount cleanup may release this claim again.
+      releasedAction.current = null;
       toast.error('Could not continue the workflow', {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),

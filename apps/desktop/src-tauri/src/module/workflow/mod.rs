@@ -244,7 +244,7 @@ pub struct WorkflowRunResult {
     pub interrupted: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolConfirmationDecisionRequest {
     pub function_call_id: String,

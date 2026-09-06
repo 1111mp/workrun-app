@@ -6,14 +6,17 @@ use crate::{
     module::{
         process_node::ProcessNodeRegistry,
         python_runtime::PythonOutputChunk,
-        run_history::{AppendRunEvents, CreatePendingAction, NewRunEvent, RunHistoryStore, RunStatus},
+        run_history::{
+            AppendRunEvents, CreatePendingAction, CreateRunRecord, NewRunEvent, RunHistoryStore, RunRecordSummary,
+            RunStatus, RunTargetType,
+        },
         workflow::{self, ToolConfirmationDecisionRequest, WorkflowDsl},
     },
     process::AsyncHandler,
+    singleton,
 };
 use adk_rust::graph::{State, StreamEvent};
 use anyhow::{Context, Result, bail};
-use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -21,7 +24,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -29,10 +32,161 @@ use tauri::{
     Emitter,
     ipc::{Channel, InvokeResponseBody},
 };
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio_util::sync::CancellationToken;
 
-static WORKFLOW_SESSIONS: Lazy<Mutex<HashMap<String, WorkflowSession>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-static APP_RUNS: Lazy<Mutex<HashMap<String, Arc<AppRunHandle>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+const MAX_CONCURRENT_TOP_LEVEL_RUNS: usize = 4;
+const MAX_CONCURRENT_TOP_LEVEL_APP_RUNS: usize = 2;
+
+/// The native owner of all top-level Run lifecycle state. Keeping these
+/// indexes together prevents a renderer-owned map from becoming authoritative.
+struct RunManager {
+    workflow_sessions: Mutex<HashMap<String, WorkflowSession>>,
+    workflow_cancellations: Mutex<HashMap<String, CancellationToken>>,
+    app_runs: Mutex<HashMap<String, Arc<AppRunHandle>>>,
+    supervisor: RunSupervisor,
+}
+
+impl Default for RunManager {
+    fn default() -> Self {
+        Self {
+            workflow_sessions: Mutex::new(HashMap::new()),
+            workflow_cancellations: Mutex::new(HashMap::new()),
+            app_runs: Mutex::new(HashMap::new()),
+            supervisor: RunSupervisor::new(),
+        }
+    }
+}
+
+impl RunManager {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn start_supervisor(&'static self) {
+        self.supervisor.start();
+    }
+}
+
+singleton!(RunManager, RUN_MANAGER);
+
+/// Owns dispatch of persisted top-level runs. Workflow-internal Apps deliberately
+/// remain children of their workflow task: queueing them again could deadlock a
+/// workflow that already holds the last top-level execution permit.
+struct RunSupervisor {
+    permits: Arc<Semaphore>,
+    app_permits: Arc<Semaphore>,
+    wake: Notify,
+    idle: Notify,
+    started: AtomicBool,
+    accepting: AtomicBool,
+    active_runs: AtomicUsize,
+}
+
+impl RunSupervisor {
+    fn new() -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(MAX_CONCURRENT_TOP_LEVEL_RUNS)),
+            app_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_TOP_LEVEL_APP_RUNS)),
+            wake: Notify::new(),
+            idle: Notify::new(),
+            started: AtomicBool::new(false),
+            accepting: AtomicBool::new(true),
+            active_runs: AtomicUsize::new(0),
+        }
+    }
+
+    fn start(&'static self) {
+        if self.started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        AsyncHandler::spawn(move || async move {
+            loop {
+                self.dispatch_available_runs().await;
+                self.wake.notified().await;
+            }
+        });
+        self.wake.notify_one();
+    }
+
+    fn notify(&self) {
+        if self.accepting.load(Ordering::Acquire) {
+            self.wake.notify_one();
+        }
+    }
+
+    async fn shutdown(&self) {
+        self.accepting.store(false, Ordering::Release);
+        self.wake.notify_waiters();
+        // Let native tasks flush their final events before Tauri exits. The
+        // timeout bounds shutdown when an external model or process ignores
+        // cancellation; OS process teardown remains the final safeguard.
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let notified = self.idle.notified();
+                if self.active_runs.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                notified.await;
+            }
+        })
+        .await;
+    }
+
+    async fn dispatch_available_runs(&'static self) {
+        loop {
+            if !self.accepting.load(Ordering::Acquire) {
+                return;
+            }
+            let permit = match Arc::clone(&self.permits).try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            // Reserve an App slot before claiming. When all App slots are full,
+            // SQLite can still select a queued Workflow rather than marking an
+            // App as running while it waits for an in-memory permit.
+            let available_app_permit = Arc::clone(&self.app_permits).try_acquire_owned().ok();
+            let run_id = match RunHistoryStore::claim_next_queued_run(available_app_permit.is_some()).await {
+                Ok(Some(run_id)) => run_id,
+                Ok(None) => return,
+                Err(error) => {
+                    log::error!("failed to claim queued run: {error:#}");
+                    return;
+                },
+            };
+            let claimed = match RunHistoryStore::inspect(&run_id).await {
+                Ok(run) => run,
+                Err(error) => {
+                    log::error!("failed to inspect claimed run {run_id}: {error:#}");
+                    return;
+                },
+            };
+            let app_permit = (claimed.summary.target_type == "app")
+                .then_some(available_app_permit)
+                .flatten();
+            publish_run_status(&run_id, RunStatus::Running).ok();
+            self.active_runs.fetch_add(1, Ordering::AcqRel);
+            AsyncHandler::spawn(move || async move {
+                execute_claimed_run(&run_id).await;
+                drop(permit);
+                drop(app_permit);
+                self.active_runs.fetch_sub(1, Ordering::AcqRel);
+                self.idle.notify_waiters();
+                RunManager::global().supervisor.notify();
+            });
+        }
+    }
+}
+
+/// Called only after the database has completed migration and recovery. Recovery
+/// marks incomplete records interrupted, so this only dispatches new user work.
+pub fn start_supervisor() {
+    RunManager::global().start_supervisor();
+}
+
+pub async fn shutdown_supervisor() {
+    RunManager::global().supervisor.shutdown().await;
+}
 
 #[derive(Debug, Clone)]
 struct WorkflowSession {
@@ -134,12 +288,12 @@ pub async fn start_app(request: StartAppRun) -> Result<()> {
     if request.run_id.trim().is_empty() || request.target_id.trim().is_empty() {
         bail!("run id and target id are required");
     }
-    RunHistoryStore::create(crate::module::run_history::CreateRunRecord {
+    RunHistoryStore::create(CreateRunRecord {
         id: request.run_id.clone(),
-        target_type: crate::module::run_history::RunTargetType::App,
+        target_type: RunTargetType::App,
         target_id: request.target_id.clone(),
         target_name: request.target_name,
-        status: RunStatus::Running,
+        status: RunStatus::Queued,
         started_at: chrono::Utc::now().to_rfc3339(),
         input: None,
         output_view: request.output_view,
@@ -147,27 +301,8 @@ pub async fn start_app(request: StartAppRun) -> Result<()> {
         runtime: json!({ "kind": "app" }),
     })
     .await?;
-    publish_run_status(&request.run_id, RunStatus::Running)?;
-    let run_id = request.run_id.clone();
-    let target_id = request.target_id.clone();
-    let handle = Arc::new(AppRunHandle::new());
-    APP_RUNS.lock().insert(run_id.clone(), Arc::clone(&handle));
-
-    let task = AsyncHandler::spawn(move || async move {
-        if let Err(error) = execute_app(&run_id, &target_id, Arc::clone(&handle)).await {
-            if handle.cancelled.load(Ordering::Acquire) {
-                let _ = complete_app_cancellation(&run_id).await;
-            } else {
-                let _ = publish_error(&run_id, &error.to_string()).await;
-            }
-        }
-        handle.is_finished.store(true, Ordering::Release);
-        handle.finished_notify.notify_waiters();
-        APP_RUNS.lock().remove(&run_id);
-    });
-
-    drop(task);
-
+    publish_run_status(&request.run_id, RunStatus::Queued)?;
+    RunManager::global().supervisor.notify();
     Ok(())
 }
 
@@ -175,10 +310,18 @@ pub async fn start_app(request: StartAppRun) -> Result<()> {
 /// cancellation becomes durable. That preserves output emitted just before the
 /// operating system delivered the termination signal.
 pub async fn cancel_running_app(run_id: &str) -> Result<()> {
-    let active_handle = { APP_RUNS.lock().get(run_id).cloned() };
+    let active_handle = { RunManager::global().app_runs.lock().get(run_id).cloned() };
     let handle = match active_handle {
         Some(handle) => handle,
-        None => return reconcile_inactive_app_run(run_id).await,
+        None => {
+            let run = RunHistoryStore::inspect(run_id).await?;
+            if run.summary.target_type == "app" && run.summary.status == "queued" {
+                RunHistoryStore::cancel_queued_run(run_id).await?;
+                publish_run_status(run_id, RunStatus::Cancelled)?;
+                return Ok(());
+            }
+            return reconcile_inactive_app_run(run_id).await;
+        },
     };
     handle.cancelled.store(true, Ordering::Release);
     let pid = handle.pid.load(Ordering::Acquire);
@@ -250,12 +393,12 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         "threadId": request.thread_id,
         "initialState": request.initial_state,
     });
-    RunHistoryStore::create(crate::module::run_history::CreateRunRecord {
+    RunHistoryStore::create(CreateRunRecord {
         id: request.run_id.clone(),
-        target_type: crate::module::run_history::RunTargetType::Workflow,
+        target_type: RunTargetType::Workflow,
         target_id: request.target_id,
         target_name: request.target_name,
-        status: RunStatus::Running,
+        status: RunStatus::Queued,
         started_at: chrono::Utc::now().to_rfc3339(),
         input: Some(request.input),
         output_view: request.output_view,
@@ -263,15 +406,83 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         runtime,
     })
     .await?;
-    publish_run_status(&request.run_id, RunStatus::Running)?;
-    let session = WorkflowSession {
-        dsl: request.dsl,
-        thread_id: request.thread_id,
-        initial_state: request.initial_state,
-    };
-    WORKFLOW_SESSIONS.lock().insert(request.run_id.clone(), session.clone());
-    spawn_workflow(request.run_id, session, false, None);
+    publish_run_status(&request.run_id, RunStatus::Queued)?;
+    RunManager::global().supervisor.notify();
     Ok(())
+}
+
+/// Creates a fresh queued execution from an immutable terminal history entry.
+/// It intentionally does not try to revive a process or workflow checkpoint
+/// that disappeared with the previous native process.
+pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
+    let source = RunHistoryStore::inspect(source_run_id).await?;
+    let target_type = replay_target_type(&source.summary.target_type)?;
+    if !matches!(
+        source.summary.status.as_str(),
+        "completed" | "failed" | "cancelled" | "interrupted"
+    ) {
+        bail!("only a finished run can be replayed");
+    }
+    let run_id = uuid::Uuid::new_v4().to_string();
+    RunHistoryStore::create(CreateRunRecord {
+        id: run_id.clone(),
+        target_type,
+        target_id: source.summary.target_id,
+        target_name: source.summary.target_name,
+        status: RunStatus::Queued,
+        started_at: chrono::Utc::now().to_rfc3339(),
+        input: source.input,
+        output_view: json!({}),
+        target_snapshot: source.target_snapshot,
+        runtime: replay_runtime(source.runtime, source_run_id)?,
+    })
+    .await?;
+    publish_run_status(&run_id, RunStatus::Queued)?;
+    RunManager::global().supervisor.notify();
+    Ok(RunHistoryStore::inspect(&run_id).await?.summary)
+}
+
+fn replay_target_type(target_type: &str) -> Result<RunTargetType> {
+    match target_type {
+        "workflow" => Ok(RunTargetType::Workflow),
+        "app" => Ok(RunTargetType::App),
+        _ => bail!("unsupported run target type: {target_type}"),
+    }
+}
+
+fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
+    let object = runtime.as_object_mut().context("run runtime metadata is invalid")?;
+    // A replay always starts from the original recipe. Resume-only fields
+    // describe a vanished checkpoint and must never leak into the new run.
+    object.remove("resume");
+    object.remove("toolConfirmation");
+    object.insert("replayOf".to_string(), json!(source_run_id));
+    Ok(runtime)
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::replay_runtime;
+    use serde_json::json;
+
+    #[test]
+    fn replay_runtime_preserves_recipe_and_clears_checkpoint_controls() {
+        let runtime = replay_runtime(
+            json!({
+                "kind": "workflow",
+                "dsl": { "nodes": [] },
+                "resume": true,
+                "toolConfirmation": { "approved": true },
+            }),
+            "old-run",
+        )
+        .unwrap();
+
+        assert_eq!(runtime["dsl"], json!({ "nodes": [] }));
+        assert_eq!(runtime["replayOf"], "old-run");
+        assert!(runtime.get("resume").is_none());
+        assert!(runtime.get("toolConfirmation").is_none());
+    }
 }
 
 /// Resume a checkpointed workflow without asking the original React component
@@ -281,18 +492,10 @@ pub async fn resume_workflow(request: ResumeWorkflowRun) -> Result<()> {
     if record.summary.target_type != "workflow" || record.summary.status != "waiting_for_input" {
         bail!("only a workflow waiting for input can be resumed");
     }
-    let session = if let Some(session) = WORKFLOW_SESSIONS.lock().get(&request.run_id).cloned() {
-        session
-    } else {
-        // A paused graph checkpoint is durable. Rehydrate only the execution
-        // recipe after restart; active processes are intentionally not resumed.
-        let session = workflow_session_from_runtime(&record.runtime)?;
-        WORKFLOW_SESSIONS.lock().insert(request.run_id.clone(), session.clone());
-        session
-    };
-    RunHistoryStore::mark_running(&request.run_id).await?;
-    publish_run_status(&request.run_id, RunStatus::Running)?;
-    spawn_workflow(request.run_id, session, true, request.tool_confirmation);
+    let runtime = workflow_resume_runtime(record.runtime, request.tool_confirmation)?;
+    RunHistoryStore::enqueue_workflow_resume(&request.run_id, runtime).await?;
+    publish_run_status(&request.run_id, RunStatus::Queued)?;
+    RunManager::global().supervisor.notify();
     Ok(())
 }
 
@@ -309,18 +512,30 @@ pub async fn resolve_workflow_action(request: ResolveWorkflowAction) -> Result<(
     if record.summary.target_type != "workflow" || record.summary.status != "waiting_for_input" {
         bail!("only a workflow waiting for input can be resumed");
     }
-    let session = if let Some(session) = WORKFLOW_SESSIONS.lock().get(&action.run_id).cloned() {
+    let session = if let Some(session) = RunManager::global()
+        .workflow_sessions
+        .lock()
+        .get(&action.run_id)
+        .cloned()
+    {
         session
     } else {
         let session = workflow_session_from_runtime(&record.runtime)?;
-        WORKFLOW_SESSIONS.lock().insert(action.run_id.clone(), session.clone());
+        RunManager::global()
+            .workflow_sessions
+            .lock()
+            .insert(action.run_id.clone(), session.clone());
         session
     };
     let tool_confirmation = apply_pending_action_checkpoint(&session, &action, &request.resolution).await?;
-    RunHistoryStore::resolve_claimed_action_and_mark_running(&action.id, &request.claimant_id, request.resolution)
+    let runtime = workflow_resume_runtime(record.runtime, tool_confirmation)?;
+    RunHistoryStore::resolve_claimed_action_and_enqueue(&action.id, &request.claimant_id, request.resolution, runtime)
         .await?;
-    publish_run_status(&action.run_id, RunStatus::Running)?;
-    spawn_workflow(action.run_id, session, true, tool_confirmation);
+    // The checkpoint is already applied above. The durable recipe now tells the
+    // dispatcher to continue it when a top-level execution permit is available.
+    drop(session);
+    publish_run_status(&action.run_id, RunStatus::Queued)?;
+    RunManager::global().supervisor.notify();
     Ok(())
 }
 
@@ -413,10 +628,25 @@ fn required_bool(object: &serde_json::Map<String, Value>, key: &str) -> Result<b
 /// process lifecycle can be terminated reliably.
 pub async fn cancel_waiting_workflow(run_id: &str) -> Result<()> {
     let run = RunHistoryStore::inspect(run_id).await?;
+    if run.summary.target_type == "workflow" && run.summary.status == "queued" {
+        RunHistoryStore::cancel_queued_run(run_id).await?;
+        publish_run_status(run_id, RunStatus::Cancelled)?;
+        return Ok(());
+    }
+    if run.summary.target_type == "workflow" && run.summary.status == "running" {
+        let cancellation = RunManager::global()
+            .workflow_cancellations
+            .lock()
+            .get(run_id)
+            .cloned()
+            .context("workflow run has not reached a cancellable execution point")?;
+        cancellation.cancel();
+        return Ok(());
+    }
     if run.summary.target_type != "workflow" || run.summary.status != "waiting_for_input" {
         bail!("only a workflow waiting for input can be cancelled");
     }
-    WORKFLOW_SESSIONS.lock().remove(run_id);
+    RunManager::global().workflow_sessions.lock().remove(run_id);
     RunHistoryStore::cancel_pending_actions(run_id).await?;
     publish_value_event(
         run_id,
@@ -457,24 +687,78 @@ fn workflow_session_from_runtime(runtime: &Value) -> Result<WorkflowSession> {
     })
 }
 
-fn spawn_workflow(
-    run_id: String,
-    session: WorkflowSession,
-    resume: bool,
-    tool_confirmation: Option<ToolConfirmationDecisionRequest>,
-) {
-    AsyncHandler::spawn(move || async move {
-        if let Err(error) = execute_workflow(&run_id, session, resume, tool_confirmation).await {
-            let message = error.to_string();
-            // Persisting the diagnostic event can itself fail (for example due
-            // to a SQLite lock). The terminal state must still be attempted so
-            // an action created before that failure cannot survive as pending.
-            if publish_error(&run_id, &message).await.is_err() {
-                let _ = finish_run(&run_id, RunStatus::Failed, Some(message)).await;
-            }
-            WORKFLOW_SESSIONS.lock().remove(&run_id);
+async fn execute_claimed_run(run_id: &str) {
+    let result = async {
+        let record = RunHistoryStore::inspect(run_id).await?;
+        match record.summary.target_type.as_str() {
+            "app" => execute_claimed_app(run_id, &record.summary.target_id).await,
+            "workflow" => execute_claimed_workflow(run_id, record.runtime).await,
+            target_type => bail!("unsupported queued run target type: {target_type}"),
         }
-    });
+    }
+    .await;
+    if let Err(error) = result {
+        let message = error.to_string();
+        if publish_error(run_id, &message).await.is_err() {
+            let _ = finish_run(run_id, RunStatus::Failed, Some(message)).await;
+        }
+        RunManager::global().workflow_sessions.lock().remove(run_id);
+    }
+}
+
+async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
+    let handle = Arc::new(AppRunHandle::new());
+    RunManager::global()
+        .app_runs
+        .lock()
+        .insert(run_id.to_string(), Arc::clone(&handle));
+    let result = execute_app(run_id, target_id, Arc::clone(&handle)).await;
+    handle.is_finished.store(true, Ordering::Release);
+    handle.finished_notify.notify_waiters();
+    RunManager::global().app_runs.lock().remove(run_id);
+    result
+}
+
+async fn execute_claimed_workflow(run_id: &str, runtime: Value) -> Result<()> {
+    let session = workflow_session_from_runtime(&runtime)?;
+    let resume = runtime.get("resume").and_then(Value::as_bool).unwrap_or(false);
+    let tool_confirmation = runtime
+        .get("toolConfirmation")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("workflow resume confirmation is invalid")?;
+    RunManager::global()
+        .workflow_sessions
+        .lock()
+        .insert(run_id.to_string(), session.clone());
+    let cancellation = CancellationToken::new();
+    RunManager::global()
+        .workflow_cancellations
+        .lock()
+        .insert(run_id.to_string(), cancellation.clone());
+    let result = execute_workflow(run_id, session, resume, tool_confirmation, cancellation).await;
+    RunManager::global().workflow_cancellations.lock().remove(run_id);
+    result
+}
+
+fn workflow_resume_runtime(
+    mut runtime: Value,
+    tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+) -> Result<Value> {
+    let object = runtime
+        .as_object_mut()
+        .context("workflow runtime metadata is invalid")?;
+    object.insert("resume".to_string(), Value::Bool(true));
+    object.insert(
+        "toolConfirmation".to_string(),
+        tool_confirmation
+            .map(serde_json::to_value)
+            .transpose()?
+            .unwrap_or(Value::Null),
+    );
+    Ok(runtime)
 }
 
 async fn execute_workflow(
@@ -482,6 +766,7 @@ async fn execute_workflow(
     session: WorkflowSession,
     resume: bool,
     tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+    cancellation: CancellationToken,
 ) -> Result<()> {
     let dsl: WorkflowDsl = serde_json::from_value(session.dsl)?;
     let initial_state: State = serde_json::from_value(session.initial_state)?;
@@ -504,30 +789,48 @@ async fn execute_workflow(
         // decisions; route them through the same durable writer as graph events.
         let compiled = workflow::compile(dsl, &config, Some(node_events)).await?;
         let event_sender = events.clone();
-        compiled
-            .run_stream(
-                initial_state,
-                &session.thread_id,
-                resume,
-                tool_confirmation,
-                move |event| {
-                    if let StreamEvent::Done { total_steps: steps, .. } = event {
-                        // `run_stream` emits ADK's internal graph state here. Hold
-                        // the terminal event until its observer-safe state is built
-                        // below, so the Output panel receives global/node namespaces.
-                        *callback_terminal_steps.lock() = Some(steps);
-                        return;
-                    }
-                    // The graph callback cannot await SQLite. A single writer keeps
-                    // event order durable while the graph remains free to stream.
-                    if let Ok(event) = serde_json::to_value(workflow::redact_event_for_transport(event)) {
-                        let _ = event_sender.send(event);
-                    }
-                },
-            )
-            .await?
+        let run = compiled.run_stream(
+            initial_state,
+            &session.thread_id,
+            resume,
+            tool_confirmation,
+            move |event| {
+                if let StreamEvent::Done { total_steps: steps, .. } = event {
+                    // `run_stream` emits ADK's internal graph state here. Hold
+                    // the terminal event until its observer-safe state is built
+                    // below, so the Output panel receives global/node namespaces.
+                    *callback_terminal_steps.lock() = Some(steps);
+                    return;
+                }
+                // The graph callback cannot await SQLite. A single writer keeps
+                // event order durable while the graph remains free to stream.
+                if let Ok(event) = serde_json::to_value(workflow::redact_event_for_transport(event)) {
+                    let _ = event_sender.send(event);
+                }
+            },
+        );
+        tokio::select! {
+            result = run => Some(result?),
+            _ = cancellation.cancelled() => None,
+        }
         // `compiled` owns the node event Channel. Its sender must be dropped
         // before waiting for the writer, otherwise receiver.recv never ends.
+    };
+    let Some(result) = result else {
+        drop(events);
+        writer.await??;
+        RunManager::global().workflow_sessions.lock().remove(run_id);
+        publish_value_event(
+            run_id,
+            json!({
+                "type": "custom",
+                "node": "",
+                "event_type": "workflow.run_cancelled",
+                "data": {},
+            }),
+        )
+        .await?;
+        return finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await;
     };
     if let Some(total_steps) = terminal_steps.lock().take() {
         let event = StreamEvent::Done {
@@ -554,7 +857,7 @@ async fn execute_workflow(
     )
     .await?;
     if !result.interrupted {
-        WORKFLOW_SESSIONS.lock().remove(run_id);
+        RunManager::global().workflow_sessions.lock().remove(run_id);
     }
     Ok(())
 }
@@ -574,8 +877,7 @@ async fn publish_error(run_id: &str, message: &str) -> Result<()> {
     )
     .await?;
 
-    let app = handle::Handle::app_handle();
-    app.emit(
+    emit_on_main_thread(
         "run-event",
         RunEventEnvelope {
             run_id: run_id.to_string(),
@@ -589,7 +891,6 @@ async fn publish_error(run_id: &str, message: &str) -> Result<()> {
 async fn persist_events(run_id: String, mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<bool> {
     let mut sequence = RunHistoryStore::last_sequence(&run_id).await? + 1;
     let mut has_pending_action = false;
-    let app = handle::Handle::app_handle();
     while let Some(mut event) = receiver.recv().await {
         if let Some((kind, payload)) = pending_action(&event) {
             let action_id = uuid::Uuid::new_v4().to_string();
@@ -603,7 +904,7 @@ async fn persist_events(run_id: String, mut receiver: mpsc::UnboundedReceiver<Va
             .await?;
             // Claiming belongs to the shell-level coordinator. Notify it only
             // after the action is durable, so it can claim immediately.
-            app.emit(
+            emit_on_main_thread(
                 "pending-action-created",
                 PendingActionCreated {
                     action_id: action_id.clone(),
@@ -628,7 +929,7 @@ async fn persist_events(run_id: String, mut receiver: mpsc::UnboundedReceiver<Va
             },
         )
         .await?;
-        app.emit(
+        emit_on_main_thread(
             "run-event",
             RunEventEnvelope {
                 run_id: run_id.clone(),
@@ -705,15 +1006,13 @@ async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> R
 }
 
 fn publish_run_status(run_id: &str, status: RunStatus) -> Result<()> {
-    let app = handle::Handle::app_handle();
-    app.emit(
+    emit_on_main_thread(
         "run-status-changed",
         RunStatusChange {
             run_id: run_id.to_string(),
             status,
         },
-    )?;
-    Ok(())
+    )
 }
 
 #[cfg(unix)]
@@ -745,8 +1044,7 @@ async fn publish_value_event(run_id: &str, event: Value) -> Result<()> {
     )
     .await?;
 
-    let app = handle::Handle::app_handle();
-    app.emit(
+    emit_on_main_thread(
         "run-event",
         RunEventEnvelope {
             run_id: run_id.to_string(),
@@ -774,8 +1072,7 @@ async fn persist_app_output(run_id: String, mut receiver: mpsc::UnboundedReceive
         )
         .await?;
 
-        let app = handle::Handle::app_handle();
-        app.emit(
+        emit_on_main_thread(
             "run-event",
             RunEventEnvelope {
                 run_id: run_id.clone(),
@@ -785,6 +1082,23 @@ async fn persist_app_output(run_id: String, mut receiver: mpsc::UnboundedReceive
         )?;
         sequence += 1;
     }
+    Ok(())
+}
+
+fn emit_on_main_thread<S>(event_name: &'static str, payload: S) -> Result<()>
+where
+    S: Serialize + Clone + Send + 'static,
+{
+    let app = handle::Handle::app_handle();
+    let emit_app = app.clone();
+    // Wry synchronously evaluates listeners for an emit from a background
+    // worker. Queue it on the main loop so a concurrent WebView IPC request
+    // cannot invert the WebView lock and freeze the renderer.
+    app.run_on_main_thread(move || {
+        if let Err(error) = emit_app.emit(event_name, payload) {
+            log::warn!("failed to emit {event_name}: {error}");
+        }
+    })?;
     Ok(())
 }
 

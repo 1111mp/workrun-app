@@ -80,15 +80,24 @@ impl DBManager {
     }
 
     async fn mark_incomplete_runs_interrupted(pool: &sqlx::SqlitePool) -> Result<()> {
-        // A native restart destroys the execution session behind every pause.
-        // A persisted checkpoint cannot safely recreate its in-memory channels,
-        // so never offer a pre-restart question or approval for continuation.
+        // A native restart destroys running execution sessions and their paused
+        // checkpoints. Do not auto-run queued work after restart: the history
+        // entry remains the user's durable recipe, but only an explicit replay
+        // can create a new execution from it.
         let recovered_at = chrono::Utc::now().to_rfc3339();
-        let recovered = sqlx::query(
-            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status IN ('queued', 'running', 'waiting_for_input')",
+        let active_runs = sqlx::query(
+            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status IN ('running', 'waiting_for_input')",
         )
         .bind(&recovered_at)
         .bind("Execution ended when Workrun restarted.")
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
+        let queued_runs = sqlx::query(
+            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status = 'queued'",
+        )
+        .bind(&recovered_at)
+        .bind("Execution did not start before Workrun restarted.")
         .bind(&recovered_at)
         .execute(pool)
         .await?;
@@ -100,12 +109,13 @@ impl DBManager {
         )
         .execute(pool)
         .await?;
-        if recovered.rows_affected() > 0 {
+        let interrupted = active_runs.rows_affected() + queued_runs.rows_affected();
+        if interrupted > 0 {
             logging!(
                 info,
                 Type::Setup,
                 "Marked {} incomplete run(s) as interrupted",
-                recovered.rows_affected()
+                interrupted
             );
         }
         Ok(())
@@ -125,7 +135,7 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[tokio::test]
-    async fn restart_interrupts_waiting_run_and_expires_every_pending_action() {
+    async fn restart_interrupts_active_and_queued_runs() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -144,6 +154,10 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-1', 'waiting_for_input')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-2', 'queued')")
             .execute(&pool)
             .await
             .unwrap();
@@ -174,5 +188,15 @@ mod tests {
         .unwrap();
         assert_eq!(status, "interrupted");
         assert_eq!(expired, 3);
+        let queued_status: String = sqlx::query_scalar("SELECT status FROM run_records WHERE id = 'run-2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(queued_status, "interrupted");
+        let queued_error: String = sqlx::query_scalar("SELECT error FROM run_records WHERE id = 'run-2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(queued_error, "Execution did not start before Workrun restarted.");
     }
 }

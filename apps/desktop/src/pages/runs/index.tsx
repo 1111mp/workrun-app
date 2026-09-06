@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
   Button,
@@ -29,9 +29,11 @@ import {
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
+import { toast } from 'sonner';
 
 import {
   listRunHistoryPage,
+  replayRun,
   type RunHistoryCursor,
   type RunStatus,
   type RunTargetType,
@@ -46,10 +48,13 @@ const targetFilters: { label: string; value?: RunTargetType }[] = [
 
 const statusFilters: { label: string; value?: RunStatus }[] = [
   { label: 'Any status' },
+  { label: 'Queued', value: 'queued' },
+  { label: 'Running', value: 'running' },
+  { label: 'Needs attention', value: 'waiting_for_input' },
   { label: 'Completed', value: 'completed' },
   { label: 'Failed', value: 'failed' },
+  { label: 'Cancelled', value: 'cancelled' },
   { label: 'Interrupted', value: 'interrupted' },
-  { label: 'Running', value: 'running' },
 ];
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
@@ -65,8 +70,16 @@ const RUN_STATUS_STYLES: Record<RunStatus, string> = {
     'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
 };
 
+const REPLAYABLE_RUN_STATUSES: RunStatus[] = [
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+];
+
 function RunsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const openWorkspaceRun = useRunWorkspaceStore((state) => state.openRun);
   const targetType = searchParams.get('targetType') as RunTargetType | null;
   const targetId = searchParams.get('targetId') ?? undefined;
@@ -93,6 +106,19 @@ function RunsPage() {
   const completedCount = historyItems.filter(
     (run) => run.status === 'completed',
   ).length;
+  const replay = useMutation({
+    mutationFn: replayRun,
+    onSuccess: (run) => {
+      void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+      openWorkspaceRun(run);
+    },
+    onError: (error) => {
+      toast.error('Could not replay run', {
+        description: error instanceof Error ? error.message : String(error),
+        toasterId: 'global',
+      });
+    },
+  });
 
   const updateFilter = (name: string, value?: string) => {
     const next = new URLSearchParams(searchParams);
@@ -224,6 +250,7 @@ function RunsPage() {
           {historyItems.map((run) => {
             const isWorkflow = run.targetType === 'workflow';
             const Icon = isWorkflow ? WorkflowIcon : AppWindowIcon;
+            const canReplay = REPLAYABLE_RUN_STATUSES.includes(run.status);
             return (
               <Item
                 key={run.id}
@@ -258,6 +285,19 @@ function RunsPage() {
                   <Button size='sm' onClick={() => openWorkspaceRun(run)}>
                     View output
                   </Button>
+                  {canReplay ? (
+                    <Button
+                      size='sm'
+                      variant='secondary'
+                      disabled={replay.isPending}
+                      onClick={() => replay.mutate(run.id)}
+                    >
+                      {run.error ===
+                      'Execution did not start before Workrun restarted.'
+                        ? 'Run'
+                        : 'Re-run'}
+                    </Button>
+                  ) : null}
                 </ItemActions>
               </Item>
             );

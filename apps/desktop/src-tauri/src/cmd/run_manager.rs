@@ -1,9 +1,10 @@
 use crate::{
     cmd::{CmdResult, StringifyErr},
-    module::run_manager::{self, ResolveWorkflowAction, ResumeWorkflowRun, StartAppRun, StartWorkflowRun},
+    module::{
+        run_history::RunRecordSummary,
+        run_manager::{self, ResolveWorkflowAction, ResumeWorkflowRun, StartAppRun, StartWorkflowRun},
+    },
 };
-use tauri::AppHandle;
-
 #[tauri::command]
 pub async fn workflow_run_start(request: StartWorkflowRun) -> CmdResult {
     run_manager::start_workflow(request).await.stringify_err()
@@ -32,4 +33,9 @@ pub async fn process_node_run_start(request: StartAppRun) -> CmdResult {
 #[tauri::command]
 pub async fn process_node_run_cancel(run_id: String) -> CmdResult {
     run_manager::cancel_running_app(&run_id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn run_replay(source_run_id: String) -> Result<RunRecordSummary, String> {
+    run_manager::replay_run(&source_run_id).await.stringify_err()
 }

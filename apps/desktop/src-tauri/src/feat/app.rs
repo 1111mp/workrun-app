@@ -1,4 +1,4 @@
-use crate::{config::Config, core::handle, utils::dirs};
+use crate::{config::Config, core::handle, module::run_manager, utils::dirs};
 use anyhow::Result;
 
 /// open app config dir
@@ -17,6 +17,8 @@ pub async fn open_logs_dir() -> Result<()> {
 
 pub async fn restart_app() {
     handle::Handle::global().set_is_exiting();
+
+    run_manager::shutdown_supervisor().await;
 
     Config::apply_all_and_save_file().await;
 

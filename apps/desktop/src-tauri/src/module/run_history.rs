@@ -283,6 +283,48 @@ impl RunHistoryStore {
         Ok(())
     }
 
+    /// Reserve the oldest queued run before a native worker begins executing it.
+    /// SQLite has one writer, so an immediate transaction prevents two dispatcher
+    /// loops from observing and starting the same record.
+    pub async fn claim_next_queued_run(include_apps: bool) -> Result<Option<String>> {
+        let pool = DBManager::global().pool()?;
+        claim_next_queued_run_from_pool(&pool, include_apps).await
+    }
+
+    pub async fn enqueue_workflow_resume(id: &str, runtime: Value) -> Result<()> {
+        let pool = DBManager::global().pool()?;
+        let result = sqlx::query(
+            "UPDATE run_records SET status = 'queued', ended_at = NULL, error = NULL, runtime_json = ?, updated_at = ? WHERE id = ? AND status = 'waiting_for_input'",
+        )
+        .bind(runtime.to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            bail!("workflow is no longer waiting for input: {id}");
+        }
+        Ok(())
+    }
+
+    pub async fn cancel_queued_run(id: &str) -> Result<()> {
+        let pool = DBManager::global().pool()?;
+        let result = sqlx::query(
+            "UPDATE run_records SET status = 'cancelled', ended_at = ?, duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER), error = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+        )
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind("Cancelled by user")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            bail!("run is no longer queued: {id}");
+        }
+        Ok(())
+    }
+
     pub async fn last_sequence(id: &str) -> Result<i64> {
         let pool = DBManager::global().pool()?;
         Ok(
@@ -480,13 +522,14 @@ impl RunHistoryStore {
         Ok(action)
     }
 
-    /// Resolve a claimed workflow action and transition its run back to
-    /// `running` in the same SQLite transaction. Spawning the native task
-    /// happens immediately afterwards and cannot be claimed by another UI.
-    pub async fn resolve_claimed_action_and_mark_running(
+    /// Resolve a claimed action and put its workflow back in the native queue.
+    /// The resume recipe is persisted in the same transaction, so a renderer
+    /// cannot race a dispatcher into resuming with stale confirmation data.
+    pub async fn resolve_claimed_action_and_enqueue(
         id: &str,
         claimant_id: &str,
         resolution: Value,
+        runtime: Value,
     ) -> Result<PendingAction> {
         let pool = DBManager::global().pool()?;
         let mut transaction = pool.begin().await?;
@@ -510,8 +553,9 @@ impl RunHistoryStore {
         .await?;
         let action = pending_action_from_row(&row)?;
         let result = sqlx::query(
-            "UPDATE run_records SET status = 'running', ended_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = 'waiting_for_input'",
+            "UPDATE run_records SET status = 'queued', ended_at = NULL, error = NULL, runtime_json = ?, updated_at = ? WHERE id = ? AND status = 'waiting_for_input'",
         )
+        .bind(runtime.to_string())
         .bind(chrono::Utc::now().to_rfc3339())
         .bind(&action.run_id)
         .execute(&mut *transaction)
@@ -609,6 +653,32 @@ async fn finish_execution_in_pool(
     Ok(())
 }
 
+async fn claim_next_queued_run_from_pool(pool: &sqlx::SqlitePool, include_apps: bool) -> Result<Option<String>> {
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let id = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM run_records WHERE status = 'queued' AND (target_type = 'workflow' OR ?) ORDER BY created_at ASC, id ASC LIMIT 1",
+    )
+    .bind(include_apps)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(id) = id else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let result = sqlx::query(
+        "UPDATE run_records SET status = 'running', ended_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = 'queued'",
+    )
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(&id)
+    .execute(&mut *transaction)
+    .await?;
+    if result.rows_affected() == 0 {
+        bail!("queued run was no longer available: {id}");
+    }
+    transaction.commit().await?;
+    Ok(Some(id))
+}
+
 fn pending_action_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PendingAction> {
     Ok(PendingAction {
         id: row.try_get("id")?,
@@ -694,7 +764,9 @@ fn json_column(value: String) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunStatus, claim_next_pending_action_from_pool, finish_execution_in_pool};
+    use super::{
+        RunStatus, claim_next_pending_action_from_pool, claim_next_queued_run_from_pool, finish_execution_in_pool,
+    };
     use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 
     async fn pending_action_pool() -> SqlitePool {
@@ -738,6 +810,61 @@ mod tests {
             .unwrap();
         }
         pool
+    }
+
+    async fn queued_run_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, ended_at TEXT, error TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (id, target_type, created_at) in [
+            ("run-1", "app", "2026-09-05T00:00:01Z"),
+            ("run-2", "workflow", "2026-09-05T00:00:02Z"),
+        ] {
+            sqlx::query("INSERT INTO run_records (id, target_type, status, created_at) VALUES (?, ?, 'queued', ?)")
+                .bind(id)
+                .bind(target_type)
+                .bind(created_at)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool
+    }
+
+    #[tokio::test]
+    async fn claims_queued_runs_in_creation_order_once() {
+        let pool = queued_run_pool().await;
+        assert_eq!(
+            claim_next_queued_run_from_pool(&pool, true).await.unwrap().as_deref(),
+            Some("run-1")
+        );
+        assert_eq!(
+            claim_next_queued_run_from_pool(&pool, true).await.unwrap().as_deref(),
+            Some("run-2")
+        );
+        assert!(claim_next_queued_run_from_pool(&pool, true).await.unwrap().is_none());
+        let running: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM run_records WHERE status = 'running'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(running, 2);
+    }
+
+    #[tokio::test]
+    async fn skips_apps_when_the_app_worker_limit_is_exhausted() {
+        let pool = queued_run_pool().await;
+        assert_eq!(
+            claim_next_queued_run_from_pool(&pool, false).await.unwrap().as_deref(),
+            Some("run-2")
+        );
     }
 
     #[tokio::test]

@@ -133,6 +133,7 @@ pub fn run() {
             cmd::run_manager::workflow_run_cancel,
             cmd::run_manager::process_node_run_start,
             cmd::run_manager::process_node_run_cancel,
+            cmd::run_manager::run_replay,
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,

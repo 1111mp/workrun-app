@@ -216,6 +216,14 @@ function WorkflowRunPanel({
 
   const isRunning = run.status === 'running';
   const formKey = `${open}:${JSON.stringify(settings)}`;
+  const runAgain = () => {
+    if (run.status === 'interrupted') {
+      onResume();
+      return;
+    }
+    // A failed run has no resumable checkpoint, so retry from its original input.
+    if (lastRunInput) onRun(lastRunInput);
+  };
 
   return (
     <Drawer
@@ -236,11 +244,7 @@ function WorkflowRunPanel({
             isRunning={isRunning}
             isChat
             readOnly={readOnly}
-            onRunAgain={() => {
-              if (run.status === 'failed' || run.status === 'interrupted')
-                onResume();
-              else if (lastRunInput) onRun(lastRunInput);
-            }}
+            onRunAgain={runAgain}
             onSend={onRun}
             onClose={() =>
               readOnly ? onHistoricalClose?.() : onOpenChange(false)
@@ -252,11 +256,7 @@ function WorkflowRunPanel({
             workflowNodes={nodes}
             isRunning={isRunning}
             readOnly={readOnly}
-            onRunAgain={() => {
-              if (run.status === 'failed' || run.status === 'interrupted')
-                onResume();
-              else if (lastRunInput) onRun(lastRunInput);
-            }}
+            onRunAgain={runAgain}
             onClose={() =>
               readOnly ? onHistoricalClose?.() : onOpenChange(false)
             }

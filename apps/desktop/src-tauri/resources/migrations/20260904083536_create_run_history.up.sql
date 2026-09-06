@@ -43,6 +43,10 @@ CREATE INDEX idx_run_records_target_started_at_id
 CREATE INDEX idx_run_records_status_started_at_id
   ON run_records(status, started_at DESC, id DESC);
 
+-- The dispatcher claims queued work by creation time, unlike history views.
+CREATE INDEX idx_run_records_queue_claim
+  ON run_records(status, created_at ASC, id ASC);
+
 -- run_events：流式事件与日志，按顺序追加
 CREATE TABLE run_events (
   run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE CASCADE,
