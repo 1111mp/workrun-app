@@ -84,7 +84,7 @@ export type WorkflowRunEvent =
   | { type: 'step_complete'; step: number; nodes_executed: string[] }
   | { type: 'interrupted'; node: string; message: string }
   | { type: 'resumed'; step: number; pending_nodes: string[] }
-  | { type: 'done'; state: Record<string, unknown>; total_steps: number }
+  | { type: 'done'; state: WorkflowFinalState; total_steps: number }
   | { type: 'error'; message: string; node: string | null }
   | { type: 'route_dispatched'; source: string; targets: string[] };
 
@@ -109,7 +109,7 @@ export type WorkflowRunMessage = {
 export type WorkflowRunThought = {
   id: string;
   nodeId: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
   /** The chat turn this step belongs to. */
   turnId?: string;
@@ -118,7 +118,7 @@ export type WorkflowRunThought = {
 export type WorkflowRunNode = {
   id: string;
   name?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
 };
 
@@ -132,7 +132,7 @@ export type WorkflowProcessLog = {
 export type WorkflowRunExecution = {
   nodeId: string;
   type: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
   /** The chat turn this execution belongs to. */
   turnId?: string;
@@ -143,6 +143,7 @@ export type WorkflowRunView = {
   status: WorkflowRunStatus;
   startedAt?: number;
   endedAt?: number;
+  durationMs?: number;
   activeNodeId?: string;
   totalSteps?: number;
   nodes: WorkflowRunNode[];

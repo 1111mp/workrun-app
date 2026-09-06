@@ -44,8 +44,7 @@ type WorkflowRunStore = {
     events: WorkflowRunEvent[],
     context: { mode: WorkflowMode; nodes: Node[]; turnId?: string },
   ) => void;
-  finishWorkflowRun: (state: Record<string, unknown>) => void;
-  failWorkflowRun: (message: string) => void;
+  projectFailedRun: (message: string) => void;
   clearRunningNode: () => void;
   clearToolApproval: () => void;
   clearHumanReview: () => void;
@@ -68,16 +67,47 @@ type WorkflowRunEventContext = {
   turnId?: string;
 };
 
-export function restoreWorkflowRunView(outputView: unknown): WorkflowRunView {
+type WorkflowRunArchive = {
+  status: string;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  error?: string;
+};
+
+function terminalWorkflowRunStatus(
+  status: string | undefined,
+): Extract<WorkflowRunView['status'], 'completed' | 'failed' | 'cancelled' | 'interrupted'> | undefined {
+  return status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'interrupted'
+    ? status
+    : undefined;
+}
+
+export function restoreWorkflowRunView(
+  outputView: unknown,
+  archive?: WorkflowRunArchive,
+): WorkflowRunView {
   const view =
     outputView && typeof outputView === 'object'
       ? (outputView as Partial<WorkflowRunView>)
       : {};
-
+  const startedAt = archive ? Date.parse(archive.startedAt) : Number.NaN;
+  const endedAt = archive?.endedAt ? Date.parse(archive.endedAt) : Number.NaN;
+  const status = terminalWorkflowRunStatus(archive?.status);
   // Replay records created before all collection fields were persisted.
   return {
     ...view,
-    status: view.status ?? 'idle',
+    // outputView is captured when a run starts; terminal lifecycle metadata
+    // belongs to the archived run record and must win when reopening history.
+    status: status ?? view.status ?? 'idle',
+    error:
+      status && status !== 'cancelled' ? archive?.error : view.error,
+    durationMs: archive?.durationMs ?? view.durationMs,
+    startedAt: Number.isNaN(startedAt) ? view.startedAt : startedAt,
+    endedAt: Number.isNaN(endedAt) ? view.endedAt : endedAt,
     nodes: Array.isArray(view.nodes) ? view.nodes : [],
     messages: Array.isArray(view.messages) ? view.messages : [],
     thoughts: Array.isArray(view.thoughts) ? view.thoughts : [],
@@ -220,11 +250,10 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
         for (const event of events) applyRunEvent(state, event, context);
       });
     },
-    finishWorkflowRun: (finalState) => {
-      set((state) => finish(state, 'completed', finalState));
-    },
-    failWorkflowRun: (message) => {
-      set((state) => finish(state, 'failed', undefined, message));
+    projectFailedRun: (message) => {
+      set((state) =>
+        projectTerminalRunState(state, 'failed', undefined, message),
+      );
     },
     clearRunningNode: () => {
       set((state) => {
@@ -341,17 +370,17 @@ function applyRunEvent(
   }
   if (event.type === 'custom') return applyCustom(state, event);
   if (event.type === 'done') {
-    finish(state, 'completed', event.state);
+    projectTerminalRunState(state, 'completed', event.state);
     view.totalSteps = event.total_steps;
   } else if (event.type === 'error') {
-    finish(state, 'failed', undefined, event.message);
+    projectTerminalRunState(state, 'failed', undefined, event.message);
   } else if (event.type === 'interrupted') {
     const awaitingInput = Boolean(
       state.toolApproval || state.humanReview || state.askUserQuestion,
     );
     // Dynamic interrupts pause the workflow for a user decision; they are not
     // execution failures and should not leave a destructive error banner behind.
-    finish(
+    projectTerminalRunState(
       state,
       'interrupted',
       undefined,
@@ -399,7 +428,7 @@ function applyCustom(
   event: Extract<WorkflowRunEvent, { type: 'custom' }>,
 ) {
   if (event.event_type === 'workflow.run_cancelled') {
-    finish(state, 'cancelled', undefined, 'Cancelled by user');
+    projectTerminalRunState(state, 'cancelled');
     return;
   }
   if (typeof event.data !== 'object' || event.data === null) return;
@@ -500,7 +529,11 @@ function applyCustom(
   }
 }
 
-function finish(
+/**
+ * Projects a terminal event into renderer-only output. The native run record
+ * owns status, end time, and duration; this never writes lifecycle timestamps.
+ */
+function projectTerminalRunState(
   state: WorkflowRunReplayState,
   status: WorkflowRunView['status'],
   finalState?: Record<string, unknown>,
@@ -509,7 +542,6 @@ function finish(
   const view = state.runView;
   view.status = status;
   view.activeNodeId = undefined;
-  view.endedAt ??= Date.now();
   if (finalState) view.finalState = finalState;
   // A later completion (for example after a human-review resume) supersedes
   // any error from an earlier execution attempt.
@@ -519,9 +551,23 @@ function finish(
   state.toolApproval = undefined;
   state.humanReview = undefined;
   state.askUserQuestion = undefined;
+  // The graph does not emit node_end after cancellation. Mark every live
+  // projection terminal so history cannot continue to describe a cancelled
+  // node as awaiting a response.
+  const nodeStatus =
+    status === 'completed'
+      ? 'completed'
+      : status === 'cancelled'
+        ? 'cancelled'
+        : 'failed';
+  view.nodes.forEach((item) => {
+    if (item.status === 'running') item.status = nodeStatus;
+  });
+  view.execution.forEach((item) => {
+    if (item.status === 'running') item.status = nodeStatus;
+  });
   view.thoughts.forEach((item) => {
-    if (item.status === 'running')
-      item.status = status === 'completed' ? 'completed' : 'failed';
+    if (item.status === 'running') item.status = nodeStatus;
   });
   view.messages.forEach((item) => {
     item.isStreaming = false;

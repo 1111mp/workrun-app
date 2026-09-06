@@ -91,8 +91,7 @@ function useWorkflowRun(
       startWorkflowRun: state.startWorkflowRun,
       resumeWorkflowRun: state.resumeWorkflowRun,
       applyRunEvents: state.applyRunEvents,
-      finishWorkflowRun: state.finishWorkflowRun,
-      failWorkflowRun: state.failWorkflowRun,
+      projectFailedRun: state.projectFailedRun,
       clearRunningNode: state.clearRunningNode,
       clearToolApproval: state.clearToolApproval,
       clearHumanReview: state.clearHumanReview,
@@ -108,6 +107,7 @@ function useWorkflowRun(
   const pendingCharacters = useRef(0);
   const pendingFrame = useRef<number | undefined>(undefined);
   const afterDrain = useRef<(() => void)[]>([]);
+  const handleEventRef = useRef<(event: WorkflowRunEvent) => void>(() => {});
 
   const context = () => ({
     mode: settings.mode,
@@ -211,13 +211,18 @@ function useWorkflowRun(
     }
     store.applyRunEvents([event], context());
   };
+  handleEventRef.current = handleEvent;
 
   useEffect(() => {
     if (!restoredRun) return;
     runId.current = restoredRun.id;
     runThreadId.current = restoredRun.threadId;
     let disposed = false;
-    void subscribeWorkflowRun(restoredRun.id, handleEvent).then((unlisten) => {
+    // Keep this restored-run subscription intact while routing events through
+    // the current render's handler and state.
+    void subscribeWorkflowRun(restoredRun.id, (event) => {
+      handleEventRef.current(event);
+    }).then((unlisten) => {
       if (disposed) unlisten();
       else unlistenRunEvents.current = unlisten;
     });
@@ -279,7 +284,7 @@ function useWorkflowRun(
     } catch (error) {
       unlistenRunEvents.current?.();
       unlistenRunEvents.current = undefined;
-      store.failWorkflowRun(
+      store.projectFailedRun(
         error instanceof Error ? error.message : String(error),
       );
       toast.error('Workflow could not start', {
@@ -303,7 +308,7 @@ function useWorkflowRun(
     store.resumeWorkflowRun();
     void resumeBackgroundWorkflowRun(id, toolConfirmation).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      store.failWorkflowRun(message);
+      store.projectFailedRun(message);
       toast.error('Workflow could not resume', {
         toasterId: 'global',
         description: message,

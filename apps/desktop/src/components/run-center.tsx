@@ -293,7 +293,7 @@ function RunCenter() {
                       key={run.id}
                       run={run}
                       onCancel={
-                        run.targetType === 'app' && cancellingRunId !== run.id
+                        cancellingRunId !== run.id
                           ? () => void cancelRun(run)
                           : undefined
                       }

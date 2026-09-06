@@ -198,7 +198,7 @@ function WorkflowEditorContent({
   useEffect(() => {
     if (!historicalRun) return;
     restoreHistoricalRun.setRunView(
-      restoreWorkflowRunView(historicalRun.outputView),
+      restoreWorkflowRunView(historicalRun.outputView, historicalRun),
     );
     // Native sessions persist the transport trace, so an active run can be
     // reconstructed after its original editor was closed or unmounted.
@@ -214,7 +214,7 @@ function WorkflowEditorContent({
     try {
       const record = await inspectRunRecord(id);
       restoreHistoricalRun.setRunView(
-        restoreWorkflowRunView(record.outputView),
+        restoreWorkflowRunView(record.outputView, record),
       );
       restoreHistoricalRun.applyRunEvents(
         record.events.map(({ event }) => event as WorkflowRunEvent),

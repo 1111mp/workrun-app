@@ -72,18 +72,48 @@ function RunWorkspace() {
   const workflowRun = useMemo(() => {
     if (activeTab?.targetType !== 'workflow' || !activeRecord) return;
     const snapshot = workflowSnapshot(activeRecord.targetSnapshot);
+    const run = replayWorkflowRunView(
+      activeRecord.outputView,
+      activeRecord.events.map(({ event }) => event as WorkflowRunEvent),
+      snapshot,
+    );
+    const startedAt = Date.parse(activeRecord.startedAt);
+    const endedAt =
+      !Number.isNaN(startedAt) && activeRecord.durationMs !== undefined
+        ? startedAt + activeRecord.durationMs
+        : activeRecord.endedAt
+          ? Date.parse(activeRecord.endedAt)
+          : undefined;
+    const terminalState =
+      activeRecord.status === 'completed' ||
+      activeRecord.status === 'failed' ||
+      activeRecord.status === 'cancelled' ||
+      activeRecord.status === 'interrupted'
+        ? {
+            status: activeRecord.status,
+            error:
+              activeRecord.status === 'cancelled'
+                ? undefined
+                : activeRecord.error,
+          }
+        : undefined;
     return {
       ...snapshot,
-      run: replayWorkflowRunView(
-        activeRecord.outputView,
-        activeRecord.events.map(({ event }) => event as WorkflowRunEvent),
-        snapshot,
-      ),
+      // The archived duration is authoritative. It remains stable even if the
+      // output panel is reopened long after a terminal event was received.
+      run: {
+        ...run,
+        ...terminalState,
+        durationMs: activeRecord.durationMs,
+        startedAt: Number.isNaN(startedAt) ? run.startedAt : startedAt,
+        endedAt:
+          endedAt === undefined || Number.isNaN(endedAt) ? run.endedAt : endedAt,
+      },
     };
   }, [activeRecord, activeTab?.targetType]);
 
   useEffect(() => {
-    if (!activeRunId) return;
+    if (!activeRunId || !open) return;
     let cancelled = false;
     void inspectRunRecord(activeRunId).then((next) => {
       if (!cancelled) setRecord(next);
@@ -91,23 +121,33 @@ function RunWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [activeRunId]);
+  }, [activeRunId, open]);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    let unlistenStatusChange: (() => void) | undefined;
+    const refreshActiveRun = (runId: string) => {
+      if (runId !== useRunWorkspaceStore.getState().activeRunId) return;
+      void inspectRunRecord(runId).then(setRecord);
+    };
     void listen<{ runId: string }>('run-event', ({ payload }) => {
       noteEvent(payload.runId);
-      if (payload.runId === useRunWorkspaceStore.getState().activeRunId) {
-        void inspectRunRecord(payload.runId).then(setRecord);
-      }
+      refreshActiveRun(payload.runId);
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
     });
+    void listen<{ runId: string }>('run-status-changed', ({ payload }) => {
+      refreshActiveRun(payload.runId);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlistenStatusChange = stop;
+    });
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenStatusChange?.();
     };
   }, [noteEvent]);
 
