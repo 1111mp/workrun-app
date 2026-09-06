@@ -1,5 +1,18 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
   Badge,
   Button,
   Empty,
@@ -22,19 +35,21 @@ import {
 import {
   AppWindowIcon,
   HistoryIcon,
+  Info,
   ListFilterIcon,
   RefreshCwIcon,
   SearchIcon,
   WorkflowIcon,
 } from 'lucide-react';
-import { useMemo } from 'react';
-import { useSearchParams } from 'react-router';
+import { useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 
 import {
   listRunHistoryPage,
   replayRun,
   type RunHistoryCursor,
+  type RunRecordSummary,
   type RunStatus,
   type RunTargetType,
 } from '@/services/run-history';
@@ -79,8 +94,10 @@ const REPLAYABLE_RUN_STATUSES: RunStatus[] = [
 
 function RunsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const openWorkspaceRun = useRunWorkspaceStore((state) => state.openRun);
+  const [runToReplay, setRunToReplay] = useState<RunRecordSummary>();
   const targetType = searchParams.get('targetType') as RunTargetType | null;
   const targetId = searchParams.get('targetId') ?? undefined;
   const status = searchParams.get('status') as RunStatus | null;
@@ -282,7 +299,18 @@ function RunsPage() {
                   >
                     {run.status}
                   </Badge>
-                  <Button size='sm' onClick={() => openWorkspaceRun(run)}>
+                  <Button
+                    size='sm'
+                    onClick={() => {
+                      if (isWorkflow) {
+                        void navigate(
+                          `/workflows/${run.targetId}?runId=${run.id}`,
+                        );
+                      } else {
+                        openWorkspaceRun(run);
+                      }
+                    }}
+                  >
                     View output
                   </Button>
                   {canReplay ? (
@@ -290,7 +318,7 @@ function RunsPage() {
                       size='sm'
                       variant='secondary'
                       disabled={replay.isPending}
-                      onClick={() => replay.mutate(run.id)}
+                      onClick={() => setRunToReplay(run)}
                     >
                       {run.error ===
                       'Execution did not start before Workrun restarted.'
@@ -323,6 +351,43 @@ function RunsPage() {
           </p>
         ) : null}
       </div>
+      <AlertDialog
+        open={Boolean(runToReplay)}
+        onOpenChange={(open) => {
+          if (!open && !replay.isPending) setRunToReplay(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Info />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Create a new run?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will use the saved input and definition from{' '}
+              {runToReplay?.targetName} to create a new{' '}
+              {runToReplay?.targetType === 'workflow' ? 'Workflow' : 'App'} run.
+              It will not resume this record.
+              {runToReplay?.targetType === 'workflow'
+                ? ' It starts with a new Workflow state, so prior node results and approvals are not reused.'
+                : ''}{' '}
+              The new execution will have its own record in run history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={replay.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={replay.isPending}
+              onClick={() => runToReplay && replay.mutate(runToReplay.id)}
+            >
+              {replay.isPending ? <Spinner data-icon='inline-start' /> : null}
+              Create new run
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

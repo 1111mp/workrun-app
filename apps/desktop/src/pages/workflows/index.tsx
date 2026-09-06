@@ -105,7 +105,7 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
             variant='outline'
             size='sm'
             nativeButton={false}
-            render={<Link to={`/workflows/${workflow.id}`} />}
+            render={<Link to={`/workflows/${workflow.id}`} viewTransition />}
           >
             <FilePenLineIcon data-icon='inline-start' />
             Edit
@@ -212,7 +212,7 @@ function WorkflowsPage() {
           <Button
             size='sm'
             nativeButton={false}
-            render={<Link to='/workflows/new' />}
+            render={<Link to='/workflows/new' viewTransition />}
           >
             <PlusIcon data-icon='inline-start' />
             Create workflow

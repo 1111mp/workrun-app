@@ -70,6 +70,25 @@ const WORKFLOW_MODE = [
   { value: 'chat', label: 'Chat' },
 ];
 
+function restoreWorkflowRunView(outputView: unknown): WorkflowRunView {
+  const view =
+    outputView && typeof outputView === 'object'
+      ? (outputView as Partial<WorkflowRunView>)
+      : {};
+
+  // Older replay records stored an empty snapshot; event replay still needs
+  // the collections below to be present before processing its first node event.
+  return {
+    ...view,
+    status: view.status ?? 'idle',
+    nodes: Array.isArray(view.nodes) ? view.nodes : [],
+    messages: Array.isArray(view.messages) ? view.messages : [],
+    thoughts: Array.isArray(view.thoughts) ? view.thoughts : [],
+    processLogs: Array.isArray(view.processLogs) ? view.processLogs : [],
+    execution: Array.isArray(view.execution) ? view.execution : [],
+  };
+}
+
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
   autoStartRun?: boolean;
@@ -198,7 +217,7 @@ function WorkflowEditorContent({
   useEffect(() => {
     if (!historicalRun) return;
     restoreHistoricalRun.setRunView(
-      historicalRun.outputView as WorkflowRunView,
+      restoreWorkflowRunView(historicalRun.outputView),
     );
     // Native sessions persist the transport trace, so an active run can be
     // reconstructed after its original editor was closed or unmounted.
@@ -213,7 +232,9 @@ function WorkflowEditorContent({
   const openHistoricalRun = async (id: string) => {
     try {
       const record = await inspectRunRecord(id);
-      restoreHistoricalRun.setRunView(record.outputView as WorkflowRunView);
+      restoreHistoricalRun.setRunView(
+        restoreWorkflowRunView(record.outputView),
+      );
       restoreHistoricalRun.applyRunEvents(
         record.events.map(({ event }) => event as WorkflowRunEvent),
         { mode: workflowSettings.mode, nodes },
@@ -429,8 +450,13 @@ function WorkflowEditorContent({
           onResume={workflowRun.resumeWorkflowRun}
           readOnly={Boolean(historicalRun || viewingHistoricalRunId)}
           onHistoricalClose={() => {
-            if (historicalRun) void navigate(-1);
-            else {
+            if (historicalRun) {
+              // This store outlives the history page. Reset it before returning
+              // so a cached record still opens the drawer from its closed state.
+              restoreHistoricalRun.setShowRunOutput(false);
+              restoreHistoricalRun.setRunPanelOpen(false);
+              void navigate(-1);
+            } else {
               setViewingHistoricalRunId(undefined);
               restoreHistoricalRun.setRunPanelOpen(false);
             }

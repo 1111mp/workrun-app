@@ -284,7 +284,7 @@ function AppItem({
           variant='outline'
           size='sm'
           nativeButton={false}
-          render={<Link to={`/apps/${definition.id}`} />}
+          render={<Link to={`/apps/${definition.id}`} viewTransition />}
         >
           <FilePenLineIcon data-icon='inline-start' />
           Details
@@ -718,7 +718,7 @@ function AppsPage() {
           <Button
             size='sm'
             nativeButton={false}
-            render={<Link to='/apps/new' />}
+            render={<Link to='/apps/new' viewTransition />}
           >
             <PlusIcon data-icon='inline-start' />
             Create App

@@ -12,7 +12,10 @@ import {
 import { CheckCircle2Icon, CircleAlertIcon, ClipboardIcon } from 'lucide-react';
 import { useState } from 'react';
 
-import type { ProcessNode } from '@/services/process-node';
+import type {
+  ProcessNode,
+  ProcessNodeDefinition,
+} from '@/services/process-node';
 import type { RunRecord } from '@/services/run-history';
 
 export type ProcessNodeOutput = Record<'stdout' | 'stderr', string>;
@@ -36,6 +39,18 @@ function appendRestoredOutput(current: string, chunk: string) {
   return `[Earlier output truncated]\n${next.slice(-MAX_RESTORED_OUTPUT_CHARS)}`;
 }
 
+function processNodeFromSnapshot(snapshot: unknown): ProcessNode | undefined {
+  if (!snapshot || typeof snapshot !== 'object') return undefined;
+  const definition = snapshot as Partial<ProcessNodeDefinition>;
+  if (typeof definition.id !== 'string' || typeof definition.name !== 'string')
+    return undefined;
+  return {
+    definition: definition as ProcessNodeDefinition,
+    projectPath: definition.projectRoot ?? '',
+    installStatus: 'notInstalled',
+  };
+}
+
 /**
  * The stored view is only a fast initial snapshot. Replaying the durable event
  * journal makes a run view complete even after the originating page unmounts.
@@ -46,8 +61,9 @@ function restoreProcessNodeRun(
 ): ProcessNodeRun {
   const view = record.outputView as Partial<ProcessNodeRun>;
   // A catalog entry can change after a run. Prefer the current one when the
-  // caller has it, but retain the captured entry for archive-only views.
-  const node = currentNode ?? view.node;
+  // caller has it, but retain the captured entry or snapshot for archive-only views.
+  const node =
+    currentNode ?? view.node ?? processNodeFromSnapshot(record.targetSnapshot);
   if (!node) throw new Error('The saved App definition is unavailable.');
   const run: ProcessNodeRun = {
     ...view,

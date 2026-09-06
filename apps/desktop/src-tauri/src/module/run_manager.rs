@@ -424,6 +424,7 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
         bail!("only a finished run can be replayed");
     }
     let run_id = uuid::Uuid::new_v4().to_string();
+    let output_view = replay_output_view(target_type);
     RunHistoryStore::create(CreateRunRecord {
         id: run_id.clone(),
         target_type,
@@ -432,7 +433,7 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
         status: RunStatus::Queued,
         started_at: chrono::Utc::now().to_rfc3339(),
         input: source.input,
-        output_view: json!({}),
+        output_view,
         target_snapshot: source.target_snapshot,
         runtime: replay_runtime(source.runtime, source_run_id)?,
     })
@@ -440,6 +441,22 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
     publish_run_status(&run_id, RunStatus::Queued)?;
     RunManager::global().supervisor.notify();
     Ok(RunHistoryStore::inspect(&run_id).await?.summary)
+}
+
+fn replay_output_view(target_type: RunTargetType) -> Value {
+    match target_type {
+        // Workflow history restores this snapshot before replaying its event
+        // journal, so its collection fields must exist even before node events.
+        RunTargetType::Workflow => json!({
+            "status": "running",
+            "nodes": [],
+            "messages": [],
+            "thoughts": [],
+            "processLogs": [],
+            "execution": [],
+        }),
+        RunTargetType::App => json!({}),
+    }
 }
 
 fn replay_target_type(target_type: &str) -> Result<RunTargetType> {
@@ -452,17 +469,20 @@ fn replay_target_type(target_type: &str) -> Result<RunTargetType> {
 
 fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     let object = runtime.as_object_mut().context("run runtime metadata is invalid")?;
-    // A replay always starts from the original recipe. Resume-only fields
-    // describe a vanished checkpoint and must never leak into the new run.
+    // A replay starts from the original recipe, but never from its checkpoint.
+    // The thread ID namespaces persisted graph state, so it must also be new.
     object.remove("resume");
     object.remove("toolConfirmation");
+    if object.contains_key("threadId") {
+        object.insert("threadId".to_string(), json!(uuid::Uuid::new_v4()));
+    }
     object.insert("replayOf".to_string(), json!(source_run_id));
     Ok(runtime)
 }
 
 #[cfg(test)]
 mod replay_tests {
-    use super::replay_runtime;
+    use super::{replay_output_view, replay_runtime};
     use serde_json::json;
 
     #[test]
@@ -482,6 +502,25 @@ mod replay_tests {
         assert_eq!(runtime["replayOf"], "old-run");
         assert!(runtime.get("resume").is_none());
         assert!(runtime.get("toolConfirmation").is_none());
+    }
+
+    #[test]
+    fn replay_runtime_uses_a_new_workflow_state_thread() {
+        let runtime = replay_runtime(json!({ "kind": "workflow", "threadId": "original-thread" }), "old-run").unwrap();
+
+        assert_ne!(runtime["threadId"], "original-thread");
+    }
+
+    #[test]
+    fn replayed_workflow_starts_with_a_restorable_output_view() {
+        let view = replay_output_view(super::RunTargetType::Workflow);
+
+        assert_eq!(view["status"], "running");
+        assert_eq!(view["nodes"], json!([]));
+        assert_eq!(view["messages"], json!([]));
+        assert_eq!(view["thoughts"], json!([]));
+        assert_eq!(view["processLogs"], json!([]));
+        assert_eq!(view["execution"], json!([]));
     }
 }
 

@@ -114,7 +114,6 @@ function RunCenter() {
   const [cancellingRunId, setCancellingRunId] = useState<string>();
 
   const { pathname } = useLocation();
-  console.log('pathname', pathname);
 
   const isRunSurface = pathname === '/workflows' || pathname === '/apps';
 

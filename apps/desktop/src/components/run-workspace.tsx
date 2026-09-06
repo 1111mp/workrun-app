@@ -12,6 +12,10 @@ import { PinIcon, XIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import {
+  AppRunOutputPanel,
+  restoreProcessNodeRun,
+} from '@/components/app-run-output-panel';
+import {
   inspectRunRecord,
   type RunRecord,
   type RunStatus,
@@ -73,6 +77,21 @@ function RunWorkspace() {
       unlisten?.();
     };
   }, [noteEvent]);
+
+  if (activeTab?.targetType === 'app') {
+    // Wait for the saved output before mounting the drawer so Vaul can measure
+    // its final content rather than animate an empty sheet from the viewport.
+    return (
+      <AppRunOutputPanel
+        open={open && Boolean(activeRecord)}
+        readOnly
+        run={activeRecord ? restoreProcessNodeRun(activeRecord) : undefined}
+        onClear={() => undefined}
+        onRunAgain={() => undefined}
+        onOpenChange={setOpen}
+      />
+    );
+  }
 
   return (
     <Drawer
