@@ -25,9 +25,11 @@ function App() {
       <TooltipProvider>
         <RouterProvider router={router} />
       </TooltipProvider>
-      <TeamAuthTauriHandler />
       <Toaster id='global' position='top-center' richColors={true} />
       <UpdateDialog />
+      {config.workspace_mode === 'team' && config.team?.server_url ? (
+        <TeamAuthTauriHandler />
+      ) : null}
       <PythonUiRequestDialog />
       <ApprovalCoordinator />
       <RunWorkspace />
