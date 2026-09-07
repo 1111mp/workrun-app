@@ -9,6 +9,7 @@ pub mod model;
 pub mod process_node;
 pub mod python_runtime;
 pub mod run_history;
+pub mod run_manager;
 pub mod skill;
 pub mod system;
 pub mod tool_registry;

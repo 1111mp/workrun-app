@@ -43,13 +43,10 @@ pub async fn process_node_default_root() -> CmdResult<String> {
 
 #[tauri::command]
 pub async fn process_node_create(
-    app: AppHandle,
     request: CreateProcessNodeRequest,
     progress: Channel<ProcessNodeCreateProgress>,
 ) -> CmdResult<ProcessNode> {
-    ProcessNodeRegistry::create(&app, request, progress)
-        .await
-        .stringify_err()
+    ProcessNodeRegistry::create(request, progress).await.stringify_err()
 }
 
 #[tauri::command]

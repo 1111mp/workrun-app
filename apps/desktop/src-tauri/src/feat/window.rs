@@ -1,7 +1,7 @@
 use crate::{
     core::handle,
     logging,
-    module::mcp_server::McpServerRegistry,
+    module::{mcp_server::McpServerRegistry, run_manager},
     utils::{logging::Type, window_manager::WindowManager},
 };
 
@@ -19,6 +19,8 @@ pub async fn quit() {
     logging!(debug, Type::System, "Starting shutdown process");
 
     handle::Handle::global().set_is_exiting();
+
+    run_manager::shutdown_supervisor().await;
 
     if let Err(error) = McpServerRegistry::shutdown_all().await {
         logging!(error, Type::System, "Failed to stop MCP servers: {}", error);

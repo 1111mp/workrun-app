@@ -34,20 +34,16 @@ pub async fn ensure_venv(
 /// Synchronize a uv project's dependencies into its project-local `.venv`.
 #[tauri::command]
 pub async fn sync_dependencies(
-    app: AppHandle,
     project_path: String,
     version: String,
 ) -> CmdResult<python_runtime::DependencySyncResult> {
-    python_runtime::PythonRuntime::sync_dependencies(&app, project_path.as_ref(), &version)
+    python_runtime::PythonRuntime::sync_dependencies(project_path.as_ref(), &version)
         .await
         .stringify_err()
 }
 
 /// Prepare a uv project and run a script with its synchronized `.venv`.
 #[tauri::command]
-pub async fn run_project_python(
-    app: AppHandle,
-    request: feat::RunProjectPythonRequest,
-) -> CmdResult<feat::ProjectPythonRunResult> {
-    feat::run_project_python(&app, request).await.stringify_err()
+pub async fn run_project_python(request: feat::RunProjectPythonRequest) -> CmdResult<feat::ProjectPythonRunResult> {
+    feat::run_project_python(request).await.stringify_err()
 }

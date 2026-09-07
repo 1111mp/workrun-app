@@ -3,6 +3,7 @@ pub mod mcp_server;
 pub mod process_node;
 pub mod python_runtime;
 pub mod run_history;
+pub mod run_manager;
 pub mod skill;
 pub mod state;
 pub mod tool_registry;

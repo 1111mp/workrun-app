@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import type { DependencySyncResult } from '@/services/runtime';
 
@@ -67,6 +68,20 @@ export type ProcessNodeRunResult = {
   };
 };
 
+export type BackgroundProcessNodeRunRequest = {
+  runId: string;
+  targetId: string;
+  targetName: string;
+  outputView: unknown;
+  targetSnapshot: unknown;
+};
+
+export type ProcessNodeRunEvent =
+  | { type: 'output'; stream: ProcessNodeOutputStream; data: string }
+  | { type: 'app_done'; execution: ProcessNodeRunResult['execution'] }
+  | { type: 'app_cancelled' }
+  | { type: 'error'; message: string };
+
 export function listProcessNodes() {
   return invoke<ProcessNode[]>('process_node_list');
 }
@@ -115,4 +130,26 @@ export function runProcessNode(
   const output = new Channel<ProcessNodeOutputChunk>();
   output.onmessage = onOutput;
   return invoke<ProcessNodeRunResult>('process_node_run', { id, output });
+}
+
+export function startBackgroundProcessNodeRun(
+  request: BackgroundProcessNodeRunRequest,
+) {
+  return invoke('process_node_run_start', { request });
+}
+
+export function cancelBackgroundProcessNodeRun(runId: string) {
+  return invoke('process_node_run_cancel', { runId });
+}
+
+export function subscribeProcessNodeRun(
+  runId: string,
+  onEvent: (event: ProcessNodeRunEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<{ runId: string; event: ProcessNodeRunEvent }>(
+    'run-event',
+    ({ payload }) => {
+      if (payload.runId === runId) onEvent(payload.event);
+    },
+  );
 }

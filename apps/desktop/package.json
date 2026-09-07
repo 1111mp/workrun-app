@@ -16,7 +16,8 @@
     "oxlint:fix": "oxlint src scripts --fix",
     "format": "oxfmt --check src",
     "format:write": "oxfmt --write src",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@daveyplate/better-auth-tauri": "^0.1.9",
@@ -67,6 +68,7 @@
     "tailwindcss": "^4.3.3",
     "tar": "^7.5.22",
     "vite": "^8.2.2",
-    "vite-plugin-html": "^3.2.2"
+    "vite-plugin-html": "^3.2.2",
+    "vitest": "4.1.11"
   }
 }

@@ -323,73 +323,79 @@ function WorkflowCanvas({
       <WorkflowSidebar onNodeDrop={addPaletteNode} />
       <SidebarInset>
         {header}
-        <div className='flex flex-1 min-h-0'>
-          {canvasContent ?? <ReactFlow
-            colorMode={colorMode}
-            fitView
-            nodes={nodes}
-            edges={displayEdges}
-            nodeTypes={nodeTypes}
-            onInit={setReactFlowInstance}
-            onConnect={addConnection}
-            onNodeDragStart={startNodeDrag}
-            onNodeDragStop={onNodeDragStop}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onSelectionChange={({ nodes: selectedNodes }) =>
-              setSelectedNodeId(selectedNodes.at(-1)?.id ?? null)
-            }
-          >
-            <MiniMap />
-            <Controls />
-            <Background className='bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]' />
-            <Panel position='top-left'>
-              <div className='bg-background z-10 flex gap-1 rounded-md border p-1 shadow-sm'>
+        <div className='flex min-h-0 flex-1'>
+          {canvasContent ?? (
+            <ReactFlow
+              colorMode={colorMode}
+              fitView
+              nodes={nodes}
+              edges={displayEdges}
+              nodeTypes={nodeTypes}
+              onInit={setReactFlowInstance}
+              onConnect={addConnection}
+              onNodeDragStart={startNodeDrag}
+              onNodeDragStop={onNodeDragStop}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onSelectionChange={({ nodes: selectedNodes }) =>
+                setSelectedNodeId(selectedNodes.at(-1)?.id ?? null)
+              }
+            >
+              <MiniMap />
+              <Controls />
+              <Background className='bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]' />
+              <Panel position='top-left'>
+                <div className='bg-background z-10 flex gap-1 rounded-md border p-1 shadow-sm'>
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    aria-label='Undo'
+                    title='Undo (Ctrl/Cmd + Z)'
+                    disabled={!canUndo}
+                    onClick={() => {
+                      const { undo, pastStates } =
+                        workflowStore.temporal.getState();
+                      if (pastStates.length > 0) undo();
+                    }}
+                  >
+                    <Undo2Icon />
+                  </Button>
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    aria-label='Redo'
+                    title='Redo (Ctrl/Cmd + Shift + Z)'
+                    disabled={!canRedo}
+                    onClick={() => {
+                      const { redo, futureStates } =
+                        workflowStore.temporal.getState();
+                      if (futureStates.length > 0) redo();
+                    }}
+                  >
+                    <Redo2Icon />
+                  </Button>
+                </div>
+              </Panel>
+              <Panel position='top-right'>
                 <Button
-                  variant='ghost'
-                  size='icon-sm'
-                  aria-label='Undo'
-                  title='Undo (Ctrl/Cmd + Z)'
-                  disabled={!canUndo}
-                  onClick={() => {
-                    const { undo, pastStates } =
-                      workflowStore.temporal.getState();
-                    if (pastStates.length > 0) undo();
-                  }}
+                  variant='secondary'
+                  disabled={isRunning}
+                  onClick={onRun}
                 >
-                  <Undo2Icon />
+                  {isRunning ? (
+                    <Spinner data-icon='inline-start' />
+                  ) : (
+                    <Play data-icon='inline-start' />
+                  )}
+                  {isRunning
+                    ? runningNodeId
+                      ? `Running ${runningNodeId}…`
+                      : 'Running…'
+                    : 'Run'}
                 </Button>
-                <Button
-                  variant='ghost'
-                  size='icon-sm'
-                  aria-label='Redo'
-                  title='Redo (Ctrl/Cmd + Shift + Z)'
-                  disabled={!canRedo}
-                  onClick={() => {
-                    const { redo, futureStates } =
-                      workflowStore.temporal.getState();
-                    if (futureStates.length > 0) redo();
-                  }}
-                >
-                  <Redo2Icon />
-                </Button>
-              </div>
-            </Panel>
-            <Panel position='top-right'>
-              <Button variant='secondary' disabled={isRunning} onClick={onRun}>
-                {isRunning ? (
-                  <Spinner data-icon='inline-start' />
-                ) : (
-                  <Play data-icon='inline-start' />
-                )}
-                {isRunning
-                  ? runningNodeId
-                    ? `Running ${runningNodeId}…`
-                    : 'Running…'
-                  : 'Run'}
-              </Button>
-            </Panel>
-          </ReactFlow>}
+              </Panel>
+            </ReactFlow>
+          )}
         </div>
         {children}
       </SidebarInset>

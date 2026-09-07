@@ -65,7 +65,7 @@ import { toast } from 'sonner';
 
 import {
   AppRunOutputPanel,
-  type ProcessNodeRun,
+  restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
 import {
   deleteProcessNode,
@@ -860,7 +860,7 @@ function ProcessNodeDetailEditor({
         <AppRunOutputPanel
           open
           readOnly
-          run={historicalRun.outputView as ProcessNodeRun}
+          run={restoreProcessNodeRun(historicalRun, processNode)}
           onClear={() => undefined}
           onRunAgain={() => undefined}
           onOpenChange={(open) => {

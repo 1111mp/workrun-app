@@ -44,6 +44,7 @@ import {
   ChevronDownIcon,
   CircleAlertIcon,
   CircleIcon,
+  CircleXIcon,
   ClipboardIcon,
   DatabaseIcon,
   Globe2Icon,
@@ -72,7 +73,10 @@ type WorkflowOutputPanelProps = {
   readOnly?: boolean;
 };
 
-function statusLabel(status: WorkflowRunView['status']) {
+function statusLabel(run: WorkflowRunView) {
+  if (run.status === 'interrupted' && !run.error) return 'Waiting for input';
+
+  const { status } = run;
   switch (status) {
     case 'running':
       return 'Running';
@@ -80,6 +84,8 @@ function statusLabel(status: WorkflowRunView['status']) {
       return 'Completed';
     case 'failed':
       return 'Failed';
+    case 'cancelled':
+      return 'Cancelled';
     case 'interrupted':
       return 'Interrupted';
     default:
@@ -94,7 +100,17 @@ function rerunLabel(status: WorkflowRunView['status']) {
 }
 
 function durationLabel(run: WorkflowRunView) {
+  if (run.durationMs !== undefined)
+    return `${(run.durationMs / 1000).toFixed(1)}s`;
   if (!run.startedAt) return undefined;
+  if (
+    !run.endedAt &&
+    (run.status === 'completed' ||
+      run.status === 'failed' ||
+      run.status === 'cancelled' ||
+      run.status === 'interrupted')
+  )
+    return undefined;
   const end = run.endedAt ?? Date.now();
   return `${((end - run.startedAt) / 1000).toFixed(1)}s`;
 }
@@ -440,6 +456,15 @@ function TraceResult({
       ? (entry.result as Record<string, unknown>)
       : undefined;
 
+  // Cancellation is terminal regardless of node type; do not let an
+  // individual node's normal completion fallback misrepresent it as finished.
+  if (entry.status === 'cancelled')
+    return (
+      <p className='text-muted-foreground mt-2 text-sm'>
+        Cancelled before this step completed.
+      </p>
+    );
+
   if (entry.type === 'human_review') {
     const approved = result?.approved;
     return (
@@ -595,6 +620,13 @@ function TraceResult({
       {entry.status === 'running' ? 'Running…' : 'Completed.'}
     </p>
   );
+}
+
+function executionStatusIcon(status: WorkflowRunExecution['status']) {
+  if (status === 'running') return <Spinner />;
+  if (status === 'failed') return <CircleAlertIcon />;
+  if (status === 'cancelled') return <CircleXIcon />;
+  return <CheckCircle2Icon />;
 }
 
 function codeText(children: ReactNode) {
@@ -800,7 +832,7 @@ function WorkflowRunOutput({
       <DrawerHeader>
         <DrawerTitle>{isChat ? 'Chat' : 'Run output'}</DrawerTitle>
         <DrawerDescription>
-          {statusLabel(run.status)}
+          {statusLabel(run)}
           {run.activeNodeId ? ` · ${displayNodeName(run.activeNodeId)}` : ''}
           {duration ? ` · ${duration}` : ''}
         </DrawerDescription>
@@ -853,7 +885,7 @@ function WorkflowRunOutput({
                       >
                         <Marker variant='separator'>
                           <MarkerIcon>
-                            <CheckCircle2Icon />
+                            {executionStatusIcon(entry.status)}
                           </MarkerIcon>
                           <MarkerContent>
                             {index + 2}. {displayNodeName(entry.nodeId)} ·{' '}
@@ -954,13 +986,7 @@ function WorkflowRunOutput({
                                 >
                                   <Marker variant='separator'>
                                     <MarkerIcon>
-                                      {entry.status === 'running' ? (
-                                        <Spinner />
-                                      ) : entry.status === 'failed' ? (
-                                        <CircleAlertIcon />
-                                      ) : (
-                                        <CheckCircle2Icon />
-                                      )}
+                                      {executionStatusIcon(entry.status)}
                                     </MarkerIcon>
                                     <MarkerContent>
                                       {displayNodeName(entry.nodeId)} ·{' '}

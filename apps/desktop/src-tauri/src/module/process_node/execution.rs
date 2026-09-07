@@ -30,7 +30,6 @@ impl ProcessNodeRegistry {
 
         let python_version = project_python_version(&node.project_path).await?;
         run_project_python_streaming(
-            app,
             RunProjectPythonRequest {
                 project_path: node.project_path,
                 script_path: node.definition.entry,
@@ -40,6 +39,41 @@ impl ProcessNodeRegistry {
             output,
         )
         .await
+    }
+
+    /// Run an App while sending output to a native owner rather than directly
+    /// to a webview channel. This is what lets a run outlive its source page.
+    pub async fn run_with_output(
+        id: &str,
+        on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
+        on_started: Option<Arc<dyn Fn(u32) + Send + Sync>>,
+    ) -> Result<ProjectPythonStreamRunResult> {
+        let node = Self::inspect(id).await?;
+        if !matches!(node.install_status, ProcessNodeInstallStatus::Installed) {
+            bail!("Process Node is not installed: {id}");
+        }
+        let python_version = project_python_version(&node.project_path).await?;
+        let sync = PythonRuntime::sync_dependencies(&node.project_path, &python_version).await?;
+        let ipc = IpcServer::global().create_session().await?;
+        let execution = PythonRuntime::run_python_streaming_with_env_and_stdin(
+            &sync.environment,
+            &node.definition.entry,
+            &[],
+            &[
+                ("WORKRUN_IPC_ENDPOINT".into(), ipc.endpoint.clone()),
+                ("WORKRUN_IPC_TOKEN".into(), ipc.token.clone()),
+                ("WORKRUN_RUN_ID".into(), ipc.id.clone()),
+            ],
+            None,
+            on_output,
+            on_started,
+        )
+        .await;
+        ipc.close().await;
+        Ok(ProjectPythonStreamRunResult {
+            sync,
+            execution: execution?,
+        })
     }
 
     pub async fn run_for_workflow(
@@ -77,8 +111,7 @@ impl ProcessNodeRegistry {
         }
 
         let python_version = project_python_version(&node.project_path).await?;
-        let app = handle::Handle::app_handle();
-        let sync = PythonRuntime::sync_dependencies(app, &node.project_path, &python_version).await?;
+        let sync = PythonRuntime::sync_dependencies(&node.project_path, &python_version).await?;
         let mut ipc = IpcServer::global().create_session().await?;
         let input = apply_input_defaults(input, &node.definition.inputs)?;
         let input = serde_json::to_vec(&input).context("failed to serialize input for Process Node")?;
@@ -103,6 +136,7 @@ impl ProcessNodeRegistry {
                 append_output(target, &chunk.data);
                 on_output(chunk);
             }),
+            None,
         )
         .await;
 

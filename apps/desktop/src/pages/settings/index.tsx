@@ -39,7 +39,12 @@ function SettingsPage() {
       app_log_max_count: config?.app_log_max_count ?? 8,
       // model
       provider_credentials: config?.provider_credentials?.length
-        ? config.provider_credentials
+        ? config.provider_credentials.map((credential) => ({
+            ...credential,
+            // The desktop config represents an absent Rust `Option<String>` as null.
+            // Form values must remain strings for react-hook-form's resolver type.
+            baseUrl: credential.baseUrl ?? '',
+          }))
         : [
             { provider: 'gemini', apiKey: '', baseUrl: '' },
             { provider: 'open_ai', apiKey: '', baseUrl: '' },

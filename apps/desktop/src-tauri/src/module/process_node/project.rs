@@ -12,7 +12,6 @@ use uuid::Uuid;
 impl ProcessNodeRegistry {
     /// Create a local uv project and register it in the catalog.
     pub async fn create(
-        app: &AppHandle,
         request: CreateProcessNodeRequest,
         progress: Channel<ProcessNodeCreateProgress>,
     ) -> Result<ProcessNode> {
@@ -67,15 +66,15 @@ impl ProcessNodeRegistry {
             .with_context(|| format!("failed to create Process Node project {}", project_path.display()))?;
 
         let result = async {
-            PythonRuntime::init_application_project(app, &project_path).await?;
+            PythonRuntime::init_application_project(&project_path).await?;
             let _ = progress.send(ProcessNodeCreateProgress {
                 stage: ProcessNodeCreateStage::AddingSdkDependency,
             });
-            PythonRuntime::add_workrun_sdk_dependency(app, &project_path).await?;
+            PythonRuntime::add_workrun_sdk_dependency(&project_path).await?;
             let _ = progress.send(ProcessNodeCreateProgress {
                 stage: ProcessNodeCreateStage::InitializingEnvironment,
             });
-            PythonRuntime::sync_dependencies(app, &project_path, "3.12").await?;
+            PythonRuntime::sync_dependencies(&project_path, "3.12").await?;
             let _ = progress.send(ProcessNodeCreateProgress {
                 stage: ProcessNodeCreateStage::SavingApp,
             });

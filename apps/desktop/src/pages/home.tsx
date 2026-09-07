@@ -14,8 +14,8 @@ import {
   DropdownMenuTrigger,
 } from '@workspace/ui/components';
 import {
+  AppWindowIcon,
   BookOpenIcon,
-  BoxesIcon,
   HistoryIcon,
   LogOutIcon,
   RefreshCwIcon,
@@ -30,6 +30,8 @@ import { NavLink, Outlet, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
+import { RunCenter } from '@/components/run-center';
+import { RunEventTracker } from '@/components/run-event-tracker';
 import { TeamSessionGate } from '@/components/team-session-gate';
 import { createTeamAuthClient } from '@/lib/auth-client';
 import {
@@ -43,7 +45,7 @@ const navigation = [
   {
     to: '/apps',
     labelKey: 'navigation.apps',
-    icon: BoxesIcon,
+    icon: AppWindowIcon,
   },
   { to: '/runs', labelKey: 'Run history', icon: HistoryIcon },
 ];
@@ -126,6 +128,7 @@ function HomeLayout() {
             <NavLink
               key={to}
               to={to}
+              viewTransition
               className={({ isActive }) =>
                 [
                   'flex h-7 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium transition-colors',
@@ -160,27 +163,37 @@ function HomeLayout() {
               </Button>
             }
           />
-          <DropdownMenuContent align='end' className='w-44'>
+          <DropdownMenuContent align='end' className='w-48'>
             <DropdownMenuGroup>
               {displayName ? (
                 <DropdownMenuLabel className='text-muted-foreground truncate px-2 py-1.5 text-sm font-medium'>
                   {displayName}
                 </DropdownMenuLabel>
               ) : null}
-              <DropdownMenuItem onClick={() => navigate('/mcp-servers')}>
+              <DropdownMenuItem
+                onClick={() =>
+                  navigate('/mcp-servers', { viewTransition: true })
+                }
+              >
                 <ServerCogIcon />
                 MCP servers
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate('/skills')}>
+              <DropdownMenuItem
+                onClick={() => navigate('/skills', { viewTransition: true })}
+              >
                 <BookOpenIcon />
                 {t('navigation.skills')}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => navigate('/profile')}>
+              <DropdownMenuItem
+                onClick={() => navigate('/profile', { viewTransition: true })}
+              >
                 <User />
                 {t('navigation.profile')}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate('/settings')}>
+              <DropdownMenuItem
+                onClick={() => navigate('/settings', { viewTransition: true })}
+              >
                 <SettingsIcon />
                 {t('navigation.settings')}
               </DropdownMenuItem>
@@ -211,9 +224,11 @@ function HomeLayout() {
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
-      <main className='min-h-0 flex-1'>
+      <main className='min-h-0 flex-1 [view-transition-name:page-content]'>
         <Outlet />
       </main>
+      <RunEventTracker />
+      <RunCenter />
     </div>
   );
 }
