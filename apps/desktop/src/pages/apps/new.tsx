@@ -26,6 +26,7 @@ import {
 import { ArrowLeftIcon, PencilIcon, SaveIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -36,29 +37,19 @@ import {
   type ProcessNodeCreateStage,
 } from '@/services/process-node';
 
-const createAppSchema = z.object({
-  name: z.string().trim().min(1, 'Enter a name.'),
-  description: z.string(),
-  kind: z.enum(['workflow', 'tool']),
-  projectRoot: z.string().trim(),
-});
+function createAppSchema(nameRequired: string) {
+  return z.object({
+    name: z.string().trim().min(1, nameRequired),
+    description: z.string(),
+    kind: z.enum(['workflow', 'tool']),
+    projectRoot: z.string().trim(),
+  });
+}
 
-type CreateProcessNodeForm = z.infer<typeof createAppSchema>;
-
-const createStageLabels: Record<ProcessNodeCreateStage, string> = {
-  creatingProject: 'Creating project…',
-  addingSdkDependency: 'Adding Python SDK…',
-  initializingEnvironment: 'Initializing project environment…',
-  savingApp: 'Saving app…',
-  completed: 'App created',
-};
-
-const appKinds = [
-  { value: 'workflow', label: 'App' },
-  { value: 'tool', label: 'Tool App' },
-];
+type CreateProcessNodeForm = z.infer<ReturnType<typeof createAppSchema>>;
 
 function CreateProcessNodePage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createStage, setCreateStage] = useState<ProcessNodeCreateStage>();
@@ -67,7 +58,7 @@ function CreateProcessNodePage() {
     queryFn: getProcessNodeDefaultRoot,
   });
   const form = useForm<CreateProcessNodeForm>({
-    resolver: zodResolver(createAppSchema),
+    resolver: zodResolver(createAppSchema(t('apps.new.nameRequired'))),
     defaultValues: {
       name: '',
       description: '',
@@ -85,18 +76,25 @@ function CreateProcessNodePage() {
     onMutate: () => setCreateStage('creatingProject'),
     onSuccess: (node) => {
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
-      toast.success('App created', { toasterId: 'global' });
+      toast.success(t('apps.new.created'), { toasterId: 'global' });
       void navigate(`/apps/${node.definition.id}`, { replace: true });
     },
     onError: (error) => {
       setCreateStage(undefined);
-      toast.error('Could not create app', {
+      toast.error(t('apps.new.createFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
     },
   });
   const submit = form.handleSubmit((values) => create.mutate(values));
+  const stageLabel = createStage
+    ? t(`apps.new.stages.${createStage}`)
+    : undefined;
+  const appKinds = [
+    { value: 'workflow', label: t('apps.app') },
+    { value: 'tool', label: t('apps.toolApp') },
+  ];
 
   return (
     <div className='size-full overflow-y-auto'>
@@ -107,20 +105,20 @@ function CreateProcessNodePage() {
             <Button
               variant='ghost'
               size='icon-sm'
-              aria-label='Back to apps'
+              aria-label={t('apps.new.backToApps')}
               onClick={() => navigate('/apps')}
             >
               <ArrowLeftIcon />
             </Button>
             <div className='relative'>
               <div className='text-muted-foreground text-xs font-medium tracking-[0.14em] uppercase'>
-                Local project
+                {t('apps.new.localProject')}
               </div>
               <h1 className='mt-1 text-xl font-semibold tracking-tight'>
-                Create an App
+                {t('apps.new.title')}
               </h1>
               <p className='text-muted-foreground mt-1 text-sm'>
-                Start with an editable local Python project.
+                {t('apps.new.description')}
               </p>
             </div>
           </div>
@@ -128,10 +126,9 @@ function CreateProcessNodePage() {
 
         <Card className='shadow-sm'>
           <CardHeader>
-            <CardTitle>App details</CardTitle>
+            <CardTitle>{t('apps.new.detailsTitle')}</CardTitle>
             <CardDescription>
-              Give the project a recognizable name, then choose how it will be
-              used.
+              {t('apps.new.detailsDescription')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -142,11 +139,13 @@ function CreateProcessNodePage() {
                   control={form.control}
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
-                      <FieldLabel htmlFor='app-name'>Name</FieldLabel>
+                      <FieldLabel htmlFor='app-name'>
+                        {t('apps.new.name')}
+                      </FieldLabel>
                       <Input
                         {...field}
                         id='app-name'
-                        placeholder='Please enter app name'
+                        placeholder={t('apps.new.namePlaceholder')}
                         aria-invalid={fieldState.invalid}
                         autoComplete='off'
                       />
@@ -162,12 +161,12 @@ function CreateProcessNodePage() {
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
                       <FieldLabel htmlFor='app-description'>
-                        Description
+                        {t('apps.new.fieldDescription')}
                       </FieldLabel>
                       <Textarea
                         {...field}
                         id='app-description'
-                        placeholder='What does this app do?'
+                        placeholder={t('apps.new.descriptionPlaceholder')}
                         aria-invalid={fieldState.invalid}
                       />
                       {fieldState.invalid ? (
@@ -181,11 +180,11 @@ function CreateProcessNodePage() {
                   control={form.control}
                   render={({ field }) => (
                     <Field>
-                      <FieldLabel htmlFor='app-kind'>App type</FieldLabel>
+                      <FieldLabel htmlFor='app-kind'>
+                        {t('apps.new.appType')}
+                      </FieldLabel>
                       <FieldDescription>
-                        Apps run independently and can also be added as canvas
-                        nodes. Tool Apps are called by Agents with structured
-                        arguments.
+                        {t('apps.new.appTypeDescription')}
                       </FieldDescription>
                       <Select
                         items={appKinds}
@@ -211,27 +210,28 @@ function CreateProcessNodePage() {
                   control={form.control}
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
-                      <FieldLabel>Project root directory</FieldLabel>
+                      <FieldLabel>{t('apps.new.projectRoot')}</FieldLabel>
                       <FieldDescription>
-                        The App project will be created in a new folder named
-                        after its id under this directory.
+                        {t('apps.new.projectRootDescription')}
                       </FieldDescription>
                       <div className='bg-muted flex items-center rounded-md border'>
                         <span className='text-muted-foreground min-w-0 flex-1 truncate px-3 py-2 text-sm'>
-                          {field.value || defaultProjectRoot || 'Loading…'}
+                          {field.value ||
+                            defaultProjectRoot ||
+                            t('apps.new.loading')}
                         </span>
                         <Button
                           type='button'
                           variant='ghost'
                           size='icon-sm'
                           className='mr-1 shrink-0'
-                          aria-label='Change project root directory'
-                          title='Change project root directory'
+                          aria-label={t('apps.new.changeProjectRoot')}
+                          title={t('apps.new.changeProjectRoot')}
                           onClick={() => {
                             void open({
                               directory: true,
                               multiple: false,
-                              title: 'Select project root directory',
+                              title: t('apps.new.selectProjectRoot'),
                               defaultPath: field.value || defaultProjectRoot,
                             }).then((directory) => {
                               if (typeof directory === 'string') {
@@ -256,7 +256,7 @@ function CreateProcessNodePage() {
             <Field orientation='horizontal' className='justify-end'>
               {create.isPending && createStage ? (
                 <span className='text-muted-foreground mr-auto text-sm'>
-                  {createStageLabels[createStage]}
+                  {stageLabel}
                 </span>
               ) : null}
               <Button
@@ -264,7 +264,7 @@ function CreateProcessNodePage() {
                 variant='outline'
                 onClick={() => navigate('/apps')}
               >
-                Cancel
+                {t('apps.new.cancel')}
               </Button>
               <Button
                 type='submit'
@@ -276,9 +276,9 @@ function CreateProcessNodePage() {
                 ) : (
                   <SaveIcon data-icon='inline-start' />
                 )}
-                {create.isPending && createStage
-                  ? createStageLabels[createStage]
-                  : 'Create project'}
+                {create.isPending && stageLabel
+                  ? stageLabel
+                  : t('apps.new.createProject')}
               </Button>
             </Field>
           </CardFooter>

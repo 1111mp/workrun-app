@@ -1,18 +1,26 @@
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { CircleHelpIcon } from 'lucide-react';
-
-const fallbackOptions: WorkflowAskUserQuestionOption[] = [
-  { id: 'option-1', label: 'Option 1' },
-  { id: 'option-2', label: 'Option 2' },
-];
+import { useTranslation } from 'react-i18next';
 
 function AskUserQuestionNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowAskUserQuestionNodeData>>) {
-  const options = data.options?.length ? data.options : fallbackOptions;
+  const { t } = useTranslation();
+  const options = data.options?.length
+    ? data.options
+    : [
+        {
+          id: 'option-1',
+          label: t('workflowEditor.nodes.option', { index: 1 }),
+        },
+        {
+          id: 'option-2',
+          label: t('workflowEditor.nodes.option', { index: 2 }),
+        },
+      ];
 
   return (
     <div
@@ -33,7 +41,7 @@ function AskUserQuestionNode({
           aria-hidden='true'
         />
         <p className='truncate font-medium text-blue-700 dark:text-blue-300'>
-          {data.title || 'Ask user question'}
+          {data.title || t('workflowEditor.nodes.askUserQuestion')}
         </p>
       </div>
       {data.description ? (
@@ -47,7 +55,9 @@ function AskUserQuestionNode({
             key={option.id}
             className='relative min-h-5 pr-5 text-blue-700 dark:text-blue-300'
           >
-            <p className='truncate'>{option.label || 'Untitled option'}</p>
+            <p className='truncate'>
+              {option.label || t('workflowEditor.nodes.untitledOption')}
+            </p>
           </div>
         ))}
       </div>

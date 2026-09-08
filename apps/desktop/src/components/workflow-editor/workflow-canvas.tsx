@@ -10,6 +10,7 @@ import {
 } from '@xyflow/react';
 import { Play, Redo2Icon, Undo2Icon } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
+import { type TFunction, useTranslation } from 'react-i18next';
 import { useStore } from 'zustand';
 
 import {
@@ -46,13 +47,13 @@ const nodeTypes = {
   terminate: TerminateNode,
 };
 
-function createNodeData(type: WorkflowNodeType) {
+function createNodeData(type: WorkflowNodeType, t: TFunction) {
   switch (type) {
     case 'agent':
       return {
-        name: 'New agent',
+        name: t('workflowEditor.defaults.newAgent'),
         modelProfileId: '',
-        description: 'Describe this agent’s responsibility',
+        description: t('workflowEditor.defaults.agentDescription'),
         instruction: '',
         outputKey: '',
         temperature: undefined,
@@ -64,9 +65,9 @@ function createNodeData(type: WorkflowNodeType) {
       };
     case 'codeact_agent':
       return {
-        name: 'New CodeAct agent',
+        name: t('workflowEditor.defaults.newCodeActAgent'),
         modelProfileId: '',
-        description: 'Compose tools and Python into one executable plan',
+        description: t('workflowEditor.defaults.codeActDescription'),
         instruction: '',
         toolIds: [],
         maxIterations: 8,
@@ -80,15 +81,15 @@ function createNodeData(type: WorkflowNodeType) {
       };
     case 'remote_agent':
       return {
-        name: 'New remote agent',
+        name: t('workflowEditor.defaults.newRemoteAgent'),
         url: 'https://',
-        description: 'Describe this remote agent',
+        description: t('workflowEditor.defaults.remoteAgentDescription'),
       };
     case 'process':
       return {
-        name: 'New app',
+        name: t('workflowEditor.defaults.newApp'),
         processNodeId: '',
-        description: 'Select an app to run in this workflow',
+        description: t('workflowEditor.defaults.appDescription'),
       };
     case 'subworkflow':
       return {
@@ -96,48 +97,64 @@ function createNodeData(type: WorkflowNodeType) {
         workflowName: '',
       };
     case 'terminate':
-      return { label: 'Terminate workflow' };
+      return { label: t('workflowEditor.nodes.terminate') };
     case 'if_else':
       return {
-        label: 'If / Else',
+        label: t('workflowEditor.nodes.ifElse'),
         conditions: {
-          true: { label: 'True', condition: '' },
-          false: { label: 'False', condition: '' },
+          true: { label: t('workflowEditor.nodes.true'), condition: '' },
+          false: { label: t('workflowEditor.nodes.false'), condition: '' },
         },
       };
     case 'switch':
       return {
-        label: 'Switch',
+        label: t('workflowEditor.nodes.switch'),
         cases: [
-          { id: 'case-1', label: 'Case 1', condition: '' },
-          { id: 'case-2', label: 'Case 2', condition: '' },
+          {
+            id: 'case-1',
+            label: t('workflowEditor.nodes.case', { index: 1 }),
+            condition: '',
+          },
+          {
+            id: 'case-2',
+            label: t('workflowEditor.nodes.case', { index: 2 }),
+            condition: '',
+          },
         ],
-        defaultCase: { label: 'Default', condition: '' },
+        defaultCase: {
+          label: t('workflowEditor.nodes.default'),
+          condition: '',
+        },
       };
     case 'human_review':
       return {
-        title: 'Human review',
-        description:
-          'Pause this workflow until a reviewer approves or rejects it.',
+        title: t('workflowEditor.nodes.humanReview'),
+        description: t('workflowEditor.defaults.humanReviewDescription'),
         contentKey: '',
         contextKeys: [],
         editable: false,
       };
     case 'ask_user_question':
       return {
-        title: 'Choose an option',
-        description: 'The workflow continues along the selected option.',
+        title: t('workflowEditor.defaults.chooseAnOption'),
+        description: t('workflowEditor.defaults.askUserQuestionDescription'),
         options: [
-          { id: 'option-1', label: 'Option 1' },
-          { id: 'option-2', label: 'Option 2' },
+          {
+            id: 'option-1',
+            label: t('workflowEditor.nodes.option', { index: 1 }),
+          },
+          {
+            id: 'option-2',
+            label: t('workflowEditor.nodes.option', { index: 2 }),
+          },
         ],
       };
     case 'start':
-      return { label: 'Start' };
+      return { label: t('workflowEditor.nodes.start') };
     case 'end':
-      return { label: 'End' };
+      return { label: t('workflowEditor.nodes.end') };
     case 'group':
-      return { label: 'New group' };
+      return { label: t('workflowEditor.defaults.newGroup') };
   }
 }
 
@@ -207,6 +224,7 @@ function WorkflowCanvas({
   runningNodeId,
   onRun,
 }: WorkflowCanvasProps) {
+  const { t } = useTranslation();
   const workflowStore = useWorkflowStoreApi();
   const nodes = useStore(workflowStore, (state) => state.nodes);
   const edges = useStore(workflowStore, (state) => state.edges);
@@ -272,7 +290,7 @@ function WorkflowCanvas({
       position: group
         ? { x: position.x - group.position.x, y: position.y - group.position.y }
         : position,
-      data: createNodeData(type),
+      data: createNodeData(type, t),
       ...(type === 'group'
         ? {
             zIndex: -1001,
@@ -349,8 +367,8 @@ function WorkflowCanvas({
                   <Button
                     variant='ghost'
                     size='icon-sm'
-                    aria-label='Undo'
-                    title='Undo (Ctrl/Cmd + Z)'
+                    aria-label={t('workflowEditor.undo')}
+                    title={t('workflowEditor.undoShortcut')}
                     disabled={!canUndo}
                     onClick={() => {
                       const { undo, pastStates } =
@@ -363,8 +381,8 @@ function WorkflowCanvas({
                   <Button
                     variant='ghost'
                     size='icon-sm'
-                    aria-label='Redo'
-                    title='Redo (Ctrl/Cmd + Shift + Z)'
+                    aria-label={t('workflowEditor.redo')}
+                    title={t('workflowEditor.redoShortcut')}
                     disabled={!canRedo}
                     onClick={() => {
                       const { redo, futureStates } =
@@ -389,9 +407,9 @@ function WorkflowCanvas({
                   )}
                   {isRunning
                     ? runningNodeId
-                      ? `Running ${runningNodeId}…`
-                      : 'Running…'
-                    : 'Run'}
+                      ? t('workflowEditor.runningNode', { id: runningNodeId })
+                      : t('workflowEditor.running')
+                    : t('workflows.run')}
                 </Button>
               </Panel>
             </ReactFlow>

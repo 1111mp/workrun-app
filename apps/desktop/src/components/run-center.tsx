@@ -20,6 +20,7 @@ import {
   WorkflowIcon,
 } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router';
 import { toast } from 'sonner';
 
@@ -33,13 +34,7 @@ import {
 import { cancelBackgroundWorkflowRun } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores';
 
-const statusLabel = {
-  queued: 'Queued',
-  running: 'Running',
-  waiting_for_input: 'Needs attention',
-} as const;
-
-function elapsed(startedAt: string) {
+function elapsed(startedAt: string, t: ReturnType<typeof useTranslation>['t']) {
   const seconds = Math.max(
     0,
     Math.floor((Date.now() - Date.parse(startedAt)) / 1000),
@@ -47,8 +42,8 @@ function elapsed(startedAt: string) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return minutes > 0
-    ? `${minutes}m ${remainingSeconds}s`
-    : `${remainingSeconds}s`;
+    ? t('runCenter.elapsedWithMinutes', { minutes, seconds: remainingSeconds })
+    : t('runCenter.elapsedSeconds', { seconds: remainingSeconds });
 }
 
 function ActiveRunRow({
@@ -60,6 +55,7 @@ function ActiveRunRow({
   onCancel?: () => void;
   onOpenHistory: () => void;
 }) {
+  const { t } = useTranslation();
   const isWaiting = run.status === 'waiting_for_input';
   return (
     <div className='hover:bg-muted/70 flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors'>
@@ -76,31 +72,34 @@ function ActiveRunRow({
         <span className='min-w-0 flex-1'>
           <span className='block truncate font-medium'>{run.targetName}</span>
           <span className='text-muted-foreground mt-0.5 block text-xs'>
-            {run.targetType === 'workflow' ? 'Workflow' : 'App'} · started{' '}
-            {elapsed(run.startedAt)} ago
+            {run.targetType === 'workflow' ? t('runs.workflow') : t('apps.app')}{' '}
+            · {t('runCenter.started', { elapsed: elapsed(run.startedAt, t) })}
           </span>
         </span>
       </button>
       <Badge variant={isWaiting ? 'outline' : 'secondary'}>
-        {statusLabel[run.status as keyof typeof statusLabel] ?? run.status}
+        {t(`runs.runStatus.${run.status}`)}
       </Badge>
       {onCancel ? (
         <Button size='sm' variant='ghost' onClick={onCancel}>
-          Cancel
+          {t('runCenter.cancel')}
         </Button>
       ) : null}
     </div>
   );
 }
 
-function actionLabel(action: PendingAction) {
+function actionLabel(
+  action: PendingAction,
+  t: ReturnType<typeof useTranslation>['t'],
+) {
   switch (action.kind) {
     case 'tool_approval':
-      return 'Approve tool use';
+      return t('runCenter.actions.toolApproval');
     case 'human_review':
-      return 'Review workflow step';
+      return t('runCenter.actions.humanReview');
     case 'ask_user_question':
-      return 'Answer workflow question';
+      return t('runCenter.actions.askQuestion');
   }
 }
 
@@ -110,6 +109,7 @@ function actionLabel(action: PendingAction) {
  * task from the rest of the application.
  */
 function RunCenter() {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string>();
 
@@ -153,11 +153,14 @@ function RunCenter() {
         await cancelBackgroundWorkflowRun(run.id);
       else await cancelBackgroundProcessNodeRun(run.id);
       toast.success(
-        `${run.targetType === 'workflow' ? 'Workflow' : 'App'} cancelled`,
+        t('runCenter.cancelled', {
+          targetType:
+            run.targetType === 'workflow' ? t('runs.workflow') : t('apps.app'),
+        }),
         { toasterId: 'global' },
       );
     } catch (error) {
-      toast.error('Could not cancel run', {
+      toast.error(t('runCenter.cancelFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
@@ -169,7 +172,7 @@ function RunCenter() {
   return (
     <>
       <button
-        aria-label='Open Run Center'
+        aria-label={t('runCenter.open')}
         className='bg-background/30 hover:bg-muted/30 focus-visible:ring-ring flex h-10 shrink-0 items-center gap-2 border-t px-4 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset'
         type='button'
         onClick={() => setOpen(true)}
@@ -192,13 +195,20 @@ function RunCenter() {
           )}
         </span>
         <span className='flex min-w-0 flex-1 items-center gap-2'>
-          <span className='shrink-0 text-sm font-medium'>Run Center</span>
+          <span className='shrink-0 text-sm font-medium'>
+            {t('runCenter.title')}
+          </span>
           <span className='text-muted-foreground truncate text-xs'>
             {attentionCount > 0
-              ? `${attentionCount} item${attentionCount === 1 ? '' : 's'} need your attention`
+              ? t('runCenter.needsAttention', { count: attentionCount })
               : isIdle
-                ? 'Ready for your next Workflow or App run'
-                : `${runningCount} running${queuedCount > 0 ? ` · ${queuedCount} queued` : ''}`}
+                ? t('runCenter.idleSummary')
+                : queuedCount > 0
+                  ? t('runCenter.activeSummaryWithQueue', {
+                      running: runningCount,
+                      queued: queuedCount,
+                    })
+                  : t('runCenter.activeSummary', { running: runningCount })}
           </span>
         </span>
         <span className='hidden items-center gap-1.5 sm:flex'>
@@ -207,21 +217,23 @@ function RunCenter() {
               className='border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
               variant='outline'
             >
-              {attentionCount} attention
+              {t('runCenter.attentionCount', { count: attentionCount })}
             </Badge>
           ) : isIdle ? (
             <Badge
               className='border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
               variant='outline'
             >
-              Ready
+              {t('runCenter.ready')}
             </Badge>
           ) : (
-            <Badge variant='secondary'>{runs.length} active</Badge>
+            <Badge variant='secondary'>
+              {t('runCenter.activeCount', { count: runs.length })}
+            </Badge>
           )}
         </span>
         <span className='text-muted-foreground flex shrink-0 items-center gap-1 text-xs'>
-          <span className='hidden sm:inline'>View</span>{' '}
+          <span className='hidden sm:inline'>{t('runCenter.view')}</span>{' '}
           <ChevronUpIcon className='size-3.5' />
         </span>
       </button>
@@ -229,12 +241,9 @@ function RunCenter() {
         <DrawerContent>
           <DrawerHeader className='border-b px-5 py-4 text-left'>
             <DrawerTitle className='flex items-center gap-2 text-base'>
-              <ListTodoIcon className='size-4' /> Run Center
+              <ListTodoIcon className='size-4' /> {t('runCenter.title')}
             </DrawerTitle>
-            <DrawerDescription>
-              Active work stays here when its originating page or output panel
-              is closed.
-            </DrawerDescription>
+            <DrawerDescription>{t('runCenter.description')}</DrawerDescription>
           </DrawerHeader>
           <ScrollArea className='min-h-0 flex-1 px-3 py-3'>
             {isIdle ? (
@@ -242,19 +251,20 @@ function RunCenter() {
                 <span className='mb-4 flex size-11 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'>
                   <CircleCheckIcon className='size-5' />
                 </span>
-                <p className='text-sm font-medium'>Nothing running right now</p>
+                <p className='text-sm font-medium'>
+                  {t('runCenter.emptyTitle')}
+                </p>
                 <p className='text-muted-foreground mt-1 max-w-sm text-sm leading-5'>
-                  Start a run from Workflows or Apps. Its progress and any
-                  requests for input will show up here.
+                  {t('runCenter.emptyDescription')}
                 </p>
                 <div className='text-muted-foreground mt-5 flex items-center gap-4 text-xs'>
                   <span className='flex items-center gap-1.5'>
                     <WorkflowIcon className='size-3.5 text-sky-600 dark:text-sky-400' />
-                    Workflows
+                    {t('runs.targetFilters.workflow')}
                   </span>
                   <span className='flex items-center gap-1.5'>
                     <AppWindowIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
-                    Apps
+                    {t('runs.targetFilters.app')}
                   </span>
                 </div>
               </div>
@@ -262,7 +272,7 @@ function RunCenter() {
             {attentionCount > 0 ? (
               <section className='mb-4'>
                 <div className='text-muted-foreground mb-1.5 px-2 text-xs font-medium tracking-wide uppercase'>
-                  Needs attention · {attentionCount}
+                  {t('runCenter.attentionHeading', { count: attentionCount })}
                 </div>
                 {runs
                   .filter((run) => run.status === 'waiting_for_input')
@@ -284,7 +294,7 @@ function RunCenter() {
             {activeWorkCount > 0 ? (
               <section>
                 <div className='text-muted-foreground mb-1.5 px-2 text-xs font-medium tracking-wide uppercase'>
-                  Active runs · {activeWorkCount}
+                  {t('runCenter.activeHeading', { count: activeWorkCount })}
                 </div>
                 {runs
                   .filter((run) => run.status !== 'waiting_for_input')
@@ -305,7 +315,7 @@ function RunCenter() {
             {attentionCount > 0 ? (
               <section className='mt-4 border-t pt-4'>
                 <div className='text-muted-foreground mb-1.5 px-2 text-xs font-medium tracking-wide uppercase'>
-                  Approval queue · choose one to handle
+                  {t('runCenter.approvalHeading')}
                 </div>
                 {(pendingActions.data ?? []).map((action) => {
                   const run = runs.find((item) => item.id === action.runId);
@@ -320,13 +330,15 @@ function RunCenter() {
                       <CircleAlertIcon className='size-4 shrink-0 text-amber-600 dark:text-amber-400' />
                       <span className='min-w-0 flex-1'>
                         <span className='block font-medium'>
-                          {actionLabel(action)}
+                          {actionLabel(action, t)}
                         </span>
                         <span className='text-muted-foreground mt-0.5 block truncate text-xs'>
                           {run.targetName}
                         </span>
                       </span>
-                      <Badge variant='outline'>Waiting</Badge>
+                      <Badge variant='outline'>
+                        {t('runs.runStatus.waiting_for_input')}
+                      </Badge>
                     </button>
                   );
                 })}
@@ -335,7 +347,7 @@ function RunCenter() {
           </ScrollArea>
           <div className='flex shrink-0 justify-end border-t px-5 py-3'>
             <Button variant='outline' onClick={() => setOpen(false)}>
-              Close
+              {t('apps.close')}
             </Button>
           </div>
         </DrawerContent>

@@ -42,6 +42,7 @@ import {
   WorkflowIcon,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 
@@ -55,21 +56,16 @@ import {
 } from '@/services/run-history';
 import { useRunWorkspaceStore } from '@/stores';
 
-const targetFilters: { label: string; value?: RunTargetType }[] = [
-  { label: 'All' },
-  { label: 'Workflows', value: 'workflow' },
-  { label: 'Apps', value: 'app' },
-];
+const targetFilters: RunTargetType[] = ['workflow', 'app'];
 
-const statusFilters: { label: string; value?: RunStatus }[] = [
-  { label: 'Any status' },
-  { label: 'Queued', value: 'queued' },
-  { label: 'Running', value: 'running' },
-  { label: 'Needs attention', value: 'waiting_for_input' },
-  { label: 'Completed', value: 'completed' },
-  { label: 'Failed', value: 'failed' },
-  { label: 'Cancelled', value: 'cancelled' },
-  { label: 'Interrupted', value: 'interrupted' },
+const statusFilters: RunStatus[] = [
+  'queued',
+  'running',
+  'waiting_for_input',
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
 ];
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
@@ -93,6 +89,7 @@ const REPLAYABLE_RUN_STATUSES: RunStatus[] = [
 ];
 
 function RunsPage() {
+  const { t, i18n } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -130,7 +127,7 @@ function RunsPage() {
       openWorkspaceRun(run);
     },
     onError: (error) => {
-      toast.error('Could not replay run', {
+      toast.error(t('runs.replayFailed'), {
         description: error instanceof Error ? error.message : String(error),
         toasterId: 'global',
       });
@@ -153,19 +150,24 @@ function RunsPage() {
             <div className='max-w-xl'>
               <div className='text-muted-foreground mb-3 flex items-center gap-2 text-xs font-medium tracking-[0.16em] uppercase'>
                 <HistoryIcon className='size-3.5' />
-                Local execution archive
+                {t('runs.eyebrow')}
               </div>
               <h1 className='text-2xl font-semibold tracking-tight sm:text-3xl'>
-                Run history
+                {t('runs.title')}
               </h1>
               <p className='text-muted-foreground mt-2 text-sm leading-6'>
-                Browse and replay saved Workflow and App executions from this
-                device.
+                {t('runs.description')}
               </p>
             </div>
             <div className='bg-background/70 flex divide-x divide-sky-200/70 rounded-xl border border-sky-200/70 shadow-xs backdrop-blur-sm dark:divide-sky-400/15 dark:border-sky-400/15'>
-              <Metric label='Loaded' value={`${historyItems.length} runs`} />
-              <Metric label='Completed' value={`${completedCount} runs`} />
+              <Metric
+                label={t('runs.loaded')}
+                value={t('runs.count', { count: historyItems.length })}
+              />
+              <Metric
+                label={t('runs.completed')}
+                value={t('runs.count', { count: completedCount })}
+              />
             </div>
           </div>
         </section>
@@ -177,44 +179,52 @@ function RunsPage() {
                 <SearchIcon />
               </InputGroupAddon>
               <InputGroupInput
-                aria-label='Filter by Workflow or App name'
-                placeholder='Search Workflow or App name…'
+                aria-label={t('runs.searchLabel')}
+                placeholder={t('runs.searchPlaceholder')}
                 value={nameQuery}
                 onChange={(event) => updateFilter('q', event.target.value)}
               />
             </InputGroup>
             <div className='flex flex-wrap items-center gap-1'>
               <ListFilterIcon className='text-muted-foreground mr-1 size-4' />
+              <Button
+                size='sm'
+                variant={targetType === null ? 'secondary' : 'ghost'}
+                onClick={() => updateFilter('targetType')}
+              >
+                {t('runs.targetFilters.all')}
+              </Button>
               {targetFilters.map((filter) => (
                 <Button
-                  key={filter.label}
+                  key={filter}
                   size='sm'
-                  variant={
-                    targetType === (filter.value ?? null)
-                      ? 'secondary'
-                      : 'ghost'
-                  }
-                  onClick={() => updateFilter('targetType', filter.value)}
+                  variant={targetType === filter ? 'secondary' : 'ghost'}
+                  onClick={() => updateFilter('targetType', filter)}
                 >
-                  {filter.label}
+                  {t(`runs.targetFilters.${filter}`)}
                 </Button>
               ))}
             </div>
             <div className='flex flex-wrap items-center gap-1 lg:ml-auto'>
+              <Button
+                size='sm'
+                variant={status === null ? 'secondary' : 'ghost'}
+                onClick={() => updateFilter('status')}
+              >
+                {t('runs.statusFilters.all')}
+              </Button>
               {statusFilters.map((filter) => (
                 <Button
-                  key={filter.label}
+                  key={filter}
                   size='sm'
-                  variant={
-                    status === (filter.value ?? null) ? 'secondary' : 'ghost'
-                  }
-                  onClick={() => updateFilter('status', filter.value)}
+                  variant={status === filter ? 'secondary' : 'ghost'}
+                  onClick={() => updateFilter('status', filter)}
                 >
-                  {filter.label}
+                  {t(`runs.runStatus.${filter}`)}
                 </Button>
               ))}
               <Button
-                aria-label='Refresh run history'
+                aria-label={t('runs.refresh')}
                 size='icon-sm'
                 variant='ghost'
                 disabled={runs.isFetching}
@@ -227,22 +237,19 @@ function RunsPage() {
         </section>
 
         <div>
-          <h2 className='text-sm font-semibold'>Saved executions</h2>
+          <h2 className='text-sm font-semibold'>{t('runs.savedExecutions')}</h2>
           <p className='text-muted-foreground mt-0.5 text-xs'>
-            {historyItems.length} loaded run
-            {historyItems.length === 1 ? '' : 's'}
+            {t('runs.loadedCount', { count: historyItems.length })}
           </p>
         </div>
 
         {runs.isPending ? (
           <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-8 text-sm'>
-            <Spinner /> Loading run history…
+            <Spinner /> {t('runs.loading')}
           </div>
         ) : null}
         {runs.isError ? (
-          <p className='text-destructive text-sm'>
-            Could not load run history.
-          </p>
+          <p className='text-destructive text-sm'>{t('runs.loadError')}</p>
         ) : null}
         {!runs.isPending && historyItems.length === 0 ? (
           <Empty className='min-h-64 border border-dashed'>
@@ -252,13 +259,13 @@ function RunsPage() {
               </EmptyMedia>
               <EmptyTitle>
                 {status || nameQuery || targetType || targetId
-                  ? 'No matching runs'
-                  : 'No runs yet'}
+                  ? t('runs.noMatchesTitle')
+                  : t('runs.emptyTitle')}
               </EmptyTitle>
               <EmptyDescription>
                 {status || nameQuery || targetType || targetId
-                  ? 'Try a different name, type, or status filter.'
-                  : 'Run a Workflow or App to see its output here.'}
+                  ? t('runs.noMatchesDescription')
+                  : t('runs.emptyDescription')}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -284,10 +291,12 @@ function RunsPage() {
                 <ItemContent>
                   <ItemTitle>{run.targetName}</ItemTitle>
                   <ItemDescription>
-                    {isWorkflow ? 'Workflow' : 'App'} ·{' '}
-                    {new Date(run.startedAt).toLocaleString()}
+                    {isWorkflow ? t('runs.workflow') : t('apps.app')} ·{' '}
+                    {new Date(run.startedAt).toLocaleString(i18n.language)}
                     {run.durationMs !== undefined
-                      ? ` · ${(run.durationMs / 1000).toFixed(1)}s`
+                      ? t('runs.duration', {
+                          seconds: (run.durationMs / 1000).toFixed(1),
+                        })
                       : ''}
                     {run.error ? ` · ${run.error}` : ''}
                   </ItemDescription>
@@ -297,7 +306,7 @@ function RunsPage() {
                     variant='outline'
                     className={RUN_STATUS_STYLES[run.status]}
                   >
-                    {run.status}
+                    {t(`runs.runStatus.${run.status}`)}
                   </Badge>
                   <Button
                     size='sm'
@@ -311,7 +320,7 @@ function RunsPage() {
                       }
                     }}
                   >
-                    View output
+                    {t('runs.viewOutput')}
                   </Button>
                   {canReplay ? (
                     <Button
@@ -322,8 +331,8 @@ function RunsPage() {
                     >
                       {run.error ===
                       'Execution did not start before Workrun restarted.'
-                        ? 'Run'
-                        : 'Re-run'}
+                        ? t('runs.run')
+                        : t('runs.rerun')}
                     </Button>
                   ) : null}
                 </ItemActions>
@@ -342,12 +351,12 @@ function RunsPage() {
               {runs.isFetchingNextPage ? (
                 <Spinner data-icon='inline-start' />
               ) : null}
-              Load more
+              {t('runs.loadMore')}
             </Button>
           </div>
         ) : historyItems.length ? (
           <p className='text-muted-foreground text-center text-xs'>
-            All runs loaded
+            {t('runs.allLoaded')}
           </p>
         ) : null}
       </div>
@@ -362,28 +371,31 @@ function RunsPage() {
             <AlertDialogMedia>
               <Info />
             </AlertDialogMedia>
-            <AlertDialogTitle>Create a new run?</AlertDialogTitle>
+            <AlertDialogTitle>{t('runs.replayTitle')}</AlertDialogTitle>
             <AlertDialogDescription>
-              This will use the saved input and definition from{' '}
-              {runToReplay?.targetName} to create a new{' '}
-              {runToReplay?.targetType === 'workflow' ? 'Workflow' : 'App'} run.
-              It will not resume this record.
+              {t('runs.replayDescription', {
+                name: runToReplay?.targetName,
+                targetType:
+                  runToReplay?.targetType === 'workflow'
+                    ? t('runs.workflow')
+                    : t('apps.app'),
+              })}
               {runToReplay?.targetType === 'workflow'
-                ? ' It starts with a new Workflow state, so prior node results and approvals are not reused.'
+                ? ` ${t('runs.replayWorkflowNote')}`
                 : ''}{' '}
-              The new execution will have its own record in run history.
+              {t('runs.replayRecordNote')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={replay.isPending}>
-              Cancel
+              {t('apps.new.cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
               disabled={replay.isPending}
               onClick={() => runToReplay && replay.mutate(runToReplay.id)}
             >
               {replay.isPending ? <Spinner data-icon='inline-start' /> : null}
-              Create new run
+              {t('runs.createNew')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

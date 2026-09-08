@@ -47,7 +47,7 @@ const navigation = [
     labelKey: 'navigation.apps',
     icon: AppWindowIcon,
   },
-  { to: '/runs', labelKey: 'Run history', icon: HistoryIcon },
+  { to: '/runs', labelKey: 'navigation.runHistory', icon: HistoryIcon },
 ];
 
 function HomePage() {
@@ -176,7 +176,7 @@ function HomeLayout() {
                 }
               >
                 <ServerCogIcon />
-                MCP servers
+                {t('navigation.mcpServers')}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => navigate('/skills', { viewTransition: true })}

@@ -49,6 +49,7 @@ import {
   Switch,
   Textarea,
 } from '@workspace/ui/components';
+import type { TFunction } from 'i18next';
 import {
   ArrowLeftIcon,
   CircleAlertIcon,
@@ -60,6 +61,7 @@ import {
   Trash2Icon,
 } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 
@@ -91,15 +93,15 @@ function toDraft(definition: ProcessNodeDefinition): DefinitionDraft {
   };
 }
 
-function parseSchemas(value: string, label: string) {
+function parseSchemas(value: string, label: string, t: TFunction) {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error(`${label} must be valid JSON.`);
+    throw new Error(t('apps.detail.jsonInvalid', { label }));
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object.`);
+    throw new Error(t('apps.detail.jsonObjectRequired', { label }));
   }
   return parsed as Record<string, unknown>;
 }
@@ -124,14 +126,14 @@ const contractTypes = [
   'array',
 ];
 
-const toolExecutionPolicies = [
-  { value: 'ask_every_time', label: 'Ask every time' },
-  { value: 'auto', label: 'Run automatically' },
-];
+const toolExecutionPolicies = [{ value: 'ask_every_time' }, { value: 'auto' }];
 
-function contractFields(value: string): ContractField[] | undefined {
+function contractFields(
+  value: string,
+  t: TFunction,
+): ContractField[] | undefined {
   try {
-    const schemas = parseSchemas(value, 'Data contract');
+    const schemas = parseSchemas(value, t('apps.detail.dataContract'), t);
     return Object.entries(schemas).flatMap(([key, value]) => {
       if (!value || typeof value !== 'object' || Array.isArray(value))
         return [];
@@ -197,8 +199,11 @@ function ContractEditor({
   value: string;
   onChange: (value: string) => void;
 }) {
-  const label = kind === 'input' ? 'Inputs' : 'Outputs';
-  const fields = contractFields(value);
+  const { t } = useTranslation();
+  const label = t(
+    kind === 'input' ? 'apps.detail.inputs' : 'apps.detail.outputs',
+  );
+  const fields = contractFields(value, t);
   const updateFields = (next: ContractField[]) =>
     onChange(serializeContractFields(next));
 
@@ -206,9 +211,7 @@ function ContractEditor({
     return (
       <Field data-invalid>
         <FieldLabel>{label}</FieldLabel>
-        <FieldError>
-          Fix the JSON below before using the field editor.
-        </FieldError>
+        <FieldError>{t('apps.detail.fixJson')}</FieldError>
         <Textarea
           className='min-h-44 font-mono text-xs'
           value={value}
@@ -251,7 +254,11 @@ function ContractEditor({
     <Field>
       <FieldLabel>{label}</FieldLabel>
       <FieldDescription>
-        Define the values this App {label === 'Inputs' ? 'accepts' : 'returns'}.
+        {t(
+          kind === 'input'
+            ? 'apps.detail.inputsDescription'
+            : 'apps.detail.outputsDescription',
+        )}
       </FieldDescription>
       <FieldGroup className='gap-4'>
         {fields.map((field, index) => (
@@ -266,7 +273,7 @@ function ContractEditor({
               <Button
                 variant='ghost'
                 size='icon-sm'
-                aria-label={`Remove ${field.key}`}
+                aria-label={t('apps.detail.removeField', { name: field.key })}
                 onClick={() =>
                   updateFields(fields.filter((_, current) => current !== index))
                 }
@@ -275,18 +282,18 @@ function ContractEditor({
               </Button>
             </div>
             <Field>
-              <FieldLabel>Label</FieldLabel>
+              <FieldLabel>{t('apps.detail.fieldLabel')}</FieldLabel>
               <Input
                 value={field.title}
                 onChange={(event) =>
                   updateField(index, { title: event.target.value })
                 }
-                placeholder='Shown to people configuring or running this App'
+                placeholder={t('apps.detail.fieldLabelPlaceholder')}
               />
             </Field>
             <FieldGroup className='grid gap-4 sm:grid-cols-[minmax(0,1fr)_9rem]'>
               <Field>
-                <FieldLabel>Field name</FieldLabel>
+                <FieldLabel>{t('apps.detail.fieldName')}</FieldLabel>
                 <Input
                   value={field.key}
                   onChange={(event) =>
@@ -295,7 +302,7 @@ function ContractEditor({
                 />
               </Field>
               <Field>
-                <FieldLabel>Type</FieldLabel>
+                <FieldLabel>{t('apps.detail.fieldType')}</FieldLabel>
                 <Select
                   value={field.type}
                   onValueChange={(type) => {
@@ -318,13 +325,13 @@ function ContractEditor({
               </Field>
             </FieldGroup>
             <Field>
-              <FieldLabel>Description</FieldLabel>
+              <FieldLabel>{t('apps.new.fieldDescription')}</FieldLabel>
               <Input
                 value={field.description}
                 onChange={(event) =>
                   updateField(index, { description: event.target.value })
                 }
-                placeholder='Optional help for the Agent'
+                placeholder={t('apps.detail.fieldDescriptionPlaceholder')}
               />
             </Field>
             {kind === 'input' &&
@@ -332,10 +339,9 @@ function ContractEditor({
               <Field className='gap-3'>
                 <Field orientation='horizontal' className='justify-between'>
                   <FieldContent>
-                    <FieldLabel>Default value</FieldLabel>
+                    <FieldLabel>{t('apps.detail.defaultValue')}</FieldLabel>
                     <FieldDescription>
-                      Use this value when the workflow does not provide the
-                      field.
+                      {t('apps.detail.defaultValueDescription')}
                     </FieldDescription>
                   </FieldContent>
                   <Switch
@@ -370,7 +376,7 @@ function ContractEditor({
                         <FieldLabel
                           htmlFor={`contract-field-default-value-${kind}-${index}`}
                         >
-                          Enabled by default
+                          {t('apps.detail.enabledByDefault')}
                         </FieldLabel>
                       </FieldContent>
                     </Field>
@@ -410,10 +416,10 @@ function ContractEditor({
                 <FieldLabel
                   htmlFor={`contract-field-required-${label}-${index}`}
                 >
-                  Required
+                  {t('apps.detail.required')}
                 </FieldLabel>
                 <FieldDescription>
-                  Require this value when the App is called.
+                  {t('apps.detail.requiredDescription')}
                 </FieldDescription>
               </FieldContent>
             </Field>
@@ -426,7 +432,9 @@ function ContractEditor({
           onClick={addField}
         >
           <PlusIcon data-icon='inline-start' />
-          Add {label === 'Inputs' ? 'input' : 'output'}
+          {t(
+            kind === 'input' ? 'apps.detail.addInput' : 'apps.detail.addOutput',
+          )}
         </Button>
       </FieldGroup>
       <Collapsible className='rounded-md border'>
@@ -439,7 +447,7 @@ function ContractEditor({
             />
           }
         >
-          Advanced JSON Schema
+          {t('apps.detail.advancedJsonSchema')}
         </CollapsibleTrigger>
         <CollapsibleContent className='border-t p-3'>
           <Textarea
@@ -456,6 +464,7 @@ function ContractEditor({
 type ProcessNodeDetails = Awaited<ReturnType<typeof getProcessNode>>;
 
 function ProcessNodeDetailPage() {
+  const { t } = useTranslation();
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
@@ -475,11 +484,11 @@ function ProcessNodeDetailPage() {
       <div className='p-6'>
         <Alert variant='destructive'>
           <CircleAlertIcon />
-          <AlertTitle>Could not load Process Node</AlertTitle>
+          <AlertTitle>{t('apps.detail.loadErrorTitle')}</AlertTitle>
           <AlertDescription>
             {node.error instanceof Error
               ? node.error.message
-              : 'Please return to Apps and try again.'}
+              : t('apps.detail.loadErrorDescription')}
           </AlertDescription>
         </Alert>
       </div>
@@ -489,7 +498,7 @@ function ProcessNodeDetailPage() {
   if (node.isLoading || !node.data) {
     return (
       <div className='text-muted-foreground p-6 text-sm'>
-        Loading Process Node…
+        {t('apps.detail.loading')}
       </div>
     );
   }
@@ -515,6 +524,7 @@ function ProcessNodeDetailEditor({
   processNode: ProcessNodeDetails;
   historicalRun?: RunRecord;
 }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<DefinitionDraft>(() =>
@@ -532,17 +542,17 @@ function ProcessNodeDetailEditor({
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!draft.name.trim()) throw new Error('Name is required.');
+      if (!draft.name.trim()) throw new Error(t('apps.new.nameRequired'));
       return updateProcessNode({
         ...draft,
-        inputs: parseSchemas(draft.inputs, 'Inputs'),
-        outputs: parseSchemas(draft.outputs, 'Outputs'),
+        inputs: parseSchemas(draft.inputs, t('apps.detail.inputs'), t),
+        outputs: parseSchemas(draft.outputs, t('apps.detail.outputs'), t),
       });
     },
     onSuccess: (saved) => {
       queryClient.setQueryData(['apps', saved.definition.id], saved);
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
-      toast.success('Process Node saved', { toasterId: 'global' });
+      toast.success(t('apps.detail.saved'), { toasterId: 'global' });
       void navigate(`/apps/${saved.definition.id}`, { replace: true });
     },
     onError: (error) => {
@@ -556,13 +566,15 @@ function ProcessNodeDetailEditor({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
       toast.success(
-        deleteProjectFiles ? 'App and project files deleted' : 'App removed',
+        deleteProjectFiles
+          ? t('apps.detail.deletedWithFiles')
+          : t('apps.detail.deleted'),
         { toasterId: 'global' },
       );
       void navigate('/apps', { replace: true });
     },
     onError: (error) => {
-      toast.error('Could not delete App', {
+      toast.error(t('apps.detail.deleteFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
@@ -586,20 +598,20 @@ function ProcessNodeDetailEditor({
             <Button
               variant='ghost'
               size='icon-sm'
-              aria-label='Back to apps'
+              aria-label={t('apps.new.backToApps')}
               onClick={() => navigate('/apps')}
             >
               <ArrowLeftIcon />
             </Button>
             <div className='relative'>
               <div className='text-muted-foreground text-xs font-medium tracking-[0.14em] uppercase'>
-                Local project
+                {t('apps.new.localProject')}
               </div>
               <h1 className='mt-1 text-xl font-semibold tracking-tight'>
-                App details
+                {t('apps.detail.title')}
               </h1>
               <p className='text-muted-foreground mt-1 text-sm'>
-                Configure this App’s identity, runtime, and data contract.
+                {t('apps.detail.description')}
               </p>
             </div>
           </div>
@@ -610,7 +622,7 @@ function ProcessNodeDetailEditor({
               onClick={() => setDeleteOpen(true)}
             >
               <Trash2Icon data-icon='inline-start' />
-              Delete App
+              {t('apps.detail.delete')}
             </Button>
             <Button disabled={save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? (
@@ -618,7 +630,7 @@ function ProcessNodeDetailEditor({
               ) : (
                 <SaveIcon data-icon='inline-start' />
               )}
-              Save changes
+              {t('apps.detail.save')}
             </Button>
           </div>
         </section>
@@ -626,7 +638,7 @@ function ProcessNodeDetailEditor({
         {formError ? (
           <Alert variant='destructive'>
             <CircleAlertIcon />
-            <AlertTitle>Could not save Process Node</AlertTitle>
+            <AlertTitle>{t('apps.detail.saveFailed')}</AlertTitle>
             <AlertDescription>{formError}</AlertDescription>
           </Alert>
         ) : null}
@@ -643,16 +655,17 @@ function ProcessNodeDetailEditor({
                 <Trash2Icon />
               </AlertDialogMedia>
               <AlertDialogTitle>
-                Delete {processNode.definition.name}?
+                {t('apps.detail.deleteTitle', {
+                  name: processNode.definition.name,
+                })}
               </AlertDialogTitle>
               <AlertDialogDescription>
-                This removes the App from Workrun. Local project files are kept
-                by default.
+                {t('apps.detail.deleteDescription')}
               </AlertDialogDescription>
             </AlertDialogHeader>
             {workflowReferences.isLoading ? (
               <p className='text-muted-foreground text-sm'>
-                Checking workflow usage…
+                {t('apps.detail.checkingUsage')}
               </p>
             ) : workflowReferences.data?.length ? (
               <Item variant='muted' size='sm'>
@@ -661,11 +674,12 @@ function ProcessNodeDetailEditor({
                 </ItemMedia>
                 <ItemContent>
                   <ItemTitle>
-                    {workflowReferences.data.length} affected workflow
-                    {workflowReferences.data.length === 1 ? '' : 's'}
+                    {t('apps.detail.affectedWorkflows', {
+                      count: workflowReferences.data.length,
+                    })}
                   </ItemTitle>
                   <ItemDescription>
-                    Select another App before running these workflows again.
+                    {t('apps.detail.affectedWorkflowsDescription')}
                   </ItemDescription>
                   <KbdGroup>
                     {workflowReferences.data.map((workflow) => (
@@ -686,14 +700,14 @@ function ProcessNodeDetailEditor({
               />
               <FieldContent>
                 <FieldLabel htmlFor='delete-process-node-files'>
-                  Permanently delete local project files
+                  {t('apps.detail.deleteFiles')}
                 </FieldLabel>
                 <FieldDescription>{processNode.projectPath}</FieldDescription>
               </FieldContent>
             </Field>
             <AlertDialogFooter>
               <AlertDialogCancel disabled={remove.isPending}>
-                Cancel
+                {t('apps.new.cancel')}
               </AlertDialogCancel>
               <AlertDialogAction
                 variant='destructive'
@@ -705,7 +719,9 @@ function ProcessNodeDetailEditor({
                 ) : (
                   <Trash2Icon data-icon='inline-start' />
                 )}
-                {deleteProjectFiles ? 'Delete App and files' : 'Delete App'}
+                {deleteProjectFiles
+                  ? t('apps.detail.deleteWithFiles')
+                  : t('apps.detail.delete')}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -713,15 +729,17 @@ function ProcessNodeDetailEditor({
 
         <Card className='shadow-sm'>
           <CardHeader>
-            <CardTitle>Identity</CardTitle>
+            <CardTitle>{t('apps.detail.identity')}</CardTitle>
             <CardDescription>
-              Name the node as it should appear in Apps and workflows.
+              {t('apps.detail.identityDescription')}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <FieldGroup className='gap-6'>
               <Field data-invalid={Boolean(formError && !draft.name.trim())}>
-                <FieldLabel htmlFor='process-node-name'>Name</FieldLabel>
+                <FieldLabel htmlFor='process-node-name'>
+                  {t('apps.new.name')}
+                </FieldLabel>
                 <Input
                   id='process-node-name'
                   value={draft.name}
@@ -729,12 +747,14 @@ function ProcessNodeDetailEditor({
                   aria-invalid={Boolean(formError && !draft.name.trim())}
                 />
                 <FieldError>
-                  {formError && !draft.name.trim() ? 'Enter a name.' : null}
+                  {formError && !draft.name.trim()
+                    ? t('apps.new.nameRequired')
+                    : null}
                 </FieldError>
               </Field>
               <Field>
                 <FieldLabel htmlFor='process-node-description'>
-                  Description
+                  {t('apps.new.fieldDescription')}
                 </FieldLabel>
                 <Textarea
                   id='process-node-description'
@@ -742,14 +762,14 @@ function ProcessNodeDetailEditor({
                   onChange={(event) =>
                     update('description', event.target.value)
                   }
-                  placeholder='What does this node do?'
+                  placeholder={t('apps.new.descriptionPlaceholder')}
                 />
               </Field>
               {draft.kind === 'tool' ? (
                 <Field>
-                  <FieldLabel>Tool execution</FieldLabel>
+                  <FieldLabel>{t('apps.detail.toolExecution')}</FieldLabel>
                   <FieldDescription>
-                    Choose whether an Agent must ask before each call.
+                    {t('apps.detail.toolExecutionDescription')}
                   </FieldDescription>
                   <Select
                     items={toolExecutionPolicies}
@@ -767,7 +787,7 @@ function ProcessNodeDetailEditor({
                       <SelectGroup>
                         {toolExecutionPolicies.map((policy) => (
                           <SelectItem key={policy.value} value={policy.value}>
-                            {policy.label}
+                            {t(`apps.detail.toolPolicies.${policy.value}`)}
                           </SelectItem>
                         ))}
                       </SelectGroup>
@@ -781,15 +801,17 @@ function ProcessNodeDetailEditor({
 
         <Card className='shadow-sm'>
           <CardHeader>
-            <CardTitle>Runtime</CardTitle>
+            <CardTitle>{t('apps.detail.runtime')}</CardTitle>
             <CardDescription>
-              The entry script is relative to this node’s project directory.
+              {t('apps.detail.runtimeDescription')}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <FieldGroup className='sm:flex-row'>
               <Field>
-                <FieldLabel htmlFor='process-node-version'>Version</FieldLabel>
+                <FieldLabel htmlFor='process-node-version'>
+                  {t('apps.detail.version')}
+                </FieldLabel>
                 <Input
                   id='process-node-version'
                   value={draft.version}
@@ -798,7 +820,7 @@ function ProcessNodeDetailEditor({
               </Field>
               <Field>
                 <FieldLabel htmlFor='process-node-entry'>
-                  Entry script
+                  {t('apps.detail.entryScript')}
                 </FieldLabel>
                 <Input
                   id='process-node-entry'
@@ -815,7 +837,7 @@ function ProcessNodeDetailEditor({
               <Button
                 variant='ghost'
                 size='icon-sm'
-                aria-label='Open project directory'
+                aria-label={t('apps.openProjectDirectory')}
                 onClick={() =>
                   void openProjectDirectory(processNode.definition.id)
                 }
@@ -825,7 +847,7 @@ function ProcessNodeDetailEditor({
               <Button
                 variant='ghost'
                 size='icon-sm'
-                aria-label='Copy project path'
+                aria-label={t('apps.copyProjectPath')}
                 onClick={() => void copyProjectPath(processNode.projectPath)}
               >
                 <CopyIcon />
@@ -835,9 +857,9 @@ function ProcessNodeDetailEditor({
         </Card>
         <Card className='shadow-sm'>
           <CardHeader>
-            <CardTitle>Data contract</CardTitle>
+            <CardTitle>{t('apps.detail.dataContract')}</CardTitle>
             <CardDescription>
-              Define input and output JSON Schema objects for the node.
+              {t('apps.detail.dataContractDescription')}
             </CardDescription>
           </CardHeader>
           <CardContent>

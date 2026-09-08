@@ -15,6 +15,7 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import { HistoryIcon, PlayIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import type { RunRecordSummary, RunStatus } from '@/services/run-history';
 
@@ -46,23 +47,25 @@ function WorkflowHistory({
   onLoadMore: () => void;
   onView: (id: string) => void;
 }) {
+  const { t, i18n } = useTranslation();
   return (
     <div className='bg-muted/20 flex min-h-0 flex-1 flex-col overflow-y-auto bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] p-5 sm:p-7 dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]'>
       <div className='mx-auto flex w-full max-w-4xl flex-col gap-5'>
         <div>
           <div className='text-muted-foreground mb-2 flex items-center gap-2 text-xs font-medium tracking-[0.16em] uppercase'>
-            <HistoryIcon className='size-3.5' /> Run history
+            <HistoryIcon className='size-3.5' />{' '}
+            {t('workflowEditor.history.title')}
           </div>
           <h2 className='text-xl font-semibold tracking-tight'>
-            Workflow executions
+            {t('workflowEditor.history.executions')}
           </h2>
           <p className='text-muted-foreground mt-1 text-sm'>
-            Review past runs without leaving this workflow.
+            {t('workflowEditor.history.description')}
           </p>
         </div>
         {isLoading ? (
           <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-8 text-sm'>
-            <Spinner /> Loading runs…
+            <Spinner /> {t('workflowEditor.history.loading')}
           </div>
         ) : runs.length ? (
           <>
@@ -75,12 +78,14 @@ function WorkflowHistory({
                 >
                   <ItemContent>
                     <ItemTitle>
-                      {new Date(run.startedAt).toLocaleString()}
+                      {new Date(run.startedAt).toLocaleString(i18n.language)}
                     </ItemTitle>
                     <ItemDescription>
                       {run.durationMs !== undefined
-                        ? `${(run.durationMs / 1000).toFixed(1)}s`
-                        : 'Duration unavailable'}
+                        ? t('apps.history.duration', {
+                            seconds: (run.durationMs / 1000).toFixed(1),
+                          })
+                        : t('apps.history.durationUnavailable')}
                       {run.error ? ` · ${run.error}` : ''}
                     </ItemDescription>
                   </ItemContent>
@@ -89,10 +94,11 @@ function WorkflowHistory({
                       variant='outline'
                       className={RUN_STATUS_STYLES[run.status]}
                     >
-                      {run.status}
+                      {t(`runs.runStatus.${run.status}`)}
                     </Badge>
                     <Button size='sm' onClick={() => onView(run.id)}>
-                      <PlayIcon data-icon='inline-start' /> View output
+                      <PlayIcon data-icon='inline-start' />{' '}
+                      {t('runs.viewOutput')}
                     </Button>
                   </ItemActions>
                 </Item>
@@ -107,12 +113,12 @@ function WorkflowHistory({
                   onClick={onLoadMore}
                 >
                   {isLoadingMore ? <Spinner data-icon='inline-start' /> : null}
-                  Load more
+                  {t('runs.loadMore')}
                 </Button>
               </div>
             ) : (
               <p className='text-muted-foreground text-center text-xs'>
-                All runs loaded
+                {t('runs.allLoaded')}
               </p>
             )}
           </>
@@ -122,9 +128,9 @@ function WorkflowHistory({
               <EmptyMedia variant='icon'>
                 <HistoryIcon />
               </EmptyMedia>
-              <EmptyTitle>No runs yet</EmptyTitle>
+              <EmptyTitle>{t('runs.emptyTitle')}</EmptyTitle>
               <EmptyDescription>
-                Run this workflow to create its first record.
+                {t('workflowEditor.history.emptyDescription')}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

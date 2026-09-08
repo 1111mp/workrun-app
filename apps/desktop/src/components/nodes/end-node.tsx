@@ -2,13 +2,19 @@ import { Label } from '@workspace/ui/components/label';
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { CircleStopIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function EndNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowEndNodeData>>) {
-  const label = data.label || 'End';
+  const { t } = useTranslation();
+  // Older workflows persisted the English default; preserve custom labels.
+  const label =
+    !data.label || data.label === 'End'
+      ? t('workflowEditor.nodes.end')
+      : data.label;
 
   return (
     <div

@@ -29,6 +29,7 @@ import {
   Settings2Icon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
@@ -65,11 +66,6 @@ import {
 import { useWorkflowRun } from './workflow-editor/use-workflow-run';
 import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
 
-const WORKFLOW_MODE = [
-  { value: 'task', label: 'Task' },
-  { value: 'chat', label: 'Chat' },
-];
-
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
   autoStartRun?: boolean;
@@ -104,6 +100,7 @@ function WorkflowEditorContent({
   autoStartRun,
   historicalRun,
 }: WorkflowEditorProps) {
+  const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [viewingHistoricalRunId, setViewingHistoricalRunId] = useState<
@@ -224,7 +221,7 @@ function WorkflowEditorContent({
       restoreHistoricalRun.setRunPanelOpen(true);
       setViewingHistoricalRunId(id);
     } catch (error) {
-      toast.error('Could not load run output', {
+      toast.error(t('workflowEditor.history.loadOutputFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
@@ -272,19 +269,26 @@ function WorkflowEditorContent({
         : await createWorkflow(workflowDocument);
       setSavedDocument(workflowDocumentSnapshot);
       void queryClient.invalidateQueries({ queryKey: ['workflows'] });
-      toast.success(workflow ? 'Workflow saved' : 'Workflow created', {
-        toasterId: 'global',
-      });
+      toast.success(
+        workflow ? t('workflowEditor.saved') : t('workflowEditor.created'),
+        {
+          toasterId: 'global',
+        },
+      );
       if (!workflow) {
         void navigate(`/workflows/${saved.id}`, { replace: true });
       }
     } catch (error) {
-      toast.error('Workflow could not be saved', {
+      toast.error(t('workflowEditor.saveFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
     }
   };
+  const workflowModes = [
+    { value: 'task', label: t('workflows.modes.task') },
+    { value: 'chat', label: t('workflows.modes.chat') },
+  ];
 
   return (
     <SidebarProvider className='relative flex size-full min-h-0! grow flex-row'>
@@ -312,7 +316,7 @@ function WorkflowEditorContent({
               <Button
                 variant='ghost'
                 size='icon-sm'
-                aria-label='Back to workflows'
+                aria-label={t('workflowEditor.backToWorkflows')}
                 nativeButton={false}
                 render={<Link to='/workflows' />}
               >
@@ -326,7 +330,7 @@ function WorkflowEditorContent({
               <FieldGroup className='flex-row items-center gap-2'>
                 <Field className='w-52'>
                   <FieldLabel className='sr-only' htmlFor='workflow-name'>
-                    Workflow name
+                    {t('workflowEditor.name')}
                   </FieldLabel>
                   <Input
                     id='workflow-name'
@@ -339,10 +343,10 @@ function WorkflowEditorContent({
                 </Field>
                 <Field className='w-28'>
                   <FieldLabel className='sr-only' htmlFor='workflow-mode'>
-                    Run mode
+                    {t('workflowEditor.runMode')}
                   </FieldLabel>
                   <Select
-                    items={WORKFLOW_MODE}
+                    items={workflowModes}
                     value={workflowSettings.mode}
                     onValueChange={(mode) =>
                       updateWorkflowSettings({ mode: mode as WorkflowMode })
@@ -356,7 +360,7 @@ function WorkflowEditorContent({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        {WORKFLOW_MODE.map((item) => (
+                        {workflowModes.map((item) => (
                           <SelectItem key={item.value} value={item.value}>
                             {item.label}
                           </SelectItem>
@@ -370,11 +374,13 @@ function WorkflowEditorContent({
                 value={historyOpen ? 'history' : 'canvas'}
                 onValueChange={(value) => setHistoryOpen(value === 'history')}
               >
-                <TabsList aria-label='Workflow view'>
-                  <TabsTrigger value='canvas'>Canvas</TabsTrigger>
+                <TabsList aria-label={t('workflowEditor.view')}>
+                  <TabsTrigger value='canvas'>
+                    {t('workflowEditor.canvas')}
+                  </TabsTrigger>
                   <TabsTrigger value='history' disabled={!workflow}>
                     <HistoryIcon data-icon='inline-start' />
-                    History
+                    {t('workflowEditor.history.title')}
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -386,7 +392,7 @@ function WorkflowEditorContent({
                 onClick={() => setSettingsOpen(true)}
               >
                 <Settings2Icon data-icon='inline-start' />
-                More settings
+                {t('workflowEditor.moreSettings')}
               </Button>
               <Button
                 size='sm'
@@ -394,7 +400,7 @@ function WorkflowEditorContent({
                 onClick={() => void saveWorkflow()}
               >
                 <SaveIcon data-icon='inline-start' />
-                {workflow ? 'Save' : 'Create workflow'}
+                {workflow ? t('workflowEditor.save') : t('workflows.create')}
               </Button>
             </div>
           </header>

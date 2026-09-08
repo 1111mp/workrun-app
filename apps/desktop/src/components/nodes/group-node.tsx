@@ -1,9 +1,11 @@
 import { cn } from '@workspace/ui/lib/utils';
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
 import { Layers3Icon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function GroupNode({ data, selected }: NodeProps<Node<WorkflowGroupNodeData>>) {
-  const label = data.label || 'Group';
+  const { t } = useTranslation();
+  const label = data.label || t('workflowEditor.nodes.group');
 
   return (
     <div

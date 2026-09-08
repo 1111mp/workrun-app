@@ -1,12 +1,14 @@
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { UserRoundIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function HumanReviewNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowHumanReviewNodeData>>) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -26,19 +28,19 @@ function HumanReviewNode({
         </span>
         <div className='min-w-0'>
           <p className='text-[10px] font-semibold tracking-[0.14em] text-yellow-700/80 uppercase dark:text-yellow-200/80'>
-            Human checkpoint
+            {t('workflowEditor.nodes.humanCheckpoint')}
           </p>
           <p className='truncate font-medium text-yellow-800 dark:text-yellow-100'>
-            {data.title || 'Human review'}
+            {data.title || t('workflowEditor.nodes.humanReview')}
           </p>
         </div>
       </div>
       <p className='text-muted-foreground mt-2 line-clamp-2 text-sm'>
-        {data.description || 'Pause for human approval.'}
+        {data.description || t('workflowEditor.nodes.pauseForApproval')}
       </p>
       <div className='mt-3 space-y-2 border-t border-yellow-400/30 pt-2 text-xs font-medium'>
         <div className='relative min-h-5 pr-5 text-emerald-600 dark:text-emerald-400'>
-          Approved
+          {t('workflowEditor.nodes.approved')}
           <Handle
             id='approved'
             type='source'
@@ -49,7 +51,7 @@ function HumanReviewNode({
           />
         </div>
         <div className='relative min-h-5 pr-5 text-rose-600 dark:text-rose-400'>
-          Rejected
+          {t('workflowEditor.nodes.rejected')}
           <Handle
             id='rejected'
             type='source'

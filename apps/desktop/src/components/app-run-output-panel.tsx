@@ -11,6 +11,7 @@ import {
 } from '@workspace/ui/components';
 import { CheckCircle2Icon, CircleAlertIcon, ClipboardIcon } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import type {
   ProcessNode,
@@ -114,6 +115,7 @@ type AppRunOutputPanelProps = {
 type OutputStream = keyof ProcessNodeOutput;
 
 function AppRunOutputContent({ run }: { run: ProcessNodeRun }) {
+  const { t } = useTranslation();
   const [stream, setStream] = useState<OutputStream>(() =>
     run.output.stderr ? 'stderr' : 'stdout',
   );
@@ -135,7 +137,7 @@ function AppRunOutputContent({ run }: { run: ProcessNodeRun }) {
             variant={stream === item ? 'secondary' : 'ghost'}
             onClick={() => setStream(item)}
           >
-            {item === 'stdout' ? 'Output' : 'Errors'}
+            {item === 'stdout' ? t('apps.output') : t('apps.outputErrors')}
             {run.output[item] ? ' •' : ''}
           </Button>
         ))}
@@ -160,7 +162,7 @@ function AppRunOutputContent({ run }: { run: ProcessNodeRun }) {
           />
         ) : (
           <div className='p-3 font-mono text-xs leading-5 whitespace-pre-wrap'>
-            {run.isRunning ? 'Waiting for output…' : 'No output was produced.'}
+            {run.isRunning ? t('apps.outputWaiting') : t('apps.outputEmpty')}
           </div>
         )}
       </div>
@@ -176,14 +178,15 @@ function AppRunOutputPanel({
   readOnly = false,
   run,
 }: AppRunOutputPanelProps) {
+  const { t } = useTranslation();
   const hasOutput = Boolean(run?.output.stdout || run?.output.stderr);
   const status = run?.isRunning
-    ? 'Running'
+    ? t('apps.running')
     : run?.cancelled
-      ? 'Cancelled'
+      ? t('apps.runStatus.cancelled')
       : run?.error || run?.execution?.exitCode !== 0
-        ? 'Run failed'
-        : 'Run completed';
+        ? t('apps.runFailed')
+        : t('apps.runCompleted');
   const StatusIcon = run?.isRunning
     ? Spinner
     : run?.cancelled
@@ -216,12 +219,16 @@ function AppRunOutputPanel({
         {run ? (
           <>
             <DrawerHeader>
-              <DrawerTitle>Run output · {run.node.definition.name}</DrawerTitle>
+              <DrawerTitle>
+                {t('apps.history.outputTitle')} · {run.node.definition.name}
+              </DrawerTitle>
               <DrawerDescription className='flex items-center gap-1.5'>
                 <StatusIcon className='size-3.5' />
                 {status}
                 {run.execution
-                  ? ` · Exit code ${run.execution.exitCode ?? 'unknown'}`
+                  ? t('apps.exitCode', {
+                      code: run.execution.exitCode ?? t('apps.unknown'),
+                    })
                   : ''}
               </DrawerDescription>
             </DrawerHeader>
@@ -238,12 +245,12 @@ function AppRunOutputPanel({
                   disabled={!hasOutput}
                   onClick={onClear}
                 >
-                  Clear
+                  {t('apps.clear')}
                 </Button>
               )}
               <Button variant='outline' disabled={!hasOutput} onClick={copyAll}>
                 <ClipboardIcon data-icon='inline-start' />
-                Copy all
+                {t('apps.copyAll')}
               </Button>
               {!readOnly && (
                 <Button
@@ -251,10 +258,12 @@ function AppRunOutputPanel({
                   disabled={run.isRunning}
                   onClick={onRunAgain}
                 >
-                  Run again
+                  {t('apps.runAgain')}
                 </Button>
               )}
-              <Button onClick={() => onOpenChange(false)}>Close</Button>
+              <Button onClick={() => onOpenChange(false)}>
+                {t('apps.close')}
+              </Button>
             </DrawerFooter>
           </>
         ) : null}

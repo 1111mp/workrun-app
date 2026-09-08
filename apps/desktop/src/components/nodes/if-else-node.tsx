@@ -1,13 +1,15 @@
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { GitBranchIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function IfElseNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowIfElseNodeData>>) {
-  const label = data.label || 'If / Else';
+  const { t } = useTranslation();
+  const label = data.label || t('workflowEditor.nodes.ifElse');
   const trueBranch = data.conditions?.true;
   const falseBranch = data.conditions?.false;
 
@@ -35,7 +37,9 @@ function IfElseNode({
       </div>
       <div className='mt-3 space-y-2 border-t border-amber-500/20 pt-2 text-xs font-medium'>
         <div className='relative min-h-11 pr-5 text-emerald-600 dark:text-emerald-400'>
-          <p className='truncate'>{trueBranch?.label || 'True'}</p>
+          <p className='truncate'>
+            {trueBranch?.label || t('workflowEditor.nodes.true')}
+          </p>
           <p
             className={cn(
               'mt-0.5 truncate font-mono text-[11px]',
@@ -44,7 +48,8 @@ function IfElseNode({
                 : 'text-muted-foreground/60',
             )}
           >
-            {trueBranch?.condition || 'When condition is true'}
+            {trueBranch?.condition ||
+              t('workflowEditor.nodes.whenConditionTrue')}
           </p>
           <Handle
             id='true'
@@ -56,7 +61,9 @@ function IfElseNode({
           />
         </div>
         <div className='relative min-h-11 pr-5 text-rose-600 dark:text-rose-400'>
-          <p className='truncate'>{falseBranch?.label || 'False'}</p>
+          <p className='truncate'>
+            {falseBranch?.label || t('workflowEditor.nodes.false')}
+          </p>
           <p
             className={cn(
               'mt-0.5 truncate font-mono text-[11px]',
@@ -65,7 +72,8 @@ function IfElseNode({
                 : 'text-muted-foreground/60',
             )}
           >
-            {falseBranch?.condition || 'When condition is false'}
+            {falseBranch?.condition ||
+              t('workflowEditor.nodes.whenConditionFalse')}
           </p>
           <Handle
             id='false'

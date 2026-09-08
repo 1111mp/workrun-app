@@ -2,12 +2,14 @@ import { Label } from '@workspace/ui/components/label';
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { OctagonXIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function TerminateNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowTerminateNodeData>>) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -24,7 +26,9 @@ function TerminateNode({
       <div className='flex items-center gap-2'>
         <OctagonXIcon className='text-destructive size-5' aria-hidden='true' />
         <Label className='text-destructive'>
-          {data.label || 'Terminate workflow'}
+          {!data.label || data.label === 'Terminate workflow'
+            ? t('workflowEditor.nodes.terminate')
+            : data.label}
         </Label>
       </div>
     </div>

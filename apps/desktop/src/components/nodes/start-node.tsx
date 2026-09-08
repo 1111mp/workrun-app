@@ -2,13 +2,19 @@ import { Label } from '@workspace/ui/components/label';
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { CirclePlayIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function StartNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowStartNodeData>>) {
-  const label = data.label || 'Start';
+  const { t } = useTranslation();
+  // Older workflows persisted the English default; preserve custom labels.
+  const label =
+    !data.label || data.label === 'Start'
+      ? t('workflowEditor.nodes.start')
+      : data.label;
 
   return (
     <div

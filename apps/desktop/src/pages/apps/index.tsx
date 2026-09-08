@@ -58,6 +58,7 @@ import {
   WrenchIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
 
@@ -108,27 +109,29 @@ function appendOutput(current: string, chunk: string) {
   return `[Earlier output truncated]\n${next.slice(-MAX_OUTPUT_CHARS)}`;
 }
 
-function statusBadge(status: ProcessNodeInstallStatus) {
+function StatusBadge({ status }: { status: ProcessNodeInstallStatus }) {
+  const { t } = useTranslation();
+
   switch (status) {
     case 'installed':
       return (
         <Badge variant='secondary'>
           <CheckCircle2Icon data-icon='inline-start' />
-          Installed
+          {t('apps.installStatus.installed')}
         </Badge>
       );
     case 'invalid':
       return (
         <Badge variant='destructive'>
           <CircleAlertIcon data-icon='inline-start' />
-          Needs attention
+          {t('apps.installStatus.invalid')}
         </Badge>
       );
     case 'notInstalled':
       return (
         <Badge variant='outline'>
           <DownloadIcon data-icon='inline-start' />
-          Not installed
+          {t('apps.installStatus.notInstalled')}
         </Badge>
       );
   }
@@ -158,12 +161,7 @@ function AppListSkeleton() {
   );
 }
 
-const appFilters: { value: AppFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'installed', label: 'Ready' },
-  { value: 'notInstalled', label: 'Not installed' },
-  { value: 'invalid', label: 'Needs attention' },
-];
+const appFilters: AppFilter[] = ['all', 'installed', 'notInstalled', 'invalid'];
 
 function AppItem({
   node,
@@ -180,6 +178,7 @@ function AppItem({
   onViewOutput: () => void;
   onOpenHistory: () => void;
 }) {
+  const { t } = useTranslation();
   const { definition } = node;
   const isToolApp = definition.kind === 'tool';
   const inputCount = Object.keys(definition.inputs).length;
@@ -213,14 +212,14 @@ function AppItem({
           className='line-clamp-2 min-h-10'
           title={definition?.description}
         >
-          {definition.description || 'No description provided.'}
+          {definition.description || t('apps.noDescription')}
         </CardDescription>
         <CardAction className='flex flex-col items-end gap-2'>
-          {statusBadge(node.installStatus)}
+          <StatusBadge status={node.installStatus} />
           {run?.isRunning ? (
             <Badge variant='outline'>
               <Spinner data-icon='inline-start' />
-              Running
+              {t('apps.running')}
             </Badge>
           ) : null}
         </CardAction>
@@ -242,28 +241,30 @@ function AppItem({
             ) : (
               <BoxIcon data-icon='inline-start' />
             )}
-            {isToolApp ? 'Tool App' : 'App'}
+            {isToolApp ? t('apps.toolApp') : t('apps.app')}
           </Badge>
-          <span>{inputCount} inputs</span>
-          <span>{outputCount} outputs</span>
+          <span>{t('apps.inputCount', { count: inputCount })}</span>
+          <span>{t('apps.outputCount', { count: outputCount })}</span>
         </div>
         {node.installStatus === 'invalid' && node.installError ? (
           <Alert variant='destructive'>
             <CircleAlertIcon />
-            <AlertTitle>Local installation is invalid</AlertTitle>
+            <AlertTitle>{t('apps.invalidInstallTitle')}</AlertTitle>
             <AlertDescription>{node.installError}</AlertDescription>
           </Alert>
         ) : null}
         <div className='mt-auto flex min-w-0 items-end gap-2'>
           <div className='min-w-0 flex-1'>
-            <span className='text-muted-foreground text-xs'>Node ID</span>
+            <span className='text-muted-foreground text-xs'>
+              {t('apps.nodeId')}
+            </span>
             <code className='block truncate'>{definition.id}</code>
           </div>
           <div className='flex shrink-0 items-center gap-1'>
             <Button
               variant='ghost'
               size='icon-sm'
-              aria-label='Open project directory'
+              aria-label={t('apps.openProjectDirectory')}
               onClick={() => void openProjectDirectory(definition.id)}
             >
               <FolderOpenIcon />
@@ -271,7 +272,7 @@ function AppItem({
             <Button
               variant='ghost'
               size='icon-sm'
-              aria-label='Copy project path'
+              aria-label={t('apps.copyProjectPath')}
               onClick={() => void copyProjectPath(node.projectPath)}
             >
               <CopyIcon />
@@ -287,18 +288,18 @@ function AppItem({
           render={<Link to={`/apps/${definition.id}`} viewTransition />}
         >
           <FilePenLineIcon data-icon='inline-start' />
-          Details
+          {t('apps.details')}
         </Button>
         {!isToolApp ? (
           <Button variant='outline' size='sm' onClick={onOpenHistory}>
             <HistoryIcon data-icon='inline-start' />
-            History
+            {t('apps.history.title')}
           </Button>
         ) : null}
         {hasRun ? (
           <Button variant='outline' size='sm' onClick={onViewOutput}>
             <TerminalIcon data-icon='inline-start' />
-            Output
+            {t('apps.output')}
           </Button>
         ) : null}
         {node.installStatus === 'installed' &&
@@ -315,7 +316,7 @@ function AppItem({
             ) : (
               <PlayIcon data-icon='inline-start' />
             )}
-            {run?.isRunning ? 'Running' : 'Run'}
+            {run?.isRunning ? t('apps.running') : t('apps.run')}
           </Button>
         ) : null}
       </CardFooter>
@@ -336,6 +337,7 @@ function AppHistoryDrawer({
   selectedRun?: ProcessNodeRun;
   onSelectedRunChange: (run?: ProcessNodeRun) => void;
 }) {
+  const { t, i18n } = useTranslation();
   const history = useInfiniteQuery({
     queryKey: ['run-history', 'app', node?.definition.id],
     queryFn: ({ pageParam }) =>
@@ -358,9 +360,15 @@ function AppHistoryDrawer({
         onSelectedRunChange(restoreProcessNodeRun(record, node));
       }
     } catch (error) {
-      toast.error('Could not load run output', {
+      toast.error(t('apps.history.loadOutputFailed'), {
         toasterId: 'global',
-        description: error instanceof Error ? error.message : String(error),
+        description:
+          error instanceof Error &&
+          error.message === 'The saved App definition is unavailable.'
+            ? t('apps.history.definitionUnavailable')
+            : error instanceof Error
+              ? error.message
+              : String(error),
       });
     }
   };
@@ -386,13 +394,15 @@ function AppHistoryDrawer({
       <DrawerContent className='h-[min(34rem,calc(100dvh-4rem))]'>
         <DrawerHeader>
           <DrawerTitle>
-            {selectedRun ? 'Run output' : 'Run history'}
+            {selectedRun
+              ? t('apps.history.outputTitle')
+              : t('apps.history.title')}
             {node ? ` · ${node.definition.name}` : ''}
           </DrawerTitle>
           <DrawerDescription>
             {selectedRun
-              ? 'Saved output is read-only.'
-              : 'Select a run to inspect its output.'}
+              ? t('apps.history.readOnlyDescription')
+              : t('apps.history.selectRunDescription')}
           </DrawerDescription>
         </DrawerHeader>
         {selectedRun ? (
@@ -401,7 +411,7 @@ function AppHistoryDrawer({
           <div className='min-h-0 flex-1 overflow-y-auto px-4 py-3'>
             {history.isLoading ? (
               <div className='text-muted-foreground flex items-center gap-2 py-6 text-sm'>
-                <Spinner /> Loading history…
+                <Spinner /> {t('apps.history.loading')}
               </div>
             ) : historyItems.length ? (
               <>
@@ -411,13 +421,17 @@ function AppHistoryDrawer({
                       <ItemContent className='min-w-0 flex-row items-center gap-3'>
                         <ItemTitle className='shrink-0 tabular-nums'>
                           <time dateTime={record.startedAt}>
-                            {new Date(record.startedAt).toLocaleString()}
+                            {new Date(record.startedAt).toLocaleString(
+                              i18n.language,
+                            )}
                           </time>
                         </ItemTitle>
                         <ItemDescription className='line-clamp-1 text-xs'>
                           {record.durationMs !== undefined
-                            ? `${(record.durationMs / 1000).toFixed(1)}s elapsed`
-                            : 'Duration unavailable'}
+                            ? t('apps.history.duration', {
+                                seconds: (record.durationMs / 1000).toFixed(1),
+                              })
+                            : t('apps.history.durationUnavailable')}
                         </ItemDescription>
                       </ItemContent>
                       <ItemActions className='ml-auto shrink-0 gap-2'>
@@ -428,13 +442,13 @@ function AppHistoryDrawer({
                             RUN_STATUS_STYLES[record.status],
                           )}
                         >
-                          {record.status}
+                          {t(`apps.runStatus.${record.status}`)}
                         </Badge>
                         <Button
                           size='sm'
                           onClick={() => void viewOutput(record.id)}
                         >
-                          View output
+                          {t('apps.history.viewOutput')}
                         </Button>
                       </ItemActions>
                     </Item>
@@ -451,18 +465,18 @@ function AppHistoryDrawer({
                       {history.isFetchingNextPage ? (
                         <Spinner data-icon='inline-start' />
                       ) : null}
-                      Load more
+                      {t('apps.history.loadMore')}
                     </Button>
                   </div>
                 ) : (
                   <p className='text-muted-foreground pt-3 text-center text-xs'>
-                    All runs loaded
+                    {t('apps.history.allLoaded')}
                   </p>
                 )}
               </>
             ) : (
               <p className='text-muted-foreground py-6 text-sm'>
-                No saved runs yet.
+                {t('apps.history.empty')}
               </p>
             )}
           </div>
@@ -473,7 +487,8 @@ function AppHistoryDrawer({
               variant='outline'
               onClick={() => onSelectedRunChange(undefined)}
             >
-              <ArrowLeftIcon data-icon='inline-start' /> Back to history
+              <ArrowLeftIcon data-icon='inline-start' />
+              {t('apps.history.back')}
             </Button>
           ) : null}
           {selectedRun ? (
@@ -484,10 +499,10 @@ function AppHistoryDrawer({
               }
               onClick={() => void copyAll()}
             >
-              <ClipboardIcon data-icon='inline-start' /> Copy all
+              <ClipboardIcon data-icon='inline-start' /> {t('apps.copyAll')}
             </Button>
           ) : null}
-          <Button onClick={() => onOpenChange(false)}>Close</Button>
+          <Button onClick={() => onOpenChange(false)}>{t('apps.close')}</Button>
         </DrawerFooter>
       </DrawerContent>
     </Drawer>
@@ -495,6 +510,7 @@ function AppHistoryDrawer({
 }
 
 function AppsPage() {
+  const { t } = useTranslation();
   const [filter, setFilter] = useState<AppFilter>('all');
   const [query, setQuery] = useState('');
   const [runs, setRuns] = useState<Record<string, ProcessNodeRun>>({});
@@ -607,7 +623,7 @@ function AppsPage() {
         ...current,
         [runId]: { ...current[runId], error: String(error), isRunning: false },
       }));
-      toast.error('App could not start', {
+      toast.error(t('apps.startFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
@@ -674,9 +690,14 @@ function AppsPage() {
       <main className='mx-auto flex w-full flex-col gap-3 px-6 py-3'>
         <section className='flex min-w-0 flex-wrap items-center gap-2.5'>
           <div className='mr-1 flex items-baseline gap-2'>
-            <h1 className='text-lg font-semibold tracking-tight'>Apps</h1>
+            <h1 className='text-lg font-semibold tracking-tight'>
+              {t('apps.title')}
+            </h1>
             <span className='text-muted-foreground text-xs whitespace-nowrap'>
-              {installedCount ?? '—'} of {apps.data?.length ?? '—'} ready
+              {t('apps.readyCount', {
+                installed: installedCount ?? '—',
+                total: apps.data?.length ?? '—',
+              })}
             </span>
           </div>
           <InputGroup className='order-last w-full sm:order-0 sm:ml-auto sm:w-64'>
@@ -686,19 +707,19 @@ function AppsPage() {
             <InputGroupInput
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder='Search apps'
-              aria-label='Search apps'
+              placeholder={t('apps.searchPlaceholder')}
+              aria-label={t('apps.searchLabel')}
             />
           </InputGroup>
           <div className='flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0'>
             {appFilters.map((item) => (
               <Button
-                key={item.value}
-                variant={filter === item.value ? 'secondary' : 'ghost'}
+                key={item}
+                variant={filter === item ? 'secondary' : 'ghost'}
                 size='sm'
-                onClick={() => setFilter(item.value)}
+                onClick={() => setFilter(item)}
               >
-                {item.label}
+                {t(`apps.filters.${item}`)}
               </Button>
             ))}
           </div>
@@ -713,7 +734,7 @@ function AppsPage() {
             ) : (
               <RefreshCwIcon data-icon='inline-start' />
             )}
-            Refresh
+            {t('apps.refresh')}
           </Button>
           <Button
             size='sm'
@@ -721,7 +742,7 @@ function AppsPage() {
             render={<Link to='/apps/new' viewTransition />}
           >
             <PlusIcon data-icon='inline-start' />
-            Create App
+            {t('apps.create')}
           </Button>
         </section>
 
@@ -730,11 +751,11 @@ function AppsPage() {
         {apps.isError ? (
           <Alert variant='destructive'>
             <CircleAlertIcon />
-            <AlertTitle>Could not load Process Nodes</AlertTitle>
+            <AlertTitle>{t('apps.loadErrorTitle')}</AlertTitle>
             <AlertDescription>
               {apps.error instanceof Error
                 ? apps.error.message
-                : 'The Process Node catalog could not be read.'}
+                : t('apps.loadErrorDescription')}
             </AlertDescription>
             <AlertAction>
               <Button
@@ -742,27 +763,25 @@ function AppsPage() {
                 size='sm'
                 onClick={() => void apps.refetch()}
               >
-                Retry
+                {t('apps.retry')}
               </Button>
             </AlertAction>
           </Alert>
         ) : null}
 
         {apps.data?.length === 0 ? (
-          <Empty className='via-card border border-dashed border-sky-200/70 bg-linear-to-br from-sky-500/[0.06] to-violet-500/[0.05] py-14 dark:border-sky-400/15'>
+          <Empty className='via-card border border-dashed border-sky-200/70 bg-linear-to-br from-sky-500/6 to-violet-500/5 py-14 dark:border-sky-400/15'>
             <EmptyHeader>
               <EmptyMedia variant='icon'>
                 <PackageSearchIcon />
               </EmptyMedia>
-              <EmptyTitle>No apps in the catalog</EmptyTitle>
-              <EmptyDescription>
-                Create a Process Node to start a local, editable Python project.
-              </EmptyDescription>
+              <EmptyTitle>{t('apps.emptyTitle')}</EmptyTitle>
+              <EmptyDescription>{t('apps.emptyDescription')}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button nativeButton={false} render={<Link to='/apps/new' />}>
                 <PlusIcon data-icon='inline-start' />
-                Create App
+                {t('apps.create')}
               </Button>
             </EmptyContent>
           </Empty>
@@ -793,11 +812,11 @@ function AppsPage() {
         ) : null}
 
         {apps.data?.length && filteredApps?.length === 0 ? (
-          <Empty className='bg-card/70 min-h-64 rounded-xl border border-dashed border-sky-200/70 dark:border-sky-400/15'>
+          <Empty className='min-h-64 rounded-xl border border-dashed border-sky-200/70 dark:border-sky-400/15'>
             <EmptyHeader>
-              <EmptyTitle>No matching apps</EmptyTitle>
+              <EmptyTitle>{t('apps.noMatchesTitle')}</EmptyTitle>
               <EmptyDescription>
-                Try a different search term or status filter.
+                {t('apps.noMatchesDescription')}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -809,7 +828,7 @@ function AppsPage() {
                   setFilter('all');
                 }}
               >
-                Clear filters
+                {t('apps.clearFilters')}
               </Button>
             </EmptyContent>
           </Empty>

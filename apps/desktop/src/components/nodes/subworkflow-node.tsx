@@ -1,12 +1,14 @@
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { WorkflowIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function SubworkflowNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowSubworkflowNodeData>>) {
+  const { t } = useTranslation();
   const configured = Boolean(data.workflowId);
   return (
     <div
@@ -27,14 +29,16 @@ function SubworkflowNode({
           aria-hidden='true'
         />
         <p className='truncate font-medium text-indigo-700 dark:text-indigo-300'>
-          {data.workflowName || 'Subworkflow'}
+          {data.workflowName || t('workflowEditor.nodes.subworkflow')}
         </p>
       </div>
       <p className='text-muted-foreground mt-2 line-clamp-2 text-sm'>
-        {configured ? 'Runs a referenced workflow' : 'Select a workflow'}
+        {configured
+          ? t('workflowEditor.nodes.runsReferencedWorkflow')
+          : t('workflowEditor.nodes.selectWorkflow')}
       </p>
       <p className='text-muted-foreground mt-3 truncate border-t border-indigo-500/20 pt-2 text-xs'>
-        Isolated workflow scope
+        {t('workflowEditor.nodes.isolatedWorkflowScope')}
       </p>
       <Handle
         type='source'

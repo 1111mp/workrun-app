@@ -22,6 +22,7 @@ import {
 } from '@workspace/ui/components';
 import { ShieldAlertIcon, ShieldCheckIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 import { toast } from 'sonner';
 
@@ -101,6 +102,7 @@ function ToolApprovalDialog({
   onClose,
   onSubmit,
 }: ActionDialogProps) {
+  const { t } = useTranslation();
   const payload = object(action.payload) ?? {};
 
   return (
@@ -112,28 +114,32 @@ function ToolApprovalDialog({
           </AlertDialogMedia>
           <div className='min-w-0 space-y-1.5'>
             <AlertDialogTitle>
-              Allow {typeof payload.name === 'string' ? payload.name : 'Tool'}
-              {' to run?'}
+              {t('approval.tool.title', {
+                name:
+                  typeof payload.name === 'string'
+                    ? payload.name
+                    : t('approval.tool.fallbackName'),
+              })}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {typeof payload.description === 'string'
                 ? payload.description
-                : 'The Agent requested a Tool App execution.'}
+                : t('approval.tool.description')}
             </AlertDialogDescription>
             <div className='flex flex-wrap gap-1.5 pt-1'>
               <Badge variant='outline'>
-                Source:{' '}
+                {t('approval.tool.source')}:{' '}
                 {typeof payload.sourceName === 'string'
                   ? payload.sourceName
                   : typeof payload.source === 'string'
                     ? payload.source
-                    : 'Tool App'}
+                    : t('approval.tool.fallbackSource')}
               </Badge>
               <Badge variant='secondary'>
-                Risk:{' '}
+                {t('approval.tool.risk')}:{' '}
                 {typeof payload.riskLevel === 'string'
                   ? payload.riskLevel
-                  : 'unknown'}
+                  : t('approval.tool.unknown')}
               </Badge>
             </div>
           </div>
@@ -147,13 +153,13 @@ function ToolApprovalDialog({
             disabled={submitting}
             onClick={() => onSubmit({ approved: false })}
           >
-            Cancel
+            {t('approval.cancel')}
           </Button>
           <Button
             disabled={submitting}
             onClick={() => onSubmit({ approved: true })}
           >
-            {submitting ? 'Saving…' : 'Run tool'}
+            {submitting ? t('approval.saving') : t('approval.tool.run')}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -167,6 +173,7 @@ function HumanReviewDialog({
   onClose,
   onSubmit,
 }: ActionDialogProps) {
+  const { t } = useTranslation();
   const payload = object(action.payload) ?? {};
   const contentKey =
     typeof payload.contentKey === 'string' ? payload.contentKey : undefined;
@@ -190,23 +197,22 @@ function HumanReviewDialog({
             <AlertDialogTitle>
               {typeof payload.title === 'string'
                 ? payload.title
-                : 'Human review required'}
+                : t('approval.review.title')}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {typeof payload.description === 'string'
                 ? payload.description
-                : 'Review the workflow context before allowing it to continue.'}
+                : t('approval.review.description')}
             </AlertDialogDescription>
             <p className='text-muted-foreground text-sm'>
-              Approval and rejection follow their matching workflow outputs. An
-              unconnected output stops this run.
+              {t('approval.review.routingDescription')}
             </p>
           </div>
         </AlertDialogHeader>
         <div className='max-h-[calc(88vh-12rem)] min-h-0 overflow-y-auto'>
           <section className='bg-muted/20 rounded-lg border p-5'>
             <div className='mb-4 flex items-center gap-2'>
-              <Badge variant='secondary'>审核内容</Badge>
+              <Badge variant='secondary'>{t('approval.review.content')}</Badge>
               {contentKey ? (
                 <code className='text-xs'>{contentKey}</code>
               ) : null}
@@ -228,7 +234,9 @@ function HumanReviewDialog({
           {payload.context && typeof payload.context === 'object' ? (
             <section className='bg-muted/20 mt-4 rounded-lg border p-5'>
               <div className='mb-4 flex items-center gap-2'>
-                <Badge variant='secondary'>补充上下文</Badge>
+                <Badge variant='secondary'>
+                  {t('approval.review.context')}
+                </Badge>
               </div>
               <pre className='bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs'>
                 {JSON.stringify(payload.context, null, 2)}
@@ -242,13 +250,15 @@ function HumanReviewDialog({
             disabled={submitting}
             onClick={() => onSubmit(resolution(false))}
           >
-            Reject
+            {t('approval.review.reject')}
           </Button>
           <Button
             disabled={submitting}
             onClick={() => onSubmit(resolution(true))}
           >
-            {submitting ? 'Saving decision…' : 'Approve & continue'}
+            {submitting
+              ? t('approval.review.savingDecision')
+              : t('approval.review.approveContinue')}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -262,6 +272,7 @@ function AskUserQuestionDialog({
   onClose,
   onSubmit,
 }: ActionDialogProps) {
+  const { t } = useTranslation();
   const payload = object(action.payload) ?? {};
   const options = Array.isArray(payload.options)
     ? payload.options.flatMap((item) => {
@@ -280,7 +291,7 @@ function AskUserQuestionDialog({
           <AlertDialogTitle>
             {typeof payload.title === 'string'
               ? payload.title
-              : 'Choose an option'}
+              : t('approval.question.title')}
           </AlertDialogTitle>
           {typeof payload.description === 'string' ? (
             <AlertDialogDescription>
@@ -306,7 +317,7 @@ function AskUserQuestionDialog({
         >
           <QuestionnaireItem name='answer' required>
             <QuestionnaireTitle className='sr-only'>
-              Available options
+              {t('approval.question.availableOptions')}
             </QuestionnaireTitle>
             <QuestionnaireChoices>
               {options.map((option) => (
@@ -327,7 +338,9 @@ function AskUserQuestionDialog({
           </QuestionnaireItem>
           <QuestionnaireActions>
             <QuestionnaireSubmit disabled={submitting}>
-              {submitting ? 'Saving answer…' : 'Continue'}
+              {submitting
+                ? t('approval.question.savingAnswer')
+                : t('approval.continue')}
             </QuestionnaireSubmit>
           </QuestionnaireActions>
         </Questionnaire>
@@ -353,6 +366,7 @@ function PendingActionDialog(props: ActionDialogProps) {
  * produce duplicate dialogs for the same paused workflow.
  */
 function ApprovalCoordinator() {
+  const { t } = useTranslation();
   const [claimantId] = useState(approvalClaimantId);
   const [action, setAction] = useState<PendingAction>();
   const [dismissed, setDismissed] = useState(false);
@@ -386,7 +400,7 @@ function ApprovalCoordinator() {
         if (!cancelled && next) setAction(next);
       } catch (error) {
         if (!cancelled) {
-          toast.error('Could not load the approval queue', {
+          toast.error(t('approval.errors.loadQueue'), {
             toasterId: 'global',
             description: error instanceof Error ? error.message : String(error),
           });
@@ -397,7 +411,7 @@ function ApprovalCoordinator() {
     return () => {
       cancelled = true;
     };
-  }, [action, dismissed, queueVersion, claimantId]);
+  }, [action, dismissed, queueVersion, claimantId, t]);
 
   useEffect(
     () => () => {
@@ -430,7 +444,7 @@ function ApprovalCoordinator() {
       // Keep the action available for a retry if the resolution was not made
       // durable; the normal unmount cleanup may release this claim again.
       releasedAction.current = null;
-      toast.error('Could not continue the workflow', {
+      toast.error(t('approval.errors.continueWorkflow'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });

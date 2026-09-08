@@ -1,20 +1,33 @@
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { SplitIcon } from 'lucide-react';
-
-const fallbackCases: WorkflowSwitchCase[] = [
-  { id: 'case-1', label: 'Case 1', condition: '' },
-  { id: 'case-2', label: 'Case 2', condition: '' },
-];
+import { useTranslation } from 'react-i18next';
 
 function SwitchNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowSwitchNodeData>>) {
-  const label = data.label || 'Switch';
-  const cases = data.cases?.length ? data.cases : fallbackCases;
-  const defaultCase = data.defaultCase ?? { label: 'Default', condition: '' };
+  const { t } = useTranslation();
+  const label = data.label || t('workflowEditor.nodes.switch');
+  const cases = data.cases?.length
+    ? data.cases
+    : [
+        {
+          id: 'case-1',
+          label: t('workflowEditor.nodes.case', { index: 1 }),
+          condition: '',
+        },
+        {
+          id: 'case-2',
+          label: t('workflowEditor.nodes.case', { index: 2 }),
+          condition: '',
+        },
+      ];
+  const defaultCase = data.defaultCase ?? {
+    label: t('workflowEditor.nodes.default'),
+    condition: '',
+  };
 
   return (
     <div
@@ -44,7 +57,9 @@ function SwitchNode({
             key={switchCase.id}
             className='relative min-h-11 pr-5 text-cyan-700 dark:text-cyan-300'
           >
-            <p className='truncate'>{switchCase.label || 'Untitled case'}</p>
+            <p className='truncate'>
+              {switchCase.label || t('workflowEditor.nodes.untitledCase')}
+            </p>
             <p
               className={cn(
                 'mt-0.5 truncate font-mono text-[11px]',
@@ -53,14 +68,17 @@ function SwitchNode({
                   : 'text-muted-foreground/60',
               )}
             >
-              {switchCase.condition || 'When condition is met'}
+              {switchCase.condition ||
+                t('workflowEditor.nodes.whenConditionMet')}
             </p>
           </div>
         ))}
         <div className='text-muted-foreground relative min-h-11 pr-5'>
-          <p className='truncate'>{defaultCase.label || 'Default'}</p>
+          <p className='truncate'>
+            {defaultCase.label || t('workflowEditor.nodes.default')}
+          </p>
           <p className='text-muted-foreground/60 mt-0.5 truncate font-mono text-[11px]'>
-            {defaultCase.condition || 'Other cases'}
+            {defaultCase.condition || t('workflowEditor.nodes.otherCases')}
           </p>
         </div>
       </div>

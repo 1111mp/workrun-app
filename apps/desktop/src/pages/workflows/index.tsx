@@ -32,6 +32,7 @@ import {
   WorkflowIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
 
@@ -44,6 +45,7 @@ import {
 } from '@/services/workflow';
 
 function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
+  const { t } = useTranslation();
   const { settings } = workflow.document;
   const inputCount = settings.inputSchema.fields.length;
   return (
@@ -59,11 +61,11 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
           <CardTitle className='truncate'>{settings.name}</CardTitle>
         </div>
         <CardDescription className='line-clamp-2 min-h-10'>
-          {settings.description || 'No description provided.'}
+          {settings.description || t('workflows.noDescription')}
         </CardDescription>
         <CardAction>
           <Badge variant='secondary' className='capitalize'>
-            {settings.mode}
+            {t(`workflows.modes.${settings.mode}`)}
           </Badge>
         </CardAction>
       </CardHeader>
@@ -74,24 +76,32 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
             <span className='text-foreground font-medium'>
               {workflow.document.nodes.length}
             </span>
-            <span className='text-muted-foreground'>Nodes</span>
+            <span className='text-muted-foreground'>
+              {t('workflows.nodes')}
+            </span>
           </div>
           <div className='flex flex-col gap-1 border-x border-violet-500/15 p-2.5'>
             <GitBranchIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
             <span className='text-foreground font-medium'>
               {workflow.document.edges.length}
             </span>
-            <span className='text-muted-foreground'>Connections</span>
+            <span className='text-muted-foreground'>
+              {t('workflows.connections')}
+            </span>
           </div>
           <div className='flex flex-col gap-1 p-2.5'>
             <SlidersHorizontalIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
             <span className='text-foreground font-medium'>{inputCount}</span>
-            <span className='text-muted-foreground'>Inputs</span>
+            <span className='text-muted-foreground'>
+              {t('workflows.inputs')}
+            </span>
           </div>
         </div>
       </CardContent>
       <CardFooter className='gap-2'>
-        <span className='text-muted-foreground text-xs'>Workflow canvas</span>
+        <span className='text-muted-foreground text-xs'>
+          {t('workflows.canvas')}
+        </span>
         <div className='ml-auto flex items-center gap-1.5'>
           <Button
             size='sm'
@@ -99,7 +109,7 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
             render={<Link to={`/workflows/${workflow.id}?run=true`} />}
           >
             <PlayIcon data-icon='inline-start' />
-            Run
+            {t('workflows.run')}
           </Button>
           <Button
             variant='outline'
@@ -108,7 +118,7 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
             render={<Link to={`/workflows/${workflow.id}`} viewTransition />}
           >
             <FilePenLineIcon data-icon='inline-start' />
-            Edit
+            {t('workflows.edit')}
           </Button>
         </div>
       </CardFooter>
@@ -135,6 +145,7 @@ function WorkflowListSkeleton() {
 }
 
 function WorkflowsPage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
   const workflows = useQuery({
@@ -146,7 +157,7 @@ function WorkflowsPage() {
     onSuccess: () => {
       clearLegacyWorkflowDocument();
       void queryClient.invalidateQueries({ queryKey: ['workflows'] });
-      toast.success('Existing workflow moved to Workflows', {
+      toast.success(t('workflows.legacyMigrated'), {
         toasterId: 'global',
       });
     },
@@ -161,7 +172,7 @@ function WorkflowsPage() {
       return;
     const legacy = loadLegacyWorkflowDocument();
     if (legacy) migrateLegacy.mutate(legacy);
-  }, [migrateLegacy, workflows.data]);
+  }, [migrateLegacy, t, workflows.data]);
 
   const filteredWorkflows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -180,9 +191,13 @@ function WorkflowsPage() {
       <main className='mx-auto flex w-full flex-col gap-3 px-6 py-3'>
         <section className='flex min-w-0 flex-wrap items-center gap-2.5'>
           <div className='mr-1 flex items-baseline gap-2'>
-            <h1 className='text-lg font-semibold tracking-tight'>Workflows</h1>
+            <h1 className='text-lg font-semibold tracking-tight'>
+              {t('workflows.title')}
+            </h1>
             <span className='text-muted-foreground text-xs whitespace-nowrap'>
-              {workflows.data?.length ?? '—'} local
+              {t('workflows.localCount', {
+                count: workflows.data?.length ?? '—',
+              })}
             </span>
           </div>
           <InputGroup className='order-last w-full sm:order-0 sm:ml-auto sm:w-64'>
@@ -192,8 +207,8 @@ function WorkflowsPage() {
             <InputGroupInput
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder='Search workflows'
-              aria-label='Search workflows'
+              placeholder={t('workflows.searchPlaceholder')}
+              aria-label={t('workflows.searchLabel')}
             />
           </InputGroup>
           <Button
@@ -207,7 +222,7 @@ function WorkflowsPage() {
             ) : (
               <RefreshCwIcon data-icon='inline-start' />
             )}
-            Refresh
+            {t('workflows.refresh')}
           </Button>
           <Button
             size='sm'
@@ -215,7 +230,7 @@ function WorkflowsPage() {
             render={<Link to='/workflows/new' viewTransition />}
           >
             <PlusIcon data-icon='inline-start' />
-            Create workflow
+            {t('workflows.create')}
           </Button>
         </section>
         {workflows.isLoading || migrateLegacy.isPending ? (
@@ -231,11 +246,11 @@ function WorkflowsPage() {
         {workflows.isError ? (
           <Empty className='via-card border border-dashed border-violet-200/70 bg-linear-to-br from-violet-500/6 to-sky-500/5 py-14 dark:border-violet-400/15'>
             <EmptyHeader>
-              <EmptyTitle>Workflows could not be loaded</EmptyTitle>
+              <EmptyTitle>{t('workflows.loadErrorTitle')}</EmptyTitle>
               <EmptyDescription>
                 {workflows.error instanceof Error
                   ? workflows.error.message
-                  : 'Try reopening the page.'}
+                  : t('workflows.loadErrorDescription')}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -248,9 +263,9 @@ function WorkflowsPage() {
               <EmptyMedia variant='icon'>
                 <WorkflowIcon />
               </EmptyMedia>
-              <EmptyTitle>Create your first workflow</EmptyTitle>
+              <EmptyTitle>{t('workflows.emptyTitle')}</EmptyTitle>
               <EmptyDescription>
-                Combine Agents, Apps, and control flow into a reusable workflow.
+                {t('workflows.emptyDescription')}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -259,22 +274,22 @@ function WorkflowsPage() {
                 render={<Link to='/workflows/new' />}
               >
                 <PlusIcon data-icon='inline-start' />
-                Create workflow
+                {t('workflows.create')}
               </Button>
             </EmptyContent>
           </Empty>
         ) : null}
         {workflows.data?.length && filteredWorkflows?.length === 0 ? (
-          <Empty className='bg-card/70 min-h-64 rounded-xl border border-dashed border-violet-200/70 dark:border-violet-400/15'>
+          <Empty className='min-h-64 rounded-xl border border-dashed border-violet-200/70 dark:border-violet-400/15'>
             <EmptyHeader>
-              <EmptyTitle>No matching workflows</EmptyTitle>
+              <EmptyTitle>{t('workflows.noMatchesTitle')}</EmptyTitle>
               <EmptyDescription>
-                Try a different workflow name or description.
+                {t('workflows.noMatchesDescription')}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button variant='outline' size='sm' onClick={() => setQuery('')}>
-                Clear search
+                {t('workflows.clearSearch')}
               </Button>
             </EmptyContent>
           </Empty>

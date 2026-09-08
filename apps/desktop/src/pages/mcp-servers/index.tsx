@@ -62,6 +62,7 @@ import {
   Trash2Icon,
 } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import {
@@ -118,14 +119,17 @@ function parseEnvironment(lines: string) {
   );
 }
 
-function statusLabel(server: McpServer) {
-  if (server.status === 'Running') return 'Online';
-  if (server.status === 'Disabled') return 'Disabled';
+function statusLabel(
+  server: McpServer,
+  t: ReturnType<typeof useTranslation>['t'],
+) {
+  if (server.status === 'Running') return t('mcp.status.online');
+  if (server.status === 'Disabled') return t('mcp.status.disabled');
   if (server.status === 'FailedToStart' || server.status === 'Crashed') {
-    return 'Attention needed';
+    return t('mcp.status.attention');
   }
-  if (server.status === 'Restarting') return 'Restarting';
-  return 'Offline';
+  if (server.status === 'Restarting') return t('mcp.status.restarting');
+  return t('mcp.status.offline');
 }
 
 function statusTone(server: McpServer) {
@@ -137,18 +141,17 @@ function statusTone(server: McpServer) {
   return 'bg-muted-foreground/40';
 }
 
-function diagnosticTime(timestamp?: string) {
-  return timestamp ? new Date(timestamp).toLocaleString() : undefined;
-}
-
 function serverLocation(server: McpServer): ServerLocation {
   return server.definition.transport === 'streamable_http' ? 'remote' : 'local';
 }
 
-function locationPresentation(location: ServerLocation) {
+function locationPresentation(
+  location: ServerLocation,
+  t: ReturnType<typeof useTranslation>['t'],
+) {
   return location === 'remote'
     ? {
-        label: 'Remote',
+        label: t('mcp.remote'),
         icon: CloudIcon,
         cardClass: 'bg-violet-500/[0.045] hover:bg-violet-500/[0.075]',
         iconClass:
@@ -157,7 +160,7 @@ function locationPresentation(location: ServerLocation) {
           'border-violet-500/20 bg-violet-500/10 text-violet-700 dark:text-violet-300',
       }
     : {
-        label: 'Local',
+        label: t('mcp.local'),
         icon: TerminalIcon,
         cardClass: 'bg-sky-500/[0.035] hover:bg-sky-500/[0.065]',
         iconClass:
@@ -168,6 +171,7 @@ function locationPresentation(location: ServerLocation) {
 }
 
 function McpServersPage() {
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const servers = useQuery({
     queryKey: ['mcp-servers'],
@@ -222,7 +226,7 @@ function McpServersPage() {
       void refresh();
     },
     onError: (error) =>
-      toast.error('Could not save MCP server', {
+      toast.error(t('mcp.saveFailed'), {
         description: error instanceof Error ? error.message : String(error),
       }),
   });
@@ -230,7 +234,7 @@ function McpServersPage() {
     mutationFn: ({ id, action }: { id: string; action: 'start' | 'stop' }) =>
       action === 'start' ? startMcpServer(id) : stopMcpServer(id),
     onError: (error) =>
-      toast.error('Could not start MCP server', {
+      toast.error(t('mcp.startFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       }),
@@ -239,7 +243,7 @@ function McpServersPage() {
   const authorize = useMutation({
     mutationFn: authorizeMcpServer,
     onSuccess: () => {
-      toast.info('Authorization opened in your browser.');
+      toast.info(t('mcp.authorizationOpened'));
       void refresh();
     },
     onError: (error) =>
@@ -248,7 +252,7 @@ function McpServersPage() {
   const reconnect = useMutation({
     mutationFn: reconnectMcpServer,
     onError: (error) =>
-      toast.error('Could not reconnect to MCP server', {
+      toast.error(t('mcp.reconnectFailed'), {
         description: error instanceof Error ? error.message : String(error),
       }),
     onSettled: () => void refresh(),
@@ -271,60 +275,59 @@ function McpServersPage() {
             <div className='max-w-xl'>
               <div className='text-muted-foreground mb-3 flex items-center gap-2 text-xs font-medium tracking-[0.16em] uppercase'>
                 <RadioTowerIcon className='size-3.5' />
-                MCP tool registry
+                {t('mcp.eyebrow')}
               </div>
               <h1 className='text-2xl font-semibold tracking-tight sm:text-3xl'>
-                MCP servers
+                {t('mcp.title')}
               </h1>
               <p className='text-muted-foreground mt-2 text-sm leading-6'>
-                Connect local stdio or remote Streamable HTTP servers and make
-                their tools available to your workflows.
+                {t('mcp.description')}
               </p>
             </div>
             <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
               <div className='bg-background/70 flex divide-x divide-sky-200/70 rounded-xl border border-sky-200/70 shadow-xs backdrop-blur-sm dark:divide-sky-400/15 dark:border-sky-400/15'>
                 <div className='px-4 py-2.5'>
                   <div className='text-muted-foreground text-[11px] font-medium tracking-wide uppercase'>
-                    Connected
+                    {t('mcp.connected')}
                   </div>
                   <div className='mt-0.5 flex items-center gap-1.5 text-sm font-semibold tabular-nums'>
                     <span className='size-1.5 rounded-full bg-emerald-500' />
-                    {runningCount} online
+                    {t('mcp.onlineCount', { count: runningCount })}
                   </div>
                 </div>
                 <div className='px-4 py-2.5'>
                   <div className='text-muted-foreground text-[11px] font-medium tracking-wide uppercase'>
-                    Registry
+                    {t('mcp.registry')}
                   </div>
                   <div className='mt-0.5 text-sm font-semibold tabular-nums'>
-                    {configuredServers.length} servers
+                    {t('mcp.serverCount', { count: configuredServers.length })}
                   </div>
                 </div>
               </div>
               <Button onClick={() => setDraft(emptyDraft())}>
                 <PlusIcon data-icon='inline-start' />
-                Add server
+                {t('mcp.addServer')}
               </Button>
             </div>
           </div>
         </section>
         <div className='flex items-center justify-between gap-4'>
           <div>
-            <h2 className='text-sm font-semibold'>Your servers</h2>
+            <h2 className='text-sm font-semibold'>{t('mcp.yourServers')}</h2>
             <p className='text-muted-foreground mt-0.5 text-xs'>
-              Start a server to expose its tools to Workrun.
+              {t('mcp.yourServersDescription')}
             </p>
           </div>
           {attentionCount ? (
             <div className='text-destructive flex items-center gap-1.5 text-xs font-medium'>
               <CircleAlertIcon className='size-3.5' />
-              {attentionCount} needs attention
+              {t('mcp.attentionCount', { count: attentionCount })}
             </div>
           ) : null}
         </div>
         {servers.isLoading ? (
           <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-8 text-sm'>
-            <Spinner /> Loading server registry…
+            <Spinner /> {t('mcp.loading')}
           </div>
         ) : null}
         {servers.data?.length ? (
@@ -335,7 +338,7 @@ function McpServersPage() {
                 server.status === 'FailedToStart' ||
                 server.status === 'Crashed';
               const isRestarting = server.status === 'Restarting';
-              const location = locationPresentation(serverLocation(server));
+              const location = locationPresentation(serverLocation(server), t);
               const LocationIcon = location.icon;
               const isPending =
                 lifecycle.isPending &&
@@ -379,12 +382,12 @@ function McpServersPage() {
                               <span
                                 className={`size-1.5 rounded-full ${statusTone(server)}`}
                               />
-                              {statusLabel(server)}
+                              {statusLabel(server, t)}
                             </span>
                           </div>
                           <CardDescription className='mt-1 line-clamp-1'>
                             {server.definition.description ||
-                              'No description provided.'}
+                              t('mcp.noDescription')}
                           </CardDescription>
                         </div>
                       </div>
@@ -401,14 +404,16 @@ function McpServersPage() {
                       </div>
                       {server.health.lastError ? (
                         <p className='text-destructive mt-2 line-clamp-1 text-xs'>
-                          Last check failed: {server.health.lastError}
+                          {t('mcp.lastCheckFailed')}: {server.health.lastError}
                         </p>
                       ) : server.health.lastCheckedAt ? (
                         <p className='text-muted-foreground mt-2 text-xs'>
-                          Last checked{' '}
-                          {diagnosticTime(server.health.lastCheckedAt)}
+                          {t('mcp.lastChecked')}{' '}
+                          {new Date(server.health.lastCheckedAt).toLocaleString(
+                            i18n.language,
+                          )}
                           {server.health.toolCount !== undefined
-                            ? ` · ${server.health.toolCount} tools discovered`
+                            ? ` · ${t('mcp.toolsDiscovered', { count: server.health.toolCount })}`
                             : null}
                         </p>
                       ) : null}
@@ -417,7 +422,7 @@ function McpServersPage() {
                       {isRestarting ? (
                         <Button variant='outline' size='sm' disabled>
                           <Spinner data-icon='inline-start' />
-                          Reconnecting
+                          {t('mcp.reconnecting')}
                         </Button>
                       ) : server.status !== 'Disabled' ? (
                         <>
@@ -435,7 +440,7 @@ function McpServersPage() {
                               ) : (
                                 <RefreshCwIcon data-icon='inline-start' />
                               )}
-                              Reconnect
+                              {t('mcp.reconnect')}
                             </Button>
                           ) : null}
                           <Button
@@ -457,10 +462,10 @@ function McpServersPage() {
                               <CirclePlayIcon data-icon='inline-start' />
                             )}
                             {isRunning
-                              ? 'Stop'
+                              ? t('mcp.stop')
                               : needsRetry
-                                ? 'Retry'
-                                : 'Start'}
+                                ? t('mcp.retry')
+                                : t('mcp.start')}
                           </Button>
                         </>
                       ) : null}
@@ -480,8 +485,8 @@ function McpServersPage() {
                           ) : null}
                           {server.definition.authorizationStatus ===
                           'authorized'
-                            ? 'Reauthorize'
-                            : 'Authorize'}
+                            ? t('mcp.reauthorize')
+                            : t('mcp.authorize')}
                         </Button>
                       ) : null}
                       <Button
@@ -490,12 +495,14 @@ function McpServersPage() {
                         onClick={() => setDraft(server.definition)}
                       >
                         <PencilIcon data-icon='inline-start' />
-                        Edit
+                        {t('mcp.edit')}
                       </Button>
                       <Button
                         variant='ghost'
                         size='icon-sm'
-                        aria-label={`Delete ${server.definition.name}`}
+                        aria-label={t('mcp.deleteNamed', {
+                          name: server.definition.name,
+                        })}
                         className='text-muted-foreground hover:text-destructive'
                         onClick={() => setDeleting(server.definition)}
                       >
@@ -513,16 +520,13 @@ function McpServersPage() {
               <EmptyMedia variant='icon' className='rounded-xl'>
                 <CpuIcon />
               </EmptyMedia>
-              <EmptyTitle>No MCP servers configured</EmptyTitle>
-              <EmptyDescription>
-                Add a stdio or Streamable HTTP server to make its tools
-                available in your workflows.
-              </EmptyDescription>
+              <EmptyTitle>{t('mcp.emptyTitle')}</EmptyTitle>
+              <EmptyDescription>{t('mcp.emptyDescription')}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button variant='outline' onClick={() => setDraft(emptyDraft())}>
                 <PlusIcon data-icon='inline-start' />
-                Add server
+                {t('mcp.addServer')}
               </Button>
             </EmptyContent>
           </Empty>
@@ -548,19 +552,24 @@ function McpServersPage() {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete MCP server?</AlertDialogTitle>
+              <AlertDialogTitle>{t('mcp.deleteTitle')}</AlertDialogTitle>
               <AlertDialogDescription>
-                This stops the server and removes its local configuration.
+                {t('mcp.deleteDescription')}
                 {workflowReferences.isLoading
-                  ? ' Checking workflows that use its tools…'
+                  ? ` ${t('mcp.checkingWorkflows')}`
                   : workflowReferences.data?.length
-                    ? ` ${workflowReferences.data.length} workflow${workflowReferences.data.length === 1 ? '' : 's'} will retain unavailable tool selections: ${workflowReferences.data.map((workflow) => workflow.name).join(', ')}.`
-                    : ' No saved workflows reference its tools.'}
+                    ? ` ${t('mcp.affectedWorkflows', {
+                        count: workflowReferences.data.length,
+                        names: workflowReferences.data
+                          .map((workflow) => workflow.name)
+                          .join(', '),
+                      })}`
+                    : ` ${t('mcp.noWorkflowReferences')}`}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel disabled={remove.isPending}>
-                Cancel
+                {t('apps.new.cancel')}
               </AlertDialogCancel>
               <AlertDialogAction
                 disabled={remove.isPending || workflowReferences.isLoading}
@@ -571,7 +580,7 @@ function McpServersPage() {
                 ) : (
                   <Trash2Icon data-icon='inline-start' />
                 )}
-                Delete server
+                {t('mcp.deleteServer')}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -596,6 +605,7 @@ function McpServerDialog({
   onSave: (draft: Draft) => void;
   onDiagnosticsUpdated: () => void;
 }) {
+  const { t, i18n } = useTranslation();
   const [formDraft, setFormDraft] = useState<Draft | null>(draft);
   const [argsText, setArgsText] = useState(() => draft?.args.join('\n') ?? '');
   const [environmentText, setEnvironmentText] = useState(() =>
@@ -671,12 +681,14 @@ function McpServerDialog({
             </div>
             <div className='min-w-0'>
               <DialogTitle className='text-lg'>
-                {formDraft?.id ? 'Edit MCP server' : 'Connect an MCP server'}
+                {formDraft?.id
+                  ? t('mcp.dialog.editTitle')
+                  : t('mcp.dialog.connectTitle')}
               </DialogTitle>
               <DialogDescription className='mt-1 max-w-xl leading-5'>
                 {formDraft?.id
-                  ? 'Update the connection details and availability for this server.'
-                  : 'Add a local process or a remote Streamable HTTP endpoint to your tool registry.'}
+                  ? t('mcp.dialog.editDescription')
+                  : t('mcp.dialog.connectDescription')}
               </DialogDescription>
             </div>
           </div>
@@ -685,17 +697,18 @@ function McpServerDialog({
           <div className='max-h-[min(68vh,620px)] overflow-y-auto px-6 py-6'>
             <FieldGroup className='gap-7'>
               <FieldSet>
-                <FieldLegend>Server details</FieldLegend>
+                <FieldLegend>{t('mcp.dialog.serverDetails')}</FieldLegend>
                 <FieldDescription>
-                  Use a recognizable name so collaborators can find this tool
-                  connection in a workflow.
+                  {t('mcp.dialog.serverDetailsDescription')}
                 </FieldDescription>
                 <FieldGroup className='grid gap-4 sm:grid-cols-2'>
                   <Field>
-                    <FieldLabel htmlFor='mcp-server-name'>Name</FieldLabel>
+                    <FieldLabel htmlFor='mcp-server-name'>
+                      {t('apps.new.name')}
+                    </FieldLabel>
                     <Input
                       id='mcp-server-name'
-                      placeholder='e.g. GitHub MCP'
+                      placeholder={t('mcp.dialog.namePlaceholder')}
                       value={formDraft.name}
                       onChange={(event) =>
                         setFormDraft({ ...formDraft, name: event.target.value })
@@ -704,11 +717,11 @@ function McpServerDialog({
                   </Field>
                   <Field>
                     <FieldLabel htmlFor='mcp-server-description'>
-                      Description
+                      {t('apps.new.fieldDescription')}
                     </FieldLabel>
                     <Input
                       id='mcp-server-description'
-                      placeholder='e.g. Search and manage GitHub repositories'
+                      placeholder={t('mcp.dialog.descriptionPlaceholder')}
                       value={formDraft.description}
                       onChange={(event) =>
                         setFormDraft({
@@ -722,21 +735,20 @@ function McpServerDialog({
               </FieldSet>
 
               <FieldSet className='bg-muted/20 rounded-xl border p-4 sm:p-5'>
-                <FieldLegend>Connection</FieldLegend>
+                <FieldLegend>{t('mcp.dialog.connection')}</FieldLegend>
                 <FieldDescription>
-                  Choose where this server runs, then provide the connection
-                  details.
+                  {t('mcp.dialog.connectionDescription')}
                 </FieldDescription>
                 <FieldGroup className='gap-4'>
                   <Field>
                     <FieldLabel htmlFor='mcp-server-location'>
-                      Connection type
+                      {t('mcp.dialog.connectionType')}
                     </FieldLabel>
                     <Select
                       value={
                         formDraft.transport === 'streamable_http'
-                          ? 'Remote MCP Server'
-                          : 'Local MCP Server'
+                          ? 'remote'
+                          : 'local'
                       }
                       onValueChange={(location) =>
                         setFormDraft({
@@ -750,14 +762,18 @@ function McpServerDialog({
                         id='mcp-server-location'
                         className='w-full'
                       >
-                        <SelectValue placeholder='Select a connection type' />
+                        <span className='flex flex-1 text-left'>
+                          {formDraft.transport === 'streamable_http'
+                            ? t('mcp.dialog.remoteEndpoint')
+                            : t('mcp.dialog.localProcess')}
+                        </span>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value='local'>
-                          Local process (stdio)
+                          {t('mcp.dialog.localProcess')}
                         </SelectItem>
                         <SelectItem value='remote'>
-                          Remote endpoint (HTTP)
+                          {t('mcp.dialog.remoteEndpoint')}
                         </SelectItem>
                       </SelectContent>
                     </Select>
@@ -773,13 +789,13 @@ function McpServerDialog({
                     <div>
                       <div className='text-sm font-medium'>
                         {formDraft.transport === 'stdio'
-                          ? 'Managed local process'
-                          : 'Streamable HTTP endpoint'}
+                          ? t('mcp.dialog.managedLocalProcess')
+                          : t('mcp.dialog.httpEndpoint')}
                       </div>
                       <p className='text-muted-foreground mt-0.5 text-xs leading-5'>
                         {formDraft.transport === 'stdio'
-                          ? 'Workrun starts and communicates with a stdio process on this device.'
-                          : 'Workrun connects to a hosted MCP server using its public endpoint.'}
+                          ? t('mcp.dialog.managedLocalDescription')
+                          : t('mcp.dialog.httpEndpointDescription')}
                       </p>
                     </div>
                   </div>
@@ -787,7 +803,7 @@ function McpServerDialog({
                     <FieldGroup className='gap-4'>
                       <Field>
                         <FieldLabel htmlFor='mcp-server-command'>
-                          Command
+                          {t('mcp.dialog.command')}
                         </FieldLabel>
                         <Input
                           id='mcp-server-command'
@@ -803,7 +819,7 @@ function McpServerDialog({
                       </Field>
                       <Field>
                         <FieldLabel htmlFor='mcp-server-args'>
-                          Arguments
+                          {t('mcp.dialog.arguments')}
                         </FieldLabel>
                         <Textarea
                           id='mcp-server-args'
@@ -815,14 +831,14 @@ function McpServerDialog({
                           onChange={(event) => setArgsText(event.target.value)}
                         />
                         <FieldDescription>
-                          Enter one command argument per line.
+                          {t('mcp.dialog.argumentsDescription')}
                         </FieldDescription>
                       </Field>
                       <Field
                         data-invalid={hasInvalidEnvironmentLine || undefined}
                       >
                         <FieldLabel htmlFor='mcp-server-environment'>
-                          Environment variables
+                          {t('mcp.dialog.environment')}
                         </FieldLabel>
                         <Textarea
                           id='mcp-server-environment'
@@ -837,8 +853,7 @@ function McpServerDialog({
                           }
                         />
                         <FieldDescription>
-                          One <code>KEY=value</code> pair per line. Values are
-                          encrypted with this server configuration.
+                          {t('mcp.dialog.environmentDescription')}
                         </FieldDescription>
                       </Field>
                     </FieldGroup>
@@ -846,7 +861,7 @@ function McpServerDialog({
                     <FieldGroup className='gap-4'>
                       <Field>
                         <FieldLabel htmlFor='mcp-server-url'>
-                          Endpoint URL
+                          {t('mcp.dialog.endpointUrl')}
                         </FieldLabel>
                         <Input
                           id='mcp-server-url'
@@ -861,12 +876,12 @@ function McpServerDialog({
                           }
                         />
                         <FieldDescription>
-                          The server must support MCP Streamable HTTP.
+                          {t('mcp.dialog.endpointUrlDescription')}
                         </FieldDescription>
                       </Field>
                       <Field>
                         <FieldLabel htmlFor='mcp-server-auth'>
-                          Authentication
+                          {t('mcp.dialog.authentication')}
                         </FieldLabel>
                         <Select
                           value={formDraft.auth}
@@ -881,19 +896,25 @@ function McpServerDialog({
                             id='mcp-server-auth'
                             className='w-full'
                           >
-                            <SelectValue placeholder='Select authentication'>
+                            <SelectValue
+                              placeholder={t(
+                                'mcp.dialog.authenticationPlaceholder',
+                              )}
+                            >
                               {formDraft.auth === 'bearer'
-                                ? 'Bearer Token'
+                                ? t('mcp.dialog.bearerToken')
                                 : formDraft.auth === 'oauth'
                                   ? 'OAuth'
-                                  : 'No authentication'}
+                                  : t('mcp.dialog.noAuthentication')}
                             </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value='none'>
-                              No authentication
+                              {t('mcp.dialog.noAuthentication')}
                             </SelectItem>
-                            <SelectItem value='bearer'>Bearer token</SelectItem>
+                            <SelectItem value='bearer'>
+                              {t('mcp.dialog.bearerToken')}
+                            </SelectItem>
                             <SelectItem value='oauth'>OAuth</SelectItem>
                           </SelectContent>
                         </Select>
@@ -901,12 +922,12 @@ function McpServerDialog({
                       {formDraft.auth === 'bearer' ? (
                         <Field>
                           <FieldLabel htmlFor='mcp-server-token'>
-                            Bearer token
+                            {t('mcp.dialog.bearerToken')}
                           </FieldLabel>
                           <Input
                             id='mcp-server-token'
                             type='password'
-                            placeholder='Paste token'
+                            placeholder={t('mcp.dialog.tokenPlaceholder')}
                             value={formDraft.bearerToken ?? ''}
                             onChange={(event) =>
                               setFormDraft({
@@ -916,16 +937,14 @@ function McpServerDialog({
                             }
                           />
                           <FieldDescription>
-                            Stored encrypted. Leave empty to retain the saved
-                            token.
+                            {t('mcp.dialog.tokenDescription')}
                           </FieldDescription>
                         </Field>
                       ) : formDraft.auth === 'oauth' ? (
                         <div className='border-primary/15 bg-primary/5 flex items-start gap-2 rounded-lg border p-3 text-sm'>
                           <ShieldCheckIcon className='text-primary mt-0.5 size-4 shrink-0' />
                           <p className='text-muted-foreground leading-5'>
-                            Save this server, then authorize it in your browser.
-                            Credentials are stored encrypted.
+                            {t('mcp.dialog.oauthDescription')}
                           </p>
                         </div>
                       ) : null}
@@ -935,7 +954,7 @@ function McpServerDialog({
               </FieldSet>
 
               <FieldSet>
-                <FieldLegend>Availability</FieldLegend>
+                <FieldLegend>{t('mcp.dialog.availability')}</FieldLegend>
                 <Field
                   orientation='horizontal'
                   className='bg-background rounded-xl border p-4'
@@ -952,14 +971,13 @@ function McpServerDialog({
                       htmlFor='mcp-server-enabled'
                       className='flex items-center gap-2'
                     >
-                      Enable this server
+                      {t('mcp.dialog.enable')}
                       <span
                         className={`size-1.5 rounded-full ${formDraft.enabled ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`}
                       />
                     </FieldLabel>
                     <FieldDescription>
-                      Disabled servers remain saved but cannot be started or
-                      used by workflows.
+                      {t('mcp.dialog.enableDescription')}
                     </FieldDescription>
                   </FieldContent>
                 </Field>
@@ -969,15 +987,19 @@ function McpServerDialog({
                   {health.lastError ? <CircleAlertIcon /> : <CircleCheckIcon />}
                   <AlertTitle>
                     {health.lastError
-                      ? 'Latest connection check failed'
-                      : 'Latest connection check succeeded'}
+                      ? t('mcp.dialog.latestCheckFailed')
+                      : t('mcp.dialog.latestCheckSucceeded')}
                   </AlertTitle>
                   <AlertDescription>
-                    Checked {diagnosticTime(health.lastCheckedAt)}.
+                    {t('mcp.dialog.checked', {
+                      time: new Date(health.lastCheckedAt).toLocaleString(
+                        i18n.language,
+                      ),
+                    })}
                     {health.lastError
                       ? ` ${health.lastError}`
                       : health.toolCount !== undefined
-                        ? ` ${health.toolCount} tools discovered.`
+                        ? ` ${t('mcp.toolsDiscovered', { count: health.toolCount })}.`
                         : null}
                   </AlertDescription>
                 </Alert>
@@ -985,17 +1007,22 @@ function McpServerDialog({
               {currentTestResult?.result ? (
                 <Alert>
                   <CircleCheckIcon />
-                  <AlertTitle>Connection successful</AlertTitle>
+                  <AlertTitle>
+                    {t('mcp.dialog.connectionSuccessful')}
+                  </AlertTitle>
                   <AlertDescription>
                     {currentTestResult.result.toolNames.length
-                      ? `Discovered ${currentTestResult.result.toolNames.length} tools: ${currentTestResult.result.toolNames.join(', ')}.`
-                      : 'The server connected but did not advertise any tools.'}
+                      ? t('mcp.dialog.discoveredTools', {
+                          count: currentTestResult.result.toolNames.length,
+                          names: currentTestResult.result.toolNames.join(', '),
+                        })
+                      : t('mcp.dialog.noTools')}
                   </AlertDescription>
                 </Alert>
               ) : currentTestResult?.error ? (
                 <Alert variant='destructive'>
                   <CircleAlertIcon />
-                  <AlertTitle>Connection failed</AlertTitle>
+                  <AlertTitle>{t('mcp.dialog.connectionFailed')}</AlertTitle>
                   <AlertDescription>{currentTestResult.error}</AlertDescription>
                 </Alert>
               ) : null}
@@ -1011,10 +1038,10 @@ function McpServerDialog({
             {testConnection.isPending ? (
               <Spinner data-icon='inline-start' />
             ) : null}
-            Test connection
+            {t('mcp.dialog.testConnection')}
           </Button>
           <Button variant='outline' onClick={() => onOpenChange(false)}>
-            Cancel
+            {t('apps.new.cancel')}
           </Button>
           <Button
             disabled={isSaving || !canTest}
@@ -1030,7 +1057,8 @@ function McpServerDialog({
               })
             }
           >
-            {isSaving ? <Spinner data-icon='inline-start' /> : null}Save server
+            {isSaving ? <Spinner data-icon='inline-start' /> : null}
+            {t('mcp.dialog.saveServer')}
           </Button>
         </DialogFooter>
       </DialogContent>

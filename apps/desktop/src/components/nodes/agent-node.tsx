@@ -1,12 +1,24 @@
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { BotIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import { getModelCatalog } from '@/services/cmd';
 
 function AgentNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowAgentNodeData>>) {
+  const { t } = useTranslation();
+  const { data: modelProfiles = [] } = useQuery({
+    queryKey: ['modelCatalog'],
+    queryFn: getModelCatalog,
+  });
+  const modelProfile = modelProfiles.find(
+    (profile) => profile.id === data.modelProfileId,
+  );
   return (
     <div
       className={cn(
@@ -33,9 +45,13 @@ function AgentNode({
         {data.description}
       </p>
       <div className='text-muted-foreground mt-3 border-t border-violet-500/20 pt-2 text-xs'>
-        Model profile:{' '}
+        {t('workflowEditor.nodes.modelProfile')}:{' '}
         <span className='text-foreground'>
-          {data.modelProfileId || 'Not selected'}
+          {data.modelProfileId
+            ? modelProfile
+              ? `${modelProfile.name} · ${modelProfile.model}`
+              : t('workflowEditor.nodes.modelProfileSelected')
+            : t('workflowEditor.nodes.notSelected')}
         </span>
       </div>
       <Handle

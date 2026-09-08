@@ -23,6 +23,7 @@ import {
   Textarea,
 } from '@workspace/ui/components';
 import { PlusIcon, Trash2Icon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 type WorkflowSettingsPanelProps = {
   open: boolean;
@@ -32,25 +33,6 @@ type WorkflowSettingsPanelProps = {
   onSettingsChange: (patch: Partial<WorkflowSettings>) => void;
 };
 
-const inputTypeLabels = [
-  {
-    label: 'Short text',
-    value: 'string',
-  },
-  {
-    label: 'Long text',
-    value: 'textarea',
-  },
-  {
-    label: 'Number',
-    value: 'number',
-  },
-  {
-    label: 'Yes / no',
-    value: 'boolean',
-  },
-];
-
 function WorkflowSettingsPanel({
   open,
   settings,
@@ -58,6 +40,13 @@ function WorkflowSettingsPanel({
   onOpenChange,
   onSettingsChange,
 }: WorkflowSettingsPanelProps) {
+  const { t } = useTranslation();
+  const inputTypeLabels = [
+    { label: t('workflowEditor.settings.types.string'), value: 'string' },
+    { label: t('workflowEditor.settings.types.textarea'), value: 'textarea' },
+    { label: t('workflowEditor.settings.types.number'), value: 'number' },
+    { label: t('workflowEditor.settings.types.boolean'), value: 'boolean' },
+  ];
   const updateInput = (inputId: string, patch: Partial<WorkflowInput>) => {
     const current = settings.inputSchema.fields.find(
       (input) => input.id === inputId,
@@ -110,7 +99,7 @@ function WorkflowSettingsPanel({
           {
             id: crypto.randomUUID(),
             key: `input_${index}`,
-            label: `Input ${index}`,
+            label: t('workflowEditor.settings.defaultInput', { index }),
             type: 'string',
             required: false,
           },
@@ -154,7 +143,7 @@ function WorkflowSettingsPanel({
           {
             id: crypto.randomUUID(),
             key: `output_${index}`,
-            label: `Output ${index}`,
+            label: t('workflowEditor.settings.defaultOutput', { index }),
             type: 'string',
             required: false,
           },
@@ -179,20 +168,22 @@ function WorkflowSettingsPanel({
       <DrawerContent className='gap-0 sm:[--drawer-content-width:36rem]'>
         <DrawerHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>
           <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[16px_16px]' />
-          <DrawerTitle className='relative text-lg'>More settings</DrawerTitle>
+          <DrawerTitle className='relative text-lg'>
+            {t('workflowEditor.moreSettings')}
+          </DrawerTitle>
           <DrawerDescription className='relative mt-1 leading-5'>
-            Define a description and the parameters each run accepts.
+            {t('workflowEditor.settings.description')}
           </DrawerDescription>
         </DrawerHeader>
         <div className='min-h-0 flex-1 overflow-y-auto px-5 py-6'>
           <FieldGroup className='gap-7'>
             <FieldSet className='bg-card gap-4 rounded-xl border p-4 shadow-xs'>
-              <FieldLegend>Workflow details</FieldLegend>
+              <FieldLegend>{t('workflowEditor.settings.details')}</FieldLegend>
               <FieldLabel htmlFor='workflow-description'>
-                Description
+                {t('apps.new.fieldDescription')}
               </FieldLabel>
               <FieldDescription>
-                Explain the outcome this workflow produces.
+                {t('workflowEditor.settings.workflowDescription')}
               </FieldDescription>
               <Textarea
                 id='workflow-description'
@@ -204,7 +195,7 @@ function WorkflowSettingsPanel({
             </FieldSet>
             <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
-                <FieldLegend>Run inputs</FieldLegend>
+                <FieldLegend>{t('workflowEditor.settings.inputs')}</FieldLegend>
                 <Button
                   type='button'
                   size='sm'
@@ -212,15 +203,11 @@ function WorkflowSettingsPanel({
                   onClick={addInput}
                 >
                   <PlusIcon data-icon='inline-start' />
-                  Add input
+                  {t('workflowEditor.settings.addInput')}
                 </Button>
               </div>
               <FieldDescription>
-                These define the values a task run can receive. Actual values
-                belong to an individual run and are not saved in the workflow.
-                Chat workflows also receive these values alongside their
-                message; the <code>input</code> key is reserved for that
-                message.
+                {t('workflowEditor.settings.inputsDescription')}
               </FieldDescription>
               <FieldGroup className='gap-5'>
                 {settings.inputSchema.fields.map((input) => (
@@ -230,13 +217,17 @@ function WorkflowSettingsPanel({
                   >
                     <div className='flex items-center justify-between gap-2'>
                       <FieldLegend variant='label'>
-                        {input.label || 'Untitled input'}
+                        {input.label ||
+                          t('workflowEditor.settings.untitledInput')}
                       </FieldLegend>
                       <Button
                         type='button'
                         size='icon-sm'
                         variant='ghost'
-                        aria-label={`Remove ${input.label || 'input'}`}
+                        aria-label={t('workflowEditor.settings.removeInput', {
+                          name:
+                            input.label || t('workflowEditor.settings.input'),
+                        })}
                         onClick={() => removeInput(input.id)}
                       >
                         <Trash2Icon />
@@ -248,7 +239,7 @@ function WorkflowSettingsPanel({
                           <FieldLabel
                             htmlFor={`workflow-input-label-${input.id}`}
                           >
-                            Label
+                            {t('workflowEditor.settings.label')}
                           </FieldLabel>
                           <Input
                             id={`workflow-input-label-${input.id}`}
@@ -264,7 +255,7 @@ function WorkflowSettingsPanel({
                           <FieldLabel
                             htmlFor={`workflow-input-key-${input.id}`}
                           >
-                            Key
+                            {t('workflowEditor.settings.key')}
                           </FieldLabel>
                           <Input
                             id={`workflow-input-key-${input.id}`}
@@ -277,7 +268,7 @@ function WorkflowSettingsPanel({
                       </FieldGroup>
                       <Field>
                         <FieldLabel htmlFor={`workflow-input-type-${input.id}`}>
-                          Type
+                          {t('workflowEditor.settings.type')}
                         </FieldLabel>
                         <Select
                           items={inputTypeLabels}
@@ -309,7 +300,7 @@ function WorkflowSettingsPanel({
                         <FieldLabel
                           htmlFor={`workflow-input-description-${input.id}`}
                         >
-                          Help text
+                          {t('workflowEditor.settings.helpText')}
                         </FieldLabel>
                         <Textarea
                           id={`workflow-input-description-${input.id}`}
@@ -336,10 +327,10 @@ function WorkflowSettingsPanel({
                           <FieldLabel
                             htmlFor={`workflow-input-required-${input.id}`}
                           >
-                            Required
+                            {t('workflowEditor.settings.required')}
                           </FieldLabel>
                           <FieldDescription>
-                            A run cannot start without this value.
+                            {t('workflowEditor.settings.requiredDescription')}
                           </FieldDescription>
                         </FieldContent>
                       </Field>
@@ -348,9 +339,11 @@ function WorkflowSettingsPanel({
                         className='bg-muted/20 rounded-lg border p-3'
                       >
                         <FieldContent>
-                          <FieldLabel>Sensitive value</FieldLabel>
+                          <FieldLabel>
+                            {t('workflowEditor.settings.sensitive')}
+                          </FieldLabel>
                           <FieldDescription>
-                            Always replace this input in visible State.
+                            {t('workflowEditor.settings.sensitiveDescription')}
                           </FieldDescription>
                         </FieldContent>
                         <Switch
@@ -368,10 +361,11 @@ function WorkflowSettingsPanel({
               </FieldGroup>
               {executableNodes.length > 0 ? (
                 <FieldGroup className='gap-3 border-t pt-4'>
-                  <FieldLegend variant='label'>Raw input readers</FieldLegend>
+                  <FieldLegend variant='label'>
+                    {t('workflowEditor.settings.rawReaders')}
+                  </FieldLegend>
                   <FieldDescription>
-                    Ordinary nodes and Agent tools selected here may use the
-                    original run inputs. Agent prompts remain redacted.
+                    {t('workflowEditor.settings.rawReadersDescription')}
                   </FieldDescription>
                   {executableNodes.map((node) => (
                     <Field
@@ -395,7 +389,9 @@ function WorkflowSettingsPanel({
             </FieldSet>
             <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
-                <FieldLegend>Workflow outputs</FieldLegend>
+                <FieldLegend>
+                  {t('workflowEditor.settings.outputs')}
+                </FieldLegend>
                 <Button
                   type='button'
                   size='sm'
@@ -403,13 +399,11 @@ function WorkflowSettingsPanel({
                   onClick={addOutput}
                 >
                   <PlusIcon data-icon='inline-start' />
-                  Add output
+                  {t('workflowEditor.settings.addOutput')}
                 </Button>
               </div>
               <FieldDescription>
-                Declare the global State keys this workflow exposes when used as
-                a subworkflow. The node producing each value must publish that
-                key to Global State.
+                {t('workflowEditor.settings.outputsDescription')}
               </FieldDescription>
               <FieldGroup className='gap-4'>
                 {outputFields.map((output) => (
@@ -419,13 +413,17 @@ function WorkflowSettingsPanel({
                   >
                     <div className='flex items-center justify-between gap-2'>
                       <FieldLegend variant='label'>
-                        {output.label || 'Untitled output'}
+                        {output.label ||
+                          t('workflowEditor.settings.untitledOutput')}
                       </FieldLegend>
                       <Button
                         type='button'
                         size='icon-sm'
                         variant='ghost'
-                        aria-label={`Remove ${output.label || 'output'}`}
+                        aria-label={t('workflowEditor.settings.removeOutput', {
+                          name:
+                            output.label || t('workflowEditor.settings.output'),
+                        })}
                         onClick={() => removeOutput(output.id)}
                       >
                         <Trash2Icon />
@@ -436,7 +434,7 @@ function WorkflowSettingsPanel({
                         <FieldLabel
                           htmlFor={`workflow-output-label-${output.id}`}
                         >
-                          Label
+                          {t('workflowEditor.settings.label')}
                         </FieldLabel>
                         <Input
                           id={`workflow-output-label-${output.id}`}
@@ -452,7 +450,7 @@ function WorkflowSettingsPanel({
                         <FieldLabel
                           htmlFor={`workflow-output-key-${output.id}`}
                         >
-                          State key
+                          {t('workflowEditor.settings.stateKey')}
                         </FieldLabel>
                         <Input
                           id={`workflow-output-key-${output.id}`}

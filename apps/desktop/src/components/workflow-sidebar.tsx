@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { DraggableCore, type DraggableData } from 'react-draggable';
+import { useTranslation } from 'react-i18next';
 
 type WorkflowNodePaletteItem = {
   type: WorkflowNodeType;
@@ -162,8 +163,13 @@ function DraggablePaletteItem({
   onDrag,
   onDragStop,
 }: DraggablePaletteItemProps) {
+  const { t } = useTranslation();
   const nodeRef = useRef<HTMLDivElement>(null);
   const Icon = item.icon;
+  const label = t(`workflowEditor.palette.items.${item.type}.label`);
+  const description = t(
+    `workflowEditor.palette.items.${item.type}.description`,
+  );
 
   return (
     <DraggableCore
@@ -174,14 +180,14 @@ function DraggablePaletteItem({
     >
       <div ref={nodeRef}>
         <SidebarMenuButton
-          tooltip={item.label}
+          tooltip={label}
           className='h-auto cursor-grab py-2 active:cursor-grabbing'
         >
           <Icon className={item.iconClassName} aria-hidden='true' />
           <span className='flex min-w-0 flex-col gap-0.5'>
-            <span>{item.label}</span>
+            <span>{label}</span>
             <span className='text-muted-foreground text-xs font-normal'>
-              {item.description}
+              {description}
             </span>
           </span>
         </SidebarMenuButton>
@@ -191,6 +197,7 @@ function DraggablePaletteItem({
 }
 
 function WorkflowSidebar({ onNodeDrop }: WorkflowSidebarProps) {
+  const { t } = useTranslation();
   const [dragging, setDragging] = useState<{
     item: WorkflowNodePaletteItem;
     x: number;
@@ -242,16 +249,20 @@ function WorkflowSidebar({ onNodeDrop }: WorkflowSidebarProps) {
   return (
     <Sidebar variant='floating' className='absolute h-full!'>
       <SidebarHeader className='gap-0 px-3 py-2.5'>
-        <p className='text-sm font-medium tracking-tight'>Node palette</p>
+        <p className='text-sm font-medium tracking-tight'>
+          {t('workflowEditor.palette.title')}
+        </p>
         <p className='text-muted-foreground mt-0.5 text-xs'>
-          Drag nodes onto the canvas
+          {t('workflowEditor.palette.description')}
         </p>
       </SidebarHeader>
       <SidebarSeparator />
       <SidebarContent>
         {nodeGroups.map((group) => (
           <SidebarGroup key={group.label}>
-            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+            <SidebarGroupLabel>
+              {t(`workflowEditor.palette.groups.${group.label}`)}
+            </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => (
@@ -286,9 +297,13 @@ function WorkflowSidebar({ onNodeDrop }: WorkflowSidebarProps) {
               />
             )}
             <span className='flex min-w-0 flex-col gap-0.5'>
-              <span>{dragging.item.label}</span>
+              <span>
+                {t(`workflowEditor.palette.items.${dragging.item.type}.label`)}
+              </span>
               <span className='text-muted-foreground text-xs font-normal'>
-                {dragging.item.description}
+                {t(
+                  `workflowEditor.palette.items.${dragging.item.type}.description`,
+                )}
               </span>
             </span>
           </div>

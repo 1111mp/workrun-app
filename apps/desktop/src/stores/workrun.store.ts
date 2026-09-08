@@ -4,6 +4,7 @@ import { persist, type PersistStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 
 import { localProfileAvatarUrl } from '@/lib/avatar';
+import { i18n } from '@/lib/i18n';
 import { applyPendingTheme } from '@/lib/utils';
 import {
   getSystemTheme,
@@ -36,9 +37,9 @@ const storage: PersistStorage<Pick<WorkrunState, 'config' | 'resolvedTheme'>> =
 
       previousConfig = structuredClone(config);
 
-      // if (config.locale) {
-      //   void i18n.changeLanguage(config.locale);
-      // }
+      if (config.locale) {
+        void i18n.changeLanguage(config.locale);
+      }
 
       return {
         state: {

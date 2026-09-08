@@ -46,7 +46,7 @@ function AboutSettings() {
             }}
           >
             <ItemContent>
-              <ItemTitle>Synclan {t('settings.about.version')}</ItemTitle>
+              <ItemTitle>Workrun {t('settings.about.version')}</ItemTitle>
             </ItemContent>
             <ItemActions>
               <span className='text-muted-foreground'>v{version}</span>

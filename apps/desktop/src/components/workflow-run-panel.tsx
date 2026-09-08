@@ -19,6 +19,7 @@ import {
 import type { Node } from '@xyflow/react';
 import { PlayIcon } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 
 import { WorkflowRunOutput } from '@/components/workflow-output-panel';
@@ -76,6 +77,7 @@ function WorkflowRunForm({
   onClose,
   onRun,
 }: WorkflowRunFormProps) {
+  const { t } = useTranslation();
   const inputs = runInputs(settings);
   const [values, setValues] = useState<RunValues>(() =>
     initialValues(settings),
@@ -150,7 +152,9 @@ function WorkflowRunForm({
                       }
                     />
                     <FieldContent>
-                      <FieldDescription>Enabled</FieldDescription>
+                      <FieldDescription>
+                        {t('workflowEditor.enabled')}
+                      </FieldDescription>
                     </FieldContent>
                   </Field>
                 ) : (
@@ -175,7 +179,7 @@ function WorkflowRunForm({
       </div>
       <DrawerFooter>
         <Button type='button' variant='outline' onClick={onClose}>
-          Cancel
+          {t('apps.new.cancel')}
         </Button>
         <Button type='submit' disabled={isRunning}>
           {isRunning ? (
@@ -183,7 +187,7 @@ function WorkflowRunForm({
           ) : (
             <PlayIcon data-icon='inline-start' />
           )}
-          Run
+          {t('workflows.run')}
         </Button>
       </DrawerFooter>
     </form>
@@ -198,6 +202,7 @@ function WorkflowRunPanel({
   readOnly = false,
   onHistoricalClose,
 }: WorkflowRunPanelProps) {
+  const { t } = useTranslation();
   const {
     lastRunInput,
     open,
@@ -264,10 +269,9 @@ function WorkflowRunPanel({
         ) : (
           <>
             <DrawerHeader>
-              <DrawerTitle>Test run</DrawerTitle>
+              <DrawerTitle>{t('workflowEditor.testRun')}</DrawerTitle>
               <DrawerDescription>
-                Provide the values for this individual run. They are not saved
-                to the workflow.
+                {t('workflowEditor.testRunDescription')}
               </DrawerDescription>
             </DrawerHeader>
             <WorkflowRunForm

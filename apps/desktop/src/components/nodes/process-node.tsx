@@ -1,12 +1,14 @@
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { TerminalIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 function ProcessNode({
   data,
   isConnectable,
   selected,
 }: NodeProps<Node<WorkflowProcessNodeData>>) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -33,7 +35,9 @@ function ProcessNode({
         {data.description}
       </p>
       <p className='text-muted-foreground mt-3 truncate border-t border-lime-500/20 pt-2 text-xs'>
-        {data.processNodeId ? 'App selected' : 'Select an app'}
+        {data.processNodeId
+          ? t('workflowEditor.nodes.appSelected')
+          : t('workflowEditor.nodes.selectApp')}
       </p>
       <Handle
         type='source'

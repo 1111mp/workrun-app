@@ -53,6 +53,7 @@ import {
   TerminalIcon,
 } from 'lucide-react';
 import { Children, Fragment, type ReactNode, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
@@ -73,30 +74,34 @@ type WorkflowOutputPanelProps = {
   readOnly?: boolean;
 };
 
-function statusLabel(run: WorkflowRunView) {
-  if (run.status === 'interrupted' && !run.error) return 'Waiting for input';
+function statusLabel(run: WorkflowRunView, t: (key: string) => string) {
+  if (run.status === 'interrupted' && !run.error)
+    return t('workflowEditor.output.waitingForInput');
 
   const { status } = run;
   switch (status) {
     case 'running':
-      return 'Running';
+      return t('workflowEditor.output.status.running');
     case 'completed':
-      return 'Completed';
+      return t('workflowEditor.output.status.completed');
     case 'failed':
-      return 'Failed';
+      return t('workflowEditor.output.status.failed');
     case 'cancelled':
-      return 'Cancelled';
+      return t('workflowEditor.output.status.cancelled');
     case 'interrupted':
-      return 'Interrupted';
+      return t('workflowEditor.output.status.interrupted');
     default:
-      return 'Waiting to run';
+      return t('workflowEditor.output.waitingToRun');
   }
 }
 
-function rerunLabel(status: WorkflowRunView['status']) {
-  if (status === 'interrupted') return 'Resume';
-  if (status === 'failed') return 'Retry';
-  return 'Run again';
+function rerunLabel(
+  status: WorkflowRunView['status'],
+  t: (key: string) => string,
+) {
+  if (status === 'interrupted') return t('workflowEditor.output.resume');
+  if (status === 'failed') return t('workflowEditor.output.retry');
+  return t('workflowEditor.output.runAgain');
 }
 
 function durationLabel(run: WorkflowRunView) {
@@ -801,6 +806,7 @@ function WorkflowRunOutput({
   onSend,
   readOnly = false,
 }: WorkflowOutputPanelProps) {
+  const { t } = useTranslation();
   const [message, setMessage] = useState('');
   const duration = durationLabel(run);
   const output = run.messages.map((message) => message.content).join('\n\n');
@@ -830,9 +836,13 @@ function WorkflowRunOutput({
   return (
     <>
       <DrawerHeader>
-        <DrawerTitle>{isChat ? 'Chat' : 'Run output'}</DrawerTitle>
+        <DrawerTitle>
+          {isChat
+            ? t('workflowEditor.output.chat')
+            : t('workflowEditor.output.runOutput')}
+        </DrawerTitle>
         <DrawerDescription>
-          {statusLabel(run)}
+          {statusLabel(run, t)}
           {run.activeNodeId ? ` · ${displayNodeName(run.activeNodeId)}` : ''}
           {duration ? ` · ${duration}` : ''}
         </DrawerDescription>
@@ -842,14 +852,14 @@ function WorkflowRunOutput({
         {!isChat && isRunning && (
           <div className='text-muted-foreground flex items-center gap-2 px-4 py-2 text-sm'>
             <Spinner className='size-3.5' />
-            Running workflow…
+            {t('workflowEditor.output.runningWorkflow')}
           </div>
         )}
 
         {run.error && (
           <Alert variant='destructive' className='m-4 w-auto'>
             <CircleAlertIcon />
-            <AlertTitle>Workflow failed</AlertTitle>
+            <AlertTitle>{t('workflowEditor.output.workflowFailed')}</AlertTitle>
             <AlertDescription>{run.error}</AlertDescription>
           </Alert>
         )}
@@ -865,10 +875,12 @@ function WorkflowRunOutput({
                         <MarkerIcon>
                           <CheckCircle2Icon />
                         </MarkerIcon>
-                        <MarkerContent>1. Start</MarkerContent>
+                        <MarkerContent>
+                          1. {t('workflowEditor.output.start')}
+                        </MarkerContent>
                       </Marker>
                       <p className='text-muted-foreground mt-2 text-sm'>
-                        Workflow started.
+                        {t('workflowEditor.output.workflowStarted')}
                       </p>
                     </div>
                   </MessageScrollerItem>
@@ -896,7 +908,10 @@ function WorkflowRunOutput({
                           </MarkerContent>
                         </Marker>
                         <TraceResult entry={entry} />
-                        <ExecutionOutput label='Process output' log={log} />
+                        <ExecutionOutput
+                          label={t('workflowEditor.output.processOutput')}
+                          log={log}
+                        />
                       </MessageScrollerItem>
                     );
                   })}
@@ -918,11 +933,12 @@ function WorkflowRunOutput({
                           <CheckCircle2Icon />
                         </MarkerIcon>
                         <MarkerContent>
-                          {execution.length + 2}. End
+                          {execution.length + 2}.{' '}
+                          {t('workflowEditor.output.end')}
                         </MarkerContent>
                       </Marker>
                       <p className='text-muted-foreground mt-2 text-sm'>
-                        Workflow completed.
+                        {t('workflowEditor.output.workflowCompleted')}
                       </p>
                     </MessageScrollerItem>
                   )}
@@ -942,14 +958,14 @@ function WorkflowRunOutput({
                       <EmptyTitle>
                         {run.status === 'running'
                           ? isChat
-                            ? 'Thinking…'
-                            : 'Waiting for output'
-                          : 'No output was produced'}
+                            ? t('workflowEditor.output.thinking')
+                            : t('workflowEditor.output.waitingForOutput')
+                          : t('workflowEditor.output.noOutput')}
                       </EmptyTitle>
                       <EmptyDescription>
                         {isChat
-                          ? 'Send a message to start this workflow.'
-                          : 'Model responses will appear here as they stream.'}
+                          ? t('workflowEditor.output.sendMessageToStart')
+                          : t('workflowEditor.output.responsesAppearHere')}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -1001,7 +1017,9 @@ function WorkflowRunOutput({
                                     showAgentResponse={false}
                                   />
                                   <ExecutionOutput
-                                    label='Process output'
+                                    label={t(
+                                      'workflowEditor.output.processOutput',
+                                    )}
                                     log={log}
                                   />
                                 </MessageScrollerItem>
@@ -1043,10 +1061,10 @@ function WorkflowRunOutput({
                           </span>
                           <span className='flex flex-col items-start'>
                             <span className='text-sm font-semibold'>
-                              Final state
+                              {t('workflowEditor.output.finalState')}
                             </span>
                             <span className='text-muted-foreground text-xs'>
-                              Workflow data at completion
+                              {t('workflowEditor.output.finalStateDescription')}
                             </span>
                           </span>
                         </span>
@@ -1079,15 +1097,15 @@ function WorkflowRunOutput({
                 onClick={onRunAgain}
               >
                 <RotateCcwIcon data-icon='inline-start' />
-                {rerunLabel(run.status)}
+                {rerunLabel(run.status, t)}
               </Button>
             )}
           <form className='w-full' onSubmit={sendMessage}>
             <InputGroup className='h-auto'>
               <InputGroupTextarea
-                aria-label='Message'
+                aria-label={t('workflowEditor.output.message')}
                 disabled={readOnly || isRunning}
-                placeholder='What are we working on today?'
+                placeholder={t('workflowEditor.output.messagePlaceholder')}
                 value={message}
                 onChange={(event) => setMessage(event.target.value)}
                 onKeyDown={(event) => {
@@ -1099,7 +1117,7 @@ function WorkflowRunOutput({
               />
               <InputGroupAddon align='block-end' className='justify-between'>
                 <InputGroupText>
-                  Enter to send · Shift+Enter for new line
+                  {t('workflowEditor.output.sendHint')}
                 </InputGroupText>
                 <InputGroupButton
                   disabled={readOnly || !message.trim() || isRunning}
@@ -1108,7 +1126,9 @@ function WorkflowRunOutput({
                   variant='default'
                 >
                   <ArrowUpIcon />
-                  <span className='sr-only'>Send</span>
+                  <span className='sr-only'>
+                    {t('workflowEditor.output.send')}
+                  </span>
                 </InputGroupButton>
               </InputGroupAddon>
             </InputGroup>
@@ -1119,15 +1139,15 @@ function WorkflowRunOutput({
           {!readOnly && (
             <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
               <RotateCcwIcon data-icon='inline-start' />
-              {rerunLabel(run.status)}
+              {rerunLabel(run.status, t)}
             </Button>
           )}
           <Button variant='outline' disabled={!output} onClick={copyAll}>
             <ClipboardIcon data-icon='inline-start' />
-            Copy all
+            {t('workflowEditor.output.copyAll')}
           </Button>
           <Button type='button' onClick={onClose}>
-            Close
+            {t('workflowEditor.output.close')}
           </Button>
         </DrawerFooter>
       )}

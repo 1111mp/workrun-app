@@ -40,6 +40,7 @@ import {
 import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { getProcessNodes } from '@/services/process-node';
 import { listSkills, type SkillSummary } from '@/services/skill';
@@ -53,22 +54,6 @@ type WorkflowNodeInspectorProps = {
   onClose: () => void;
   onDataChange: (nodeId: string, patch: Record<string, unknown>) => void;
   modelProfiles?: ModelDefinition[];
-};
-
-const nodeTitles: Record<string, string> = {
-  agent: 'Agent',
-  codeact_agent: 'CodeAct Agent',
-  remote_agent: 'Remote Agent',
-  process: 'App',
-  subworkflow: 'Subworkflow',
-  if_else: 'If / Else',
-  switch: 'Switch',
-  human_review: 'Human Review',
-  ask_user_question: 'Ask User Question',
-  group: 'Group',
-  start: 'Start',
-  end: 'End',
-  terminate: 'Terminate workflow',
 };
 
 const workflowOutputTypeLabels: Record<WorkflowInputType, string> = {
@@ -271,11 +256,6 @@ function getCodeActMounts(data: Record<string, unknown>) {
   });
 }
 
-const mountAccessOptions = [
-  { label: 'Read only', value: 'read_only' },
-  { label: 'Read/write', value: 'read_write' },
-];
-
 function getCodeActEnvironment(data: Record<string, unknown>) {
   const value = data.environment;
   if (!Array.isArray(value)) return [];
@@ -387,8 +367,16 @@ function CodeActRuntimeFields({
   data: Record<string, unknown>;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
+  const { t } = useTranslation();
   const mounts = getCodeActMounts(data);
   const environment = getCodeActEnvironment(data);
+  const mountAccessOptions = [
+    { label: t('workflowEditor.inspector.mountReadOnly'), value: 'read_only' },
+    {
+      label: t('workflowEditor.inspector.mountReadWrite'),
+      value: 'read_write',
+    },
+  ];
 
   const updateMount = (index: number, patch: Partial<WorkflowCodeActMount>) => {
     onChange({
@@ -500,7 +488,11 @@ function CodeActRuntimeFields({
                       })
                     }
                   >
-                    <SelectTrigger aria-label={`Mount ${index + 1} access`}>
+                    <SelectTrigger
+                      aria-label={t('workflowEditor.inspector.mountAccess', {
+                        index: index + 1,
+                      })}
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -644,9 +636,17 @@ function WorkflowNodeInspector({
   onDataChange,
   modelProfiles = [],
 }: WorkflowNodeInspectorProps) {
+  const { t } = useTranslation();
   const data = node?.data ?? {};
-  const title = node ? (nodeTitles[node.type ?? ''] ?? 'Node') : 'Node';
+  const title = node
+    ? t(`workflowEditor.inspector.nodes.${node.type ?? 'unknown'}`, {
+        defaultValue: t('workflowEditor.inspector.nodes.unknown'),
+      })
+    : t('workflowEditor.inspector.nodes.unknown');
   const profilesByProvider = groupModelProfiles(modelProfiles);
+  const selectedModelProfile = modelProfiles.find(
+    (profile) => profile.id === getText(data, 'modelProfileId'),
+  );
 
   const processNodes = useQuery({
     queryKey: ['processNodes'],
@@ -692,33 +692,38 @@ function WorkflowNodeInspector({
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
-              title='Identity'
-              description='How this agent is identified on the workflow canvas.'
+              title={t('workflowEditor.inspector.identity')}
+              description={t(
+                'workflowEditor.inspector.agentIdentityDescription',
+              )}
             >
               <TextField
                 id='agent-name'
-                label='Name'
-                description='A short name shown on the workflow canvas.'
+                label={t('workflowEditor.inspector.name')}
+                description={t('workflowEditor.inspector.nameDescription')}
                 value={getText(data, 'name')}
                 onChange={(name) => updateData({ name })}
               />
               <TextareaField
                 id='agent-description'
-                label='Description'
-                description='Briefly describe this agent’s responsibility for people reading the workflow.'
+                label={t('workflowEditor.inspector.description')}
+                description={t('workflowEditor.inspector.agentDescription')}
                 value={getText(data, 'description')}
                 onChange={(description) => updateData({ description })}
               />
             </InspectorSection>
             <InspectorSection
-              title='Model and instructions'
-              description='Choose the model configuration and define how the agent should behave.'
+              title={t('workflowEditor.inspector.modelAndInstructions')}
+              description={t(
+                'workflowEditor.inspector.modelAndInstructionsDescription',
+              )}
             >
               <Field>
-                <Label htmlFor='agent-model-profile'>Model profile</Label>
+                <Label htmlFor='agent-model-profile'>
+                  {t('workflowEditor.inspector.modelProfile')}
+                </Label>
                 <FieldDescription>
-                  Selects the provider, model, and encrypted credential used by
-                  this agent.
+                  {t('workflowEditor.inspector.modelProfileDescription')}
                 </FieldDescription>
                 <Select
                   value={getText(data, 'modelProfileId')}
@@ -727,7 +732,11 @@ function WorkflowNodeInspector({
                   }
                 >
                   <SelectTrigger id='agent-model-profile' className='w-full'>
-                    <SelectValue placeholder='Select a model profile' />
+                    <span className='flex flex-1 truncate text-left'>
+                      {selectedModelProfile
+                        ? `${selectedModelProfile.name} · ${selectedModelProfile.model}`
+                        : t('workflowEditor.inspector.selectModelProfile')}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
                     {Object.entries(profilesByProvider).map(
@@ -753,8 +762,10 @@ function WorkflowNodeInspector({
               </Field>
               <TextareaField
                 id='agent-instruction'
-                label='Instruction'
-                description='Give the agent its role, goals, constraints, and the expected output.'
+                label={t('workflowEditor.inspector.instruction')}
+                description={t(
+                  'workflowEditor.inspector.instructionDescription',
+                )}
                 value={getText(data, 'instruction')}
                 onChange={(instruction) => updateData({ instruction })}
                 className='min-h-36 font-mono text-xs'
@@ -762,17 +773,21 @@ function WorkflowNodeInspector({
               {!isCodeActAgent && !getText(data, 'outputSchema').trim() && (
                 <TextField
                   id='agent-output-key'
-                  label='Output key'
-                  description='Optionally save the complete final response to this workflow state key.'
+                  label={t('workflowEditor.inspector.outputKey')}
+                  description={t(
+                    'workflowEditor.inspector.outputKeyDescription',
+                  )}
                   value={getText(data, 'outputKey')}
                   onChange={(outputKey) => updateData({ outputKey })}
-                  placeholder='Output key'
+                  placeholder={t('workflowEditor.inspector.outputKey')}
                 />
               )}
               <TextareaField
                 id='agent-output-schema'
-                label='Structured output schema (advanced)'
-                description='Optional JSON Schema. Its root must be an object; final properties are written to this node’s State. It replaces Output key for Local Agents.'
+                label={t('workflowEditor.inspector.outputSchema')}
+                description={t(
+                  'workflowEditor.inspector.outputSchemaDescription',
+                )}
                 value={getText(data, 'outputSchema')}
                 onChange={(outputSchema) => updateData({ outputSchema })}
                 placeholder={
@@ -783,14 +798,18 @@ function WorkflowNodeInspector({
             </InspectorSection>
             {!isCodeActAgent && (
               <InspectorSection
-                title='Generation controls'
-                description='Optional sampling settings. Leave either field empty to use the model default.'
+                title={t('workflowEditor.inspector.generationControls')}
+                description={t(
+                  'workflowEditor.inspector.generationControlsDescription',
+                )}
               >
                 <FieldGroup className='grid grid-cols-2 gap-4'>
                   <Field>
-                    <Label htmlFor='agent-temperature'>Temperature</Label>
+                    <Label htmlFor='agent-temperature'>
+                      {t('workflowEditor.inspector.temperature')}
+                    </Label>
                     <FieldDescription>
-                      Controls variation (0–2).
+                      {t('workflowEditor.inspector.temperatureDescription')}
                     </FieldDescription>
                     <Input
                       id='agent-temperature'
@@ -809,7 +828,7 @@ function WorkflowNodeInspector({
                   <Field>
                     <Label htmlFor='agent-top-p'>Top P</Label>
                     <FieldDescription>
-                      Controls token diversity (0–1).
+                      {t('workflowEditor.inspector.topPDescription')}
                     </FieldDescription>
                     <Input
                       id='agent-top-p'
@@ -828,11 +847,11 @@ function WorkflowNodeInspector({
             )}
             {!isCodeActAgent && (
               <InspectorSection
-                title='Skills'
-                description='Attach local Agent Skills. Their instructions are added to this agent and their allowed tools restrict its selected tools.'
+                title={t('workflowEditor.inspector.skills')}
+                description={t('workflowEditor.inspector.skillsDescription')}
               >
                 <Field>
-                  <Label>Active skills</Label>
+                  <Label>{t('workflowEditor.inspector.activeSkills')}</Label>
                   <SkillCombobox
                     skills={skills.data ?? []}
                     selectedNames={getPersonalSkillNames(data)}
@@ -850,11 +869,11 @@ function WorkflowNodeInspector({
               </InspectorSection>
             )}
             <InspectorSection
-              title='Tools'
-              description='Select local Tool Apps or tools discovered from running MCP servers.'
+              title={t('workflowEditor.inspector.tools')}
+              description={t('workflowEditor.inspector.toolsDescription')}
             >
               <Field>
-                <Label>Available tools</Label>
+                <Label>{t('workflowEditor.inspector.availableTools')}</Label>
                 <ToolCombobox
                   tools={tools.data ?? []}
                   selectedIds={selectedToolIds}
@@ -880,10 +899,10 @@ function WorkflowNodeInspector({
                 {isCodeActAgent && (
                   <Field>
                     <Label htmlFor='codeact-agent-max-iterations'>
-                      Iteration limit
+                      {t('workflowEditor.inspector.iterationLimit')}
                     </Label>
                     <FieldDescription>
-                      Maximum model turns to write or repair a script.
+                      {t('workflowEditor.inspector.iterationLimitDescription')}
                     </FieldDescription>
                     <Input
                       id='codeact-agent-max-iterations'
@@ -901,9 +920,11 @@ function WorkflowNodeInspector({
                   </Field>
                 )}
                 <Field>
-                  <Label htmlFor='agent-max-tool-calls'>Call limit</Label>
+                  <Label htmlFor='agent-max-tool-calls'>
+                    {t('workflowEditor.inspector.callLimit')}
+                  </Label>
                   <FieldDescription>
-                    Maximum Tool App calls in one Agent run.
+                    {t('workflowEditor.inspector.callLimitDescription')}
                   </FieldDescription>
                   <Input
                     id='agent-max-tool-calls'
@@ -920,9 +941,11 @@ function WorkflowNodeInspector({
                   />
                 </Field>
                 <Field>
-                  <Label htmlFor='agent-tool-timeout'>Tool timeout</Label>
+                  <Label htmlFor='agent-tool-timeout'>
+                    {t('workflowEditor.inspector.toolTimeout')}
+                  </Label>
                   <FieldDescription>
-                    Seconds allowed for each Tool App call.
+                    {t('workflowEditor.inspector.toolTimeoutDescription')}
                   </FieldDescription>
                   <Input
                     id='agent-tool-timeout'
@@ -950,32 +973,36 @@ function WorkflowNodeInspector({
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
-              title='Identity'
-              description='How this service is identified on the workflow canvas.'
+              title={t('workflowEditor.inspector.identity')}
+              description={t(
+                'workflowEditor.inspector.remoteIdentityDescription',
+              )}
             >
               <TextField
                 id='remote-agent-name'
-                label='Name'
-                description='A short name shown on the workflow canvas.'
+                label={t('workflowEditor.inspector.name')}
+                description={t('workflowEditor.inspector.nameDescription')}
                 value={getText(data, 'name')}
                 onChange={(name) => updateData({ name })}
               />
               <TextareaField
                 id='remote-agent-description'
-                label='Description'
-                description='Explain what the remote service does and when this workflow should call it.'
+                label={t('workflowEditor.inspector.description')}
+                description={t('workflowEditor.inspector.remoteDescription')}
                 value={getText(data, 'description')}
                 onChange={(description) => updateData({ description })}
               />
             </InspectorSection>
             <InspectorSection
-              title='Connection'
-              description='The remote endpoint Workrun invokes for this node.'
+              title={t('workflowEditor.inspector.connection')}
+              description={t('workflowEditor.inspector.connectionDescription')}
             >
               <TextField
                 id='remote-agent-url'
-                label='Service URL'
-                description='The HTTPS endpoint used to invoke the remote agent service.'
+                label={t('workflowEditor.inspector.serviceUrl')}
+                description={t(
+                  'workflowEditor.inspector.serviceUrlDescription',
+                )}
                 type='url'
                 value={getText(data, 'url')}
                 onChange={(url) => updateData({ url })}
@@ -993,23 +1020,27 @@ function WorkflowNodeInspector({
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
-              title='Identity'
-              description='How this app is identified on the workflow canvas.'
+              title={t('workflowEditor.inspector.identity')}
+              description={t('workflowEditor.inspector.appIdentityDescription')}
             >
               <TextField
                 id='process-name'
-                label='Name'
-                description='A short name shown on the workflow canvas.'
+                label={t('workflowEditor.inspector.name')}
+                description={t('workflowEditor.inspector.nameDescription')}
                 value={getText(data, 'name')}
                 onChange={(name) => updateData({ name })}
               />
             </InspectorSection>
             <InspectorSection
-              title='App connection'
-              description='Choose the installed app this workflow node will run.'
+              title={t('workflowEditor.inspector.appConnection')}
+              description={t(
+                'workflowEditor.inspector.appConnectionDescription',
+              )}
             >
               <Field>
-                <Label htmlFor='process-node'>App</Label>
+                <Label htmlFor='process-node'>
+                  {t('workflowEditor.inspector.app')}
+                </Label>
                 <FieldDescription>
                   The selected local app receives this node’s authorized State
                   view as JSON on stdin and returns its result with{' '}
@@ -1036,8 +1067,8 @@ function WorkflowNodeInspector({
                     <span className='flex flex-1 truncate text-left'>
                       {selectedApp?.definition.name ??
                         (processNodes.isLoading
-                          ? 'Loading apps…'
-                          : 'Select an installed app')}
+                          ? t('workflowEditor.inspector.loadingApps')
+                          : t('workflowEditor.inspector.selectInstalledApp'))}
                     </span>
                   </SelectTrigger>
                   <SelectContent>
@@ -1059,15 +1090,14 @@ function WorkflowNodeInspector({
                 </Select>
                 {selectedId && !selectedApp ? (
                   <FieldDescription className='text-destructive'>
-                    The selected app is unavailable. Choose another installed
-                    app.
+                    {t('workflowEditor.inspector.selectedAppUnavailable')}
                   </FieldDescription>
                 ) : null}
               </Field>
               <TextareaField
                 id='process-description'
-                label='Description'
-                description='Explain what this app does in the workflow.'
+                label={t('workflowEditor.inspector.description')}
+                description={t('workflowEditor.inspector.appDescription')}
                 value={getText(data, 'description')}
                 onChange={(description) => updateData({ description })}
               />
@@ -1091,14 +1121,17 @@ function WorkflowNodeInspector({
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
-              title='Referenced workflow'
-              description='This node runs the selected saved workflow as an isolated child graph.'
+              title={t('workflowEditor.inspector.referencedWorkflow')}
+              description={t(
+                'workflowEditor.inspector.referencedWorkflowDescription',
+              )}
             >
               <Field>
-                <Label htmlFor='subworkflow-id'>Workflow</Label>
+                <Label htmlFor='subworkflow-id'>
+                  {t('workflowEditor.inspector.workflow')}
+                </Label>
                 <FieldDescription>
-                  Changes to the referenced workflow apply the next time this
-                  workflow runs.
+                  {t('workflowEditor.inspector.referencedWorkflowChanges')}
                 </FieldDescription>
                 <Select
                   value={selectedWorkflowId}
@@ -1116,8 +1149,8 @@ function WorkflowNodeInspector({
                     <span className='flex flex-1 truncate text-left'>
                       {selectedWorkflow?.document.settings.name ||
                         (workflows.isLoading
-                          ? 'Loading workflows…'
-                          : 'Select a saved workflow')}
+                          ? t('workflowEditor.inspector.loadingWorkflows')
+                          : t('workflowEditor.inspector.selectSavedWorkflow'))}
                     </span>
                   </SelectTrigger>
                   <SelectContent>
@@ -1127,7 +1160,7 @@ function WorkflowNodeInspector({
                         .map((workflow) => (
                           <SelectItem key={workflow.id} value={workflow.id}>
                             {workflow.document.settings.name ||
-                              'Untitled workflow'}
+                              t('workflowEditor.inspector.untitledWorkflow')}
                           </SelectItem>
                         ))}
                     </SelectGroup>
@@ -1135,8 +1168,7 @@ function WorkflowNodeInspector({
                 </Select>
                 {selectedWorkflowId && !selectedWorkflow ? (
                   <FieldDescription className='text-destructive'>
-                    The selected workflow is unavailable. Choose another
-                    workflow.
+                    {t('workflowEditor.inspector.selectedWorkflowUnavailable')}
                   </FieldDescription>
                 ) : null}
               </Field>
@@ -1145,32 +1177,34 @@ function WorkflowNodeInspector({
                   <div className='border-primary/15 bg-primary/5 flex items-start justify-between gap-3 border-b px-4 py-3'>
                     <div>
                       <p className='text-sm font-medium'>
-                        Child workflow outputs
+                        {t('workflowEditor.inspector.childWorkflowOutputs')}
                       </p>
                       <p className='text-muted-foreground mt-1 text-xs leading-5'>
-                        Values returned by{' '}
+                        {t('workflowEditor.inspector.valuesReturnedBy')}{' '}
                         {selectedWorkflow.document.settings.name ||
-                          'this workflow'}
+                          t('workflowEditor.inspector.thisWorkflow')}
                         .
                       </p>
                     </div>
                     <Badge variant='secondary' className='shrink-0'>
-                      {childOutputs.length} outputs
+                      {t('workflowEditor.inspector.outputCount', {
+                        count: childOutputs.length,
+                      })}
                     </Badge>
                   </div>
                   <div className='space-y-3 p-4'>
                     <div className='grid grid-cols-2 gap-2'>
                       <div className='bg-muted/40 rounded-lg border px-3 py-2.5'>
                         <p className='text-muted-foreground text-[11px]'>
-                          Default location
+                          {t('workflowEditor.inspector.defaultLocation')}
                         </p>
                         <p className='mt-1 text-xs font-medium'>
-                          This node’s private State
+                          {t('workflowEditor.inspector.privateState')}
                         </p>
                       </div>
                       <div className='border-primary/25 bg-primary/5 rounded-lg border px-3 py-2.5'>
                         <p className='text-primary text-[11px]'>
-                          Shared to Global State
+                          {t('workflowEditor.inspector.sharedToGlobalState')}
                         </p>
                         <p className='mt-1 text-xs font-medium'>
                           {publishedOutputCount} of {childOutputs.length}{' '}
@@ -1204,8 +1238,8 @@ function WorkflowNodeInspector({
                                 }
                               >
                                 {publishedOutputKeys.has(output.key)
-                                  ? 'Global'
-                                  : 'Private'}
+                                  ? t('workflowEditor.inspector.global')
+                                  : t('workflowEditor.inspector.private')}
                               </Badge>
                             </div>
                           </div>
@@ -1214,17 +1248,17 @@ function WorkflowNodeInspector({
                     ) : (
                       <div className='rounded-lg border border-dashed px-3 py-4'>
                         <p className='text-sm font-medium'>
-                          No declared outputs
+                          {t('workflowEditor.inspector.noDeclaredOutputs')}
                         </p>
                         <p className='text-muted-foreground mt-1 text-xs leading-5'>
-                          Add outputs in the child workflow’s settings to make
-                          its result contract visible here.
+                          {t(
+                            'workflowEditor.inspector.noDeclaredOutputsDescription',
+                          )}
                         </p>
                       </div>
                     )}
                     <p className='text-muted-foreground text-xs leading-5'>
-                      Private outputs can be read by nodes allowed in State
-                      access. Publish only the values the whole workflow needs.
+                      {t('workflowEditor.inspector.privateOutputsDescription')}
                     </p>
                   </div>
                 </div>
@@ -1236,11 +1270,11 @@ function WorkflowNodeInspector({
       case 'if_else':
         return (
           <FieldGroup className='gap-7'>
-            <InspectorSection title='Node details'>
+            <InspectorSection title={t('workflowEditor.inspector.nodeDetails')}>
               <TextField
                 id='if-else-label'
-                label='Name'
-                description='A short name shown on the workflow canvas.'
+                label={t('workflowEditor.inspector.name')}
+                description={t('workflowEditor.inspector.nameDescription')}
                 value={getText(data, 'label')}
                 onChange={(label) => updateData({ label })}
               />
@@ -1259,11 +1293,17 @@ function WorkflowNodeInspector({
                   className='bg-muted/20 gap-4 rounded-xl border p-4'
                 >
                   <FieldLegend>
-                    {isTrueBranch ? 'True branch' : 'False branch'}
+                    {isTrueBranch
+                      ? t('workflowEditor.inspector.trueBranch')
+                      : t('workflowEditor.inspector.falseBranch')}
                   </FieldLegend>
                   <TextField
                     id={`if-else-${branch}-label`}
-                    label={`${isTrueBranch ? 'True' : 'False'} label`}
+                    label={
+                      isTrueBranch
+                        ? t('workflowEditor.inspector.trueLabel')
+                        : t('workflowEditor.inspector.falseLabel')
+                    }
                     value={current.label}
                     onChange={(label) =>
                       updateData({
@@ -1276,13 +1316,17 @@ function WorkflowNodeInspector({
                   />
                   <TextareaField
                     id={`if-else-${branch}-condition`}
-                    label={`${isTrueBranch ? 'True' : 'False'} condition`}
+                    label={
+                      isTrueBranch
+                        ? t('workflowEditor.inspector.trueCondition')
+                        : t('workflowEditor.inspector.falseCondition')
+                    }
                     placeholder={
                       isTrueBranch
-                        ? 'When condition is true'
-                        : 'When condition is false'
+                        ? t('workflowEditor.inspector.whenConditionTrue')
+                        : t('workflowEditor.inspector.whenConditionFalse')
                     }
-                    description='For example: score >= 80 or approved == true.'
+                    description={t('workflowEditor.inspector.conditionExample')}
                     value={current.condition}
                     onChange={(condition) =>
                       updateData({
@@ -1304,18 +1348,18 @@ function WorkflowNodeInspector({
 
         return (
           <FieldGroup className='gap-7'>
-            <InspectorSection title='Node details'>
+            <InspectorSection title={t('workflowEditor.inspector.nodeDetails')}>
               <TextField
                 id='switch-label'
-                label='Name'
-                description='A short name shown on the workflow canvas.'
+                label={t('workflowEditor.inspector.name')}
+                description={t('workflowEditor.inspector.nameDescription')}
                 value={getText(data, 'label')}
                 onChange={(label) => updateData({ label })}
               />
             </InspectorSection>
             <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
-                <FieldLegend>Cases</FieldLegend>
+                <FieldLegend>{t('workflowEditor.inspector.cases')}</FieldLegend>
                 <Button
                   type='button'
                   size='sm'
@@ -1326,7 +1370,9 @@ function WorkflowNodeInspector({
                         ...cases,
                         {
                           id: crypto.randomUUID(),
-                          label: `Case ${cases.length + 1}`,
+                          label: t('workflowEditor.inspector.case', {
+                            index: cases.length + 1,
+                          }),
                           condition: '',
                         },
                       ],
@@ -1334,12 +1380,11 @@ function WorkflowNodeInspector({
                   }
                 >
                   <PlusIcon data-icon='inline-start' />
-                  Add case
+                  {t('workflowEditor.inspector.addCase')}
                 </Button>
               </div>
               <FieldDescription>
-                Cases are evaluated from top to bottom. The first matching
-                condition determines the outgoing branch.
+                {t('workflowEditor.inspector.casesDescription')}
               </FieldDescription>
               <FieldGroup className='gap-4'>
                 {cases.map((switchCase, index) => (
@@ -1349,13 +1394,17 @@ function WorkflowNodeInspector({
                   >
                     <div className='flex items-center justify-between gap-2'>
                       <FieldLegend variant='label'>
-                        Case {index + 1}
+                        {t('workflowEditor.inspector.case', {
+                          index: index + 1,
+                        })}
                       </FieldLegend>
                       <Button
                         type='button'
                         size='icon-sm'
                         variant='ghost'
-                        aria-label={`Remove case ${index + 1}`}
+                        aria-label={t('workflowEditor.inspector.removeCase', {
+                          index: index + 1,
+                        })}
                         onClick={() =>
                           updateData({
                             cases: cases.filter(
@@ -1369,9 +1418,11 @@ function WorkflowNodeInspector({
                     </div>
                     <TextField
                       id={`switch-case-${switchCase.id}-label`}
-                      label='Label'
+                      label={t('workflowEditor.inspector.label')}
                       value={switchCase.label}
-                      placeholder={`Case ${index + 1}`}
+                      placeholder={t('workflowEditor.inspector.case', {
+                        index: index + 1,
+                      })}
                       onChange={(label) =>
                         updateData({
                           cases: cases.map((item) =>
@@ -1384,9 +1435,11 @@ function WorkflowNodeInspector({
                     />
                     <TextareaField
                       id={`switch-case-${switchCase.id}-condition`}
-                      label='Condition'
+                      label={t('workflowEditor.inspector.condition')}
                       value={switchCase.condition}
-                      placeholder={`When condition ${index + 1} is met`}
+                      placeholder={t('workflowEditor.inspector.whenCaseMet', {
+                        index: index + 1,
+                      })}
                       onChange={(condition) =>
                         updateData({
                           cases: cases.map((item) =>
@@ -1402,24 +1455,26 @@ function WorkflowNodeInspector({
               </FieldGroup>
             </FieldSet>
             <FieldSet className='bg-card gap-4 rounded-xl border p-4 shadow-xs'>
-              <FieldLegend>Default branch</FieldLegend>
+              <FieldLegend>
+                {t('workflowEditor.inspector.defaultBranch')}
+              </FieldLegend>
               <FieldDescription>
-                Used when no case condition matches.
+                {t('workflowEditor.inspector.defaultBranchDescription')}
               </FieldDescription>
               <TextField
                 disabled
                 id='switch-default-label'
-                label='Label'
+                label={t('workflowEditor.inspector.label')}
                 value={defaultCase.label}
-                placeholder='Default'
+                placeholder={t('workflowEditor.inspector.default')}
                 onChange={() => undefined}
               />
               <TextareaField
                 disabled
                 id='switch-default-condition'
-                label='Condition'
+                label={t('workflowEditor.inspector.condition')}
                 value={defaultCase.condition}
-                placeholder='Other cases'
+                placeholder={t('workflowEditor.inspector.otherCases')}
                 onChange={() => undefined}
               />
             </FieldSet>
@@ -1430,34 +1485,40 @@ function WorkflowNodeInspector({
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
-              title='Review request'
-              description='The workflow pauses here. Connect the Approved and Rejected outputs to choose what happens next.'
+              title={t('workflowEditor.inspector.reviewRequest')}
+              description={t(
+                'workflowEditor.inspector.reviewRequestDescription',
+              )}
             >
               <TextField
                 id='human-review-title'
-                label='Title'
+                label={t('workflowEditor.inspector.title')}
                 value={getText(data, 'title')}
                 onChange={(title) => updateData({ title })}
               />
               <TextareaField
                 id='human-review-description'
-                label='Description'
-                description='Explain the decision the reviewer needs to make.'
+                label={t('workflowEditor.inspector.description')}
+                description={t('workflowEditor.inspector.reviewDescription')}
                 value={getText(data, 'description')}
                 onChange={(description) => updateData({ description })}
               />
               <TextField
                 id='human-review-content-key'
-                label='Content key'
-                description='The workflow state value shown to the reviewer.'
+                label={t('workflowEditor.inspector.contentKey')}
+                description={t(
+                  'workflowEditor.inspector.contentKeyDescription',
+                )}
                 value={getText(data, 'contentKey')}
                 onChange={(contentKey) => updateData({ contentKey })}
-                placeholder='Content key'
+                placeholder={t('workflowEditor.inspector.contentKey')}
               />
               <TextField
                 id='human-review-context-keys'
-                label='Context keys'
-                description='Comma-separated read-only state keys shown below the review content.'
+                label={t('workflowEditor.inspector.contextKeys')}
+                description={t(
+                  'workflowEditor.inspector.contextKeysDescription',
+                )}
                 value={getStringArray(data, 'contextKeys').join(', ')}
                 onChange={(value) =>
                   updateData({
@@ -1470,10 +1531,11 @@ function WorkflowNodeInspector({
               />
               <Field orientation='horizontal'>
                 <div className='flex flex-1 flex-col gap-1'>
-                  <Label htmlFor='human-review-editable'>Allow editing</Label>
+                  <Label htmlFor='human-review-editable'>
+                    {t('workflowEditor.inspector.allowEditing')}
+                  </Label>
                   <FieldDescription>
-                    Write the edited text back to this content key when
-                    approved.
+                    {t('workflowEditor.inspector.allowEditingDescription')}
                   </FieldDescription>
                 </div>
                 <Switch
@@ -1490,26 +1552,30 @@ function WorkflowNodeInspector({
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
-              title='Question'
-              description='The workflow pauses here and continues through the output for the selected option.'
+              title={t('workflowEditor.inspector.question')}
+              description={t('workflowEditor.inspector.questionDescription')}
             >
               <TextField
                 id='ask-user-question-title'
-                label='Question'
+                label={t('workflowEditor.inspector.question')}
                 value={getText(data, 'title')}
                 onChange={(title) => updateData({ title })}
               />
               <TextareaField
                 id='ask-user-question-description'
-                label='Description'
-                description='Optional context shown before the choices.'
+                label={t('workflowEditor.inspector.description')}
+                description={t(
+                  'workflowEditor.inspector.questionContextDescription',
+                )}
                 value={getText(data, 'description')}
                 onChange={(description) => updateData({ description })}
               />
             </InspectorSection>
             <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
-                <FieldLegend>Options</FieldLegend>
+                <FieldLegend>
+                  {t('workflowEditor.inspector.options')}
+                </FieldLegend>
                 <Button
                   type='button'
                   size='sm'
@@ -1527,12 +1593,11 @@ function WorkflowNodeInspector({
                   }
                 >
                   <PlusIcon data-icon='inline-start' />
-                  Add option
+                  {t('workflowEditor.inspector.addOption')}
                 </Button>
               </div>
               <FieldDescription>
-                Each option has one canvas output. Its identifier stays stable
-                when its label changes.
+                {t('workflowEditor.inspector.optionsDescription')}
               </FieldDescription>
               <FieldGroup className='gap-4'>
                 {options.map((option, index) => (
@@ -1542,13 +1607,17 @@ function WorkflowNodeInspector({
                   >
                     <div className='flex items-center justify-between gap-2'>
                       <FieldLegend variant='label'>
-                        Option {index + 1}
+                        {t('workflowEditor.inspector.option', {
+                          index: index + 1,
+                        })}
                       </FieldLegend>
                       <Button
                         type='button'
                         size='icon-sm'
                         variant='ghost'
-                        aria-label={`Remove option ${index + 1}`}
+                        aria-label={t('workflowEditor.inspector.removeOption', {
+                          index: index + 1,
+                        })}
                         disabled={options.length === 1}
                         onClick={() =>
                           updateData({
@@ -1563,7 +1632,7 @@ function WorkflowNodeInspector({
                     </div>
                     <TextField
                       id={`ask-user-question-option-${option.id}-label`}
-                      label='Label'
+                      label={t('workflowEditor.inspector.label')}
                       value={option.label}
                       onChange={(label) =>
                         updateData({
@@ -1575,7 +1644,7 @@ function WorkflowNodeInspector({
                     />
                     <TextField
                       id={`ask-user-question-option-${option.id}-description`}
-                      label='Description'
+                      label={t('workflowEditor.inspector.description')}
                       value={option.description ?? ''}
                       onChange={(description) =>
                         updateData({
@@ -1599,14 +1668,14 @@ function WorkflowNodeInspector({
       case 'group':
         return (
           <FieldGroup>
-            <InspectorSection title='Node details'>
+            <InspectorSection title={t('workflowEditor.inspector.nodeDetails')}>
               <TextField
                 id={`${node.type}-label`}
-                label='Name'
+                label={t('workflowEditor.inspector.name')}
                 description={
                   node.type === 'group'
-                    ? 'A title for this layout container. Resize it directly on the canvas.'
-                    : `A short name shown on the workflow canvas for this ${node.type} node.`
+                    ? t('workflowEditor.inspector.groupDescription')
+                    : t('workflowEditor.inspector.nameDescription')
                 }
                 disabled={node.type === 'start' || node.type === 'end'}
                 value={getText(data, 'label')}
@@ -1619,22 +1688,24 @@ function WorkflowNodeInspector({
         return (
           <FieldGroup className='gap-7'>
             <InspectorSection
-              title='Terminate task'
-              description='Immediately ends this workflow and propagates the termination through every parent workflow.'
+              title={t('workflowEditor.inspector.terminateTask')}
+              description={t(
+                'workflowEditor.inspector.terminateTaskDescription',
+              )}
             >
               <FieldDescription>
-                Do not connect this node to End. It stops all later workflow
-                steps, including steps after the containing subworkflow.
+                {t('workflowEditor.inspector.terminateWarning')}
               </FieldDescription>
               <FieldDescription>
-                Work that is already running in parallel cannot be cancelled.
+                {t('workflowEditor.inspector.terminateParallelWarning')}
               </FieldDescription>
             </InspectorSection>
-            <InspectorSection title='Node details'>
+            <InspectorSection title={t('workflowEditor.inspector.nodeDetails')}>
               <TextField
+                disabled
                 id='terminate-label'
-                label='Name'
-                description='A short name shown on the workflow canvas.'
+                label={t('workflowEditor.inspector.name')}
+                description={t('workflowEditor.inspector.nameDescription')}
                 value={getText(data, 'label')}
                 onChange={(label) => updateData({ label })}
               />
@@ -1663,9 +1734,11 @@ function WorkflowNodeInspector({
       <DrawerContent className='sm:[--drawer-content-width:32rem]'>
         <DrawerHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>
           <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[16px_16px]' />
-          <DrawerTitle className='relative text-lg'>Edit {title}</DrawerTitle>
+          <DrawerTitle className='relative text-lg'>
+            {t('workflowEditor.inspector.editNode', { title })}
+          </DrawerTitle>
           <DrawerDescription className='relative mt-1 leading-5'>
-            Changes apply to the workflow immediately.
+            {t('workflowEditor.inspector.changesApplyImmediately')}
           </DrawerDescription>
         </DrawerHeader>
         <Button
@@ -1673,7 +1746,7 @@ function WorkflowNodeInspector({
           variant='ghost'
           size='icon-sm'
           className='absolute top-3 right-3'
-          aria-label='Close node editor'
+          aria-label={t('workflowEditor.inspector.closeNodeEditor')}
           onClick={onClose}
         >
           <XIcon aria-hidden='true' />
@@ -1702,6 +1775,7 @@ function ToolStateBindingFields({
   bindings: WorkflowToolStateBinding[];
   onChange: (bindings: WorkflowToolStateBinding[]) => void;
 }) {
+  const { t } = useTranslation();
   const toolArgumentPaths = new Map(
     tools.map((tool) => [tool.id, getToolArgumentPaths(tool.inputSchema)]),
   );
@@ -1722,10 +1796,11 @@ function ToolStateBindingFields({
     <FieldSet className='gap-3 rounded-lg border p-3'>
       <div className='flex items-start justify-between gap-3'>
         <div className='flex flex-col gap-1'>
-          <FieldLegend>State bindings (advanced)</FieldLegend>
+          <FieldLegend>
+            {t('workflowEditor.inspector.stateBindings')}
+          </FieldLegend>
           <FieldDescription>
-            Same-path values are restored automatically. Add a binding only when
-            a Tool argument uses a different State path.
+            {t('workflowEditor.inspector.stateBindingsDescription')}
           </FieldDescription>
         </div>
         <Button
@@ -1747,7 +1822,7 @@ function ToolStateBindingFields({
           }}
         >
           <PlusIcon data-icon='inline-start' aria-hidden='true' />
-          Add binding
+          {t('workflowEditor.inspector.addBinding')}
         </Button>
       </div>
       {bindings.length > 0 ? (
@@ -1760,7 +1835,7 @@ function ToolStateBindingFields({
                 className='grid grid-cols-[minmax(8rem,0.8fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_auto] items-end gap-2'
               >
                 <Field>
-                  <Label>Tool</Label>
+                  <Label>{t('workflowEditor.inspector.tool')}</Label>
                   <Select
                     value={binding.toolId}
                     onValueChange={(toolId) => {
@@ -1771,13 +1846,20 @@ function ToolStateBindingFields({
                       });
                     }}
                   >
-                    <SelectTrigger aria-label={`Binding ${index + 1} Tool`}>
-                      <SelectValue placeholder='Select a Tool'>
+                    <SelectTrigger
+                      aria-label={t('workflowEditor.inspector.bindingTool', {
+                        index: index + 1,
+                      })}
+                    >
+                      <SelectValue
+                        placeholder={t('workflowEditor.inspector.selectTool')}
+                      >
                         {(toolId: string | null) =>
                           toolId
                             ? (bindableTools.find((tool) => tool.id === toolId)
-                                ?.displayName ?? 'Unavailable Tool')
-                            : 'Select a Tool'
+                                ?.displayName ??
+                              t('workflowEditor.inspector.unavailableTool'))
+                            : t('workflowEditor.inspector.selectTool')
                         }
                       </SelectValue>
                     </SelectTrigger>
@@ -1793,7 +1875,7 @@ function ToolStateBindingFields({
                   </Select>
                 </Field>
                 <Field>
-                  <Label>Argument path</Label>
+                  <Label>{t('workflowEditor.inspector.argumentPath')}</Label>
                   <Select
                     value={binding.argumentPath}
                     onValueChange={(argumentPath) => {
@@ -1802,9 +1884,18 @@ function ToolStateBindingFields({
                     }}
                   >
                     <SelectTrigger
-                      aria-label={`Binding ${index + 1} argument path`}
+                      aria-label={t(
+                        'workflowEditor.inspector.bindingArgument',
+                        {
+                          index: index + 1,
+                        },
+                      )}
                     >
-                      <SelectValue placeholder='Select an argument' />
+                      <SelectValue
+                        placeholder={t(
+                          'workflowEditor.inspector.selectArgument',
+                        )}
+                      />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
@@ -1818,7 +1909,9 @@ function ToolStateBindingFields({
                   </Select>
                 </Field>
                 <Field>
-                  <Label htmlFor={`binding-state-${index}`}>State path</Label>
+                  <Label htmlFor={`binding-state-${index}`}>
+                    {t('workflowEditor.inspector.statePath')}
+                  </Label>
                   <Input
                     id={`binding-state-${index}`}
                     value={binding.statePath}
@@ -1832,7 +1925,9 @@ function ToolStateBindingFields({
                   type='button'
                   variant='ghost'
                   size='icon-sm'
-                  aria-label={`Remove binding ${index + 1}`}
+                  aria-label={t('workflowEditor.inspector.removeBinding', {
+                    index: index + 1,
+                  })}
                   onClick={() =>
                     onChange(
                       bindings.filter(
@@ -1861,6 +1956,7 @@ function NodeStateFields({
   executableNodes: Node[];
   onChange: (state: WorkflowNodeStateConfig) => void;
 }) {
+  const { t } = useTranslation();
   const config = getNodeStateConfig(node.data);
   const readers = config.readers.filter((id) => id !== node.id);
   const rawReaders = config.rawReaders.filter((id) => readers.includes(id));
@@ -1880,8 +1976,9 @@ function NodeStateFields({
         getText(candidate.data, 'workflowName') ||
         getText(candidate.data, 'name') ||
         getText(candidate.data, 'title') ||
-        nodeTitles[candidate.type ?? ''] ||
-        'Untitled node',
+        t(`workflowEditor.inspector.nodes.${candidate.type ?? 'unknown'}`, {
+          defaultValue: t('workflowEditor.inspector.untitledNode'),
+        }),
     }));
   const setReaders = (nextReaders: string[]) =>
     onChange({
@@ -1908,13 +2005,13 @@ function NodeStateFields({
   return (
     <FieldGroup className='mt-7 gap-7'>
       <InspectorSection
-        title='State access'
-        description='This node always owns its private State. Grant selected nodes read-only access to all of it.'
+        title={t('workflowEditor.inspector.stateAccess')}
+        description={t('workflowEditor.inspector.stateAccessDescription')}
       >
         <Field>
-          <Label>Allowed readers</Label>
+          <Label>{t('workflowEditor.inspector.allowedReaders')}</Label>
           <FieldDescription>
-            By default, no other node can read this node’s private State.
+            {t('workflowEditor.inspector.allowedReadersDescription')}
           </FieldDescription>
           <NodeCombobox
             nodes={availableReaders}
@@ -1923,10 +2020,9 @@ function NodeStateFields({
           />
         </Field>
         <Field>
-          <Label>Raw state readers</Label>
+          <Label>{t('workflowEditor.inspector.rawStateReaders')}</Label>
           <FieldDescription>
-            Selected readers receive this node’s original values. Agent prompts
-            remain redacted; only their tools can use these values.
+            {t('workflowEditor.inspector.rawStateReadersDescription')}
           </FieldDescription>
           <NodeCombobox
             nodes={availableReaders.filter((candidate) =>
@@ -1938,9 +2034,11 @@ function NodeStateFields({
         </Field>
         {outputSchemaPaths.length > 0 ? (
           <FieldSet className='gap-3'>
-            <FieldLegend variant='label'>Schema fields</FieldLegend>
+            <FieldLegend variant='label'>
+              {t('workflowEditor.inspector.schemaFields')}
+            </FieldLegend>
             <FieldDescription>
-              Select structured output paths to redact in visible State.
+              {t('workflowEditor.inspector.schemaFieldsDescription')}
             </FieldDescription>
             <FieldGroup className='gap-2'>
               {outputSchemaPaths.map((path) => {
@@ -1973,13 +2071,15 @@ function NodeStateFields({
           id={`${node.id}-sensitive-state-fields`}
           label={
             outputSchemaPaths.length > 0
-              ? 'Additional sensitive state paths'
-              : 'Sensitive state fields'
+              ? t('workflowEditor.inspector.additionalSensitivePaths')
+              : t('workflowEditor.inspector.sensitiveStateFields')
           }
           description={
             outputSchemaPaths.length > 0
-              ? 'Use dot-separated paths for dynamic outputs not declared by the schema.'
-              : 'Always redact these output paths in visible State. Raw state readers and authorized Agent tools can still use the original values.'
+              ? t(
+                  'workflowEditor.inspector.additionalSensitivePathsDescription',
+                )
+              : t('workflowEditor.inspector.sensitiveStateFieldsDescription')
           }
           value={additionalSensitivePaths.join(', ')}
           placeholder='customer.email, customer.phone'
@@ -1996,13 +2096,17 @@ function NodeStateFields({
       </InspectorSection>
       {supportsGlobalPublication(node.type) ? (
         <InspectorSection
-          title='Global State publication'
-          description='Outputs are private by default. List the output keys this node should publish for every node to read and write.'
+          title={t('workflowEditor.inspector.globalStatePublication')}
+          description={t(
+            'workflowEditor.inspector.globalStatePublicationDescription',
+          )}
         >
           <TextField
             id={`${node.id}-global-state-keys`}
-            label='Published output keys'
-            description='Separate keys with commas, for example summary, score.'
+            label={t('workflowEditor.inspector.publishedOutputKeys')}
+            description={t(
+              'workflowEditor.inspector.publishedOutputKeysDescription',
+            )}
             value={config.globalKeys.join(', ')}
             placeholder='summary, score'
             onChange={(value) =>
@@ -2031,6 +2135,7 @@ function NodeCombobox({
   selectedIds: string[];
   onChange: (nodeIds: string[]) => void;
 }) {
+  const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   const selected = nodes.filter((node) => selectedIds.includes(node.id));
 
@@ -2048,10 +2153,14 @@ function NodeCombobox({
             <ComboboxChip key={node.id}>{node.name}</ComboboxChip>
           ))}
         </ComboboxValue>
-        <ComboboxChipsInput placeholder='Select workflow nodes…' />
+        <ComboboxChipsInput
+          placeholder={t('workflowEditor.inspector.selectWorkflowNodes')}
+        />
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
-        <ComboboxEmpty>No other executable nodes are available.</ComboboxEmpty>
+        <ComboboxEmpty>
+          {t('workflowEditor.inspector.noExecutableNodes')}
+        </ComboboxEmpty>
         <ComboboxList>
           {nodes.map((node) => (
             <ComboboxItem key={node.id} value={node}>
