@@ -68,8 +68,8 @@ import {
   authorizeMcpServer,
   createMcpServer,
   deleteMcpServer,
+  getMcpServers,
   listMcpServerWorkflowReferences,
-  listMcpServers,
   reconnectMcpServer,
   startMcpServer,
   stopMcpServer,
@@ -171,7 +171,7 @@ function McpServersPage() {
   const queryClient = useQueryClient();
   const servers = useQuery({
     queryKey: ['mcp-servers'],
-    queryFn: listMcpServers,
+    queryFn: getMcpServers,
     refetchInterval: (query) => {
       const configuredServers = query.state.data ?? [];
       if (

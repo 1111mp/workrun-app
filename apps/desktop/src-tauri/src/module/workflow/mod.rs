@@ -36,7 +36,6 @@ use crate::core::db::DBManager;
 use crate::{
     config::{Config, IWorkrun, ModelDefinition, ModelProvider, model_catalog},
     module::{
-        mcp_server::McpServerRegistry,
         process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
         state::{AccessRule, NodeStatePolicy},
         tool_registry::{ToolDefinition, ToolRegistry, ToolSource},

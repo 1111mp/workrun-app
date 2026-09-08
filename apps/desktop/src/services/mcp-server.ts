@@ -78,26 +78,26 @@ export type McpServerWorkflowReference = {
   name: string;
 };
 
-export function listMcpServers() {
-  return invoke<McpServer[]>('mcp_server_list');
+export function getMcpServers() {
+  return invoke<McpServer[]>('get_mcp_servers');
 }
 
 export function createMcpServer(request: CreateMcpServerRequest) {
-  return invoke<McpServer>('mcp_server_create', { request });
+  return invoke<McpServer>('create_mcp_server', { request });
 }
 
 export function updateMcpServer(definition: UpdateMcpServerRequest) {
-  return invoke<McpServer>('mcp_server_update', { definition });
+  return invoke<McpServer>('update_mcp_server', { definition });
 }
 
 export function deleteMcpServer(id: string) {
-  return invoke('mcp_server_delete', { id });
+  return invoke('delete_mcp_server', { id });
 }
 
 export function testMcpServerConnection(
   request: TestMcpServerConnectionRequest,
 ) {
-  return invoke<McpServerConnectionTest>('mcp_server_test_connection', {
+  return invoke<McpServerConnectionTest>('test_mcp_server_connection', {
     request,
   });
 }
@@ -113,7 +113,7 @@ export function listMcpServerWorkflowReferences(id: string) {
 
 export function startMcpServer(id: string) {
   return Promise.race([
-    invoke<McpServer>('mcp_server_start', { id }),
+    invoke<McpServer>('start_mcp_server', { id }),
     new Promise<never>((_, reject) => {
       window.setTimeout(
         () =>
@@ -125,13 +125,13 @@ export function startMcpServer(id: string) {
 }
 
 export function stopMcpServer(id: string) {
-  return invoke<McpServer>('mcp_server_stop', { id });
+  return invoke<McpServer>('stop_mcp_server', { id });
 }
 
 export function reconnectMcpServer(id: string) {
-  return invoke<McpServer>('mcp_server_reconnect', { id });
+  return invoke<McpServer>('reconnect_mcp_server', { id });
 }
 
 export function authorizeMcpServer(id: string) {
-  return invoke('mcp_server_authorize', { id });
+  return invoke('authorize_mcp_server', { id });
 }

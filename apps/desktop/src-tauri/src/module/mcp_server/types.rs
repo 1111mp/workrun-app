@@ -1,9 +1,7 @@
 //! Persistent configuration and lifecycle management for local stdio MCP servers.
 
-use crate::{
-    config::{deserialize_encrypted, serialize_encrypted},
-    singleton,
-};
+pub use crate::config::{McpServerAuth, McpServerTransport};
+use crate::{config::IMcpServer, singleton};
 use adk_rust::tool::{
     Toolset,
     mcp::{
@@ -49,63 +47,6 @@ impl CredentialStore for OAuthCredentialStore {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct McpServerCatalog {
-    #[serde(default)]
-    pub servers: Vec<McpServerDefinition>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct McpServerDefinition {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub transport: McpServerTransport,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub auth: McpServerAuth,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_encrypted",
-        deserialize_with = "deserialize_encrypted"
-    )]
-    pub bearer_token: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_encrypted",
-        deserialize_with = "deserialize_encrypted"
-    )]
-    pub oauth_credentials: Option<StoredCredentials>,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub created_at: String,
-    #[serde(default)]
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum McpServerAuth {
-    #[default]
-    None,
-    Bearer,
-    #[serde(rename = "oauth", alias = "o_auth")]
-    OAuth,
-}
-
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpServerAuthorizationStatus {
@@ -116,67 +57,11 @@ pub enum McpServerAuthorizationStatus {
     Authorized,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum McpServerTransport {
-    #[default]
-    Stdio,
-    StreamableHttp,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateMcpServerRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub transport: McpServerTransport,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub auth: McpServerAuth,
-    #[serde(default)]
-    pub bearer_token: Option<String>,
-    #[serde(default = "enabled_by_default")]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TestMcpServerConnectionRequest {
-    #[serde(default)]
-    pub id: Option<String>,
-    pub name: String,
-    #[serde(default)]
-    pub transport: McpServerTransport,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub auth: McpServerAuth,
-    #[serde(default)]
-    pub bearer_token: Option<String>,
-}
-
-fn enabled_by_default() -> bool {
-    true
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServer {
     #[serde(serialize_with = "serialize_definition_for_frontend")]
-    pub definition: McpServerDefinition,
+    pub definition: IMcpServer,
     pub status: ServerStatus,
     pub health: McpServerHealth,
 }
@@ -223,7 +108,7 @@ struct McpServerFrontendDefinition<'a> {
     updated_at: &'a str,
 }
 
-fn serialize_definition_for_frontend<S>(definition: &McpServerDefinition, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_definition_for_frontend<S>(definition: &IMcpServer, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {

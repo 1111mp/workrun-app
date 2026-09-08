@@ -83,7 +83,7 @@ pub(super) async fn add_local_agent_node(
         let tool_bindings = state_bindings.remove(&tool.id).unwrap_or_default();
         let executor = match tool.source {
             ToolSource::Process => ManagedToolExecutor::Process,
-            ToolSource::Mcp => ManagedToolExecutor::Mcp(McpServerRegistry::resolve_tool(&tool.id).await?.1),
+            ToolSource::Mcp => ManagedToolExecutor::Mcp(crate::feat::resolve_mcp_tool(&tool.id).await?.1),
         };
         let managed_tool: Arc<dyn Tool> = Arc::new(ManagedTool::new(
             tool,

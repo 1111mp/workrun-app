@@ -1,10 +1,13 @@
 use super::{
-    CreateMcpServerRequest, McpRuntime, McpServer, McpServerAuth, McpServerCatalog, McpServerConnectionTest,
-    McpServerDefinition, McpServerHealth, McpServerRuntimeStore, McpServerTransport, McpServerWorkflowReference,
-    OAuthCredentialStore, TestMcpServerConnectionRequest, parse_tool_id, stdio_restart_policy, tool_definition,
-    validate_catalog, validate_definition, validate_id, workflow_uses_mcp_server,
+    McpRuntime, McpServer, McpServerAuth, McpServerConnectionTest, McpServerHealth, McpServerRuntimeStore,
+    McpServerTransport, McpServerWorkflowReference, OAuthCredentialStore, stdio_restart_policy, tool_definition,
+    validate_definition, validate_id, workflow_uses_mcp_server,
 };
-use crate::{config::with_encryption, feat, module::tool_registry::ToolDefinition, utils::dirs};
+use crate::{
+    config::IMcpServer,
+    feat::{self, TestMcpServerConnectionRequest},
+    module::tool_registry::ToolDefinition,
+};
 use adk_rust::{
     ReadonlyContext,
     tool::{
@@ -13,13 +16,12 @@ use adk_rust::{
             McpServerConfig, McpServerManager, ServerStatus,
             rmcp::{
                 self,
-                transport::auth::{AuthorizationManager, AuthorizationRequest, CredentialStore, StoredCredentials},
+                transport::auth::{AuthorizationManager, AuthorizationRequest, CredentialStore},
             },
         },
     },
 };
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use url::Url;
@@ -28,111 +30,31 @@ use uuid::Uuid;
 pub struct McpServerRegistry;
 
 impl McpServerRegistry {
-    pub async fn list() -> Result<Vec<McpServer>> {
-        let catalog = Self::read_catalog().await?;
-        let mut servers = Vec::with_capacity(catalog.servers.len());
-        for definition in catalog.servers {
-            let status = Self::status(&definition).await;
-            if status == ServerStatus::Crashed {
-                Self::record_health_error_if_absent(
-                    &definition.id,
-                    "MCP process exited unexpectedly; automatic restart is pending.".into(),
-                );
-            } else if status == ServerStatus::FailedToStart {
-                Self::record_health_error_if_absent(
-                    &definition.id,
-                    "MCP process stopped after automatic restart attempts.".into(),
-                );
-            }
-            servers.push(McpServer {
-                status,
-                health: Self::health(&definition.id),
-                definition,
-            });
+    /// Adds process-local runtime state without reading or changing persisted configuration.
+    pub async fn describe(definition: IMcpServer) -> McpServer {
+        let status = Self::status(&definition).await;
+        if status == ServerStatus::Crashed {
+            Self::record_health_error_if_absent(
+                &definition.id,
+                "MCP process exited unexpectedly; automatic restart is pending.".into(),
+            );
+        } else if status == ServerStatus::FailedToStart {
+            Self::record_health_error_if_absent(
+                &definition.id,
+                "MCP process stopped after automatic restart attempts.".into(),
+            );
         }
-        Ok(servers)
-    }
-
-    pub async fn create(request: CreateMcpServerRequest) -> Result<McpServer> {
-        let now = Utc::now().to_rfc3339();
-        let definition = McpServerDefinition {
-            id: Uuid::now_v7().to_string(),
-            name: request.name.trim().to_string(),
-            description: request.description.trim().to_string(),
-            transport: request.transport,
-            command: request.command.trim().to_string(),
-            args: request.args,
-            env: request.env,
-            url: request.url.trim().to_string(),
-            auth: request.auth,
-            bearer_token: request.bearer_token.filter(|token| !token.trim().is_empty()),
-            oauth_credentials: None,
-            enabled: request.enabled,
-            created_at: now.clone(),
-            updated_at: now,
-        };
-        validate_definition(&definition)?;
-        let mut catalog = Self::read_catalog().await?;
-        catalog.servers.push(definition.clone());
-        Self::write_catalog(&catalog).await?;
-        Ok(McpServer {
-            status: ServerStatus::Stopped,
-            health: McpServerHealth::default(),
-            definition,
-        })
-    }
-
-    pub async fn update(mut definition: McpServerDefinition) -> Result<McpServer> {
-        validate_definition(&definition)?;
-        let mut catalog = Self::read_catalog().await?;
-        let existing = catalog
-            .servers
-            .iter_mut()
-            .find(|server| server.id == definition.id)
-            .ok_or_else(|| anyhow::anyhow!("MCP Server is not in the catalog: {}", definition.id))?;
-        // The API deliberately omits saved tokens when returning a definition.
-        // Keep the existing token when an edit changes other fields but does not
-        // supply a replacement.
-        if definition.auth == McpServerAuth::Bearer && definition.bearer_token.is_none() {
-            definition.bearer_token = existing.bearer_token.clone();
-        }
-        if definition.auth == McpServerAuth::OAuth && definition.oauth_credentials.is_none() {
-            definition.oauth_credentials = existing.oauth_credentials.clone();
-        }
-        if definition.auth != McpServerAuth::Bearer {
-            definition.bearer_token = None;
-        }
-        if definition.auth != McpServerAuth::OAuth {
-            definition.oauth_credentials = None;
-        }
-        definition.created_at = existing.created_at.clone();
-        definition.updated_at = Utc::now().to_rfc3339();
-        *existing = definition.clone();
-        Self::stop_runtime(&definition.id).await?;
-        Self::write_catalog(&catalog).await?;
-        Ok(McpServer {
-            status: ServerStatus::Stopped,
+        McpServer {
             health: Self::health(&definition.id),
+            status,
             definition,
-        })
-    }
-
-    pub async fn delete(id: &str) -> Result<()> {
-        let mut catalog = Self::read_catalog().await?;
-        let original_len = catalog.servers.len();
-        catalog.servers.retain(|server| server.id != id);
-        if catalog.servers.len() == original_len {
-            bail!("MCP Server is not in the catalog: {id}");
         }
-        Self::stop_runtime(id).await?;
-        Self::write_catalog(&catalog).await
     }
 
-    pub async fn test_connection(request: TestMcpServerConnectionRequest) -> Result<McpServerConnectionTest> {
-        let existing = match request.id.as_deref() {
-            Some(id) => Some(Self::definition(id).await?),
-            None => None,
-        };
+    pub async fn test_connection(
+        request: TestMcpServerConnectionRequest,
+        existing: Option<IMcpServer>,
+    ) -> Result<McpServerConnectionTest> {
         let bearer_token = if request.auth == McpServerAuth::Bearer {
             request
                 .bearer_token
@@ -145,7 +67,7 @@ impl McpServerRegistry {
         } else {
             None
         };
-        let definition = McpServerDefinition {
+        let definition = IMcpServer {
             id: Uuid::now_v7().to_string(),
             name: request.name.trim().to_string(),
             description: String::new(),
@@ -210,49 +132,46 @@ impl McpServerRegistry {
             .collect())
     }
 
-    pub async fn start(id: &str) -> Result<McpServer> {
-        let definition = Self::definition(id).await?;
+    pub async fn start(definition: IMcpServer) -> Result<McpServer> {
         if !definition.enabled {
             bail!("MCP Server `{}` is disabled", definition.name);
         }
         let runtime = match Self::runtime(&definition).await {
             Ok(runtime) => runtime,
             Err(error) => {
-                Self::record_health_error(id, error.to_string());
+                Self::record_health_error(&definition.id, error.to_string());
                 return Err(error);
             },
         };
         if let Err(error) = Self::start_runtime(&runtime, &definition.id).await {
-            Self::record_health_error(id, error.to_string());
+            Self::record_health_error(&definition.id, error.to_string());
             return Err(error);
         }
-        Self::record_health_success(id, None);
+        Self::record_health_success(&definition.id, None);
         Ok(McpServer {
             status: Self::runtime_status(&runtime, &definition.id).await?,
-            health: Self::health(id),
+            health: Self::health(&definition.id),
             definition,
         })
     }
 
-    pub async fn stop(id: &str) -> Result<McpServer> {
-        let definition = Self::definition(id).await?;
-        Self::stop_runtime(id).await?;
+    pub async fn stop(definition: IMcpServer) -> Result<McpServer> {
+        Self::stop_runtime(&definition.id).await?;
         Ok(McpServer {
             status: ServerStatus::Stopped,
-            health: Self::health(id),
+            health: Self::health(&definition.id),
             definition,
         })
     }
 
-    pub async fn reconnect(id: &str) -> Result<McpServer> {
-        Self::stop(id).await?;
-        Self::start(id).await
+    pub async fn reconnect(definition: IMcpServer) -> Result<McpServer> {
+        Self::stop(definition.clone()).await?;
+        Self::start(definition).await
     }
 
     /// Starts the OAuth authorization-code flow for a remote MCP server. The
     /// callback listener is local-only and accepts exactly one redirect.
-    pub async fn authorize(id: &str) -> Result<()> {
-        let definition = Self::definition(id).await?;
+    pub async fn authorize(definition: IMcpServer) -> Result<()> {
         if definition.transport != McpServerTransport::StreamableHttp || definition.auth != McpServerAuth::OAuth {
             bail!("MCP Server `{}` does not use OAuth", definition.name);
         }
@@ -307,7 +226,7 @@ impl McpServerRegistry {
                 result?;
                 let credentials = store.load().await.map_err(|error| anyhow::anyhow!("OAuth credential storage failed: {error}"))?
                     .context("OAuth authorization did not return credentials")?;
-                Self::store_oauth_credentials(&definition.id, credentials).await
+                feat::store_oauth_credentials(&definition.id, credentials).await
             }.await;
             if let Err(error) = outcome {
                 log::warn!("OAuth authorization for MCP Server {} failed: {error:#}", definition.id);
@@ -329,12 +248,11 @@ impl McpServerRegistry {
     /// Discover the tools currently advertised by running MCP servers.
     /// Stopped, disabled, and temporarily unreachable servers are omitted so
     /// Agents cannot persist a selection that is not presently usable.
-    pub async fn list_tool_definitions() -> Result<Vec<ToolDefinition>> {
-        let catalog = Self::read_catalog().await?;
+    pub async fn list_tool_definitions(servers: Vec<IMcpServer>) -> Result<Vec<ToolDefinition>> {
         let context: Arc<dyn ReadonlyContext> = Arc::new(SimpleToolContext::new("mcp-discovery"));
         let mut definitions = Vec::new();
 
-        for server in catalog.servers {
+        for server in servers {
             let manager = McpServerRuntimeStore::global().runtime(&server.id).ok().flatten();
             let Some(manager) = manager else { continue };
             if Self::runtime_status(&manager, &server.id)
@@ -359,15 +277,13 @@ impl McpServerRegistry {
     /// Start an enabled server if necessary and resolve one of its currently
     /// advertised tools. A workflow stores the stable `mcp:<server>:<tool>` id,
     /// so discovery is repeated here to avoid executing a stale declaration.
-    pub async fn resolve_tool(id: &str) -> Result<(ToolDefinition, Arc<dyn Tool>)> {
-        let (server_id, tool_name) = parse_tool_id(id)?;
-        let server = Self::definition(server_id).await?;
+    pub async fn resolve_tool(server: IMcpServer, tool_name: &str) -> Result<(ToolDefinition, Arc<dyn Tool>)> {
         if !server.enabled {
             bail!("MCP Server `{}` is disabled", server.name);
         }
         let manager = Self::runtime(&server).await?;
-        if Self::runtime_status(&manager, server_id).await? != ServerStatus::Running {
-            Self::start_runtime(&manager, server_id).await?;
+        if Self::runtime_status(&manager, &server.id).await? != ServerStatus::Running {
+            Self::start_runtime(&manager, &server.id).await?;
         }
         let context: Arc<dyn ReadonlyContext> = Arc::new(SimpleToolContext::new("mcp-tool-resolution"));
         let tool = Self::runtime_tools(&manager, context)
@@ -378,17 +294,7 @@ impl McpServerRegistry {
         Ok((tool_definition(&server, Arc::clone(&tool)), tool))
     }
 
-    async fn definition(id: &str) -> Result<McpServerDefinition> {
-        validate_id(id)?;
-        Self::read_catalog()
-            .await?
-            .servers
-            .into_iter()
-            .find(|server| server.id == id)
-            .ok_or_else(|| anyhow::anyhow!("MCP Server is not in the catalog: {id}"))
-    }
-
-    async fn runtime(definition: &McpServerDefinition) -> Result<Arc<McpRuntime>> {
+    async fn runtime(definition: &IMcpServer) -> Result<Arc<McpRuntime>> {
         if let Some(runtime) = McpServerRuntimeStore::global().runtime(&definition.id)? {
             return Ok(runtime);
         }
@@ -444,7 +350,7 @@ impl McpServerRegistry {
         McpServerRuntimeStore::global().insert_runtime_if_absent(definition.id.clone(), runtime)
     }
 
-    async fn stop_runtime(id: &str) -> Result<()> {
+    pub(crate) async fn stop_runtime(id: &str) -> Result<()> {
         let manager = McpServerRuntimeStore::global().remove_runtime(id)?;
         if let Some(runtime) = manager {
             Self::shutdown_runtime(runtime).await?;
@@ -452,7 +358,7 @@ impl McpServerRegistry {
         Ok(())
     }
 
-    async fn status(definition: &McpServerDefinition) -> ServerStatus {
+    async fn status(definition: &IMcpServer) -> ServerStatus {
         let manager = McpServerRuntimeStore::global().runtime(&definition.id).ok().flatten();
         match manager {
             Some(manager) => Self::runtime_status(&manager, &definition.id)
@@ -465,6 +371,14 @@ impl McpServerRegistry {
 
     pub(super) fn health(id: &str) -> McpServerHealth {
         McpServerRuntimeStore::global().health(id)
+    }
+
+    pub(crate) fn stopped(definition: IMcpServer) -> McpServer {
+        McpServer {
+            status: ServerStatus::Stopped,
+            health: Self::health(&definition.id),
+            definition,
+        }
     }
 
     fn record_health(id: &str, result: &Result<McpServerConnectionTest>) {
@@ -516,61 +430,7 @@ impl McpServerRegistry {
         Ok(())
     }
 
-    async fn read_catalog() -> Result<McpServerCatalog> {
-        let path = dirs::mcp_server_catalog_path()?;
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(McpServerCatalog::default()),
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to read MCP Server catalog {}", path.display()));
-            },
-        };
-        let encrypted = with_encryption(|| async { serde_json::from_slice::<McpServerCatalog>(&bytes) }).await;
-        let (catalog, migrated_from_plaintext) = match encrypted {
-            Ok(catalog) => (catalog, false),
-            Err(encrypted_error) => {
-                let catalog = serde_json::from_slice::<McpServerCatalog>(&bytes).with_context(|| {
-                    format!(
-                        "invalid MCP Server catalog {} (encrypted read also failed: {encrypted_error})",
-                        path.display()
-                    )
-                })?;
-                (catalog, true)
-            },
-        };
-        validate_catalog(&catalog)?;
-        if migrated_from_plaintext {
-            log::warn!("Migrating plaintext MCP Server credentials to encrypted storage");
-            Self::write_catalog(&catalog).await?;
-        }
-        Ok(catalog)
-    }
-
-    async fn write_catalog(catalog: &McpServerCatalog) -> Result<()> {
-        validate_catalog(catalog)?;
-        let path = dirs::mcp_server_catalog_path()?;
-        let parent = path.parent().context("MCP Server catalog has no parent directory")?;
-        tokio::fs::create_dir_all(parent).await?;
-        let bytes = with_encryption(|| async { serde_json::to_vec_pretty(catalog) }).await?;
-        tokio::fs::write(&path, bytes)
-            .await
-            .with_context(|| format!("failed to write MCP Server catalog {}", path.display()))
-    }
-
-    async fn store_oauth_credentials(id: &str, credentials: StoredCredentials) -> Result<()> {
-        let mut catalog = Self::read_catalog().await?;
-        let definition = catalog
-            .servers
-            .iter_mut()
-            .find(|server| server.id == id)
-            .ok_or_else(|| anyhow::anyhow!("MCP Server is not in the catalog: {id}"))?;
-        definition.oauth_credentials = Some(credentials);
-        definition.updated_at = Utc::now().to_rfc3339();
-        Self::stop_runtime(id).await?;
-        Self::write_catalog(&catalog).await
-    }
-
-    async fn oauth_access_token(definition: &McpServerDefinition) -> Result<String> {
+    async fn oauth_access_token(definition: &IMcpServer) -> Result<String> {
         let credentials = definition
             .oauth_credentials
             .as_ref()
@@ -597,7 +457,7 @@ impl McpServerRegistry {
             .map_err(|error| anyhow::anyhow!("OAuth credential storage failed: {error}"))?
         {
             if refreshed.token_received_at != credentials.token_received_at {
-                Self::store_oauth_credentials(&definition.id, refreshed).await?;
+                feat::store_oauth_credentials(&definition.id, refreshed).await?;
             }
         }
         Ok(access_token)

@@ -75,6 +75,7 @@ async fn ensure_directories() -> Result<()> {
         ("app_logs", dirs::app_logs_dir()?),
         ("app_runtime", dirs::runtime_dir()?),
         ("app_skills", dirs::skills_dir()?),
+        ("app_mcp_server", dirs::mcp_server_dir()?),
     ];
 
     for (name, dir) in directories {

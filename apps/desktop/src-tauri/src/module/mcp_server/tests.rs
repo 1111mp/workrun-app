@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::{IMcpServer, IMcpServers};
 use crate::module::{process_node::ToolExecutionPolicy, tool_registry::ToolRiskLevel};
 use adk_rust::{
     ToolContext,
@@ -29,8 +30,8 @@ impl Tool for TestTool {
     }
 }
 
-fn definition() -> McpServerDefinition {
-    McpServerDefinition {
+fn definition() -> IMcpServer {
+    IMcpServer {
         id: "019b812d-4958-7d37-8a45-47e1e20a4744".into(),
         name: "Everything".into(),
         description: "MCP test server".into(),
@@ -123,12 +124,7 @@ fn reads_credentials_saved_by_rmcp_v1_without_an_issuer() {
 #[test]
 fn catalog_rejects_duplicate_server_ids() {
     let definition = definition();
-    assert!(
-        validate_catalog(&McpServerCatalog {
-            servers: vec![definition.clone(), definition],
-        })
-        .is_err()
-    );
+    assert!(validate_catalog(&IMcpServers::from_servers(vec![definition.clone(), definition])).is_err());
 }
 
 #[test]

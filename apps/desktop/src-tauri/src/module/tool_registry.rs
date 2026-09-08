@@ -3,9 +3,9 @@
 //! Individual sources own discovery and execution. This module keeps the
 //! Agent-facing contract stable as Process Apps are joined by MCP tools.
 
-use crate::module::{
-    mcp_server::McpServerRegistry,
-    process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
+use crate::{
+    feat,
+    module::process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -59,7 +59,7 @@ pub struct ToolRegistry;
 impl ToolRegistry {
     pub async fn list() -> Result<Vec<ToolDefinition>> {
         let mut tools = ProcessNodeRegistry::list_tool_definitions().await?;
-        tools.extend(McpServerRegistry::list_tool_definitions().await?);
+        tools.extend(feat::list_mcp_tool_definitions().await?);
         Ok(tools)
     }
 
@@ -71,7 +71,7 @@ impl ToolRegistry {
         let mut tools = Vec::with_capacity(ids.len());
         for id in ids {
             if id.starts_with("mcp:") {
-                tools.push(McpServerRegistry::resolve_tool(id).await?.0);
+                tools.push(feat::resolve_mcp_tool(id).await?.0);
             } else {
                 tools.push(
                     process_tools

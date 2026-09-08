@@ -1,34 +1,35 @@
 use crate::{
     cmd::{CmdResult, StringifyErr as _},
-    module::mcp_server::{
-        CreateMcpServerRequest, McpServer, McpServerConnectionTest, McpServerDefinition, McpServerRegistry,
-        McpServerWorkflowReference, TestMcpServerConnectionRequest,
-    },
+    config::IMcpServer,
+    feat,
+    module::mcp_server::{McpServer, McpServerConnectionTest, McpServerRegistry, McpServerWorkflowReference},
 };
 
 #[tauri::command]
-pub async fn mcp_server_list() -> CmdResult<Vec<McpServer>> {
-    McpServerRegistry::list().await.stringify_err()
+pub async fn get_mcp_servers() -> CmdResult<Vec<McpServer>> {
+    feat::get_mcp_servers().await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn mcp_server_create(request: CreateMcpServerRequest) -> CmdResult<McpServer> {
-    McpServerRegistry::create(request).await.stringify_err()
+pub async fn create_mcp_server(request: feat::CreateMcpServerRequest) -> CmdResult<McpServer> {
+    feat::create_mcp_server(request).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn mcp_server_update(definition: McpServerDefinition) -> CmdResult<McpServer> {
-    McpServerRegistry::update(definition).await.stringify_err()
+pub async fn update_mcp_server(definition: IMcpServer) -> CmdResult<McpServer> {
+    feat::update_mcp_server(definition).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn mcp_server_delete(id: String) -> CmdResult {
-    McpServerRegistry::delete(&id).await.stringify_err()
+pub async fn delete_mcp_server(id: String) -> CmdResult {
+    feat::delete_mcp_server(&id).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn mcp_server_test_connection(request: TestMcpServerConnectionRequest) -> CmdResult<McpServerConnectionTest> {
-    McpServerRegistry::test_connection(request).await.stringify_err()
+pub async fn test_mcp_server_connection(
+    request: feat::TestMcpServerConnectionRequest,
+) -> CmdResult<McpServerConnectionTest> {
+    feat::test_mcp_server_connection(request).await.stringify_err()
 }
 
 #[tauri::command]
@@ -37,21 +38,21 @@ pub async fn mcp_server_workflow_references(id: String) -> CmdResult<Vec<McpServ
 }
 
 #[tauri::command]
-pub async fn mcp_server_start(id: String) -> CmdResult<McpServer> {
-    McpServerRegistry::start(&id).await.stringify_err()
+pub async fn start_mcp_server(id: String) -> CmdResult<McpServer> {
+    feat::start_mcp_server(&id).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn mcp_server_stop(id: String) -> CmdResult<McpServer> {
-    McpServerRegistry::stop(&id).await.stringify_err()
+pub async fn stop_mcp_server(id: String) -> CmdResult<McpServer> {
+    feat::stop_mcp_server(&id).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn mcp_server_reconnect(id: String) -> CmdResult<McpServer> {
-    McpServerRegistry::reconnect(&id).await.stringify_err()
+pub async fn reconnect_mcp_server(id: String) -> CmdResult<McpServer> {
+    feat::reconnect_mcp_server(&id).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn mcp_server_authorize(id: String) -> CmdResult {
-    McpServerRegistry::authorize(&id).await.stringify_err()
+pub async fn authorize_mcp_server(id: String) -> CmdResult {
+    feat::authorize_mcp_server(&id).await.stringify_err()
 }

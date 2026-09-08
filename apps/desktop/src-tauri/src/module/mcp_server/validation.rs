@@ -1,4 +1,5 @@
-use super::{McpServerDefinition, McpServerTransport};
+use super::McpServerTransport;
+use crate::config::{IMcpServer, IMcpServers};
 use crate::module::{
     process_node::ToolExecutionPolicy,
     tool_registry::{ToolDefinition, ToolRiskLevel, ToolSource},
@@ -8,18 +9,18 @@ use anyhow::{Context, Result, bail};
 use std::{collections::HashSet, sync::Arc};
 use uuid::Uuid;
 
-pub(super) fn validate_catalog(catalog: &super::McpServerCatalog) -> Result<()> {
-    let mut ids = HashSet::new();
-    for definition in &catalog.servers {
-        validate_definition(definition)?;
-        if !ids.insert(&definition.id) {
+pub(crate) fn validate_catalog(catalog: &IMcpServers) -> Result<()> {
+    let mut ids = HashSet::<String>::new();
+    for definition in catalog.get_mcp_servers() {
+        validate_definition(&definition)?;
+        if !ids.insert(definition.id.clone()) {
             bail!("MCP Server catalog contains duplicate id {:?}", definition.id);
         }
     }
     Ok(())
 }
 
-pub(super) fn validate_definition(definition: &McpServerDefinition) -> Result<()> {
+pub(crate) fn validate_definition(definition: &IMcpServer) -> Result<()> {
     validate_id(&definition.id)?;
     if definition.name.trim().is_empty() {
         bail!("MCP Server name must not be empty");
@@ -51,7 +52,7 @@ pub(super) fn validate_definition(definition: &McpServerDefinition) -> Result<()
     Ok(())
 }
 
-pub(super) fn validate_id(id: &str) -> Result<()> {
+pub(crate) fn validate_id(id: &str) -> Result<()> {
     let uuid = Uuid::parse_str(id).with_context(|| format!("MCP Server id must be a UUID, got {id:?}"))?;
     if uuid.hyphenated().to_string() != id {
         bail!("MCP Server id must be a lowercase, hyphenated UUID");
@@ -59,7 +60,7 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn parse_tool_id(id: &str) -> Result<(&str, &str)> {
+pub(crate) fn parse_tool_id(id: &str) -> Result<(&str, &str)> {
     let (server_id, tool_name) = id
         .strip_prefix("mcp:")
         .and_then(|value| value.split_once(':'))
@@ -82,7 +83,7 @@ pub(super) fn workflow_uses_mcp_server(document: &serde_json::Value, prefix: &st
         .any(|tool_id| tool_id.starts_with(prefix))
 }
 
-pub(super) fn tool_definition(server: &McpServerDefinition, tool: Arc<dyn Tool>) -> ToolDefinition {
+pub(super) fn tool_definition(server: &IMcpServer, tool: Arc<dyn Tool>) -> ToolDefinition {
     ToolDefinition {
         id: format!("mcp:{}:{}", server.id, tool.name()),
         source: ToolSource::Mcp,

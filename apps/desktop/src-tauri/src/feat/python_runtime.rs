@@ -7,7 +7,6 @@ use crate::module::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::AppHandle;
 use tauri::ipc::Channel;
 
 fn default_python_version() -> String {

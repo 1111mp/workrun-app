@@ -63,7 +63,7 @@ pub async fn read_mapping(path: &PathBuf) -> Result<Mapping> {
     }
 }
 
-/// read data from json as struct T
+/// Read JSON with encrypted fields enabled.
 pub async fn read_json<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
     if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         bail!("file not found \"{}\"", path.display());
@@ -71,14 +71,14 @@ pub async fn read_json<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 
     let json_str = tokio::fs::read_to_string(path).await?;
 
-    serde_json::from_str::<T>(&json_str)
+    with_encryption(|| async { serde_json::from_str::<T>(&json_str) })
+        .await
         .with_context(|| format!("failed to read the file with json format \"{}\"", path.display()))
 }
 
-/// save the data to the file
-/// can set `prefix` string to add some comments
+/// Save JSON with encrypted fields enabled.
 pub async fn save_json<T: Serialize + Sync>(path: &PathBuf, data: &T, prefix: Option<&str>) -> Result<()> {
-    let data_str = serde_json::to_string(data)?;
+    let data_str = with_encryption(|| async { serde_json::to_string(data) }).await?;
 
     let json_str = match prefix {
         Some(prefix) => format!("{prefix}\n\n{data_str}"),

@@ -68,8 +68,12 @@ impl WorkspacePaths {
         self.process_nodes_dir().join("catalog.json")
     }
 
+    pub fn mcp_server_dir(&self) -> PathBuf {
+        self.root.join("mcp-servers")
+    }
+
     pub fn mcp_server_catalog_path(&self) -> PathBuf {
-        self.root.join("mcp-servers").join("catalog.json")
+        self.mcp_server_dir().join("catalog.json")
     }
 
     pub fn workflow_catalog_path(&self) -> PathBuf {
@@ -188,6 +192,11 @@ pub fn process_nodes_dir() -> Result<PathBuf> {
 /// Local catalog of Process Node definitions managed from Apps.
 pub fn process_node_catalog_path() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.process_node_catalog_path())
+}
+
+/// Root directory for locally managed MCP Servers.
+pub fn mcp_server_dir() -> Result<PathBuf> {
+    Ok(active_workspace_paths()?.mcp_server_dir())
 }
 
 /// Local catalog of configured stdio MCP Servers.
