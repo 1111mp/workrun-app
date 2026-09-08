@@ -44,7 +44,7 @@ import { type ReactNode } from 'react';
 import { listProcessNodes } from '@/services/process-node';
 import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
-import { listWorkflows } from '@/services/workflow';
+import { getWorkflows } from '@/services/workflow';
 
 type WorkflowNodeInspectorProps = {
   node: Node | null;
@@ -665,7 +665,7 @@ function WorkflowNodeInspector({
   });
   const workflows = useQuery({
     queryKey: ['workflows'],
-    queryFn: listWorkflows,
+    queryFn: getWorkflows,
     enabled: node?.type === 'subworkflow',
   });
 

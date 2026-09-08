@@ -11,7 +11,7 @@ import { useParams, useSearchParams } from 'react-router';
 
 import { WorkflowEditor } from '@/components';
 import { inspectRunRecord } from '@/services/run-history';
-import { inspectWorkflow } from '@/services/workflow';
+import { getWorkflow } from '@/services/workflow';
 
 function WorkflowPage() {
   const { id } = useParams();
@@ -20,7 +20,7 @@ function WorkflowPage() {
 
   const workflow = useQuery({
     queryKey: ['workflows', id],
-    queryFn: () => inspectWorkflow(id!),
+    queryFn: () => getWorkflow(id!),
     enabled: Boolean(id),
   });
   const historicalRun = useQuery({

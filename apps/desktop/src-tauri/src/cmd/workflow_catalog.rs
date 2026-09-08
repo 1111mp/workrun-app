@@ -1,25 +1,26 @@
 use crate::{
     cmd::{CmdResult, StringifyErr},
-    module::workflow_catalog::{StoredWorkflow, WorkflowCatalogStore},
+    config::IWorkflow,
+    feat,
 };
 use serde_json::Value;
 
 #[tauri::command]
-pub async fn workflow_catalog_list() -> CmdResult<Vec<StoredWorkflow>> {
-    WorkflowCatalogStore::list().await.stringify_err()
+pub async fn get_workflows() -> CmdResult<Vec<IWorkflow>> {
+    feat::get_workflows().await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn workflow_catalog_create(document: Value) -> CmdResult<StoredWorkflow> {
-    WorkflowCatalogStore::create(document).await.stringify_err()
+pub async fn create_workflow(document: Value) -> CmdResult<IWorkflow> {
+    feat::create_workflow(document).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn workflow_catalog_inspect(id: String) -> CmdResult<StoredWorkflow> {
-    WorkflowCatalogStore::inspect(&id).await.stringify_err()
+pub async fn get_workflow(id: String) -> CmdResult<IWorkflow> {
+    feat::get_workflow(&id).await.stringify_err()
 }
 
 #[tauri::command]
-pub async fn workflow_catalog_update(id: String, document: Value) -> CmdResult<StoredWorkflow> {
-    WorkflowCatalogStore::update(&id, document).await.stringify_err()
+pub async fn update_workflow(id: String, document: Value) -> CmdResult<IWorkflow> {
+    feat::update_workflow(&id, document).await.stringify_err()
 }

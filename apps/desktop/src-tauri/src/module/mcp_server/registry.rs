@@ -4,11 +4,7 @@ use super::{
     OAuthCredentialStore, TestMcpServerConnectionRequest, parse_tool_id, stdio_restart_policy, tool_definition,
     validate_catalog, validate_definition, validate_id, workflow_uses_mcp_server,
 };
-use crate::{
-    config::with_encryption,
-    module::{tool_registry::ToolDefinition, workflow_catalog::WorkflowCatalogStore},
-    utils::dirs,
-};
+use crate::{config::with_encryption, feat, module::tool_registry::ToolDefinition, utils::dirs};
 use adk_rust::{
     ReadonlyContext,
     tool::{
@@ -197,7 +193,7 @@ impl McpServerRegistry {
     pub async fn workflow_references(id: &str) -> Result<Vec<McpServerWorkflowReference>> {
         validate_id(id)?;
         let prefix = format!("mcp:{id}:");
-        Ok(WorkflowCatalogStore::list()
+        Ok(feat::get_workflows()
             .await?
             .into_iter()
             .filter(|workflow| workflow_uses_mcp_server(&workflow.document, &prefix))

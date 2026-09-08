@@ -978,7 +978,7 @@ fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{module::workflow_catalog::WorkflowCatalogStore, utils::dirs::PORTABLE_FLAG};
+    use crate::{feat, utils::dirs::PORTABLE_FLAG};
     use std::sync::OnceLock;
     use std::{thread, time::Duration};
 
@@ -1524,7 +1524,7 @@ mod tests {
             .lock()
             .await;
         PORTABLE_FLAG.get_or_init(|| true);
-        let child = WorkflowCatalogStore::create(json!({
+        let child = feat::create_workflow(json!({
             "nodes": [
                 {"id": "start", "type": "start", "data": {}},
                 {"id": "stop", "type": "terminate", "data": {}},

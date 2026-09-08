@@ -1,5 +1,5 @@
 use super::*;
-use crate::module::{state::NodeStateUpdate, workflow_catalog::WorkflowCatalogStore};
+use crate::{feat, module::state::NodeStateUpdate};
 
 pub(super) fn add_subworkflow_node(
     graph: StateGraph,
@@ -197,7 +197,7 @@ fn extract_outputs(state: &adk_rust::graph::State, output_keys: Vec<String>) -> 
 }
 
 pub async fn workflow_dsl(id: &str) -> Result<WorkflowDsl> {
-    let workflow = WorkflowCatalogStore::inspect(id).await?;
+    let workflow = feat::get_workflow(id).await?;
     let settings = workflow.document.get("settings").cloned().unwrap_or_default();
     serde_json::from_value(json!({
         "id": workflow.id,

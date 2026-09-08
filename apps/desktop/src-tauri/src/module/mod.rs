@@ -8,4 +8,3 @@ pub mod skill;
 pub mod state;
 pub mod tool_registry;
 pub mod workflow;
-pub mod workflow_catalog;

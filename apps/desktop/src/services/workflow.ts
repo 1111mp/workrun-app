@@ -259,20 +259,20 @@ export function clearLegacyWorkflowDocument() {
   window.localStorage.removeItem(workflowDocumentStorageKey);
 }
 
-export function listWorkflows() {
-  return invoke<StoredWorkflow[]>('workflow_catalog_list');
+export function getWorkflows() {
+  return invoke<StoredWorkflow[]>('get_workflows');
 }
 
 export function createWorkflow(document: WorkflowDocument) {
-  return invoke<StoredWorkflow>('workflow_catalog_create', { document });
+  return invoke<StoredWorkflow>('create_workflow', { document });
 }
 
-export function inspectWorkflow(id: string) {
-  return invoke<StoredWorkflow>('workflow_catalog_inspect', { id });
+export function getWorkflow(id: string) {
+  return invoke<StoredWorkflow>('get_workflow', { id });
 }
 
 export function updateWorkflow(id: string, document: WorkflowDocument) {
-  return invoke<StoredWorkflow>('workflow_catalog_update', { id, document });
+  return invoke<StoredWorkflow>('update_workflow', { id, document });
 }
 
 export function compileWorkflow(dsl: Workflow) {

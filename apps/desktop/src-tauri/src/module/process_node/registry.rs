@@ -1,9 +1,6 @@
 use super::types::*;
 use super::{installation_status, process_tool_definition, validate_catalog, validate_definition, validate_node_id};
-use crate::{
-    module::{tool_registry::ToolDefinition, workflow_catalog::WorkflowCatalogStore},
-    utils::dirs,
-};
+use crate::{feat, module::tool_registry::ToolDefinition, utils::dirs};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use std::path::PathBuf;
@@ -122,7 +119,7 @@ impl ProcessNodeRegistry {
     /// List saved workflows with a Process Node selected on a canvas node.
     pub async fn workflow_references(id: &str) -> Result<Vec<ProcessNodeWorkflowReference>> {
         validate_node_id(id)?;
-        Ok(WorkflowCatalogStore::list()
+        Ok(feat::get_workflows()
             .await?
             .into_iter()
             .filter(|workflow| workflow_uses_process_node(&workflow.document, id))

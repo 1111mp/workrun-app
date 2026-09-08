@@ -38,7 +38,7 @@ import { toast } from 'sonner';
 import {
   clearLegacyWorkflowDocument,
   createWorkflow,
-  listWorkflows,
+  getWorkflows,
   loadLegacyWorkflowDocument,
   type StoredWorkflow,
 } from '@/services/workflow';
@@ -139,7 +139,7 @@ function WorkflowsPage() {
   const [query, setQuery] = useState('');
   const workflows = useQuery({
     queryKey: ['workflows'],
-    queryFn: listWorkflows,
+    queryFn: getWorkflows,
   });
   const migrateLegacy = useMutation({
     mutationFn: createWorkflow,
