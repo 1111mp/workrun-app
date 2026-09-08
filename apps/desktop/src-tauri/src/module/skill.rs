@@ -3,36 +3,7 @@
 use crate::utils::dirs;
 use adk_rust::skill::{SkillDocument, SkillDraft, SkillIndex, SkillSummary, load_skill_index};
 use anyhow::{Context, Result, anyhow, bail};
-use serde::Deserialize;
-use serde_json::Value;
-use std::collections::HashMap;
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillWriteRequest {
-    pub name: String,
-    pub description: String,
-    #[serde(default)]
-    pub version: Option<String>,
-    #[serde(default)]
-    pub license: Option<String>,
-    #[serde(default)]
-    pub compatibility: Option<String>,
-    #[serde(default)]
-    pub tags: Option<String>,
-    #[serde(default)]
-    pub allowed_tools: Option<String>,
-    #[serde(default)]
-    pub references: Option<String>,
-    #[serde(default)]
-    pub trigger: bool,
-    #[serde(default)]
-    pub hint: Option<String>,
-    #[serde(default)]
-    pub metadata: HashMap<String, Value>,
-    #[serde(default)]
-    pub instructions: String,
-}
+use std::io::Write;
 
 pub struct SkillRegistry;
 
@@ -63,21 +34,19 @@ impl SkillRegistry {
         Self::resolve(&[name.to_string()]).map(|mut skills| skills.remove(0))
     }
 
-    pub fn create(request: SkillWriteRequest) -> Result<SkillDocument> {
-        let skill_path = Self::skill_path(&request.name)?;
-        let legacy_path = Self::legacy_skill_path(&request.name)?;
-        if skill_path.exists() || legacy_path.exists() || Self::load_index()?.find_by_name(&request.name).is_some() {
-            bail!("skill `{}` already exists", request.name);
+    pub fn create(name: String, draft: SkillDraft) -> Result<SkillDocument> {
+        let skill_path = Self::skill_path(&name)?;
+        let legacy_path = Self::legacy_skill_path(&name)?;
+        if skill_path.exists() || legacy_path.exists() || Self::load_index()?.find_by_name(&name).is_some() {
+            bail!("skill `{name}` already exists");
         }
-        let name = request.name.clone();
-        Self::write_skill(&skill_path, &request.into_draft())?;
+        Self::write_skill(&skill_path, &draft)?;
         Self::inspect(&name)
     }
 
-    pub fn update(request: SkillWriteRequest) -> Result<SkillDocument> {
-        let existing = Self::inspect(&request.name)?;
-        let name = request.name.clone();
-        Self::write_skill(&existing.path, &request.into_draft())?;
+    pub fn update(name: String, draft: SkillDraft) -> Result<SkillDocument> {
+        let existing = Self::inspect(&name)?;
+        Self::write_skill(&existing.path, &draft)?;
         Self::inspect(&name)
     }
 
@@ -122,46 +91,32 @@ impl SkillRegistry {
         Ok(dirs::skills_dir()?.join(format!("{name}.md")))
     }
 
-    fn write_skill(path: &std::path::Path, draft: &SkillDraft) -> Result<()> {
+    pub(crate) fn write_skill(path: &std::path::Path, draft: &SkillDraft) -> Result<()> {
         let contents = draft.to_markdown().map_err(|error| anyhow!(error.to_string()))?;
         let directory = path.parent().context("skill file has no parent directory")?;
         std::fs::create_dir_all(directory)
             .with_context(|| format!("failed to create skill directory {}", directory.display()))?;
-        std::fs::write(path, contents).with_context(|| format!("failed to write skill file {}", path.display()))
-    }
-}
+        // Keeping the temporary file in the target directory makes rename an atomic replacement.
+        let temporary_path = directory.join(format!(".SKILL.md.{}.tmp", uuid::Uuid::now_v7()));
+        let write_result = (|| -> Result<()> {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary_path)
+                .with_context(|| format!("failed to create temporary skill file {}", temporary_path.display()))?;
+            file.write_all(contents.as_bytes())
+                .with_context(|| format!("failed to write temporary skill file {}", temporary_path.display()))?;
+            file.sync_all()
+                .with_context(|| format!("failed to sync temporary skill file {}", temporary_path.display()))?;
+            drop(file);
+            std::fs::rename(&temporary_path, path)
+                .with_context(|| format!("failed to replace skill file {}", path.display()))
+        })();
 
-impl SkillWriteRequest {
-    fn into_draft(self) -> SkillDraft {
-        let mut draft = SkillDraft::new(self.name, self.description).with_body(self.instructions);
-        if let Some(version) = self.version.filter(|value| !value.trim().is_empty()) {
-            draft = draft.with_version(version);
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&temporary_path);
         }
-        if let Some(license) = self.license.filter(|value| !value.trim().is_empty()) {
-            draft = draft.with_license(license);
-        }
-        if let Some(compatibility) = self.compatibility.filter(|value| !value.trim().is_empty()) {
-            draft = draft.with_compatibility(compatibility);
-        }
-        if let Some(tools) = self.allowed_tools {
-            draft = draft.with_allowed_tools(tools.split_whitespace());
-        }
-        if let Some(tags) = self.tags {
-            draft = draft.with_tags(tags.split_whitespace());
-        }
-        if let Some(references) = self.references {
-            draft = draft.with_references(references.lines().map(str::trim).filter(|value| !value.is_empty()));
-        }
-        if self.trigger {
-            draft = draft.with_trigger(true);
-        }
-        if let Some(hint) = self.hint.filter(|value| !value.trim().is_empty()) {
-            draft = draft.with_hint(hint);
-        }
-        if !self.metadata.is_empty() {
-            draft = draft.with_metadata(self.metadata);
-        }
-        draft
+        write_result
     }
 }
 
@@ -232,41 +187,21 @@ mod tests {
     }
 
     #[test]
-    fn writes_all_agentskills_frontmatter_fields() {
+    fn writing_skill_replaces_the_existing_file_without_temporary_files() {
         let root = std::env::temp_dir().join(format!("workrun-skill-test-{}", uuid::Uuid::now_v7()));
-        let request = SkillWriteRequest {
-            name: "voice-receptionist".to_string(),
-            description: "Answer calls for the plumbing team.".to_string(),
-            version: Some("1.1.0".to_string()),
-            license: Some("MIT".to_string()),
-            compatibility: Some("Gemini Live".to_string()),
-            tags: Some("support voice".to_string()),
-            allowed_tools: Some("user_profile knowledge".to_string()),
-            references: Some("references/technicians.json\nreferences/coverage.csv".to_string()),
-            trigger: true,
-            hint: Some("Tell us how we can help.".to_string()),
-            metadata: HashMap::from([("owner".to_string(), Value::String("platform".to_string()))]),
-            instructions: "Greet callers and collect the repair details.".to_string(),
-        };
+        let skill_path = root.join("SKILL.md");
 
-        let skill_path = root.join(".skills/voice-receptionist/SKILL.md");
-        SkillRegistry::write_skill(&skill_path, &request.into_draft()).unwrap();
-        assert!(skill_path.is_file());
-        let index = load_skill_index(&root).unwrap();
-        let skill = index.find_by_name("voice-receptionist").unwrap();
+        SkillRegistry::write_skill(&skill_path, &SkillDraft::new("first", "First").with_body("first body")).unwrap();
+        SkillRegistry::write_skill(
+            &skill_path,
+            &SkillDraft::new("second", "Second").with_body("second body"),
+        )
+        .unwrap();
 
-        assert_eq!(skill.version.as_deref(), Some("1.1.0"));
-        assert_eq!(skill.license.as_deref(), Some("MIT"));
-        assert_eq!(skill.compatibility.as_deref(), Some("Gemini Live"));
-        assert_eq!(skill.tags, ["support", "voice"]);
-        assert_eq!(skill.allowed_tools, ["user_profile", "knowledge"]);
-        assert_eq!(
-            skill.references,
-            ["references/technicians.json", "references/coverage.csv"]
-        );
-        assert!(skill.trigger);
-        assert_eq!(skill.hint.as_deref(), Some("Tell us how we can help."));
-        assert_eq!(skill.metadata["owner"], Value::String("platform".to_string()));
+        let contents = std::fs::read_to_string(&skill_path).unwrap();
+        assert!(contents.contains("second body"));
+        assert!(!contents.contains("first body"));
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

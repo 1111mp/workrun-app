@@ -46,7 +46,7 @@ impl Node for ProcessWorkflowNode {
             .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
             .node_input(&self.id)
             .map_err(|error| graph_node_error(&self.id, error))?;
-        let run = ProcessNodeRegistry::run_for_workflow(
+        let run = crate::feat::run_process_node_for_workflow(
             &self.process_node_id,
             &input,
             // The registry still captures complete stdout/stderr. Emitting only

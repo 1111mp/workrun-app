@@ -1,4 +1,5 @@
 use crate::{
+    config::Config,
     core::handle,
     logging,
     module::{mcp_server::McpServerRegistry, run_manager},
@@ -19,6 +20,8 @@ pub async fn quit() {
     logging!(debug, Type::System, "Starting shutdown process");
 
     handle::Handle::global().set_is_exiting();
+
+    Config::apply_all_and_save_file().await;
 
     run_manager::shutdown_supervisor().await;
 

@@ -208,7 +208,7 @@ impl Tool for ManagedTool {
             ManagedToolExecutor::Process => {
                 let run = tokio::time::timeout(
                     timeout,
-                    ProcessNodeRegistry::run_for_tool(
+                    crate::feat::run_process_node_for_tool(
                         &self.definition.id,
                         &execution_args,
                         // Buffer process output so secrets split across chunks

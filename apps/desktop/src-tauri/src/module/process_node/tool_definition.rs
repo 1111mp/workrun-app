@@ -1,10 +1,12 @@
-use super::types::*;
-use crate::module::tool_registry::{ToolDefinition, ToolSource};
+use crate::{
+    config::IProcessNode,
+    module::tool_registry::{ToolDefinition, ToolSource},
+};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub(super) fn process_tool_definition(node: ProcessNodeDefinition) -> Result<ToolDefinition> {
+pub(super) fn process_tool_definition(node: IProcessNode) -> Result<ToolDefinition> {
     if node.inputs.is_empty() {
         bail!("Tool App `{}` must define at least one input schema", node.name);
     }

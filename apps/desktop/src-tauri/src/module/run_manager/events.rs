@@ -88,7 +88,7 @@ pub(super) async fn execute_app(run_id: &str, target_id: &str, handle: Arc<AppRu
     let writer = tauri::async_runtime::spawn(persist_app_output(run_id.to_string(), receiver));
     let output_sender = output.clone();
     let started_handle = Arc::clone(&handle);
-    let result = ProcessNodeRegistry::run_with_output(
+    let result = crate::feat::run_process_node_with_output(
         target_id,
         std::sync::Arc::new(move |chunk| {
             let _ = output_sender.send(chunk);

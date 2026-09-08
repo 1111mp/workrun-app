@@ -41,7 +41,7 @@ import type { Node } from '@xyflow/react';
 import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
 
-import { listProcessNodes } from '@/services/process-node';
+import { getProcessNodes } from '@/services/process-node';
 import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
 import { getWorkflows } from '@/services/workflow';
@@ -650,7 +650,7 @@ function WorkflowNodeInspector({
 
   const processNodes = useQuery({
     queryKey: ['processNodes'],
-    queryFn: listProcessNodes,
+    queryFn: getProcessNodes,
     enabled: node?.type === 'process',
   });
   const tools = useQuery({

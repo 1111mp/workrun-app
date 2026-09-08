@@ -5,7 +5,6 @@ mod project;
 mod registry;
 mod tool_definition;
 mod types;
-mod validation;
 
 #[cfg(test)]
 mod tests;
@@ -14,4 +13,3 @@ pub use types::*;
 
 use project::{installation_status, project_python_version};
 use tool_definition::*;
-use validation::*;

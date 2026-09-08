@@ -1,42 +1,20 @@
-use super::{types::*, validate_definition};
-use crate::module::{python_runtime::PythonRuntime, tool_registry::ToolRiskLevel};
-use anyhow::{Context, Result, bail};
-use chrono::Utc;
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
+use super::types::*;
+use crate::{
+    config::{IProcessNode, ProcessNodeKind, validate_process_node_definition},
+    feat,
+    module::python_runtime::PythonRuntime,
 };
-use tauri::{AppHandle, ipc::Channel};
-use uuid::Uuid;
+use anyhow::{Context, Result, bail};
+use std::path::Path;
+use tauri::ipc::Channel;
 
 impl ProcessNodeRegistry {
-    /// Create a local uv project and register it in the catalog.
-    pub async fn create(
-        request: CreateProcessNodeRequest,
-        progress: Channel<ProcessNodeCreateProgress>,
-    ) -> Result<ProcessNode> {
-        if request.name.trim().is_empty() {
-            bail!("Process Node name must not be empty");
-        }
-
-        let now = Utc::now().to_rfc3339();
-        let definition = ProcessNodeDefinition {
-            id: Uuid::now_v7().to_string(),
-            name: request.name.trim().to_string(),
-            description: request.description.trim().to_string(),
-            version: "0.1.0".to_string(),
-            created_at: now.clone(),
-            updated_at: now,
-            entry: PathBuf::from("main.py"),
-            project_root: request.project_root,
-            kind: request.kind,
-            tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
-            tool_risk_level: ToolRiskLevel::Low,
-            tool_permissions: Vec::new(),
-            inputs: BTreeMap::new(),
-            outputs: BTreeMap::new(),
-        };
-        validate_definition(&definition)?;
+    /// Initialize a local uv project for an already validated catalog entry.
+    pub async fn initialize_project(
+        definition: &IProcessNode,
+        progress: Channel<feat::ProcessNodeCreateProgress>,
+    ) -> Result<()> {
+        validate_process_node_definition(definition)?;
         let project_path = Self::project_path(&definition)?;
         match tokio::fs::metadata(&project_path).await {
             Ok(_) => bail!(
@@ -49,8 +27,8 @@ impl ProcessNodeRegistry {
                     .with_context(|| format!("failed to inspect Process Node project {}", project_path.display()));
             },
         }
-        let _ = progress.send(ProcessNodeCreateProgress {
-            stage: ProcessNodeCreateStage::CreatingProject,
+        let _ = progress.send(feat::ProcessNodeCreateProgress {
+            stage: feat::ProcessNodeCreateStage::CreatingProject,
         });
         let project_parent = project_path
             .parent()
@@ -65,23 +43,21 @@ impl ProcessNodeRegistry {
             .await
             .with_context(|| format!("failed to create Process Node project {}", project_path.display()))?;
 
-        let result = async {
+        let result: Result<()> = async {
             PythonRuntime::init_application_project(&project_path).await?;
-            let _ = progress.send(ProcessNodeCreateProgress {
-                stage: ProcessNodeCreateStage::AddingSdkDependency,
+            let _ = progress.send(feat::ProcessNodeCreateProgress {
+                stage: feat::ProcessNodeCreateStage::AddingSdkDependency,
             });
             PythonRuntime::add_workrun_sdk_dependency(&project_path).await?;
-            let _ = progress.send(ProcessNodeCreateProgress {
-                stage: ProcessNodeCreateStage::InitializingEnvironment,
+            let _ = progress.send(feat::ProcessNodeCreateProgress {
+                stage: feat::ProcessNodeCreateStage::InitializingEnvironment,
             });
             PythonRuntime::sync_dependencies(&project_path, "3.12").await?;
-            let _ = progress.send(ProcessNodeCreateProgress {
-                stage: ProcessNodeCreateStage::SavingApp,
+            let _ = progress.send(feat::ProcessNodeCreateProgress {
+                stage: feat::ProcessNodeCreateStage::SavingApp,
             });
             tokio::fs::write(project_path.join(&definition.entry), starter_script(definition.kind)).await?;
-            let mut catalog = Self::read_catalog().await?;
-            catalog.nodes.push(definition.clone());
-            Self::write_catalog(&catalog).await
+            Ok(())
         }
         .await;
 
@@ -89,11 +65,7 @@ impl ProcessNodeRegistry {
             let _ = tokio::fs::remove_dir_all(&project_path).await;
             return Err(error).with_context(|| "failed to initialize Process Node project");
         }
-        let node = Self::with_installation(definition).await;
-        let _ = progress.send(ProcessNodeCreateProgress {
-            stage: ProcessNodeCreateStage::Completed,
-        });
-        Ok(node)
+        Ok(())
     }
 }
 

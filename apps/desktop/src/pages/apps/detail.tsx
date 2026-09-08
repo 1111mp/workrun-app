@@ -69,7 +69,7 @@ import {
 } from '@/components/app-run-output-panel';
 import {
   deleteProcessNode,
-  inspectProcessNode,
+  getProcessNode,
   listProcessNodeWorkflowReferences,
   updateProcessNode,
   type ProcessNodeDefinition,
@@ -453,7 +453,7 @@ function ContractEditor({
   );
 }
 
-type ProcessNodeDetails = Awaited<ReturnType<typeof inspectProcessNode>>;
+type ProcessNodeDetails = Awaited<ReturnType<typeof getProcessNode>>;
 
 function ProcessNodeDetailPage() {
   const { id } = useParams();
@@ -461,7 +461,7 @@ function ProcessNodeDetailPage() {
   const historyRunId = searchParams.get('runId');
   const node = useQuery({
     queryKey: ['apps', id],
-    queryFn: () => inspectProcessNode(id!),
+    queryFn: () => getProcessNode(id!),
     enabled: Boolean(id),
   });
   const historicalRun = useQuery({

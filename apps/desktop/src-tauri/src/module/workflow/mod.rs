@@ -34,9 +34,9 @@ use tool::*;
 #[cfg(not(test))]
 use crate::core::db::DBManager;
 use crate::{
+    config::ToolExecutionPolicy,
     config::{Config, IWorkrun, ModelDefinition, ModelProvider, model_catalog},
     module::{
-        process_node::{ProcessNodeRegistry, ToolExecutionPolicy},
         state::{AccessRule, NodeStatePolicy},
         tool_registry::{ToolDefinition, ToolRegistry, ToolSource},
     },

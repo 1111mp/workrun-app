@@ -4,7 +4,6 @@ use crate::{
     config::Config,
     core::handle,
     module::{
-        process_node::ProcessNodeRegistry,
         python_runtime::PythonOutputChunk,
         run_history::{
             AppendRunEvents, CreatePendingAction, CreateRunRecord, NewRunEvent, RunHistoryStore, RunRecordSummary,

@@ -1,9 +1,13 @@
 use super::*;
+use crate::config::{
+    IProcessNode, IProcessNodes, ProcessNodeKind, ToolExecutionPolicy, validate_process_node_catalog,
+    validate_process_node_definition,
+};
 use crate::module::tool_registry::{ToolRiskLevel, ToolSource};
 use std::collections::BTreeMap;
 
-fn definition() -> ProcessNodeDefinition {
-    ProcessNodeDefinition {
+fn definition() -> IProcessNode {
+    IProcessNode {
         id: "019b812d-4958-7d37-8a45-47e1e20a4744".into(),
         name: "Web Search".into(),
         description: "Search the web".into(),
@@ -25,15 +29,10 @@ fn definition() -> ProcessNodeDefinition {
 fn catalog_rejects_noncanonical_and_duplicate_ids() {
     let mut invalid = definition();
     invalid.id = "019B812D-4958-7D37-8A45-47E1E20A4744".into();
-    assert!(validate_catalog(&ProcessNodeCatalog { nodes: vec![invalid] }).is_err());
+    assert!(validate_process_node_catalog(&IProcessNodes::from_nodes(vec![invalid])).is_err());
 
     let duplicate = definition();
-    assert!(
-        validate_catalog(&ProcessNodeCatalog {
-            nodes: vec![definition(), duplicate],
-        })
-        .is_err()
-    );
+    assert!(validate_process_node_catalog(&IProcessNodes::from_nodes(vec![definition(), duplicate])).is_err());
 }
 
 #[test]
@@ -90,7 +89,7 @@ fn rejects_a_default_value_that_does_not_match_its_schema() {
         serde_json::json!({ "type": "integer", "default": "250" }),
     );
 
-    assert!(validate_definition(&node).is_err());
+    assert!(validate_process_node_definition(&node).is_err());
 }
 
 #[test]
@@ -98,7 +97,7 @@ fn legacy_catalog_entries_default_to_workflow_apps() {
     let mut value = serde_json::to_value(definition()).unwrap();
     value.as_object_mut().unwrap().remove("kind");
 
-    let parsed: ProcessNodeDefinition = serde_json::from_value(value).unwrap();
+    let parsed: IProcessNode = serde_json::from_value(value).unwrap();
     assert_eq!(parsed.kind, ProcessNodeKind::Workflow);
 }
 
@@ -106,10 +105,10 @@ fn legacy_catalog_entries_default_to_workflow_apps() {
 fn project_root_must_be_absolute() {
     let mut node = definition();
     node.project_root = Some("projects/my-app".into());
-    assert!(validate_definition(&node).is_err());
+    assert!(validate_process_node_definition(&node).is_err());
 
     node.project_root = Some(std::env::temp_dir().join("my-app"));
-    assert!(validate_definition(&node).is_ok());
+    assert!(validate_process_node_definition(&node).is_ok());
 }
 
 #[test]

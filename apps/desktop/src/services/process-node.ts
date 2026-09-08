@@ -82,12 +82,12 @@ export type ProcessNodeRunEvent =
   | { type: 'app_cancelled' }
   | { type: 'error'; message: string };
 
-export function listProcessNodes() {
-  return invoke<ProcessNode[]>('process_node_list');
+export function getProcessNodes() {
+  return invoke<ProcessNode[]>('get_process_nodes');
 }
 
-export function inspectProcessNode(id: string) {
-  return invoke<ProcessNode>('process_node_inspect', { id });
+export function getProcessNode(id: string) {
+  return invoke<ProcessNode>('get_process_node', { id });
 }
 
 export function openProcessNodeProject(id: string) {
@@ -104,15 +104,15 @@ export function createProcessNode(
 ) {
   const progress = new Channel<ProcessNodeCreateProgress>();
   progress.onmessage = onProgress;
-  return invoke<ProcessNode>('process_node_create', { request, progress });
+  return invoke<ProcessNode>('create_process_node', { request, progress });
 }
 
 export function updateProcessNode(definition: ProcessNodeDefinition) {
-  return invoke<ProcessNode>('process_node_update', { definition });
+  return invoke<ProcessNode>('update_process_node', { definition });
 }
 
 export function deleteProcessNode(id: string, deleteProjectFiles: boolean) {
-  return invoke('process_node_delete', { id, deleteProjectFiles });
+  return invoke('delete_process_node', { id, deleteProjectFiles });
 }
 
 export function listProcessNodeWorkflowReferences(id: string) {

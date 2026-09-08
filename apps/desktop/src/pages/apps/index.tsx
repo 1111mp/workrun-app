@@ -69,7 +69,7 @@ import {
   type ProcessNodeRun,
 } from '@/components/app-run-output-panel';
 import {
-  listProcessNodes,
+  getProcessNodes,
   startBackgroundProcessNodeRun,
   subscribeProcessNodeRun,
   type ProcessNode,
@@ -509,7 +509,7 @@ function AppsPage() {
   const unlistenRuns = useRef<Record<string, () => void>>({});
   const apps = useQuery({
     queryKey: ['apps'],
-    queryFn: listProcessNodes,
+    queryFn: getProcessNodes,
   });
 
   useEffect(
