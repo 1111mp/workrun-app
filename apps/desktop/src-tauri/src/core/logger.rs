@@ -49,7 +49,7 @@ impl Logger {
 
     pub async fn init(&self) -> Result<()> {
         let (log_level, log_max_size, log_max_count) = {
-            let workrun_draft = crate::config::Config::workrun().await;
+            let workrun_draft = crate::config::BaseConfig::workrun().await;
             let workrun = workrun_draft.latest_arc();
             (
                 workrun.get_log_level(),

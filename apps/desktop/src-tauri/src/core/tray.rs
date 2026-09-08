@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use crate::{
-    config::Config,
+    config::BaseConfig,
     core::handle,
     feat, logging, logging_error,
     process::AsyncHandler,
@@ -120,7 +120,7 @@ impl Tray {
             return Ok(());
         };
 
-        let workrun = Config::workrun().await.latest_arc();
+        let workrun = BaseConfig::workrun().await.latest_arc();
         let locale = i18n::Locale::from_str(workrun.locale.as_deref());
 
         logging_error!(

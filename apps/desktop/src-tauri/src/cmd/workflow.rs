@@ -1,6 +1,6 @@
 use crate::{
     cmd::{CmdResult, StringifyErr},
-    config::Config,
+    config::BaseConfig,
     module::workflow::{self, ToolConfirmationDecisionRequest, WorkflowDsl, WorkflowPlan, WorkflowRunResult},
 };
 use adk_rust::graph::State;
@@ -13,7 +13,7 @@ use tauri::ipc::Channel;
 #[tauri::command]
 pub async fn workflow_compile(dsl: Value) -> CmdResult<WorkflowPlan> {
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
-    let config = Config::workrun().await.latest_arc();
+    let config = BaseConfig::workrun().await.latest_arc();
     let compiled = workflow::compile(dsl, &config, None).await.stringify_err()?;
     Ok(compiled.plan().clone())
 }
@@ -32,7 +32,7 @@ pub async fn workflow_run(
 ) -> CmdResult<WorkflowRunResult> {
     let dsl: WorkflowDsl = serde_json::from_value(dsl).stringify_err()?;
     let state: State = serde_json::from_value(initial_state).stringify_err()?;
-    let config = Config::workrun().await.latest_arc();
+    let config = BaseConfig::workrun().await.latest_arc();
     let compiled = workflow::compile(dsl, &config, Some(on_event.clone()))
         .await
         .stringify_err()?;

@@ -83,6 +83,7 @@ import {
   type RunHistoryCursor,
   type RunStatus,
 } from '@/services/run-history';
+import { useWorkrunStore } from '@/stores';
 
 import { copyProjectPath, openProjectDirectory } from './project-path';
 
@@ -510,23 +511,30 @@ function AppHistoryDrawer({
 }
 
 function AppsPage() {
-  const { t } = useTranslation();
   const [filter, setFilter] = useState<AppFilter>('all');
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState<string>('');
   const [runs, setRuns] = useState<Record<string, ProcessNodeRun>>({});
-  const [outputOpen, setOutputOpen] = useState(false);
+  const [outputOpen, setOutputOpen] = useState<boolean>(false);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [historyNode, setHistoryNode] = useState<ProcessNode>();
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState<boolean>(false);
   const [historySelectedRun, setHistorySelectedRun] =
     useState<ProcessNodeRun>();
+
   const pendingOutput = useRef<Record<string, ProcessNodeOutput>>({});
   const frames = useRef<Record<string, number | undefined>>({});
   const unlistenRuns = useRef<Record<string, () => void>>({});
+  const workspaceMode = useWorkrunStore((s) => s.config?.workspace_mode);
+  const teamServerUrl = useWorkrunStore((s) => s.config?.team?.server_url);
+
   const apps = useQuery({
-    queryKey: ['apps'],
+    // A team catalog must never reuse the personal catalog cached under the
+    // same route while the workspace mode changes.
+    queryKey: ['apps', workspaceMode, teamServerUrl],
     queryFn: getProcessNodes,
   });
+
+  const { t } = useTranslation();
 
   useEffect(
     () => () => {

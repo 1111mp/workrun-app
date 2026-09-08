@@ -80,6 +80,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // app
+            cmd::app::restart_app,
             // workrun
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,

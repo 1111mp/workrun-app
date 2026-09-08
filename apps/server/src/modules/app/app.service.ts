@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 
 import { BetterAuthUser } from '../user/schemas/better-auth-user.schema';
 import { CreateAppDto } from './dto/create-app.dto';
+import { ListAppsDto } from './dto/list-apps.dto';
 import { UpdateAppDto } from './dto/update-app.dto';
 import { App, type AppDocument } from './schemas/app.schema';
 
@@ -23,15 +28,52 @@ export class AppService {
     });
   }
 
-  findAll(ownerId: string) {
-    return this.appModel
-      .find({ ownerId: this.toOwnerId(ownerId), isDelete: false })
-      .sort({ updatedAt: -1 })
+  async findAll(ownerId: string, query: ListAppsDto = {}) {
+    const pageSize = query.pageSize ?? 30;
+    const filter: {
+      ownerId: Types.ObjectId;
+      isDelete: false;
+      $or?: Array<Record<string, unknown>>;
+    } = {
+      ownerId: this.toOwnerId(ownerId),
+      isDelete: false,
+    };
+
+    if (query.cursor) {
+      const cursor = await this.appModel
+        .findOne({ id: query.cursor, ownerId: this.toOwnerId(ownerId) })
+        .select('id updatedAt')
+        .lean();
+      if (!cursor) throw new BadRequestException('Invalid app cursor');
+
+      const { id, updatedAt } = cursor as unknown as {
+        id: string;
+        updatedAt: Date;
+      };
+      // The ID tie-breaker keeps page boundaries stable when timestamps match.
+      filter.$or = [
+        { updatedAt: { $lt: updatedAt } },
+        { updatedAt, id: { $lt: id } },
+      ];
+    }
+
+    const items = await this.appModel
+      .find(filter)
+      .sort({ updatedAt: -1, id: -1 })
+      .limit(pageSize + 1)
       .populate<{ ownerId: BetterAuthUser }>({
         path: 'ownerId',
         select: 'name email emailVerified image createdAt updatedAt',
       })
       .lean();
+
+    if (items.length <= pageSize) return { items };
+
+    items.pop();
+    return {
+      items,
+      nextCursor: items.at(-1)!.id,
+    };
   }
 
   async findOne(ownerId: string, id: string) {

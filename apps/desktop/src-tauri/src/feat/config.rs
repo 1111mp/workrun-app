@@ -1,9 +1,9 @@
 #[allow(unused_imports)]
-use crate::config::{Config, WorkrunPatch};
+use crate::config::{BaseConfig, WorkrunPatch};
 use crate::{
     core::{autostart, logger::Logger, tray},
     logging,
-    utils::logging::Type,
+    utils::{dirs, init, logging::Type},
 };
 use anyhow::Result;
 use bitflags::bitflags;
@@ -21,7 +21,8 @@ bitflags! {
 
 /// Patch Workrun Configuration
 pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result<()> {
-    Config::workrun().await.edit_draft(|s| s.patch_config(patch));
+    let was_onboarded = BaseConfig::workrun().await.data_arc().onboarding_completed;
+    BaseConfig::workrun().await.edit_draft(|s| s.patch_config(patch));
 
     let update_flags = determine_update_flags(patch);
     logging!(debug, Type::Setup, "Determined update flags: {:?}", update_flags);
@@ -31,14 +32,22 @@ pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result
     };
 
     if let Err(err) = process_flag_result {
-        Config::workrun().await.discard();
+        BaseConfig::workrun().await.discard();
         return Err(err);
     }
-    Config::workrun().await.apply();
+    BaseConfig::workrun().await.apply();
     if need_save_file {
-        let workrun_data = Config::workrun().await.data_arc();
+        let workrun_data = BaseConfig::workrun().await.data_arc();
         logging!(debug, Type::Setup, "Saving Workrun configuration to file...");
         workrun_data.save_config().await?;
+    }
+    if !was_onboarded && patch.onboarding_completed == Some(true) {
+        let scope = match BaseConfig::workrun().await.data_arc().workspace_mode {
+            Some(crate::config::WorkspaceMode::Team) => dirs::default_team_workspace_scope(),
+            _ => dirs::WorkspaceScope::Personal,
+        };
+        dirs::initialize_active_workspace_scope(scope);
+        init::ensure_active_workspace_directories().await?;
     }
     Ok(())
 }

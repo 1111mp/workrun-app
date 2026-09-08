@@ -10,10 +10,10 @@ import {
 import { HardDriveIcon, UsersIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
 import { createTeamAuthClient } from '@/lib/auth-client';
+import { restartApp } from '@/services/cmd';
 import { normalizeServerUrl } from '@/services/session';
 import { useWorkrunStore } from '@/stores';
 
@@ -22,7 +22,6 @@ function WorkspaceSettings() {
   const config = useWorkrunStore((s) => s.config);
   const updateConfig = useWorkrunStore((s) => s.updateConfig);
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const [mode, setMode] = useState<WorkspaceMode>(
     config?.workspace_mode ?? 'personal',
   );
@@ -57,18 +56,12 @@ function WorkspaceSettings() {
           ? { team: { server_url: normalizeServerUrl(serverUrl)! } }
           : {}),
       });
-      toast.success(t('settings.workspace.saved'), { toasterId: 'global' });
 
-      if (currentMode === 'team' && mode === 'personal') {
-        await navigate('/profile', { replace: true });
+      if (currentMode !== mode) {
+        await restartApp();
         return;
       }
-
-      if (currentMode === 'personal' && mode === 'team') {
-        useWorkrunStore.getState().setTeamUser(undefined);
-        queryClient.removeQueries({ queryKey: ['team-user'] });
-        await navigate('/login', { replace: true });
-      }
+      toast.success(t('settings.workspace.saved'), { toasterId: 'global' });
     } catch {
       toast.error(t('settings.workspace.signOutFailed'), {
         toasterId: 'global',

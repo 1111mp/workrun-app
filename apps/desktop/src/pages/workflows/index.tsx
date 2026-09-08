@@ -145,13 +145,15 @@ function WorkflowListSkeleton() {
 }
 
 function WorkflowsPage() {
-  const { t } = useTranslation();
+  const [query, setQuery] = useState<string>('');
+
   const queryClient = useQueryClient();
-  const [query, setQuery] = useState('');
+
   const workflows = useQuery({
     queryKey: ['workflows'],
     queryFn: getWorkflows,
   });
+
   const migrateLegacy = useMutation({
     mutationFn: createWorkflow,
     onSuccess: () => {
@@ -162,6 +164,8 @@ function WorkflowsPage() {
       });
     },
   });
+
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (

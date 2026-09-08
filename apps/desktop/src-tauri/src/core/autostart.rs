@@ -3,7 +3,7 @@ use crate::logging_error;
 #[cfg(target_os = "windows")]
 use crate::utils::schtasks;
 #[allow(unused_imports)]
-use crate::{config::Config, core::handle::Handle, logging, utils::logging::Type};
+use crate::{config::BaseConfig, core::handle::Handle, logging, utils::logging::Type};
 use anyhow::Result;
 #[cfg(windows)]
 use deelevate::{PrivilegeLevel, Token};
@@ -13,7 +13,7 @@ pub use libc;
 use tauri_plugin_autostart::ManagerExt as _;
 
 pub async fn update_launch() -> Result<()> {
-    let enable_auto_launch = { Config::workrun().await.latest_arc().enable_auto_launch };
+    let enable_auto_launch = { BaseConfig::workrun().await.latest_arc().enable_auto_launch };
     let is_enable = enable_auto_launch.unwrap_or(false);
     logging!(info, Type::System, "Setting auto-launch enabled state to: {is_enable}");
 

@@ -40,7 +40,8 @@ describe('AppService', () => {
   it('lists only apps owned by the authenticated user', async () => {
     const lean = vi.fn().mockResolvedValue([]);
     const populate = vi.fn().mockReturnValue({ lean });
-    const sort = vi.fn().mockReturnValue({ populate });
+    const limit = vi.fn().mockReturnValue({ populate });
+    const sort = vi.fn().mockReturnValue({ limit });
     model.find.mockReturnValue({ sort });
 
     await service.findAll(ownerId);
@@ -49,11 +50,56 @@ describe('AppService', () => {
       isDelete: false,
       ownerId: expect.any(Types.ObjectId),
     });
-    expect(sort).toHaveBeenCalledWith({ updatedAt: -1 });
+    expect(sort).toHaveBeenCalledWith({ updatedAt: -1, id: -1 });
+    expect(limit).toHaveBeenCalledWith(31);
     expect(populate).toHaveBeenCalledWith({
       path: 'ownerId',
       select: 'name email emailVerified image createdAt updatedAt',
     });
+  });
+
+  it('uses an exclusive cursor and exposes the last returned app as nextCursor', async () => {
+    const updatedAt = new Date('2026-09-08T00:00:00.000Z');
+    const items = [
+      { id: 'app-3', updatedAt },
+      { id: 'app-2', updatedAt },
+      { id: 'app-1', updatedAt },
+    ];
+    const lean = vi.fn().mockResolvedValue(items);
+    const populate = vi.fn().mockReturnValue({ lean });
+    const limit = vi.fn().mockReturnValue({ populate });
+    const sort = vi.fn().mockReturnValue({ limit });
+    model.find.mockReturnValue({ sort });
+    const cursorLean = vi.fn().mockResolvedValue({
+      id: 'app-4',
+      updatedAt,
+    });
+    const select = vi.fn().mockReturnValue({ lean: cursorLean });
+    model.findOne.mockReturnValue({ select });
+
+    await expect(
+      service.findAll(ownerId, {
+        pageSize: 2,
+        cursor: 'app-4',
+      }),
+    ).resolves.toEqual({
+      items: items.slice(0, 2),
+      nextCursor: 'app-2',
+    });
+    expect(model.findOne).toHaveBeenCalledWith({
+      id: 'app-4',
+      ownerId: expect.any(Types.ObjectId),
+    });
+    expect(select).toHaveBeenCalledWith('id updatedAt');
+    expect(model.find).toHaveBeenCalledWith({
+      isDelete: false,
+      ownerId: expect.any(Types.ObjectId),
+      $or: [
+        { updatedAt: { $lt: updatedAt } },
+        { id: { $lt: 'app-4' }, updatedAt },
+      ],
+    });
+    expect(limit).toHaveBeenCalledWith(3);
   });
 
   it('returns an app only when it belongs to the authenticated user', async () => {

@@ -1,5 +1,5 @@
 use crate::{
-    config::Config,
+    config::BaseConfig,
     core::handle,
     logging, logging_error,
     utils::{logging::Type, resolve::window_script::build_window_initial_script},
@@ -19,7 +19,7 @@ const DEFAULT_DECORATIONS: bool = true;
 pub async fn build_new_window() -> Result<WebviewWindow, String> {
     let app_handle = handle::Handle::app_handle();
 
-    let config = Config::workrun().await;
+    let config = BaseConfig::workrun().await;
     let workrun = config.latest_arc();
     let initial_theme_mode = match workrun.theme.as_deref() {
         Some("dark") => "dark",

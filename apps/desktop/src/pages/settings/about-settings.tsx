@@ -42,7 +42,9 @@ function AboutSettings() {
             className='hover:bg-muted rounded-none py-3'
             onClick={async () => {
               await navigator.clipboard.writeText(version);
-              toast.success(t('settings.about.versionCopied'));
+              toast.success(t('settings.about.versionCopied'), {
+                toasterId: 'global',
+              });
             }}
           >
             <ItemContent>

@@ -25,10 +25,14 @@ describe('AppController', () => {
   });
 
   it('scopes reads to the authenticated user', () => {
-    controller.findAll(session);
+    const query = {
+      pageSize: 20,
+      cursor: 'app-1',
+    };
+    controller.findAll(session, query);
     controller.findOne(session, 'app-1');
 
-    expect(appService.findAll).toHaveBeenCalledWith('user-1');
+    expect(appService.findAll).toHaveBeenCalledWith('user-1', query);
     expect(appService.findOne).toHaveBeenCalledWith('user-1', 'app-1');
   });
 

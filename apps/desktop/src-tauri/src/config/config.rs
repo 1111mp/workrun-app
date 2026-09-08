@@ -1,4 +1,4 @@
-use super::{Draft, IWorkrun};
+use super::Draft;
 use crate::{
     config::{IMcpServers, IProcessNodes, IWorkflows},
     logging, logging_error,
@@ -8,7 +8,6 @@ use crate::{
 use tokio::sync::OnceCell;
 
 pub struct Config {
-    workrun_config: Draft<IWorkrun>,
     workflow_config: Draft<IWorkflows>,
     process_node_config: Draft<IProcessNodes>,
     mcp_server_config: Draft<IMcpServers>,
@@ -20,17 +19,12 @@ impl Config {
         CONFIG
             .get_or_init(|| async {
                 Self {
-                    workrun_config: Draft::new(IWorkrun::new().await),
                     workflow_config: Draft::new(IWorkflows::new().await),
                     process_node_config: Draft::new(IProcessNodes::new().await),
                     mcp_server_config: Draft::new(IMcpServers::new().await),
                 }
             })
             .await
-    }
-
-    pub async fn workrun() -> Draft<IWorkrun> {
-        Self::global().await.workrun_config.clone()
     }
 
     pub async fn workflows() -> Draft<IWorkflows> {
@@ -47,12 +41,6 @@ impl Config {
 
     pub async fn apply_all_and_save_file() {
         logging!(info, Type::Config, "save all draft data");
-
-        let save_workrun_task = AsyncHandler::spawn(|| async {
-            let workrun = Self::workrun().await;
-            workrun.apply();
-            logging_error!(Type::Config, workrun.data_arc().save_config().await);
-        });
 
         let save_workflow_task = AsyncHandler::spawn(|| async {
             let workflow = Self::workflows().await;
@@ -72,12 +60,7 @@ impl Config {
             logging_error!(Type::Config, mcp_server.data_arc().save_file().await);
         });
 
-        let _ = tokio::join!(
-            save_workrun_task,
-            save_workflow_task,
-            save_process_node_task,
-            save_mcp_server_task
-        );
+        let _ = tokio::join!(save_workflow_task, save_process_node_task, save_mcp_server_task);
 
         logging!(info, Type::Config, "save all draft data finished");
     }

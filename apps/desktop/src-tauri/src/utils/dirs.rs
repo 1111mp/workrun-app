@@ -21,6 +21,11 @@ pub enum WorkspaceScope {
     Team { team_id: String },
 }
 
+/// Temporary scope until the server exposes a stable team identifier.
+pub const DEFAULT_TEAM_ID: &str = "default";
+
+static ACTIVE_WORKSPACE_SCOPE: OnceCell<WorkspaceScope> = OnceCell::new();
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspacePaths {
     root: PathBuf,
@@ -42,18 +47,6 @@ impl WorkspacePaths {
 
     pub fn root(&self) -> PathBuf {
         self.root.clone()
-    }
-
-    pub fn workrun_path(&self) -> PathBuf {
-        self.root.join(WORKRUN_CONFIG)
-    }
-
-    pub fn logs_dir(&self) -> PathBuf {
-        self.root.join("logs")
-    }
-
-    pub fn db_dir(&self) -> PathBuf {
-        self.root.join("db")
     }
 
     pub fn runtime_dir(&self) -> PathBuf {
@@ -82,6 +75,36 @@ impl WorkspacePaths {
 
     pub fn skills_dir(&self) -> PathBuf {
         self.root.join(".skills")
+    }
+}
+
+/// Installation-wide paths that must survive a workspace switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GlobalPaths {
+    root: PathBuf,
+}
+
+impl GlobalPaths {
+    fn new(app_data_dir: &Path) -> Self {
+        Self {
+            root: app_data_dir.to_path_buf(),
+        }
+    }
+
+    fn workrun_path(&self) -> PathBuf {
+        self.root.join(WORKRUN_CONFIG)
+    }
+
+    fn logs_dir(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+
+    fn db_dir(&self) -> PathBuf {
+        self.root.join("db")
+    }
+
+    fn encryption_key_path(&self) -> PathBuf {
+        self.root.join(".encryption_key")
     }
 }
 
@@ -131,11 +154,27 @@ pub fn workspace_paths(scope: WorkspaceScope) -> Result<WorkspacePaths> {
     WorkspacePaths::new(&app_data_dir()?, &scope)
 }
 
-/// The active workspace remains Personal until team activation has a dedicated
-/// lifecycle and a persisted team identifier. Keeping this choice here makes
-/// every existing subsystem use the same isolated root in the meantime.
+fn global_paths() -> Result<GlobalPaths> {
+    Ok(GlobalPaths::new(&app_data_dir()?))
+}
+
+pub fn default_team_workspace_scope() -> WorkspaceScope {
+    WorkspaceScope::Team {
+        team_id: DEFAULT_TEAM_ID.to_string(),
+    }
+}
+
+pub fn initialize_active_workspace_scope(scope: WorkspaceScope) {
+    let _ = ACTIVE_WORKSPACE_SCOPE.set(scope);
+}
+
 pub fn active_workspace_paths() -> Result<WorkspacePaths> {
-    workspace_paths(WorkspaceScope::Personal)
+    workspace_paths(
+        ACTIVE_WORKSPACE_SCOPE
+            .get()
+            .cloned()
+            .unwrap_or(WorkspaceScope::Personal),
+    )
 }
 
 /// get the active workrun app home dir
@@ -159,17 +198,17 @@ pub fn app_resources_dir() -> Result<PathBuf> {
 
 /// `workrun.yaml` file path
 pub fn workrun_path() -> Result<PathBuf> {
-    Ok(active_workspace_paths()?.workrun_path())
+    Ok(global_paths()?.workrun_path())
 }
 
 /// logs dir
 pub fn app_logs_dir() -> Result<PathBuf> {
-    Ok(active_workspace_paths()?.logs_dir())
+    Ok(global_paths()?.logs_dir())
 }
 
 /// sqlite db dir
 pub fn app_db_dir() -> Result<PathBuf> {
-    Ok(active_workspace_paths()?.db_dir())
+    Ok(global_paths()?.db_dir())
 }
 
 /// db migration dir
@@ -225,8 +264,7 @@ pub fn uv_cache_dir() -> Result<PathBuf> {
 }
 
 pub fn get_encryption_key() -> Result<Vec<u8>> {
-    let app_dir = app_home_dir()?;
-    let key_path = app_dir.join(".encryption_key");
+    let key_path = global_paths()?.encryption_key_path();
 
     if key_path.exists() {
         // Read existing key
@@ -269,10 +307,29 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(personal.workrun_path(), PathBuf::from("/workrun/personal/workrun.yaml"));
         assert_eq!(personal.skills_dir(), PathBuf::from("/workrun/personal/.skills"));
         assert_eq!(team.runtime_dir(), PathBuf::from("/workrun/team/acme/runtime"));
         assert_ne!(personal.root(), team.root());
+    }
+
+    #[test]
+    fn global_paths_are_shared_by_every_workspace() {
+        let paths = GlobalPaths::new(Path::new("/workrun"));
+
+        assert_eq!(paths.workrun_path(), PathBuf::from("/workrun/workrun.yaml"));
+        assert_eq!(paths.logs_dir(), PathBuf::from("/workrun/logs"));
+        assert_eq!(paths.db_dir(), PathBuf::from("/workrun/db"));
+        assert_eq!(paths.encryption_key_path(), PathBuf::from("/workrun/.encryption_key"),);
+    }
+
+    #[test]
+    fn default_team_workspace_uses_the_temporary_team_id() {
+        assert_eq!(
+            default_team_workspace_scope(),
+            WorkspaceScope::Team {
+                team_id: DEFAULT_TEAM_ID.to_string(),
+            },
+        );
     }
 
     #[test]
