@@ -1,7 +1,7 @@
 use super::CmdResult;
 use crate::{
     cmd::StringifyErr as _,
-    config::{Config, IWorkrun, LocalProfile, ProviderCredential, TeamSettings, WorkrunPatch, WorkspaceMode},
+    config::{BaseConfig, IWorkrun, LocalProfile, ProviderCredential, TeamSettings, WorkrunPatch, WorkspaceMode},
     feat,
 };
 use serde::Serialize;
@@ -52,7 +52,7 @@ impl From<&IWorkrun> for PublicWorkrunConfig {
 /// get workrun configuration
 #[tauri::command]
 pub async fn get_workrun_config() -> CmdResult<PublicWorkrunConfig> {
-    let draft = Config::workrun().await;
+    let draft = BaseConfig::workrun().await;
     let config = draft.data_arc();
     Ok(PublicWorkrunConfig::from(config.as_ref().as_ref()))
 }

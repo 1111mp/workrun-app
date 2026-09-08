@@ -1,5 +1,5 @@
 use crate::{
-    config::Config,
+    config::{BaseConfig, Config},
     core::handle,
     logging,
     module::{mcp_server::McpServerRegistry, run_manager},
@@ -21,6 +21,7 @@ pub async fn quit() {
 
     handle::Handle::global().set_is_exiting();
 
+    BaseConfig::apply_and_save_file().await;
     Config::apply_all_and_save_file().await;
 
     run_manager::shutdown_supervisor().await;

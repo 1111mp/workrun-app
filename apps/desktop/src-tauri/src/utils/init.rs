@@ -1,5 +1,5 @@
 use crate::{
-    config::{Config, IWorkrun},
+    config::{BaseConfig, IWorkrun, WorkspaceMode},
     logging,
     process::AsyncHandler,
     utils::{
@@ -19,7 +19,7 @@ pub async fn delete_log() -> Result<()> {
     }
 
     let auto_log_clean = {
-        let workrun_draft = Config::workrun().await;
+        let workrun_draft = BaseConfig::workrun().await;
         let workrun = workrun_draft.data_arc();
         workrun.auto_log_clean.unwrap_or(0)
     };
@@ -69,15 +69,29 @@ pub async fn delete_log() -> Result<()> {
     Ok(())
 }
 
-async fn ensure_directories() -> Result<()> {
+pub async fn ensure_active_workspace_directories() -> Result<()> {
     let directories = [
         ("app_home", dirs::app_home_dir()?),
-        ("app_logs", dirs::app_logs_dir()?),
         ("app_skills", dirs::skills_dir()?),
         ("app_runtime", dirs::runtime_dir()?),
         ("app_mcp_server", dirs::mcp_server_dir()?),
         ("app_process_nodes", dirs::process_nodes_dir()?),
     ];
+
+    for (name, dir) in directories {
+        if !dir.exists() {
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to create {} directory {:?}: {}", name, dir, e))?;
+            logging!(info, Type::Setup, "Created {} directory: {:?}", name, dir);
+        }
+    }
+
+    Ok(())
+}
+
+async fn ensure_basic_directories() -> Result<()> {
+    let directories = [("app_data", dirs::app_data_dir()?), ("app_logs", dirs::app_logs_dir()?)];
 
     for (name, dir) in directories {
         if !dir.exists() {
@@ -107,9 +121,20 @@ async fn initialize_config_files() -> Result<()> {
 
 /// Initialize all the config files before tauri setup
 pub async fn init_config() -> Result<()> {
-    ensure_directories().await?;
+    ensure_basic_directories().await?;
 
     initialize_config_files().await?;
+
+    let workrun = BaseConfig::workrun().await.data_arc();
+    let scope = match workrun.workspace_mode {
+        Some(WorkspaceMode::Team) => Some(dirs::default_team_workspace_scope()),
+        Some(WorkspaceMode::Personal) => Some(dirs::WorkspaceScope::Personal),
+        None => None,
+    };
+    if let Some(scope) = scope {
+        dirs::initialize_active_workspace_scope(scope);
+        ensure_active_workspace_directories().await?;
+    }
 
     AsyncHandler::spawn(|| async {
         if let Err(e) = delete_log().await {

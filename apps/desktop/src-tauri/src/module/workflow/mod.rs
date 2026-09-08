@@ -35,7 +35,7 @@ use tool::*;
 use crate::core::db::DBManager;
 use crate::{
     config::ToolExecutionPolicy,
-    config::{Config, IWorkrun, ModelDefinition, ModelProvider, model_catalog},
+    config::{BaseConfig, IWorkrun, ModelDefinition, ModelProvider, model_catalog},
     module::{
         state::{AccessRule, NodeStatePolicy},
         tool_registry::{ToolDefinition, ToolRegistry, ToolSource},
@@ -273,7 +273,7 @@ pub async fn resolve_human_review_checkpoint(
     if edits.len() > usize::from(editable_key.is_some()) || edits.keys().any(|key| Some(key) != editable_key.as_ref()) {
         bail!("review edits do not match the configured editable key");
     }
-    let config = Config::workrun().await.latest_arc();
+    let config = BaseConfig::workrun().await.latest_arc();
     let compiled = compile(dsl, &config, None).await?;
     let mut updates = vec![(approval_key, Value::Bool(approved))];
     if let Some(editable_key) = editable_key
@@ -294,7 +294,7 @@ pub async fn resolve_ask_user_question_checkpoint(
     let (dsl, thread_id) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
     let answer_key = ask_user_question_answer_key(&dsl, &node_id)?;
     let option_id = ask_user_question_option_id(&dsl, &node_id, &option_id)?;
-    let config = Config::workrun().await.latest_arc();
+    let config = BaseConfig::workrun().await.latest_arc();
     let compiled = compile(dsl, &config, None).await?;
     compiled
         .update_state(&thread_id, [(answer_key, Value::String(option_id))])

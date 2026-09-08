@@ -1,4 +1,10 @@
-use crate::{config::Config, core::handle, module::run_manager, utils::dirs};
+use crate::{
+    config::{BaseConfig, Config},
+    core::handle,
+    logging,
+    module::{mcp_server::McpServerRegistry, run_manager},
+    utils::{dirs, logging::Type},
+};
 use anyhow::Result;
 
 /// open app config dir
@@ -16,11 +22,18 @@ pub async fn open_logs_dir() -> Result<()> {
 }
 
 pub async fn restart_app() {
+    logging!(debug, Type::System, "Startup and Restart Application Process");
+
     handle::Handle::global().set_is_exiting();
+
+    BaseConfig::apply_and_save_file().await;
+    Config::apply_all_and_save_file().await;
 
     run_manager::shutdown_supervisor().await;
 
-    Config::apply_all_and_save_file().await;
+    if let Err(error) = McpServerRegistry::shutdown_all().await {
+        logging!(error, Type::System, "Failed to stop MCP servers: {}", error);
+    }
 
     let app_handle = handle::Handle::app_handle();
     app_handle.restart();

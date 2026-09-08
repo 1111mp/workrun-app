@@ -23,3 +23,7 @@ export async function getModelCatalog(): Promise<ModelDefinition[]> {
 export async function getSystemTheme() {
   return invoke<AppBaseTheme>('get_system_theme');
 }
+
+export async function restartApp() {
+  return invoke<void>('restart_app');
+}

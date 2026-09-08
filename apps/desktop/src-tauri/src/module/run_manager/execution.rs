@@ -85,7 +85,7 @@ async fn execute_workflow(
 ) -> Result<()> {
     let dsl: WorkflowDsl = serde_json::from_value(session.dsl)?;
     let initial_state: State = serde_json::from_value(session.initial_state)?;
-    let config = Config::workrun().await.latest_arc();
+    let config = BaseConfig::workrun().await.latest_arc();
     let (events, receiver) = mpsc::unbounded_channel();
     let writer = tauri::async_runtime::spawn(persist_events(run_id.to_string(), receiver));
     let terminal_steps = Arc::new(Mutex::new(None));

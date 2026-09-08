@@ -6,12 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiCookieAuth } from '@nestjs/swagger';
 import { Session, type UserSession } from '@thallesp/nestjs-better-auth';
 
 import { AppService } from './app.service';
 import { CreateAppDto } from './dto/create-app.dto';
+import { ListAppsDto } from './dto/list-apps.dto';
 import { UpdateAppDto } from './dto/update-app.dto';
 
 @ApiCookieAuth('sessionCookie')
@@ -26,8 +28,8 @@ export class AppController {
   }
 
   @Get()
-  findAll(@Session() session: UserSession) {
-    return this.appService.findAll(session.user.id);
+  findAll(@Session() session: UserSession, @Query() query: ListAppsDto) {
+    return this.appService.findAll(session.user.id, query);
   }
 
   @Get(':id')

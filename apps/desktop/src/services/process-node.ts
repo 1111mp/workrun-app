@@ -1,6 +1,8 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
+import { isTeamMode } from '@/lib/constant';
+import { fetchApi } from '@/services/fetch-api';
 import type { DependencySyncResult } from '@/services/runtime';
 
 export type ProcessNodeInstallStatus = 'notInstalled' | 'installed' | 'invalid';
@@ -30,6 +32,13 @@ export type ProcessNode = {
   projectPath: string;
   installStatus: ProcessNodeInstallStatus;
   installError?: string;
+};
+
+type TeamApp = ProcessNodeDefinition;
+
+type TeamAppList = {
+  items: TeamApp[];
+  nextCursor?: string;
 };
 
 export type ProcessNodeWorkflowReference = {
@@ -83,6 +92,20 @@ export type ProcessNodeRunEvent =
   | { type: 'error'; message: string };
 
 export function getProcessNodes() {
+  if (isTeamMode()) {
+    // Team Apps are catalog metadata on the server; local installation state
+    // must not be inferred from another workspace's project directory.
+    return fetchApi
+      .get<TeamAppList>('/api/v1/app')
+      .then(({ items }) =>
+        items.map((definition) => ({
+          definition,
+          projectPath: '',
+          installStatus: 'notInstalled' as const,
+        })),
+      );
+  }
+
   return invoke<ProcessNode[]>('get_process_nodes');
 }
 

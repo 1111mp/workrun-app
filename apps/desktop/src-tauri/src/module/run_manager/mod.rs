@@ -1,7 +1,7 @@
 //! Native ownership of long-running workflow sessions.
 
 use crate::{
-    config::Config,
+    config::BaseConfig,
     core::handle,
     module::{
         python_runtime::PythonOutputChunk,
