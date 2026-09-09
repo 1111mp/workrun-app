@@ -1,3 +1,5 @@
+import { VariantProps } from 'class-variance-authority';
+
 export * from './alert';
 export * from './alert-dialog';
 export * from './avatar';
@@ -41,3 +43,5 @@ export * from './switch';
 export * from './tabs';
 export * from './textarea';
 export * from './tooltip';
+
+export { type VariantProps };

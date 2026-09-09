@@ -18,11 +18,16 @@ function LoginPage() {
   const [startingProvider, setStartingProvider] = useState<string>();
 
   const serverUrl = useWorkrunStore((s) => s.config?.team?.server_url);
+  const updateConfig = useWorkrunStore((s) => s.updateConfig);
 
   const navigate = useNavigate();
 
   const { t } = useTranslation();
   const isAuthenticating = saving || Boolean(startingProvider);
+
+  const selectWorkspaceMode = async () => {
+    await updateConfig({ onboarding_completed: false });
+  };
 
   const login = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -72,7 +77,7 @@ function LoginPage() {
         description={t('onboarding.login.missingServerDescription')}
         title={t('onboarding.login.missingServerTitle')}
       >
-        <Button onClick={() => void navigate('/settings')}>
+        <Button onClick={() => void selectWorkspaceMode()}>
           {t('onboarding.login.openWorkspaceSettings')}
         </Button>
       </AuthPageLayout>
@@ -147,7 +152,7 @@ function LoginPage() {
           <div className='flex justify-between gap-3'>
             <Button
               disabled={isAuthenticating}
-              onClick={() => void navigate('/settings')}
+              onClick={() => void selectWorkspaceMode()}
               type='button'
               variant='ghost'
             >

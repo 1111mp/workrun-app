@@ -121,6 +121,13 @@ function StatusBadge({ status }: { status: ProcessNodeInstallStatus }) {
           {t('apps.installStatus.installed')}
         </Badge>
       );
+    case 'draft':
+      return (
+        <Badge variant='outline'>
+          <FilePenLineIcon data-icon='inline-start' />
+          {t('apps.installStatus.draft')}
+        </Badge>
+      );
     case 'invalid':
       return (
         <Badge variant='destructive'>
@@ -140,7 +147,7 @@ function StatusBadge({ status }: { status: ProcessNodeInstallStatus }) {
 
 function AppListSkeleton() {
   return (
-    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 min-[80rem]:grid-cols-4'>
+    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
       {Array.from({ length: 3 }, (_, index) => (
         <Card key={index} size='sm'>
           <CardHeader>
@@ -162,7 +169,13 @@ function AppListSkeleton() {
   );
 }
 
-const appFilters: AppFilter[] = ['all', 'installed', 'notInstalled', 'invalid'];
+const appFilters: AppFilter[] = [
+  'all',
+  'draft',
+  'installed',
+  'notInstalled',
+  'invalid',
+];
 
 function AppItem({
   node,
@@ -281,7 +294,18 @@ function AppItem({
           </div>
         </div>
       </CardContent>
-      <CardFooter className='flex-wrap justify-end gap-1'>
+      <CardFooter className='flex-nowrap justify-end gap-1'>
+        {!isToolApp ? (
+          <Button
+            variant='outline'
+            size='icon-sm'
+            aria-label={t('apps.history.title')}
+            title={t('apps.history.title')}
+            onClick={onOpenHistory}
+          >
+            <HistoryIcon />
+          </Button>
+        ) : null}
         <Button
           variant='outline'
           size='sm'
@@ -291,19 +315,14 @@ function AppItem({
           <FilePenLineIcon data-icon='inline-start' />
           {t('apps.details')}
         </Button>
-        {!isToolApp ? (
-          <Button variant='outline' size='sm' onClick={onOpenHistory}>
-            <HistoryIcon data-icon='inline-start' />
-            {t('apps.history.title')}
-          </Button>
-        ) : null}
         {hasRun ? (
           <Button variant='outline' size='sm' onClick={onViewOutput}>
             <TerminalIcon data-icon='inline-start' />
             {t('apps.output')}
           </Button>
         ) : null}
-        {node.installStatus === 'installed' &&
+        {(node.installStatus === 'installed' ||
+          node.installStatus === 'draft') &&
         definition.kind === 'workflow' ? (
           <Button
             size='sm'

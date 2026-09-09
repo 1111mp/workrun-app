@@ -24,6 +24,11 @@
     "core:event:allow-unlisten",
     "dialog:default",
     "fs:allow-read-file",
+    "fs:allow-remove",
+    {
+      "identifier": "fs:scope",
+      "allow": ["$TEMP/workrun-source-*.tar.gz"]
+    },
     "fs:allow-write-file",
     "http:default",
     "os:default",

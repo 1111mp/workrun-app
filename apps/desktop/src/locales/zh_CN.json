@@ -83,12 +83,14 @@
     "noMatchesDescription": "请尝试其他搜索词或状态筛选条件。",
     "clearFilters": "清除筛选",
     "installStatus": {
+      "draft": "草稿",
       "installed": "已安装",
       "invalid": "需要处理",
       "notInstalled": "未安装"
     },
     "filters": {
       "all": "全部",
+      "draft": "草稿",
       "installed": "已就绪",
       "notInstalled": "未安装",
       "invalid": "需要处理"
@@ -158,6 +160,13 @@
       "save": "保存更改",
       "saved": "流程节点已保存",
       "saveFailed": "无法保存流程节点",
+      "publish": "发布",
+      "publishTitle": "发布应用",
+      "publishDescription": "确认要发布的版本。默认使用 pyproject.toml 中的版本号。",
+      "published": "应用已发布",
+      "publishFailed": "无法发布应用",
+      "versionRequired": "版本不能为空",
+      "versionInvalid": "请输入有效的语义化版本号，例如 1.2.3。",
       "delete": "删除应用",
       "deleteWithFiles": "删除应用及文件",
       "deleted": "应用已移除",
@@ -811,7 +820,7 @@
       "google": "Google",
       "feishu": "飞书",
       "moreProvidersSoon": "Google 和飞书登录将在 Server 配置完成后开放。",
-      "openingBrowser": "正在打开浏览器…",
+      "openingBrowser": "跳转登录中…",
       "signingIn": "正在登录…",
       "orContinueWithEmail": "或使用邮箱登录",
       "oauthStartFailed": "无法打开浏览器以开始登录。",
@@ -819,8 +828,8 @@
       "oauthExchangeFailed": "登录已完成，但无法在 Workrun 中建立会话。",
       "checkingSession": "正在验证登录状态…",
       "missingServerTitle": "未配置团队 Server",
-      "missingServerDescription": "请先在工作区设置中填写 Workrun Server 地址。",
-      "openWorkspaceSettings": "工作区设置"
+      "missingServerDescription": "请返回工作区模式选择，重新配置工作区。",
+      "openWorkspaceSettings": "选择工作区模式"
     }
   },
   "settings": {

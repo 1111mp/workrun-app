@@ -1,5 +1,9 @@
 use super::{ProcessNode, ProcessNodeInstallStatus, ProcessNodeRegistry, installation_status, process_tool_definition};
-use crate::{config::IProcessNode, module::tool_registry::ToolDefinition, utils::dirs};
+use crate::{
+    config::{IProcessNode, ProcessNodePublicationStatus},
+    module::tool_registry::ToolDefinition,
+    utils::dirs,
+};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -29,7 +33,13 @@ impl ProcessNodeRegistry {
             },
         };
 
-        let (install_status, install_error) = installation_status(&project_path).await;
+        let (install_status, install_error) = if definition.publication_status == ProcessNodePublicationStatus::Draft {
+            // A draft has a local authoring project, not an installed
+            // published App. Do not expose it as runnable yet.
+            (ProcessNodeInstallStatus::Draft, None)
+        } else {
+            installation_status(&project_path).await
+        };
         ProcessNode {
             definition,
             project_path,

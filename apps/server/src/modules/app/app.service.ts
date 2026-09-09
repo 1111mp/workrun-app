@@ -1,31 +1,186 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   BadRequestException,
+  ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 
+import { md5 } from '../../utils/file.util';
+import { FS_STATIC_SERVICE } from '../fs/fs.constant';
+import type { CommonFSService } from '../fs/types';
 import { BetterAuthUser } from '../user/schemas/better-auth-user.schema';
+import { CreateAppVersionDto } from './dto/create-app-version.dto';
 import { CreateAppDto } from './dto/create-app.dto';
 import { ListAppsDto } from './dto/list-apps.dto';
 import { UpdateAppDto } from './dto/update-app.dto';
+import { UploadAppVersionResourceDto } from './dto/upload-app-version-resource.dto';
+import {
+  AppResource,
+  type AppResourceDocument,
+} from './schemas/app-resource.schema';
+import {
+  AppVersion,
+  type AppVersionDocument,
+} from './schemas/app-version.schema';
 import { App, type AppDocument } from './schemas/app.schema';
+
+const APP_VERSION_RESOURCE_SCOPE = 'app-version';
 
 @Injectable()
 export class AppService {
   constructor(
     @InjectModel(App.name) private readonly appModel: Model<AppDocument>,
+    @InjectModel(AppVersion.name)
+    private readonly appVersionModel: Model<AppVersionDocument>,
+    @InjectModel(AppResource.name)
+    private readonly appResourceModel: Model<AppResourceDocument>,
+    @Inject(FS_STATIC_SERVICE) private readonly staticFS: CommonFSService,
   ) {}
 
-  create(ownerId: string, dto: CreateAppDto) {
-    return this.appModel.create({
-      ...dto,
-      id: randomUUID(),
-      ownerId: this.toOwnerId(ownerId),
+  async create(ownerId: string, dto: CreateAppDto) {
+    const owner = this.toOwnerId(ownerId);
+    const name = dto.name.trim();
+    const version = dto.version ?? '0.1.0';
+    const existing = await this.appModel.exists({
+      ownerId: owner,
+      name,
+      version,
+      isDelete: false,
     });
+    if (existing) {
+      throw new ConflictException(`App ${name}@${version} already exists`);
+    }
+
+    try {
+      return await this.appModel.create({
+        ...dto,
+        id: randomUUID(),
+        name,
+        ownerId: owner,
+        version,
+      });
+    } catch (error) {
+      // The lookup provides a clear error; the database index closes the
+      // concurrent-create race between that lookup and the insert.
+      if (this.isDuplicateKey(error)) {
+        throw new ConflictException(`App ${name}@${version} already exists`);
+      }
+      throw error;
+    }
+  }
+
+  async createVersion(
+    ownerId: string,
+    appId: string,
+    dto: CreateAppVersionDto,
+  ) {
+    const app = await this.getOwnedApp(ownerId, appId);
+    const version = dto.version.trim();
+    const sourceArchive = await this.appResourceModel.exists({
+      appVersionId: dto.id,
+      kind: 'source_archive',
+    });
+    if (!sourceArchive) {
+      throw new NotFoundException(`Source archive for App version ${dto.id} was not found`);
+    }
+
+    try {
+      return await this.appVersionModel.create({
+        id: dto.id,
+        appId: app.id,
+        publishedAt: new Date(),
+        status: 'published',
+        version,
+        definition: this.versionDefinition(app, version),
+      });
+    } catch (error) {
+      if (this.isDuplicateKey(error)) {
+        throw new ConflictException(`App ${app.id}@${version} already exists`);
+      }
+      throw error;
+    }
+  }
+
+  async hasVersion(ownerId: string, appId: string, version: string) {
+    const app = await this.getOwnedApp(ownerId, appId);
+    const exists = await this.appVersionModel.exists({
+      appId: app.id,
+      version: version.trim(),
+    });
+    return { exists: Boolean(exists) };
+  }
+
+  async uploadSourceArchive(
+    ownerId: string,
+    appId: string,
+    appVersionId: string,
+    dto: UploadAppVersionResourceDto,
+    archive?: Express.Multer.File,
+  ) {
+    if (!archive) throw new BadRequestException('Source archive is required');
+
+    await this.getOwnedApp(ownerId, appId);
+    // Persist the resource first so failed uploads cannot reserve a version
+    // number.
+    const existing = await this.appResourceModel.exists({
+      appVersionId,
+      kind: 'source_archive',
+    });
+    if (existing) {
+      throw new ConflictException(
+        `App version ${appVersionId} already has a source archive`,
+      );
+    }
+
+    const sha256 = createHash('sha256').update(archive.buffer).digest('hex');
+    if (sha256 !== dto.sha256) {
+      throw new BadRequestException('Source archive SHA-256 does not match');
+    }
+
+    const filename = `${appVersionId}.${dto.format}`;
+    const referrer = `app-version:${appVersionId}`;
+    const file = await this.staticFS.write(
+      APP_VERSION_RESOURCE_SCOPE,
+      filename,
+      archive.buffer,
+      {
+        md5: md5(archive.buffer),
+        mimetype: archive.mimetype,
+        referrer,
+      },
+    );
+
+    let resource: AppResourceDocument | undefined;
+    try {
+      resource = await this.appResourceModel.create({
+        id: randomUUID(),
+        appVersionId,
+        kind: 'source_archive',
+        fileId: file.id,
+        filename,
+        format: dto.format,
+        sha256,
+        size: archive.size,
+        url: file.url,
+      });
+      return { resource };
+    } catch (error) {
+      // GridFS is outside this write sequence, so remove its referrer if its
+      // resource metadata did not commit.
+      if (resource) await this.appResourceModel.deleteOne({ id: resource.id });
+      await this.staticFS.remove(APP_VERSION_RESOURCE_SCOPE, file.id, referrer);
+      if (this.isDuplicateKey(error)) {
+        throw new ConflictException(
+          `App version ${appVersionId} already has a source archive`,
+        );
+      }
+      throw error;
+    }
   }
 
   async findAll(ownerId: string, query: ListAppsDto = {}) {
@@ -118,5 +273,37 @@ export class AppService {
 
   private toOwnerId(ownerId: string) {
     return new Types.ObjectId(ownerId);
+  }
+
+  private async getOwnedApp(ownerId: string, id: string) {
+    const app = await this.appModel
+      .findOne({ id, ownerId: this.toOwnerId(ownerId), isDelete: false })
+      .lean();
+    if (!app) throw new NotFoundException(`App ${id} was not found`);
+    return app;
+  }
+
+  private versionDefinition(app: App, version: string) {
+    return {
+      description: app.description,
+      entry: app.entry,
+      inputs: app.inputs,
+      kind: app.kind,
+      name: app.name,
+      outputs: app.outputs,
+      toolExecutionPolicy: app.toolExecutionPolicy,
+      toolPermissions: app.toolPermissions,
+      toolRiskLevel: app.toolRiskLevel,
+      version,
+    };
+  }
+
+  private isDuplicateKey(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 11_000
+    );
   }
 }

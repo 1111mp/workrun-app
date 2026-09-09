@@ -169,8 +169,12 @@ impl ProcessNodeRegistry {
     async fn installed_node(definition: IProcessNode) -> Result<ProcessNode> {
         let id = definition.id.clone();
         let node = Self::with_installation(definition).await;
-        if !matches!(node.install_status, ProcessNodeInstallStatus::Installed) {
-            bail!("Process Node is not installed: {id}");
+        // Team drafts already have a local authoring project, so they can run before publication.
+        if !matches!(
+            node.install_status,
+            ProcessNodeInstallStatus::Installed | ProcessNodeInstallStatus::Draft
+        ) {
+            bail!("Process Node is not available locally: {id}");
         }
         Ok(node)
     }

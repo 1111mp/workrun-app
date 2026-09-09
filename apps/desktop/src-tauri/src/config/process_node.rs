@@ -33,6 +33,14 @@ pub enum ToolExecutionPolicy {
     Auto,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessNodePublicationStatus {
+    Draft,
+    #[default]
+    Published,
+}
+
 /// Persisted metadata for one uv-managed Python Process Node.
 ///
 /// Python versions and dependencies remain in the project's `pyproject.toml`
@@ -65,6 +73,11 @@ pub struct IProcessNode {
     pub inputs: BTreeMap<String, Value>,
     #[serde(default)]
     pub outputs: BTreeMap<String, Value>,
+    /// Team Apps remain local drafts until they are explicitly published.
+    #[serde(default)]
+    pub publication_status: ProcessNodePublicationStatus,
+    #[serde(default)]
+    pub remote_app_id: Option<String>,
 }
 
 /// The persisted Process Node catalog.

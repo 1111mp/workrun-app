@@ -1,7 +1,7 @@
 use crate::{
     config::{
-        Config, IProcessNode, ProcessNodeKind, ToolExecutionPolicy, validate_process_node_catalog,
-        validate_process_node_definition, validate_process_node_id,
+        Config, IProcessNode, ProcessNodeKind, ProcessNodePublicationStatus, ToolExecutionPolicy,
+        validate_process_node_catalog, validate_process_node_definition, validate_process_node_id,
     },
     feat::ProjectPythonStreamRunResult,
     module::{
@@ -9,13 +9,22 @@ use crate::{
         python_runtime::PythonOutputChunk,
         tool_registry::{ToolDefinition, ToolRiskLevel},
     },
+    process::AsyncHandler,
+    utils::dirs,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use flate2::{Compression, write::GzEncoder};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs::{File, OpenOptions},
+    path::{Path, PathBuf},
+};
 use tauri::{AppHandle, ipc::Channel};
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 /// Metadata collected when a local Process Node project is first created.
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +63,14 @@ pub struct ProcessNodeWorkflowReference {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessNodeSourceArchive {
+    pub path: String,
+    pub sha256: String,
+    pub size: usize,
+}
+
 pub async fn get_process_nodes() -> Result<Vec<ProcessNode>> {
     let mut definitions = Config::process_nodes().await.data_arc().get_process_nodes();
     definitions.sort_by(|left, right| {
@@ -87,7 +104,10 @@ pub async fn process_node_inspect(id: &str) -> Result<ProcessNode> {
 
 pub async fn process_node_open_project(id: &str) -> Result<()> {
     let node = process_node_inspect(id).await?;
-    if !matches!(node.install_status, ProcessNodeInstallStatus::Installed) {
+    if !matches!(
+        node.install_status,
+        ProcessNodeInstallStatus::Installed | ProcessNodeInstallStatus::Draft
+    ) {
         bail!("Process Node project is not available: {id}");
     }
     ProcessNodeRegistry::open_project(&node.project_path)
@@ -96,6 +116,119 @@ pub async fn process_node_open_project(id: &str) -> Result<()> {
 /// Return the default root directory under which new Process Node projects are created.
 pub fn process_node_default_root() -> Result<String> {
     Ok(ProcessNodeRegistry::root_dir()?.to_string_lossy().into_owned())
+}
+
+/// Read the Python package version declared by this App's local project.
+pub async fn process_node_project_version(id: &str) -> Result<Option<String>> {
+    let definition = get_process_node(id).await?;
+    let pyproject_path = ProcessNodeRegistry::project_path(&definition)?.join("pyproject.toml");
+    let contents = tokio::fs::read_to_string(&pyproject_path)
+        .await
+        .with_context(|| format!("failed to read {}", pyproject_path.display()))?;
+    let pyproject: toml::Value =
+        toml::from_str(&contents).with_context(|| format!("failed to parse {}", pyproject_path.display()))?;
+
+    Ok(pyproject
+        .get("project")
+        .and_then(toml::Value::as_table)
+        .and_then(|project| project.get("version"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned))
+}
+
+/// Update the manifest before publishing so the uploaded source and catalog
+/// always describe the same version.
+pub async fn process_node_set_project_version(id: &str, version: &str) -> Result<()> {
+    let definition = get_process_node(id).await?;
+    let pyproject_path = ProcessNodeRegistry::project_path(&definition)?.join("pyproject.toml");
+    let contents = tokio::fs::read_to_string(&pyproject_path)
+        .await
+        .with_context(|| format!("failed to read {}", pyproject_path.display()))?;
+    let mut document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("failed to parse {}", pyproject_path.display()))?;
+    let project = document
+        .get_mut("project")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .context("pyproject.toml is missing a [project] table")?;
+    project.insert("version", toml_edit::value(version));
+    tokio::fs::write(&pyproject_path, document.to_string())
+        .await
+        .with_context(|| format!("failed to write {}", pyproject_path.display()))
+}
+
+/// Build the immutable source archive used for one published App version.
+pub async fn process_node_source_archive(id: &str) -> Result<ProcessNodeSourceArchive> {
+    let definition = get_process_node(id).await?;
+    let project_path = ProcessNodeRegistry::project_path(&definition)?;
+    AsyncHandler::spawn_blocking(move || create_source_archive(&project_path))
+        .await
+        .context("source archive task failed")?
+}
+
+fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive> {
+    let gitignore = load_gitignore(project_path)?;
+    let archive_path = std::env::temp_dir().join(format!("workrun-source-{}.tar.gz", Uuid::now_v7()));
+    let output = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&archive_path)
+        .with_context(|| format!("failed to create {}", archive_path.display()))?;
+    let encoder = GzEncoder::new(output, Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+
+    for entry in WalkDir::new(project_path).follow_links(false) {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(project_path)?;
+        if gitignore
+            .as_ref()
+            .is_some_and(|ignore| ignore.matched_path_or_any_parents(relative, false).is_ignore())
+            || gitignore.is_none() && is_ignored_source_path(relative)
+        {
+            continue;
+        }
+        archive.append_file(relative, &mut File::open(entry.path())?)?;
+    }
+
+    let mut output = archive.into_inner()?.finish()?;
+    use std::io::{Seek, SeekFrom};
+    output.seek(SeekFrom::Start(0))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut output, &mut hasher)?;
+    let size = output.metadata()?.len() as usize;
+    Ok(ProcessNodeSourceArchive {
+        path: archive_path.to_string_lossy().into_owned(),
+        size,
+        sha256: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn load_gitignore(project_path: &Path) -> Result<Option<ignore::gitignore::Gitignore>> {
+    let gitignore_path = project_path.join(".gitignore");
+    if !gitignore_path.is_file() {
+        return Ok(None);
+    }
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(project_path);
+    if let Some(error) = builder.add(&gitignore_path) {
+        return Err(error).with_context(|| format!("failed to parse {}", gitignore_path.display()));
+    }
+    builder
+        .build()
+        .map(Some)
+        .with_context(|| format!("failed to parse {}", gitignore_path.display()))
+}
+
+fn is_ignored_source_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some(".git" | ".venv" | "__pycache__" | "logs")
+        )
+    }) || path.file_name().is_some_and(|name| name == ".DS_Store")
 }
 
 /// Create a new Process Node catalog entry and initialize its local project.
@@ -119,6 +252,12 @@ pub async fn create_process_node(
         tool_permissions: Vec::new(),
         inputs: BTreeMap::new(),
         outputs: BTreeMap::new(),
+        publication_status: if dirs::is_team_workspace() {
+            ProcessNodePublicationStatus::Draft
+        } else {
+            ProcessNodePublicationStatus::Published
+        },
+        remote_app_id: None,
     };
     validate_process_node_definition(&definition)?;
     ProcessNodeRegistry::initialize_project(&definition, progress.clone()).await?;

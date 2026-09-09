@@ -118,6 +118,14 @@ impl<T: Clone> Draft<T> {
         guard.1 = None;
     }
 
+    /// Replaces both snapshots when their backing storage changes externally.
+    #[inline]
+    pub fn replace(&self, data: T) {
+        let mut guard = self.inner.data.lock();
+        guard.0 = Arc::new(Box::new(data));
+        guard.1 = None;
+    }
+
     /// Asynchronously modifies the committed data by owning the `Box<T>`.
     /// The committed data is cloned locally, and the async closure returns the
     /// new `Box<T>` (which replaces the old committed data) along with a custom return value `R`.

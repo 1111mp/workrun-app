@@ -2,19 +2,31 @@ import {
   Body,
   Controller,
   Delete,
+  FileTypeValidator,
   Get,
   Param,
+  ParseFilePipe,
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiCookieAuth } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiCookieAuth,
+  ApiBody,
+} from '@nestjs/swagger';
 import { Session, type UserSession } from '@thallesp/nestjs-better-auth';
 
 import { AppService } from './app.service';
+import { CreateAppVersionDto } from './dto/create-app-version.dto';
 import { CreateAppDto } from './dto/create-app.dto';
 import { ListAppsDto } from './dto/list-apps.dto';
 import { UpdateAppDto } from './dto/update-app.dto';
+import { UploadAppVersionResourceDto } from './dto/upload-app-version-resource.dto';
 
 @ApiCookieAuth('sessionCookie')
 @ApiBearerAuth('bearerAuth')
@@ -25,6 +37,61 @@ export class AppController {
   @Post()
   create(@Session() session: UserSession, @Body() dto: CreateAppDto) {
     return this.appService.create(session.user.id, dto);
+  }
+
+  @Post(':id/versions')
+  createVersion(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+    @Body() dto: CreateAppVersionDto,
+  ) {
+    return this.appService.createVersion(session.user.id, id, dto);
+  }
+
+  @Get(':id/versions/:version')
+  hasVersion(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+    @Param('version') version: string,
+  ) {
+    return this.appService.hasVersion(session.user.id, id, version);
+  }
+
+  @Post(':id/versions/:versionId/resources/source-archive')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['archive', 'format', 'sha256'],
+      properties: {
+        archive: { type: 'string', format: 'binary' },
+        format: { type: 'string', enum: ['tar.gz'] },
+        sha256: { type: 'string' },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('archive', { limits: { fileSize: 200 * 1024 * 1024 } }),
+  )
+  uploadSourceArchive(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @Body() dto: UploadAppVersionResourceDto,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [new FileTypeValidator({ fileType: /gzip|x-gzip/ })],
+      }),
+    )
+    archive: Express.Multer.File,
+  ) {
+    return this.appService.uploadSourceArchive(
+      session.user.id,
+      id,
+      versionId,
+      dto,
+      archive,
+    );
   }
 
   @Get()
