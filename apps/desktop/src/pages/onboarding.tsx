@@ -6,6 +6,7 @@ import {
   Input,
   Label,
 } from '@workspace/ui/components';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon, HardDriveIcon, UsersIcon } from 'lucide-react';
 import { type SubmitEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -32,15 +33,16 @@ const AVATAR_IDS = [
 ];
 function OnboardingPage() {
   const config = useWorkrunStore((s) => s.config);
-  const [mode, setMode] = useState<WorkspaceMode | null | undefined>(
-    config?.workspace_mode,
-  );
+  // Re-entering onboarding must show the mode picker even when a previous
+  // workspace mode remains in the saved configuration.
+  const [mode, setMode] = useState<WorkspaceMode | null | undefined>();
 
   const updateConfig = useWorkrunStore((s) => s.updateConfig);
+  const queryClient = useQueryClient();
 
   const { t } = useTranslation();
 
-  const selectedMode = mode ?? config?.workspace_mode;
+  const selectedMode = mode;
 
   if (!config) return null;
 
@@ -74,27 +76,29 @@ function OnboardingPage() {
     <PersonalProfileStep
       initialProfile={config.local_profile}
       onBack={() => setMode(undefined)}
-      onComplete={(profile) =>
-        updateConfig({
+      onComplete={async (profile) => {
+        queryClient.clear();
+        await updateConfig({
           workspace_mode: 'personal',
           local_profile: profile,
           onboarding_completed: true,
-        })
-      }
+        });
+        useWorkrunStore.getState().setTeamUser(undefined);
+        await router.navigate('/workflows');
+      }}
     />
   ) : (
     <TeamSetupStep
       initialServerUrl={config.team?.server_url}
       onBack={() => setMode(undefined)}
       onComplete={async (serverUrl, teamUser) => {
-        if (!teamUser) {
-          await router.navigate('/login');
-        }
+        queryClient.clear();
         await updateConfig({
           workspace_mode: 'team',
           team: { server_url: serverUrl },
           onboarding_completed: true,
         });
+        await router.navigate(teamUser ? '/workflows' : '/login');
       }}
     />
   );

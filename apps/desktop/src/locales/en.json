@@ -83,12 +83,14 @@
     "noMatchesDescription": "Try a different search term or status filter.",
     "clearFilters": "Clear filters",
     "installStatus": {
+      "draft": "Draft",
       "installed": "Installed",
       "invalid": "Needs attention",
       "notInstalled": "Not installed"
     },
     "filters": {
       "all": "All",
+      "draft": "Drafts",
       "installed": "Ready",
       "notInstalled": "Not installed",
       "invalid": "Needs attention"
@@ -158,6 +160,13 @@
       "save": "Save changes",
       "saved": "Process Node saved",
       "saveFailed": "Could not save Process Node",
+      "publish": "Publish",
+      "publishTitle": "Publish app",
+      "publishDescription": "Confirm the version to publish. It defaults to the version in pyproject.toml.",
+      "published": "App published",
+      "publishFailed": "Could not publish app",
+      "versionRequired": "Version is required",
+      "versionInvalid": "Enter a valid semantic version, such as 1.2.3.",
       "delete": "Delete app",
       "deleteWithFiles": "Delete app and files",
       "deleted": "App removed",
@@ -829,7 +838,7 @@
       "google": "Google",
       "feishu": "Feishu",
       "moreProvidersSoon": "Google and Feishu will be available once the Server is configured.",
-      "openingBrowser": "Opening browser…",
+      "openingBrowser": "Redirecting to sign-in…",
       "signingIn": "Signing in…",
       "orContinueWithEmail": "or continue with email",
       "oauthStartFailed": "We couldn't open a browser to start sign-in.",
@@ -837,8 +846,8 @@
       "oauthExchangeFailed": "Sign-in completed, but Workrun could not establish a session.",
       "checkingSession": "Checking your sign-in status…",
       "missingServerTitle": "No team server configured",
-      "missingServerDescription": "Set the Workrun Server URL in workspace settings first.",
-      "openWorkspaceSettings": "Workspace settings"
+      "missingServerDescription": "Return to workspace mode selection to configure your workspace.",
+      "openWorkspaceSettings": "Choose workspace mode"
     }
   },
   "settings": {

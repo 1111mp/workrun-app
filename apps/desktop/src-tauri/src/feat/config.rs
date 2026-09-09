@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use crate::config::{BaseConfig, WorkrunPatch};
+use crate::config::{BaseConfig, Config, WorkrunPatch};
 use crate::{
     core::{autostart, logger::Logger, tray},
     logging,
@@ -16,12 +16,12 @@ bitflags! {
         const LOCALE = 1 << 1;
         const LOG_LEVEL = 1 << 2;
         const LOG_FILE = 1 << 3;
+        const INITIALIZE_WORKSPACE = 1 << 4;
     }
 }
 
 /// Patch Workrun Configuration
 pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result<()> {
-    let was_onboarded = BaseConfig::workrun().await.data_arc().onboarding_completed;
     BaseConfig::workrun().await.edit_draft(|s| s.patch_config(patch));
 
     let update_flags = determine_update_flags(patch);
@@ -41,14 +41,6 @@ pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result
         logging!(debug, Type::Setup, "Saving Workrun configuration to file...");
         workrun_data.save_config().await?;
     }
-    if !was_onboarded && patch.onboarding_completed == Some(true) {
-        let scope = match BaseConfig::workrun().await.data_arc().workspace_mode {
-            Some(crate::config::WorkspaceMode::Team) => dirs::default_team_workspace_scope(),
-            _ => dirs::WorkspaceScope::Personal,
-        };
-        dirs::initialize_active_workspace_scope(scope);
-        init::ensure_active_workspace_directories().await?;
-    }
     Ok(())
 }
 
@@ -58,6 +50,7 @@ fn determine_update_flags(patch: &WorkrunPatch) -> UpdateFlags {
     let log_level = &patch.app_log_level;
     let log_max_size = patch.app_log_max_size;
     let log_max_count = patch.app_log_max_count;
+    let workspace_mode = &patch.workspace_mode;
 
     let mut update_flags = UpdateFlags::empty();
 
@@ -72,6 +65,9 @@ fn determine_update_flags(patch: &WorkrunPatch) -> UpdateFlags {
     }
     if log_max_size.is_some() || log_max_count.is_some() {
         update_flags.insert(UpdateFlags::LOG_FILE);
+    }
+    if workspace_mode.is_some() {
+        update_flags.insert(UpdateFlags::INITIALIZE_WORKSPACE);
     }
 
     update_flags
@@ -91,6 +87,17 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatc
         let log_max_size = patch.app_log_max_size.unwrap_or(128);
         let log_max_count = patch.app_log_max_count.unwrap_or(8);
         Logger::global().update_log_config(log_max_size, log_max_count).await?;
+    }
+    if update_flags.contains(UpdateFlags::INITIALIZE_WORKSPACE) {
+        if let Some(workspace_mode) = &patch.workspace_mode {
+            let scope = match workspace_mode {
+                crate::config::WorkspaceMode::Team => dirs::default_team_workspace_scope(),
+                crate::config::WorkspaceMode::Personal => dirs::WorkspaceScope::Personal,
+            };
+            dirs::initialize_active_workspace_scope(scope);
+            init::ensure_active_workspace_directories().await?;
+            Config::reload_workspace().await;
+        }
     }
 
     Ok(())

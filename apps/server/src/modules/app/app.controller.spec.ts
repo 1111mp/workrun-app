@@ -4,6 +4,9 @@ import { AppService } from './app.service';
 describe('AppController', () => {
   const appService = {
     create: vi.fn(),
+    createVersion: vi.fn(),
+    hasVersion: vi.fn(),
+    uploadSourceArchive: vi.fn(),
     findAll: vi.fn(),
     findOne: vi.fn(),
     update: vi.fn(),
@@ -22,6 +25,46 @@ describe('AppController', () => {
     controller.create(session, dto);
 
     expect(appService.create).toHaveBeenCalledWith('user-1', dto);
+  });
+
+  it('passes version publication requests to the service', () => {
+    const dto = {
+      id: '123e4567-e89b-12d3-a456-426614174000',
+      version: '1.2.3',
+    };
+    const resourceDto = {
+      format: 'tar.gz' as const,
+      sha256: 'a'.repeat(64),
+    };
+    const archive = { buffer: Buffer.from('archive') } as Express.Multer.File;
+
+    controller.createVersion(session, 'app-1', dto);
+    controller.uploadSourceArchive(
+      session,
+      'app-1',
+      'version-1',
+      resourceDto,
+      archive,
+    );
+
+    expect(appService.createVersion).toHaveBeenCalledWith(
+      'user-1',
+      'app-1',
+      dto,
+    );
+    expect(appService.uploadSourceArchive).toHaveBeenCalledWith(
+      'user-1',
+      'app-1',
+      'version-1',
+      resourceDto,
+      archive,
+    );
+  });
+
+  it('checks a version against the authenticated app owner', () => {
+    controller.hasVersion(session, 'app-1', '1.2.3');
+
+    expect(appService.hasVersion).toHaveBeenCalledWith('user-1', 'app-1', '1.2.3');
   });
 
   it('scopes reads to the authenticated user', () => {

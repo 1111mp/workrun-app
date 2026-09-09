@@ -1,7 +1,8 @@
 use crate::{core::handle, logging, utils::logging::Type};
 use anyhow::Result;
 use async_trait::async_trait;
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
+use parking_lot::RwLock;
 use std::{
     fs,
     path::{Component, Path, PathBuf},
@@ -24,7 +25,9 @@ pub enum WorkspaceScope {
 /// Temporary scope until the server exposes a stable team identifier.
 pub const DEFAULT_TEAM_ID: &str = "default";
 
-static ACTIVE_WORKSPACE_SCOPE: OnceCell<WorkspaceScope> = OnceCell::new();
+// Workspace mode can change without restarting while onboarding is active, so
+// this scope must be replaceable rather than fixed after its first assignment.
+static ACTIVE_WORKSPACE_SCOPE: Lazy<RwLock<WorkspaceScope>> = Lazy::new(|| RwLock::new(WorkspaceScope::Personal));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspacePaths {
@@ -165,16 +168,15 @@ pub fn default_team_workspace_scope() -> WorkspaceScope {
 }
 
 pub fn initialize_active_workspace_scope(scope: WorkspaceScope) {
-    let _ = ACTIVE_WORKSPACE_SCOPE.set(scope);
+    *ACTIVE_WORKSPACE_SCOPE.write() = scope;
+}
+
+pub fn is_team_workspace() -> bool {
+    matches!(&*ACTIVE_WORKSPACE_SCOPE.read(), WorkspaceScope::Team { .. })
 }
 
 pub fn active_workspace_paths() -> Result<WorkspacePaths> {
-    workspace_paths(
-        ACTIVE_WORKSPACE_SCOPE
-            .get()
-            .cloned()
-            .unwrap_or(WorkspaceScope::Personal),
-    )
+    workspace_paths(ACTIVE_WORKSPACE_SCOPE.read().clone())
 }
 
 /// get the active workrun app home dir

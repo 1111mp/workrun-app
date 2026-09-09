@@ -12,6 +12,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProcessNodeInstallStatus {
+    Draft,
     NotInstalled,
     Installed,
     Invalid,

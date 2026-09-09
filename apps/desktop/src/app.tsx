@@ -1,7 +1,7 @@
 import { Toaster, TooltipProvider } from '@workspace/ui/components';
 import { RouterProvider } from 'react-router';
 
-import { UpdateDialog } from '@/components';
+import { ConfirmProvider, UpdateDialog } from '@/components';
 import { ApprovalCoordinator } from '@/components/approval-coordinator';
 import { PythonUiRequestDialog } from '@/components/python-ui-request-dialog';
 import { RunWorkspace } from '@/components/run-workspace';
@@ -23,7 +23,9 @@ function App() {
   return (
     <>
       <TooltipProvider>
-        <RouterProvider router={router} />
+        <ConfirmProvider>
+          <RouterProvider router={router} />
+        </ConfirmProvider>
       </TooltipProvider>
       <Toaster id='global' position='top-center' richColors={true} />
       <UpdateDialog />

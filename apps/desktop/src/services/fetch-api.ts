@@ -41,6 +41,24 @@ async function download(
   return response.blob();
 }
 
+async function postForm<T>(path: string, body: FormData): Promise<T> {
+  const serverUrl = useWorkrunStore.getState().config?.team?.server_url;
+  if (!serverUrl) throw new Error('Team server URL is not configured');
+
+  const response = await tauriFetchImpl(`${serverUrl}${normalizePath(path)}`, {
+    body,
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+    method: 'POST',
+  });
+  if (!response.ok) throw await responseError(response);
+  const result = (await response.json()) as ApiResponse<T>;
+  if (result.errorCode !== 0) {
+    throw new Error(getErrorMessage(result.message, response.status));
+  }
+  return result.payload as T;
+}
+
 async function send(
   path: string,
   method: string,
@@ -82,6 +100,7 @@ export const fetchApi = {
     request<T>(path, 'GET', undefined, options),
   post: <T>(path: string, body?: unknown, options?: FetchApiOptions) =>
     request<T>(path, 'POST', body, options),
+  postForm,
   put: <T>(path: string, body?: unknown, options?: FetchApiOptions) =>
     request<T>(path, 'PUT', body, options),
   patch: <T>(path: string, body?: unknown, options?: FetchApiOptions) =>

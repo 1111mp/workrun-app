@@ -62,3 +62,9 @@ export type AppDocument = HydratedDocument<App>;
 export const AppSchema = SchemaFactory.createForClass(App);
 
 AppSchema.index({ ownerId: 1, isDelete: 1, updatedAt: -1 });
+// A soft-deleted release can be recreated, but active releases must have a
+// stable, unique version within the current owner's App namespace.
+AppSchema.index(
+  { ownerId: 1, name: 1, version: 1 },
+  { unique: true, partialFilterExpression: { isDelete: false } },
+);

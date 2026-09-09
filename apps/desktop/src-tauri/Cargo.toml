@@ -24,15 +24,17 @@ adk-agent = { version = "2.2.0", features = ["guardrails"] }
 adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama", "skills-progressive-disclosure"] }
 aes-gcm = "0.11.1"
 anyhow = { workspace = true }
+base64 = "0.23.1"
 async-stream = "0.3.6"
 async-trait = "0.1.92"
-base64 = "0.23.1"
 bitflags = { workspace = true }
 chrono = { workspace = true }
 console-subscriber = { version = "0.5.0", optional = true }
 dark-light = { git = "https://github.com/rust-dark-light/dark-light" }
 dunce = "1.0.5"
 flexi_logger = { workspace = true }
+flate2 = { workspace = true }
+ignore = { workspace = true }
 futures = "0.3.34"
 getrandom = "0.4.3"
 jsonschema = "0.53.0"
@@ -47,6 +49,7 @@ semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true, features = ["chrono", "json", "migrate", "runtime-tokio", "sqlite"] }
 sys-locale = "0.3.2"
 tauri = { workspace = true, features = [
@@ -72,10 +75,14 @@ tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
 tauri-plugin-updater = "2.11.0"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
+tar = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 url = "2.5.8"
 uuid = { workspace = true, features = ["v4"] }
+walkdir = { workspace = true }
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

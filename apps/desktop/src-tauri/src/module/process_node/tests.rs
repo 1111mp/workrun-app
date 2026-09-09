@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::{
-    IProcessNode, IProcessNodes, ProcessNodeKind, ToolExecutionPolicy, validate_process_node_catalog,
-    validate_process_node_definition,
+    IProcessNode, IProcessNodes, ProcessNodeKind, ProcessNodePublicationStatus, ToolExecutionPolicy,
+    validate_process_node_catalog, validate_process_node_definition,
 };
 use crate::module::tool_registry::{ToolRiskLevel, ToolSource};
 use std::collections::BTreeMap;
@@ -22,6 +22,8 @@ fn definition() -> IProcessNode {
         tool_permissions: Vec::new(),
         inputs: BTreeMap::from([("query".into(), serde_json::json!({ "type": "string" }))]),
         outputs: BTreeMap::new(),
+        publication_status: ProcessNodePublicationStatus::Published,
+        remote_app_id: None,
     }
 }
 

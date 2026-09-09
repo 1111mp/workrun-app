@@ -39,6 +39,14 @@ impl Config {
         Self::global().await.mcp_server_config.clone()
     }
 
+    /// Reloads catalog snapshots after the active workspace directory changes.
+    pub async fn reload_workspace() {
+        let config = Self::global().await;
+        config.workflow_config.replace(IWorkflows::new().await);
+        config.process_node_config.replace(IProcessNodes::new().await);
+        config.mcp_server_config.replace(IMcpServers::new().await);
+    }
+
     pub async fn apply_all_and_save_file() {
         logging!(info, Type::Config, "save all draft data");
 

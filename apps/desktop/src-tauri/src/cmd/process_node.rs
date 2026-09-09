@@ -35,6 +35,23 @@ pub async fn process_node_default_root() -> CmdResult<String> {
 }
 
 #[tauri::command]
+pub async fn process_node_project_version(id: String) -> CmdResult<Option<String>> {
+    feat::process_node_project_version(&id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn process_node_set_project_version(id: String, version: String) -> CmdResult<()> {
+    feat::process_node_set_project_version(&id, &version)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn process_node_source_archive(id: String) -> CmdResult<feat::ProcessNodeSourceArchive> {
+    feat::process_node_source_archive(&id).await.stringify_err()
+}
+
+#[tauri::command]
 pub async fn create_process_node(
     request: feat::CreateProcessNodeRequest,
     progress: Channel<feat::ProcessNodeCreateProgress>,

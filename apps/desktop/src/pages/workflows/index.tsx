@@ -262,7 +262,7 @@ function WorkflowsPage() {
         {!workflows.isLoading &&
         !migrateLegacy.isPending &&
         !workflows.data?.length ? (
-          <Empty>
+          <Empty className='via-card border border-dashed border-sky-200/70 bg-linear-to-br from-sky-500/6 to-violet-500/5 py-14 dark:border-sky-400/15'>
             <EmptyHeader>
               <EmptyMedia variant='icon'>
                 <WorkflowIcon />

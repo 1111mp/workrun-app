@@ -13,7 +13,6 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import { createTeamAuthClient } from '@/lib/auth-client';
-import { restartApp } from '@/services/cmd';
 import { normalizeServerUrl } from '@/services/session';
 import { useWorkrunStore } from '@/stores';
 
@@ -40,6 +39,7 @@ function WorkspaceSettings() {
     try {
       const currentMode = config?.workspace_mode ?? 'personal';
       const currentServerUrl = config?.team?.server_url;
+      const workspaceModeChanged = currentMode !== mode;
 
       if (currentMode === 'team' && mode === 'personal') {
         if (currentServerUrl) {
@@ -50,6 +50,8 @@ function WorkspaceSettings() {
         queryClient.removeQueries({ queryKey: ['team-user'] });
       }
 
+      if (workspaceModeChanged) queryClient.clear();
+
       await updateConfig({
         workspace_mode: mode,
         ...(mode === 'team'
@@ -57,10 +59,6 @@ function WorkspaceSettings() {
           : {}),
       });
 
-      if (currentMode !== mode) {
-        await restartApp();
-        return;
-      }
       toast.success(t('settings.workspace.saved'), { toasterId: 'global' });
     } catch {
       toast.error(t('settings.workspace.signOutFailed'), {

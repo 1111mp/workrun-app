@@ -69,11 +69,19 @@ import {
   AppRunOutputPanel,
   restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
+import { AppPublishForm } from '@/components/forms';
+import { isTeamMode } from '@/lib/constant';
 import {
   deleteProcessNode,
   getProcessNode,
+  getProcessNodeProjectVersion,
+  hasPublishedProcessNodeVersion,
   listProcessNodeWorkflowReferences,
+  publishProcessNode,
+  publishProcessNodeVersion,
+  setProcessNodeProjectVersion,
   updateProcessNode,
+  updatePublishedProcessNode,
   type ProcessNodeDefinition,
 } from '@/services/process-node';
 import { inspectRunRecord, type RunRecord } from '@/services/run-history';
@@ -126,7 +134,10 @@ const contractTypes = [
   'array',
 ];
 
-const toolExecutionPolicies = [{ value: 'ask_every_time' }, { value: 'auto' }];
+const toolExecutionPolicies = [
+  { label: 'ask_every_time', value: 'ask_every_time' },
+  { label: 'auto', value: 'auto' },
+];
 
 function contractFields(
   value: string,
@@ -531,8 +542,16 @@ function ProcessNodeDetailEditor({
     toDraft(processNode.definition),
   );
   const [formError, setFormError] = useState<string>();
+  const [publishOpen, setPublishOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteProjectFiles, setDeleteProjectFiles] = useState(false);
+
+  const projectVersion = useQuery({
+    queryKey: ['apps', processNode.definition.id, 'project-version'],
+    queryFn: () => getProcessNodeProjectVersion(processNode.definition.id),
+    enabled: publishOpen,
+    refetchOnMount: 'always',
+  });
 
   const workflowReferences = useQuery({
     queryKey: ['apps', processNode.definition.id, 'workflow-references'],
@@ -559,6 +578,84 @@ function ProcessNodeDetailEditor({
       setFormError(error instanceof Error ? error.message : String(error));
     },
   });
+
+  const publish = useMutation({
+    mutationFn: async (version: string) => {
+      if (!draft.name.trim()) throw new Error(t('apps.new.nameRequired'));
+
+      const remoteAppId = processNode.definition.remoteAppId;
+      // check verison
+      if (remoteAppId) {
+        const { exists } = await hasPublishedProcessNodeVersion(
+          remoteAppId,
+          version,
+        );
+        if (exists)
+          throw new Error(`Version ${version} has already been published`);
+      }
+
+      // sync version to `pyproject.toml` file
+      await setProcessNodeProjectVersion(processNode.definition.id, version);
+
+      const saved = await updateProcessNode({
+        ...draft,
+        version,
+        inputs: parseSchemas(draft.inputs, t('apps.detail.inputs'), t),
+        outputs: parseSchemas(draft.outputs, t('apps.detail.outputs'), t),
+      });
+
+      const remote = saved.definition.remoteAppId
+        ? { id: saved.definition.remoteAppId }
+        : await publishProcessNode(saved.definition);
+
+      const publishedDefinition = saved.definition.remoteAppId
+        ? saved.definition
+        : (
+            await updateProcessNode({
+              ...saved.definition,
+              // Keep the server App identity as soon as it exists. Version
+              // creation or archive upload can be retried without creating a
+              // second App record when either of those later steps fails.
+              remoteAppId: remote.id,
+            })
+          ).definition;
+
+      await publishProcessNodeVersion(remote.id, saved.definition.id, version);
+
+      if (saved.definition.remoteAppId) {
+        await updatePublishedProcessNode(remote.id, saved.definition);
+      }
+
+      return updateProcessNode({
+        ...publishedDefinition,
+        publicationStatus: 'published',
+        remoteAppId: remote.id,
+      });
+    },
+    onSuccess: (saved) => {
+      setPublishOpen(false);
+      setDraft(toDraft(saved.definition));
+      queryClient.setQueryData(['apps', saved.definition.id], saved);
+      void queryClient.invalidateQueries({ queryKey: ['apps'] });
+      toast.success(t('apps.detail.published'), { toasterId: 'global' });
+      void navigate(`/apps/${saved.definition.id}`, { replace: true });
+    },
+    onError: (error) => {
+      toast.error(t('apps.detail.publishFailed'), {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+
+  const canPublish = isTeamMode();
+  // const canPublish =
+  //   isTeamMode() && processNode.definition.publicationStatus === 'draft';
+
+  const submitPublish = async (version: string) => {
+    setDraft((current) => ({ ...current, version }));
+    await publish.mutateAsync(version);
+  };
 
   const remove = useMutation({
     mutationFn: () =>
@@ -616,15 +713,30 @@ function ProcessNodeDetailEditor({
             </div>
           </div>
           <div className='relative flex shrink-0 flex-wrap gap-2'>
+            {canPublish ? (
+              <Button
+                variant='outline'
+                disabled={save.isPending || publish.isPending}
+                onClick={() => setPublishOpen(true)}
+              >
+                {publish.isPending ? (
+                  <Spinner data-icon='inline-start' />
+                ) : null}
+                {t('apps.detail.publish')}
+              </Button>
+            ) : null}
             <Button
               variant='destructive'
-              disabled={save.isPending}
+              disabled={save.isPending || publish.isPending}
               onClick={() => setDeleteOpen(true)}
             >
               <Trash2Icon data-icon='inline-start' />
               {t('apps.detail.delete')}
             </Button>
-            <Button disabled={save.isPending} onClick={() => save.mutate()}>
+            <Button
+              disabled={save.isPending || publish.isPending}
+              onClick={() => save.mutate()}
+            >
               {save.isPending ? (
                 <Spinner data-icon='inline-start' />
               ) : (
@@ -642,6 +754,32 @@ function ProcessNodeDetailEditor({
             <AlertDescription>{formError}</AlertDescription>
           </Alert>
         ) : null}
+
+        <AlertDialog
+          open={publishOpen}
+          onOpenChange={(open) => {
+            if (!open && !publish.isPending) {
+              setPublishOpen(false);
+            }
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {t('apps.detail.publishTitle')}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {t('apps.detail.publishDescription')}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AppPublishForm
+              defaultVersion={projectVersion.data ?? draft.version}
+              isLoadingDefaultVersion={projectVersion.isFetching}
+              isSubmitting={publish.isPending}
+              onSubmit={submitPublish}
+            />
+          </AlertDialogContent>
+        </AlertDialog>
 
         <AlertDialog
           open={deleteOpen}

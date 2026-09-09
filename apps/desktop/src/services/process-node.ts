@@ -1,14 +1,20 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { readFile, remove } from '@tauri-apps/plugin-fs';
 
 import { isTeamMode } from '@/lib/constant';
 import { fetchApi } from '@/services/fetch-api';
 import type { DependencySyncResult } from '@/services/runtime';
 
-export type ProcessNodeInstallStatus = 'notInstalled' | 'installed' | 'invalid';
+export type ProcessNodeInstallStatus =
+  | 'draft'
+  | 'notInstalled'
+  | 'installed'
+  | 'invalid';
 export type ProcessNodeKind = 'workflow' | 'tool';
 export type ToolExecutionPolicy = 'ask_every_time' | 'auto';
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
+export type ProcessNodePublicationStatus = 'draft' | 'published';
 
 export type ProcessNodeDefinition = {
   id: string;
@@ -25,6 +31,8 @@ export type ProcessNodeDefinition = {
   toolPermissions?: string[];
   inputs: Record<string, unknown>;
   outputs: Record<string, unknown>;
+  publicationStatus?: ProcessNodePublicationStatus;
+  remoteAppId?: string;
 };
 
 export type ProcessNode = {
@@ -32,6 +40,12 @@ export type ProcessNode = {
   projectPath: string;
   installStatus: ProcessNodeInstallStatus;
   installError?: string;
+};
+
+type ProcessNodeSourceArchive = {
+  path: string;
+  sha256: string;
+  size: number;
 };
 
 type TeamApp = ProcessNodeDefinition;
@@ -91,26 +105,53 @@ export type ProcessNodeRunEvent =
   | { type: 'app_cancelled' }
   | { type: 'error'; message: string };
 
-export function getProcessNodes() {
+export async function getProcessNodes() {
   if (isTeamMode()) {
-    // Team Apps are catalog metadata on the server; local installation state
-    // must not be inferred from another workspace's project directory.
-    return fetchApi
-      .get<TeamAppList>('/api/v1/app')
-      .then(({ items }) =>
-        items.map((definition) => ({
-          definition,
+    const [localNodes, remote] = await Promise.all([
+      invoke<ProcessNode[]>('get_process_nodes'),
+      fetchApi.get<TeamAppList>('/api/v1/app'),
+    ]);
+    const nodes = new Map<string, ProcessNode>(
+      remote.items.map((definition) => [
+        definition.id,
+        {
+          definition: {
+            ...definition,
+            inputs: definition.inputs ?? {},
+            outputs: definition.outputs ?? {},
+          },
           projectPath: '',
           installStatus: 'notInstalled' as const,
-        })),
-      );
+        },
+      ]),
+    );
+
+    // A local App is authoritative for its project path and install state. Once
+    // published, use its remote ID as the map key so it replaces, rather than
+    // duplicates, the matching server catalog entry.
+    localNodes.forEach((node) => {
+      nodes.set(node.definition.remoteAppId ?? node.definition.id, node);
+    });
+    return [...nodes.values()];
   }
 
-  return invoke<ProcessNode[]>('get_process_nodes');
+  return await invoke<ProcessNode[]>('get_process_nodes');
 }
 
 export function getProcessNode(id: string) {
   return invoke<ProcessNode>('get_process_node', { id });
+}
+
+export function getProcessNodeProjectVersion(id: string) {
+  return invoke<string | null>('process_node_project_version', { id });
+}
+
+export function setProcessNodeProjectVersion(id: string, version: string) {
+  return invoke('process_node_set_project_version', { id, version });
+}
+
+export function getProcessNodeSourceArchive(id: string) {
+  return invoke<ProcessNodeSourceArchive>('process_node_source_archive', { id });
 }
 
 export function openProcessNodeProject(id: string) {
@@ -132,6 +173,74 @@ export function createProcessNode(
 
 export function updateProcessNode(definition: ProcessNodeDefinition) {
   return invoke<ProcessNode>('update_process_node', { definition });
+}
+
+function publishRequest(definition: ProcessNodeDefinition) {
+  // These fields identify local authoring state and are not part of the
+  // server-owned App definition.
+  const {
+    id: _id,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    projectRoot: _projectRoot,
+    publicationStatus: _publicationStatus,
+    remoteAppId: _remoteAppId,
+    ...request
+  } = definition;
+  return request;
+}
+
+export function publishProcessNode(definition: ProcessNodeDefinition) {
+  return fetchApi.post<{ id: string }>('/api/v1/app', publishRequest(definition));
+}
+
+export function updatePublishedProcessNode(
+  remoteAppId: string,
+  definition: ProcessNodeDefinition,
+) {
+  return fetchApi.patch<{ id: string }>(
+    `/api/v1/app/${remoteAppId}`,
+    publishRequest(definition),
+  );
+}
+
+export function hasPublishedProcessNodeVersion(remoteAppId: string, version: string) {
+  return fetchApi.get<{ exists: boolean }>(
+    `/api/v1/app/${remoteAppId}/versions/${encodeURIComponent(version)}`,
+  );
+}
+
+export async function publishProcessNodeVersion(
+  remoteAppId: string,
+  localAppId: string,
+  version: string,
+) {
+  const versionId = crypto.randomUUID();
+  const archive = await getProcessNodeSourceArchive(localAppId);
+  try {
+    // Read the native archive directly; Base64 would allocate another full copy
+    // in both the IPC payload and the webview before the upload begins.
+    const bytes = await readFile(archive.path);
+    const form = new FormData();
+    form.set('format', 'tar.gz');
+    form.set('sha256', archive.sha256);
+    form.set(
+      'archive',
+      new Blob([bytes], { type: 'application/gzip' }),
+      `${version}.tar.gz`,
+    );
+    await fetchApi.postForm(
+      `/api/v1/app/${remoteAppId}/versions/${versionId}/resources/source-archive`,
+      form,
+    );
+  } finally {
+    // The archive is only an upload staging file and must not accumulate in temp.
+    await remove(archive.path).catch(() => undefined);
+  }
+  await fetchApi.post<{ id: string }>(`/api/v1/app/${remoteAppId}/versions`, {
+    id: versionId,
+    version,
+  });
 }
 
 export function deleteProcessNode(id: string, deleteProjectFiles: boolean) {
