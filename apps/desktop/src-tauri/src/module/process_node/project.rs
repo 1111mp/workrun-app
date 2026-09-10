@@ -71,7 +71,7 @@ impl ProcessNodeRegistry {
 
 /// uv writes this file for initialized projects. Prefer it over a host-wide
 /// default so a node's declared runtime (for example Python 3.14) is honored.
-pub(super) async fn project_python_version(project_path: &Path) -> Result<String> {
+pub(crate) async fn project_python_version(project_path: &Path) -> Result<String> {
     let version_path = project_path.join(".python-version");
     match tokio::fs::read_to_string(&version_path).await {
         Ok(contents) => {

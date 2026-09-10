@@ -116,6 +116,7 @@ pub fn run() {
             cmd::process_node::process_node_project_version,
             cmd::process_node::process_node_set_project_version,
             cmd::process_node::process_node_source_archive,
+            cmd::process_node::process_node_install_archive,
             cmd::process_node::create_process_node,
             cmd::process_node::update_process_node,
             cmd::process_node::delete_process_node,

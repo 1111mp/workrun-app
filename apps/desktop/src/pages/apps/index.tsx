@@ -1,4 +1,8 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   Alert,
   AlertAction,
@@ -34,6 +38,9 @@ import {
   ItemDescription,
   ItemGroup,
   ItemTitle,
+  Progress,
+  ProgressLabel,
+  ProgressValue,
   Skeleton,
   Spinner,
 } from '@workspace/ui/components';
@@ -69,13 +76,16 @@ import {
   type ProcessNodeOutput,
   type ProcessNodeRun,
 } from '@/components/app-run-output-panel';
+import { isTeamMode } from '@/lib/constant';
 import {
+  ensurePublishedProcessNode,
   getProcessNodes,
   startBackgroundProcessNodeRun,
   subscribeProcessNodeRun,
   type ProcessNode,
   type ProcessNodeInstallStatus,
   type ProcessNodeOutputChunk,
+  type ProcessNodePreparationProgress,
 } from '@/services/process-node';
 import {
   inspectRunRecord,
@@ -90,6 +100,11 @@ import { copyProjectPath, openProjectDirectory } from './project-path';
 const MAX_OUTPUT_CHARS = 200_000;
 
 type AppFilter = 'all' | ProcessNodeInstallStatus;
+type AppPreparation = ProcessNodePreparationProgress & { error?: string };
+type AppPreparationSummary = {
+  outcome: 'current' | 'installed' | 'updated';
+  version: string;
+};
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
   queued: 'border-muted-foreground/30 bg-muted text-muted-foreground',
@@ -119,6 +134,13 @@ function StatusBadge({ status }: { status: ProcessNodeInstallStatus }) {
         <Badge variant='secondary'>
           <CheckCircle2Icon data-icon='inline-start' />
           {t('apps.installStatus.installed')}
+        </Badge>
+      );
+    case 'updateAvailable':
+      return (
+        <Badge variant='secondary'>
+          <RefreshCwIcon data-icon='inline-start' />
+          {t('apps.installStatus.updateAvailable')}
         </Badge>
       );
     case 'draft':
@@ -173,6 +195,7 @@ const appFilters: AppFilter[] = [
   'all',
   'draft',
   'installed',
+  'updateAvailable',
   'notInstalled',
   'invalid',
 ];
@@ -180,6 +203,8 @@ const appFilters: AppFilter[] = [
 function AppItem({
   node,
   run,
+  preparation,
+  preparationSummary,
   runsArePending,
   onRun,
   onViewOutput,
@@ -187,6 +212,8 @@ function AppItem({
 }: {
   node: ProcessNode;
   run?: ProcessNodeRun;
+  preparation?: AppPreparation;
+  preparationSummary?: AppPreparationSummary;
   runsArePending: boolean;
   onRun: () => void;
   onViewOutput: () => void;
@@ -198,6 +225,25 @@ function AppItem({
   const inputCount = Object.keys(definition.inputs).length;
   const outputCount = Object.keys(definition.outputs).length;
   const hasRun = Boolean(run);
+  const isLocalApp = node.installStatus !== 'notInstalled';
+
+  const preparationPercent =
+    preparation?.stage === 'downloading' && preparation.totalBytes
+      ? Math.min(
+          100,
+          Math.floor(
+            (preparation.downloadedBytes / preparation.totalBytes) * 100,
+          ),
+        )
+      : undefined;
+  const preparationLabel = preparation
+    ? preparation.error
+      ? t('apps.preparation.failed')
+      : preparation.stage === 'downloading'
+        ? t('apps.preparation.downloadingUnknown')
+        : t(`apps.preparation.${preparation.stage}`)
+    : undefined;
+
   return (
     <Card
       size='sm'
@@ -234,6 +280,14 @@ function AppItem({
             <Badge variant='outline'>
               <Spinner data-icon='inline-start' />
               {t('apps.running')}
+            </Badge>
+          ) : null}
+          {preparationSummary ? (
+            <Badge variant='secondary'>
+              <CheckCircle2Icon data-icon='inline-start' />
+              {t(`apps.preparation.${preparationSummary.outcome}`, {
+                version: preparationSummary.version,
+              })}
             </Badge>
           ) : null}
         </CardAction>
@@ -274,71 +328,125 @@ function AppItem({
             </span>
             <code className='block truncate'>{definition.id}</code>
           </div>
-          <div className='flex shrink-0 items-center gap-1'>
-            <Button
-              variant='ghost'
-              size='icon-sm'
-              aria-label={t('apps.openProjectDirectory')}
-              onClick={() => void openProjectDirectory(definition.id)}
-            >
-              <FolderOpenIcon />
-            </Button>
-            <Button
-              variant='ghost'
-              size='icon-sm'
-              aria-label={t('apps.copyProjectPath')}
-              onClick={() => void copyProjectPath(node.projectPath)}
-            >
-              <CopyIcon />
-            </Button>
-          </div>
+          {isLocalApp ? (
+            <div className='flex shrink-0 items-center gap-1'>
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                aria-label={t('apps.openProjectDirectory')}
+                onClick={() => void openProjectDirectory(definition.id)}
+              >
+                <FolderOpenIcon />
+              </Button>
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                aria-label={t('apps.copyProjectPath')}
+                onClick={() => void copyProjectPath(node.projectPath)}
+              >
+                <CopyIcon />
+              </Button>
+            </div>
+          ) : null}
         </div>
       </CardContent>
-      <CardFooter className='flex-nowrap justify-end gap-1'>
-        {!isToolApp ? (
-          <Button
-            variant='outline'
-            size='icon-sm'
-            aria-label={t('apps.history.title')}
-            title={t('apps.history.title')}
-            onClick={onOpenHistory}
-          >
-            <HistoryIcon />
-          </Button>
-        ) : null}
-        <Button
-          variant='outline'
-          size='sm'
-          nativeButton={false}
-          render={<Link to={`/apps/${definition.id}`} viewTransition />}
-        >
-          <FilePenLineIcon data-icon='inline-start' />
-          {t('apps.details')}
-        </Button>
-        {hasRun ? (
-          <Button variant='outline' size='sm' onClick={onViewOutput}>
-            <TerminalIcon data-icon='inline-start' />
-            {t('apps.output')}
-          </Button>
-        ) : null}
-        {(node.installStatus === 'installed' ||
-          node.installStatus === 'draft') &&
-        definition.kind === 'workflow' ? (
-          <Button
-            size='sm'
-            className='min-w-24'
-            data-process-node-id={definition.id}
-            disabled={runsArePending}
-            onClick={onRun}
-          >
-            {run?.isRunning ? (
-              <Spinner data-icon='inline-start' />
-            ) : (
-              <PlayIcon data-icon='inline-start' />
-            )}
-            {run?.isRunning ? t('apps.running') : t('apps.run')}
-          </Button>
-        ) : null}
+      <CardFooter
+        className={cn(
+          'min-h-14 flex-nowrap gap-1',
+          !preparation && 'justify-end',
+        )}
+      >
+        {preparation ? (
+          preparation.error ? (
+            <div className='text-destructive flex min-w-0 flex-1 items-center gap-2 text-xs'>
+              <CircleAlertIcon className='size-3.5 shrink-0' />
+              <span className='truncate' title={preparation.error}>
+                {preparation.error}
+              </span>
+              <Button
+                variant='outline'
+                size='sm'
+                className='ml-auto shrink-0'
+                onClick={onRun}
+              >
+                {t('apps.retry')}
+              </Button>
+            </div>
+          ) : preparation.stage === 'checkingVersion' ? (
+            <div className='flex min-w-0 flex-1 items-center gap-2 text-sm'>
+              <Spinner className='text-muted-foreground size-3.5 shrink-0' />
+              <span className='truncate font-medium'>{preparationLabel}</span>
+            </div>
+          ) : (
+            <div className='flex min-w-0 flex-1 items-center gap-2'>
+              <Spinner className='text-muted-foreground size-3.5 shrink-0' />
+              <Progress
+                value={preparationPercent ?? 0}
+                className='w-full gap-0'
+              >
+                <ProgressLabel>{preparationLabel}</ProgressLabel>
+                <ProgressValue />
+              </Progress>
+            </div>
+          )
+        ) : (
+          <>
+            {!isToolApp && isLocalApp ? (
+              <Button
+                variant='outline'
+                size='icon-sm'
+                aria-label={t('apps.history.title')}
+                title={t('apps.history.title')}
+                onClick={onOpenHistory}
+              >
+                <HistoryIcon />
+              </Button>
+            ) : null}
+            <Button
+              variant='outline'
+              size='sm'
+              nativeButton={false}
+              render={
+                <Link
+                  to={`/apps/${definition.id}${isLocalApp ? '' : '?catalog=true'}`}
+                  viewTransition
+                />
+              }
+            >
+              <FilePenLineIcon data-icon='inline-start' />
+              {t('apps.details')}
+            </Button>
+            {hasRun ? (
+              <Button variant='outline' size='sm' onClick={onViewOutput}>
+                <TerminalIcon data-icon='inline-start' />
+                {t('apps.output')}
+              </Button>
+            ) : null}
+            {(node.installStatus === 'installed' ||
+              node.installStatus === 'updateAvailable' ||
+              // A catalog App will be installed by the future run-on-demand flow.
+              node.installStatus === 'notInstalled' ||
+              node.installStatus === 'draft') &&
+            definition.kind === 'workflow' ? (
+              <Button
+                size='sm'
+                className='min-w-24'
+                data-process-node-id={definition.id}
+                disabled={runsArePending}
+                onClick={onRun}
+              >
+                {run?.isRunning ? (
+                  <Spinner data-icon='inline-start' />
+                ) : (
+                  <PlayIcon data-icon='inline-start' />
+                )}
+                {run?.isRunning
+                  ? t('apps.running')
+                  : t('apps.run')}
+              </Button>
+            ) : null}
+          </>
+        )}
       </CardFooter>
     </Card>
   );
@@ -533,6 +641,12 @@ function AppsPage() {
   const [filter, setFilter] = useState<AppFilter>('all');
   const [query, setQuery] = useState<string>('');
   const [runs, setRuns] = useState<Record<string, ProcessNodeRun>>({});
+  const [preparations, setPreparations] = useState<
+    Record<string, AppPreparation>
+  >({});
+  const [preparationSummaries, setPreparationSummaries] = useState<
+    Record<string, AppPreparationSummary>
+  >({});
   const [outputOpen, setOutputOpen] = useState<boolean>(false);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [historyNode, setHistoryNode] = useState<ProcessNode>();
@@ -543,8 +657,13 @@ function AppsPage() {
   const pendingOutput = useRef<Record<string, ProcessNodeOutput>>({});
   const frames = useRef<Record<string, number | undefined>>({});
   const unlistenRuns = useRef<Record<string, () => void>>({});
+  const preparationSummaryTimers = useRef<Record<string, number | undefined>>(
+    {},
+  );
   const workspaceMode = useWorkrunStore((s) => s.config?.workspace_mode);
   const teamServerUrl = useWorkrunStore((s) => s.config?.team?.server_url);
+
+  const queryClient = useQueryClient();
 
   const apps = useQuery({
     // A team catalog must never reuse the personal catalog cached under the
@@ -561,6 +680,9 @@ function AppsPage() {
         if (frame !== undefined) cancelAnimationFrame(frame);
       });
       Object.values(unlistenRuns.current).forEach((unlisten) => unlisten());
+      Object.values(preparationSummaryTimers.current).forEach((timer) => {
+        if (timer !== undefined) window.clearTimeout(timer);
+      });
     },
     [],
   );
@@ -584,14 +706,74 @@ function AppsPage() {
       });
     });
   };
+
   const startRun = async (node: ProcessNode) => {
+    let runnableNode = node;
+    if (isTeamMode() && node.installStatus !== 'draft') {
+      const preparationId = node.definition.id;
+      setPreparations((current) => ({
+        ...current,
+        [preparationId]: { stage: 'checkingVersion' },
+      }));
+
+      try {
+        runnableNode = await ensurePublishedProcessNode(node, (progress) => {
+          setPreparations((current) => ({
+            ...current,
+            [preparationId]: progress,
+          }));
+        });
+        await queryClient.invalidateQueries({ queryKey: ['apps'] });
+        setPreparations((current) => {
+          const { [preparationId]: _completed, ...remaining } = current;
+          return remaining;
+        });
+        const outcome =
+          node.installStatus === 'notInstalled'
+            ? 'installed'
+            : node.installStatus === 'updateAvailable'
+              ? 'updated'
+              : 'current';
+        setPreparationSummaries((current) => ({
+          ...current,
+          [preparationId]: {
+            outcome,
+            version: runnableNode.definition.version,
+          },
+        }));
+        // Keep the terminal result visible while the Run starts immediately.
+        // This preserves fast-path feedback without adding artificial latency.
+        if (preparationSummaryTimers.current[preparationId] !== undefined) {
+          window.clearTimeout(preparationSummaryTimers.current[preparationId]);
+        }
+        preparationSummaryTimers.current[preparationId] = window.setTimeout(() => {
+          setPreparationSummaries((current) => {
+            const { [preparationId]: _summary, ...remaining } = current;
+            return remaining;
+          });
+          delete preparationSummaryTimers.current[preparationId];
+        }, 2_000);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setPreparations((current) => ({
+          ...current,
+          [preparationId]: { stage: 'checkingVersion', error: message },
+        }));
+        toast.error(t('apps.startFailed'), {
+          toasterId: 'global',
+          description: message,
+        });
+        return;
+      }
+    }
+
     const runId = crypto.randomUUID();
     pendingOutput.current[runId] = { stdout: '', stderr: '' };
     setRuns((current) => ({
       ...current,
       [runId]: {
         isRunning: true,
-        node,
+        node: runnableNode,
         output: pendingOutput.current[runId],
         runId,
         startedAt: Date.now(),
@@ -634,14 +816,14 @@ function AppsPage() {
       );
       await startBackgroundProcessNodeRun({
         runId,
-        targetId: node.definition.id,
-        targetName: node.definition.name,
+        targetId: runnableNode.definition.id,
+        targetName: runnableNode.definition.name,
         outputView: {
           isRunning: true,
-          node,
+          node: runnableNode,
           output: pendingOutput.current[runId],
         },
-        targetSnapshot: node.definition,
+        targetSnapshot: runnableNode.definition,
       });
     } catch (error) {
       unlistenRuns.current[runId]?.();
@@ -660,22 +842,39 @@ function AppsPage() {
   const filteredApps = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    return apps.data?.filter((app) => {
-      const matchesFilter = filter === 'all' || app.installStatus === filter;
-      const matchesQuery =
-        !normalizedQuery ||
-        [
-          app.definition.name,
-          app.definition.description,
-          app.definition.id,
-        ].some((value) => value.toLowerCase().includes(normalizedQuery));
+    const statusOrder: Record<ProcessNodeInstallStatus, number> = {
+      invalid: 0,
+      updateAvailable: 1,
+      installed: 2,
+      notInstalled: 3,
+      draft: 4,
+    };
 
-      return matchesFilter && matchesQuery;
-    });
+    return apps.data
+      ?.filter((app) => {
+        const matchesFilter = filter === 'all' || app.installStatus === filter;
+        const matchesQuery =
+          !normalizedQuery ||
+          [
+            app.definition.name,
+            app.definition.description,
+            app.definition.id,
+          ].some((value) => value.toLowerCase().includes(normalizedQuery));
+
+        return matchesFilter && matchesQuery;
+      })
+      .sort(
+        (left, right) =>
+          statusOrder[left.installStatus] - statusOrder[right.installStatus] ||
+          right.definition.updatedAt.localeCompare(left.definition.updatedAt) ||
+          right.definition.id.localeCompare(left.definition.id),
+      );
   }, [apps.data, filter, query]);
 
   const installedCount = apps.data?.filter(
-    (app) => app.installStatus === 'installed',
+    (app) =>
+      app.installStatus === 'installed' ||
+      app.installStatus === 'updateAvailable',
   ).length;
   const latestRunByApp = useMemo(
     () =>
@@ -821,6 +1020,8 @@ function AppsPage() {
                 key={node.definition.id}
                 node={node}
                 run={latestRunByApp[node.definition.id]}
+                preparation={preparations[node.definition.id]}
+                preparationSummary={preparationSummaries[node.definition.id]}
                 runsArePending={false}
                 onRun={() => void startRun(node)}
                 onViewOutput={() => {

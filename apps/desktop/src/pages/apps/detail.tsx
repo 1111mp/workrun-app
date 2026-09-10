@@ -12,6 +12,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
   AlertTitle,
+  Badge,
   Button,
   Card,
   CardContent,
@@ -73,6 +74,8 @@ import { AppPublishForm } from '@/components/forms';
 import { isTeamMode } from '@/lib/constant';
 import {
   deleteProcessNode,
+  deletePublishedProcessNode,
+  getPublishedProcessNode,
   getProcessNode,
   getProcessNodeProjectVersion,
   hasPublishedProcessNodeVersion,
@@ -85,6 +88,7 @@ import {
   type ProcessNodeDefinition,
 } from '@/services/process-node';
 import { inspectRunRecord, type RunRecord } from '@/services/run-history';
+import { useWorkrunStore } from '@/stores';
 
 import { copyProjectPath, openProjectDirectory } from './project-path';
 
@@ -479,9 +483,12 @@ function ProcessNodeDetailPage() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
+  const isCatalogApp = searchParams.get('catalog') === 'true';
+  const teamUserId = useWorkrunStore((state) => state.teamUser?.id);
   const node = useQuery({
-    queryKey: ['apps', id],
-    queryFn: () => getProcessNode(id!),
+    queryKey: ['apps', id, isCatalogApp ? 'catalog' : 'local'],
+    queryFn: () =>
+      isCatalogApp ? getPublishedProcessNode(id!) : getProcessNode(id!),
     enabled: Boolean(id),
   });
   const historicalRun = useQuery({
@@ -518,6 +525,8 @@ function ProcessNodeDetailPage() {
     <ProcessNodeDetailEditor
       key={node.data.definition.id}
       processNode={node.data}
+      isCatalogApp={isCatalogApp}
+      readOnly={isCatalogApp && node.data.definition.ownerId !== teamUserId}
       historicalRun={
         historicalRun.data?.targetType === 'app' &&
         historicalRun.data.targetId === node.data.definition.id
@@ -531,9 +540,13 @@ function ProcessNodeDetailPage() {
 function ProcessNodeDetailEditor({
   processNode,
   historicalRun,
+  isCatalogApp = false,
+  readOnly = false,
 }: {
   processNode: ProcessNodeDetails;
   historicalRun?: RunRecord;
+  isCatalogApp?: boolean;
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -556,23 +569,33 @@ function ProcessNodeDetailEditor({
   const workflowReferences = useQuery({
     queryKey: ['apps', processNode.definition.id, 'workflow-references'],
     queryFn: () => listProcessNodeWorkflowReferences(processNode.definition.id),
-    enabled: deleteOpen,
+    enabled: deleteOpen && !isCatalogApp,
   });
 
   const save = useMutation({
     mutationFn: async () => {
       if (!draft.name.trim()) throw new Error(t('apps.new.nameRequired'));
-      return updateProcessNode({
+      const definition = {
         ...draft,
         inputs: parseSchemas(draft.inputs, t('apps.detail.inputs'), t),
         outputs: parseSchemas(draft.outputs, t('apps.detail.outputs'), t),
-      });
+      };
+      if (isCatalogApp) {
+        await updatePublishedProcessNode(processNode.definition.id, definition);
+        return { ...processNode, definition };
+      }
+      return updateProcessNode(definition);
     },
     onSuccess: (saved) => {
-      queryClient.setQueryData(['apps', saved.definition.id], saved);
+      queryClient.setQueryData(
+        ['apps', saved.definition.id, isCatalogApp ? 'catalog' : 'local'],
+        saved,
+      );
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
       toast.success(t('apps.detail.saved'), { toasterId: 'global' });
-      void navigate(`/apps/${saved.definition.id}`, { replace: true });
+      if (!isCatalogApp) {
+        void navigate(`/apps/${saved.definition.id}`, { replace: true });
+      }
     },
     onError: (error) => {
       setFormError(error instanceof Error ? error.message : String(error));
@@ -648,7 +671,8 @@ function ProcessNodeDetailEditor({
     },
   });
 
-  const canPublish = isTeamMode();
+  const canPublish = !readOnly && isTeamMode();
+  const canPublishVersion = canPublish && !isCatalogApp;
   // const canPublish =
   //   isTeamMode() && processNode.definition.publicationStatus === 'draft';
 
@@ -659,7 +683,9 @@ function ProcessNodeDetailEditor({
 
   const remove = useMutation({
     mutationFn: () =>
-      deleteProcessNode(processNode.definition.id, deleteProjectFiles),
+      isCatalogApp
+        ? deletePublishedProcessNode(processNode.definition.id)
+        : deleteProcessNode(processNode.definition.id, deleteProjectFiles),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
       toast.success(
@@ -682,6 +708,7 @@ function ProcessNodeDetailEditor({
     key: K,
     value: DefinitionDraft[K],
   ) => {
+    if (readOnly) return;
     setDraft((current) => ({ ...current, [key]: value }));
     setFormError(undefined);
   };
@@ -701,9 +728,11 @@ function ProcessNodeDetailEditor({
               <ArrowLeftIcon />
             </Button>
             <div className='relative'>
-              <div className='text-muted-foreground text-xs font-medium tracking-[0.14em] uppercase'>
-                {t('apps.new.localProject')}
-              </div>
+              <Badge variant='outline' className='w-fit'>
+                {isCatalogApp
+                  ? t('apps.detail.publishedApp')
+                  : t('apps.detail.localProject')}
+              </Badge>
               <h1 className='mt-1 text-xl font-semibold tracking-tight'>
                 {t('apps.detail.title')}
               </h1>
@@ -716,7 +745,12 @@ function ProcessNodeDetailEditor({
             {canPublish ? (
               <Button
                 variant='outline'
-                disabled={save.isPending || publish.isPending}
+                disabled={!canPublishVersion || save.isPending || publish.isPending}
+                title={
+                  canPublishVersion
+                    ? undefined
+                    : t('apps.detail.publishInstallRequired')
+                }
                 onClick={() => setPublishOpen(true)}
               >
                 {publish.isPending ? (
@@ -725,25 +759,29 @@ function ProcessNodeDetailEditor({
                 {t('apps.detail.publish')}
               </Button>
             ) : null}
-            <Button
-              variant='destructive'
-              disabled={save.isPending || publish.isPending}
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2Icon data-icon='inline-start' />
-              {t('apps.detail.delete')}
-            </Button>
-            <Button
-              disabled={save.isPending || publish.isPending}
-              onClick={() => save.mutate()}
-            >
-              {save.isPending ? (
-                <Spinner data-icon='inline-start' />
-              ) : (
-                <SaveIcon data-icon='inline-start' />
-              )}
-              {t('apps.detail.save')}
-            </Button>
+            {!readOnly ? (
+              <>
+                <Button
+                  variant='destructive'
+                  disabled={save.isPending || publish.isPending}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Trash2Icon data-icon='inline-start' />
+                  {t('apps.detail.delete')}
+                </Button>
+                <Button
+                  disabled={save.isPending || publish.isPending}
+                  onClick={() => save.mutate()}
+                >
+                  {save.isPending ? (
+                    <Spinner data-icon='inline-start' />
+                  ) : (
+                    <SaveIcon data-icon='inline-start' />
+                  )}
+                  {t('apps.detail.save')}
+                </Button>
+              </>
+            ) : null}
           </div>
         </section>
 
@@ -801,7 +839,7 @@ function ProcessNodeDetailEditor({
                 {t('apps.detail.deleteDescription')}
               </AlertDialogDescription>
             </AlertDialogHeader>
-            {workflowReferences.isLoading ? (
+            {!isCatalogApp && workflowReferences.isLoading ? (
               <p className='text-muted-foreground text-sm'>
                 {t('apps.detail.checkingUsage')}
               </p>
@@ -829,20 +867,22 @@ function ProcessNodeDetailEditor({
                 </ItemContent>
               </Item>
             ) : null}
-            <Field orientation='horizontal'>
-              <Checkbox
-                id='delete-process-node-files'
-                checked={deleteProjectFiles}
-                disabled={remove.isPending}
-                onCheckedChange={setDeleteProjectFiles}
-              />
-              <FieldContent>
-                <FieldLabel htmlFor='delete-process-node-files'>
-                  {t('apps.detail.deleteFiles')}
-                </FieldLabel>
-                <FieldDescription>{processNode.projectPath}</FieldDescription>
-              </FieldContent>
-            </Field>
+            {!isCatalogApp ? (
+              <Field orientation='horizontal'>
+                <Checkbox
+                  id='delete-process-node-files'
+                  checked={deleteProjectFiles}
+                  disabled={remove.isPending}
+                  onCheckedChange={setDeleteProjectFiles}
+                />
+                <FieldContent>
+                  <FieldLabel htmlFor='delete-process-node-files'>
+                    {t('apps.detail.deleteFiles')}
+                  </FieldLabel>
+                  <FieldDescription>{processNode.projectPath}</FieldDescription>
+                </FieldContent>
+              </Field>
+            ) : null}
             <AlertDialogFooter>
               <AlertDialogCancel disabled={remove.isPending}>
                 {t('apps.new.cancel')}

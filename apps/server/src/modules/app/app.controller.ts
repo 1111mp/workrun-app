@@ -11,6 +11,7 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
+  Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -20,6 +21,7 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { Session, type UserSession } from '@thallesp/nestjs-better-auth';
+import type { Response } from 'express';
 
 import { AppService } from './app.service';
 import { CreateAppVersionDto } from './dto/create-app-version.dto';
@@ -92,6 +94,39 @@ export class AppController {
       dto,
       archive,
     );
+  }
+
+  @Get('catalog')
+  findPublishedCatalog(@Session() session: UserSession, @Query() query: ListAppsDto) {
+    return this.appService.findPublishedCatalog(session.user.id, query);
+  }
+
+  @Get('catalog/:id')
+  findPublishedCatalogApp(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+  ) {
+    return this.appService.findPublishedCatalogApp(session.user.id, id);
+  }
+
+  /**
+   * The catalog's App.version is the current release.  Keep archive lookup on
+   * that value so clients never infer a release from publication timestamps.
+   */
+  @Get('catalog/:id/source-archive')
+  async downloadPublishedSourceArchive(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+    @Res() response: Response,
+  ) {
+    const { resource, stream } = await this.appService.readPublishedSourceArchive(
+      session.user.id,
+      id,
+    );
+    response.setHeader('Content-Type', 'application/gzip');
+    response.setHeader('Content-Length', resource.size);
+    response.setHeader('X-Workrun-Sha256', resource.sha256);
+    stream.pipe(response);
   }
 
   @Get()

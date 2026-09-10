@@ -52,6 +52,16 @@ pub async fn process_node_source_archive(id: String) -> CmdResult<feat::ProcessN
 }
 
 #[tauri::command]
+pub async fn process_node_install_archive(
+    request: feat::InstallProcessNodeArchiveRequest,
+    progress: Channel<feat::ProcessNodeInstallProgress>,
+) -> CmdResult<ProcessNode> {
+    feat::install_process_node_archive(request, progress)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
 pub async fn create_process_node(
     request: feat::CreateProcessNodeRequest,
     progress: Channel<feat::ProcessNodeCreateProgress>,

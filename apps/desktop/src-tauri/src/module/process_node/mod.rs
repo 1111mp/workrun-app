@@ -11,5 +11,6 @@ mod tests;
 
 pub use types::*;
 
-use project::{installation_status, project_python_version};
+use project::installation_status;
+pub(crate) use project::project_python_version;
 use tool_definition::*;

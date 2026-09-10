@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 describe('AppService', () => {
   const ownerId = '507f191e810c19729de860ea';
   const model = {
+    collection: { name: 'apps' },
     create: vi.fn(),
     find: vi.fn(),
     exists: vi.fn(),
@@ -14,6 +15,7 @@ describe('AppService', () => {
     findOneAndDelete: vi.fn(),
   };
   const appVersionModel = {
+    aggregate: vi.fn(),
     create: vi.fn(),
     exists: vi.fn(),
     findOne: vi.fn(),
@@ -224,6 +226,77 @@ describe('AppService', () => {
       ],
     });
     expect(limit).toHaveBeenCalledWith(3);
+  });
+
+  it('lists only the latest published release of every active app', async () => {
+    appVersionModel.aggregate.mockResolvedValue([
+      {
+        id: 'release-2',
+        appId: 'app-1',
+        definition: { name: 'Shared App', version: '1.1.0' },
+        publishedAt: new Date('2026-09-09T00:00:00.000Z'),
+        app: {
+          createdAt: new Date('2026-09-01T00:00:00.000Z'),
+          ownerId: new Types.ObjectId(ownerId),
+        },
+      },
+    ]);
+
+    await expect(service.findPublishedCatalog(ownerId)).resolves.toEqual({
+      items: [
+        expect.objectContaining({
+          catalogVersionId: 'release-2',
+          id: 'app-1',
+          ownerId,
+          version: '1.1.0',
+        }),
+      ],
+    });
+    expect(appVersionModel.aggregate).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        { $match: { status: 'published' } },
+        {
+          $match: {
+            'app.isDelete': false,
+            $expr: { $eq: ['$version', '$app.version'] },
+          },
+        },
+        { $sort: { publishedAt: -1, id: -1 } },
+      ]),
+    );
+  });
+
+  it('returns an immutable published snapshot for a catalog App detail', async () => {
+    const releaseLean = vi.fn().mockResolvedValue({
+      id: 'release-2',
+      definition: { name: 'Shared App', version: '1.1.0' },
+      publishedAt: new Date('2026-09-09T00:00:00.000Z'),
+    });
+    appVersionModel.findOne.mockReturnValue({ lean: releaseLean });
+    const appLean = vi.fn().mockResolvedValue({
+      createdAt: new Date('2026-09-01T00:00:00.000Z'),
+      description: '',
+      entry: 'main.py',
+      inputs: {},
+      kind: 'workflow',
+      name: 'Shared App',
+      ownerId: new Types.ObjectId('507f1f77bcf86cd799439011'),
+      outputs: {},
+      toolExecutionPolicy: 'ask_every_time',
+      toolPermissions: [],
+      toolRiskLevel: 'low',
+      version: '1.1.0',
+    });
+    model.findOne.mockReturnValue({ lean: appLean });
+
+    await expect(service.findPublishedCatalogApp(ownerId, 'app-1')).resolves.toEqual(
+      expect.objectContaining({
+        catalogVersionId: 'release-2',
+        id: 'app-1',
+        ownerId: '507f1f77bcf86cd799439011',
+        version: '1.1.0',
+      }),
+    );
   });
 
   it('returns an app only when it belongs to the authenticated user', async () => {

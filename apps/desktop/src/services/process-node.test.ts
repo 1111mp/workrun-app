@@ -77,8 +77,42 @@ describe('getProcessNodes', () => {
         projectPath: '/team/default/process-nodes/app-1',
       },
     ]);
-    expect(fetchApi.get).toHaveBeenCalledWith('/api/v1/app');
+    expect(fetchApi.get).toHaveBeenCalledWith('/api/v1/app/catalog?pageSize=100');
     expect(invoke).toHaveBeenCalledWith('get_process_nodes');
+  });
+
+  it('marks a local installation when a newer catalog version exists', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValueOnce([
+      {
+        definition: {
+          ...definition,
+          version: '1.0.0',
+          publicationStatus: 'published',
+          remoteAppId: 'remote-app-1',
+        },
+        installStatus: 'installed',
+        projectPath: '/team/default/process-nodes/app-1',
+      },
+    ]);
+    vi.mocked(fetchApi.get).mockResolvedValueOnce({
+      items: [
+        {
+          ...definition,
+          id: 'remote-app-1',
+          version: '1.1.0',
+          catalogVersionId: 'release-2',
+          publishedAt: '2026-09-09T00:00:00.000Z',
+        },
+      ],
+    });
+
+    await expect(getProcessNodes()).resolves.toEqual([
+      expect.objectContaining({
+        availableVersion: '1.1.0',
+        installStatus: 'updateAvailable',
+      }),
+    ]);
   });
 
   it('publishes only the server-owned App definition', async () => {
