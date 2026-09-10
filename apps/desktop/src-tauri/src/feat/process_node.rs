@@ -5,8 +5,8 @@ use crate::{
     },
     feat::ProjectPythonStreamRunResult,
     module::{
-        process_node::{ProcessNode, ProcessNodeInstallStatus, ProcessNodeRegistry},
-        python_runtime::PythonOutputChunk,
+        process_node::{ProcessNode, ProcessNodeInstallStatus, ProcessNodeRegistry, project_python_version},
+        python_runtime::{PythonOutputChunk, PythonRuntime},
         tool_registry::{ToolDefinition, ToolRiskLevel},
     },
     process::AsyncHandler,
@@ -14,7 +14,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use flate2::{Compression, write::GzEncoder};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -69,6 +69,34 @@ pub struct ProcessNodeSourceArchive {
     pub path: String,
     pub sha256: String,
     pub size: usize,
+}
+
+/// The renderer downloads a catalog archive with its authenticated session,
+/// then passes only its temporary path to native code. Keeping archive bytes
+/// out of IPC avoids duplicating large source packages in the webview.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallProcessNodeArchiveRequest {
+    pub definition: IProcessNode,
+    pub archive_path: PathBuf,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProcessNodeInstallStage {
+    Verifying,
+    Extracting,
+    SyncingDependencies,
+    Activating,
+    SavingCatalog,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessNodeInstallProgress {
+    pub stage: ProcessNodeInstallStage,
 }
 
 pub async fn get_process_nodes() -> Result<Vec<ProcessNode>> {
@@ -164,6 +192,167 @@ pub async fn process_node_source_archive(id: &str) -> Result<ProcessNodeSourceAr
     AsyncHandler::spawn_blocking(move || create_source_archive(&project_path))
         .await
         .context("source archive task failed")?
+}
+
+/// Install a catalog release, or atomically replace its prior local release.
+pub async fn install_process_node_archive(
+    request: InstallProcessNodeArchiveRequest,
+    progress: Channel<ProcessNodeInstallProgress>,
+) -> Result<ProcessNode> {
+    validate_process_node_definition(&request.definition)?;
+    let remote_id = request.definition.id.clone();
+    let existing = Config::process_nodes()
+        .await
+        .data_arc()
+        .get_process_nodes()
+        .into_iter()
+        .find(|node| node.remote_app_id.as_deref() == Some(remote_id.as_str()));
+
+    let mut definition = request.definition;
+    definition.id = existing
+        .as_ref()
+        .map(|node| node.id.clone())
+        .unwrap_or_else(|| Uuid::now_v7().to_string());
+    definition.remote_app_id = Some(remote_id);
+    definition.publication_status = ProcessNodePublicationStatus::Published;
+    if let Some(existing) = &existing {
+        // A catalog update must not silently move an App out of a user-chosen root.
+        definition.project_root = existing.project_root.clone();
+        definition.created_at = existing.created_at.clone();
+    }
+    definition.updated_at = Utc::now().to_rfc3339();
+
+    let project_path = ProcessNodeRegistry::project_path(&definition)?;
+    let staging_path = project_path.with_file_name(format!(".{}-install-{}", definition.id, Uuid::now_v7()));
+    let project_parent = project_path
+        .parent()
+        .context("Process Node project directory has no parent")?;
+    tokio::fs::create_dir_all(project_parent).await?;
+    let archive_path = request.archive_path;
+    let expected_sha256 = request.sha256;
+    let extracted_path = staging_path.clone();
+    let _ = progress.send(ProcessNodeInstallProgress {
+        stage: ProcessNodeInstallStage::Verifying,
+    });
+    let extraction_progress = progress.clone();
+    let extraction = tokio::task::spawn_blocking(move || {
+        verify_and_extract_source_archive(&archive_path, &expected_sha256, &extracted_path, extraction_progress)
+    })
+    .await
+    .context("source archive installation task failed")?;
+    if let Err(error) = extraction {
+        let _ = tokio::fs::remove_dir_all(&staging_path).await;
+        return Err(error);
+    }
+
+    let _ = progress.send(ProcessNodeInstallProgress {
+        stage: ProcessNodeInstallStage::SyncingDependencies,
+    });
+    let install_result: Result<()> = async {
+        let python_version = project_python_version(&staging_path).await?;
+        PythonRuntime::sync_dependencies(&staging_path, &python_version).await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = install_result {
+        let _ = tokio::fs::remove_dir_all(&staging_path).await;
+        return Err(error).context("failed to prepare downloaded Process Node");
+    }
+
+    let backup_path = project_path.with_file_name(format!(".{}-previous-{}", definition.id, Uuid::now_v7()));
+    let _ = progress.send(ProcessNodeInstallProgress {
+        stage: ProcessNodeInstallStage::Activating,
+    });
+    let had_project = tokio::fs::try_exists(&project_path).await?;
+    if had_project {
+        tokio::fs::rename(&project_path, &backup_path).await?;
+    }
+    if let Err(error) = tokio::fs::rename(&staging_path, &project_path).await {
+        if had_project {
+            let _ = tokio::fs::rename(&backup_path, &project_path).await;
+        }
+        return Err(error).with_context(|| format!("failed to activate Process Node {}", definition.id));
+    }
+
+    let nodes = Config::process_nodes().await;
+    let _ = progress.send(ProcessNodeInstallProgress {
+        stage: ProcessNodeInstallStage::SavingCatalog,
+    });
+    let saved = nodes
+        .with_data_modify(|mut data| async move {
+            if let Some(existing) = data.get_process_node(&definition.id) {
+                definition.created_at = existing.created_at;
+                if !data.replace_process_node(definition.clone()) {
+                    bail!("Process Node is not in the catalog: {}", definition.id);
+                }
+            } else {
+                data.add_process_node(definition.clone());
+            }
+            validate_process_node_catalog(&data)?;
+            data.save_file().await?;
+            Ok((data, definition))
+        })
+        .await;
+    let definition = match saved {
+        Ok(definition) => definition,
+        Err(error) => {
+            let _ = tokio::fs::remove_dir_all(&project_path).await;
+            if had_project {
+                let _ = tokio::fs::rename(&backup_path, &project_path).await;
+            }
+            return Err(error).context("failed to save installed Process Node");
+        },
+    };
+    if had_project {
+        let _ = tokio::fs::remove_dir_all(&backup_path).await;
+    }
+    let node = ProcessNodeRegistry::with_installation(definition).await;
+    let _ = progress.send(ProcessNodeInstallProgress {
+        stage: ProcessNodeInstallStage::Completed,
+    });
+    Ok(node)
+}
+
+fn verify_and_extract_source_archive(
+    archive_path: &Path,
+    expected_sha256: &str,
+    destination: &Path,
+    progress: Channel<ProcessNodeInstallProgress>,
+) -> Result<()> {
+    let bytes = std::fs::read(archive_path)
+        .with_context(|| format!("failed to read downloaded source archive {}", archive_path.display()))?;
+    let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    if actual_sha256 != expected_sha256 {
+        bail!("downloaded source archive SHA-256 does not match");
+    }
+    let _ = progress.send(ProcessNodeInstallProgress {
+        stage: ProcessNodeInstallStage::Extracting,
+    });
+    std::fs::create_dir(destination)
+        .with_context(|| format!("failed to create staging directory {}", destination.display()))?;
+    let decoder = GzDecoder::new(bytes.as_slice());
+    let mut archive = tar::Archive::new(decoder);
+    for entry in archive.entries().context("failed to read source archive")? {
+        let mut entry = entry.context("failed to read source archive entry")?;
+        let path = entry
+            .path()
+            .context("source archive entry has an invalid path")?
+            .into_owned();
+        if path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!("source archive contains an unsafe path: {}", path.display());
+        }
+        let entry_type = entry.header().entry_type();
+        if !(entry_type.is_file() || entry_type.is_dir()) {
+            bail!("source archive contains a non-file entry: {}", path.display());
+        }
+        entry
+            .unpack_in(destination)
+            .with_context(|| format!("failed to extract {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive> {

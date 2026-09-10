@@ -86,7 +86,9 @@ export class AppService {
       kind: 'source_archive',
     });
     if (!sourceArchive) {
-      throw new NotFoundException(`Source archive for App version ${dto.id} was not found`);
+      throw new NotFoundException(
+        `Source archive for App version ${dto.id} was not found`,
+      );
     }
 
     try {
@@ -231,6 +233,128 @@ export class AppService {
     };
   }
 
+  async findPublishedCatalog(_viewerId: string, query: ListAppsDto = {}) {
+    const pageSize = query.pageSize ?? 30;
+    let cursorMatch: Record<string, unknown> = {};
+
+    if (query.cursor) {
+      const cursor = await this.appVersionModel
+        .findOne({ id: query.cursor, status: 'published' })
+        .select('id publishedAt')
+        .lean();
+      if (!cursor?.publishedAt) {
+        throw new BadRequestException('Invalid published app cursor');
+      }
+
+      // The cursor is a release ID, rather than an App ID: a catalog entry is
+      // ordered by its latest immutable release, not by mutable draft metadata.
+      cursorMatch = {
+        $or: [
+          { publishedAt: { $lt: cursor.publishedAt } },
+          { publishedAt: cursor.publishedAt, id: { $lt: cursor.id } },
+        ],
+      };
+    }
+
+    const items = await this.appVersionModel.aggregate<{
+      id: string;
+      appId: string;
+      definition: Record<string, unknown>;
+      publishedAt: Date;
+      app: { createdAt: Date; ownerId: Types.ObjectId };
+    }>([
+      { $match: { status: 'published' } },
+      {
+        $lookup: {
+          from: this.appModel.collection.name,
+          localField: 'appId',
+          foreignField: 'id',
+          as: 'app',
+        },
+      },
+      { $unwind: '$app' },
+      // App.version names the sole catalog release. Historical AppVersion
+      // snapshots remain downloadable only through their exact version ID.
+      {
+        $match: {
+          'app.isDelete': false,
+          $expr: { $eq: ['$version', '$app.version'] },
+          ...cursorMatch,
+        },
+      },
+      { $sort: { publishedAt: -1, id: -1 } },
+      { $limit: pageSize + 1 },
+    ]);
+
+    const page = items.slice(0, pageSize).map((item) => ({
+      ...item.definition,
+      id: item.appId,
+      createdAt: item.app.createdAt,
+      updatedAt: item.publishedAt,
+      publishedAt: item.publishedAt,
+      catalogVersionId: item.id,
+      ownerId: item.app.ownerId.toString(),
+    }));
+
+    if (items.length <= pageSize) return { items: page };
+    return { items: page, nextCursor: page.at(-1)!.catalogVersionId };
+  }
+
+  async findPublishedCatalogApp(_viewerId: string, id: string) {
+    const app = await this.appModel.findOne({ id, isDelete: false }).lean();
+    const release = app
+      ? await this.appVersionModel
+          .findOne({ appId: id, version: app.version, status: 'published' })
+          .lean()
+      : null;
+    if (!release || !app)
+      throw new NotFoundException(`Published App ${id} was not found`);
+
+    const isOwner = app.ownerId.toString() === _viewerId;
+    // Owners need their editable server draft; everyone else receives the
+    // immutable release snapshot so unpublished changes stay private.
+    return {
+      ...(isOwner ? this.appDefinition(app) : release.definition),
+      id,
+      createdAt: app.createdAt,
+      updatedAt: release.publishedAt,
+      publishedAt: release.publishedAt,
+      catalogVersionId: release.id,
+      ownerId: app.ownerId.toString(),
+    };
+  }
+
+  async readPublishedSourceArchive(_viewerId: string, id: string) {
+    const app = await this.appModel.findOne({ id, isDelete: false }).lean();
+    if (!app) throw new NotFoundException(`Published App ${id} was not found`);
+
+    // App.version is the authoritative current version. A release is usable
+    // only when its immutable source archive exists for that exact version.
+    const release = await this.appVersionModel
+      .findOne({ appId: id, version: app.version, status: 'published' })
+      .lean();
+    if (!release) {
+      throw new NotFoundException(`Published source for App ${id}@${app.version} was not found`);
+    }
+    const resource = await this.appResourceModel
+      .findOne({ appVersionId: release.id, kind: 'source_archive' })
+      .lean();
+    if (!resource) {
+      throw new NotFoundException(`Published source for App ${id}@${app.version} was not found`);
+    }
+
+    return {
+      resource,
+      // Older AppResource records can contain a UUID-style fileId, while
+      // GridFS requires a Mongo ObjectId. The published archive filename is
+      // unique per version and remains a compatible lookup key for both.
+      stream: await this.staticFS.readByName(
+        APP_VERSION_RESOURCE_SCOPE,
+        resource.filename,
+      ),
+    };
+  }
+
   async findOne(ownerId: string, id: string) {
     const app = await this.appModel
       .findOne({ id, ownerId: this.toOwnerId(ownerId), isDelete: false })
@@ -295,6 +419,21 @@ export class AppService {
       toolPermissions: app.toolPermissions,
       toolRiskLevel: app.toolRiskLevel,
       version,
+    };
+  }
+
+  private appDefinition(app: App) {
+    return {
+      description: app.description,
+      entry: app.entry,
+      inputs: app.inputs,
+      kind: app.kind,
+      name: app.name,
+      outputs: app.outputs,
+      toolExecutionPolicy: app.toolExecutionPolicy,
+      toolPermissions: app.toolPermissions,
+      toolRiskLevel: app.toolRiskLevel,
+      version: app.version,
     };
   }
 

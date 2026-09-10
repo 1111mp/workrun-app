@@ -41,6 +41,15 @@ async function download(
   return response.blob();
 }
 
+async function downloadStream(
+  path: string,
+  { headers, ...options }: FetchApiOptions = {},
+): Promise<{ stream: ReadableStream<Uint8Array>; headers: Headers }> {
+  const response = await send(path, 'GET', undefined, headers, options);
+  if (!response.body) throw new Error('Download response has no body');
+  return { stream: response.body, headers: response.headers };
+}
+
 async function postForm<T>(path: string, body: FormData): Promise<T> {
   const serverUrl = useWorkrunStore.getState().config?.team?.server_url;
   if (!serverUrl) throw new Error('Team server URL is not configured');
@@ -109,6 +118,7 @@ export const fetchApi = {
     request<T>(path, 'DELETE', undefined, options),
   // File persistence needs a user-selected path and is handled by the caller.
   download,
+  downloadStream,
 };
 
 function normalizePath(path: string) {

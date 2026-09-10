@@ -40,6 +40,7 @@ async function bootstrap() {
       'https://tauri.localhost',
     ],
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept'],
+    exposedHeaders: ['X-Workrun-Sha256'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     maxAge: 3600,

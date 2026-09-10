@@ -5,6 +5,11 @@ import { BetterAuthUser } from '../../user/schemas/better-auth-user.schema';
 
 @Schema({ timestamps: true, versionKey: false })
 export class App {
+  // Mongoose adds these fields from the schema's `timestamps` option.
+  createdAt!: Date;
+
+  updatedAt!: Date;
+
   @Prop({ required: true, unique: true, immutable: true })
   id!: string;
 
