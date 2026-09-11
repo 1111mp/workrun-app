@@ -294,7 +294,10 @@ use events::{publish_run_status, terminate_process_tree};
 use execution::execute_claimed_run;
 
 pub use app::{cancel_running_app, start_app};
-pub use workflow::{cancel_waiting_workflow, replay_run, resolve_workflow_action, resume_workflow, start_workflow};
+pub use workflow::{
+    MissingReplayDependency, cancel_waiting_workflow, replay_missing_dependencies, replay_run, resolve_workflow_action,
+    resume_workflow, start_workflow,
+};
 
 #[cfg(test)]
 mod tests;

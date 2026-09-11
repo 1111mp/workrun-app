@@ -21,5 +21,6 @@ import { App, AppSchema } from './schemas/app.schema';
   ],
   controllers: [AppController],
   providers: [AppService],
+  exports: [AppService],
 })
 export class AppModule {}

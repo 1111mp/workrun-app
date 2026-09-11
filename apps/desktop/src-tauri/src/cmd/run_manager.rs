@@ -39,3 +39,12 @@ pub async fn process_node_run_cancel(run_id: String) -> CmdResult {
 pub async fn run_replay(source_run_id: String) -> Result<RunRecordSummary, String> {
     run_manager::replay_run(&source_run_id).await.stringify_err()
 }
+
+#[tauri::command]
+pub async fn run_replay_missing_dependencies(
+    source_run_id: String,
+) -> Result<Vec<run_manager::MissingReplayDependency>, String> {
+    run_manager::replay_missing_dependencies(&source_run_id)
+        .await
+        .stringify_err()
+}

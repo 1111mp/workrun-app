@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
+import { AppModule } from '../app/app.module';
 import { UserModule } from '../user/user.module';
 import {
   WorkflowRelease,
@@ -16,6 +17,7 @@ import { WorkflowService } from './workflow.service';
       { name: Workflow.name, schema: WorkflowSchema },
       { name: WorkflowRelease.name, schema: WorkflowReleaseSchema },
     ]),
+    AppModule,
     UserModule,
   ],
   controllers: [WorkflowController],

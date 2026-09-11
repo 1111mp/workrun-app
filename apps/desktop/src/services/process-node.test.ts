@@ -8,6 +8,7 @@ import { fetchApi } from '@/services/fetch-api';
 import {
   getProcessNodeProjectVersion,
   getProcessNodes,
+  prepareWorkflowProcessApps,
   createTeamProcessNodeDraft,
   publishProcessNodeVersion,
 } from './process-node';
@@ -17,7 +18,10 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
-vi.mock('@tauri-apps/plugin-fs', () => ({ readFile: vi.fn(), remove: vi.fn() }));
+vi.mock('@tauri-apps/plugin-fs', () => ({
+  readFile: vi.fn(),
+  remove: vi.fn(),
+}));
 vi.mock('@/lib/constant', () => ({ isTeamMode: vi.fn() }));
 vi.mock('@/services/fetch-api', () => ({
   fetchApi: { get: vi.fn(), post: vi.fn(), postForm: vi.fn() },
@@ -60,6 +64,7 @@ describe('getProcessNodes', () => {
         },
         installStatus: 'installed',
         projectPath: '/team/default/process-nodes/app-1',
+        availableVersion: '0.1.0',
       },
     ]);
     vi.mocked(fetchApi.get).mockResolvedValueOnce({
@@ -75,6 +80,7 @@ describe('getProcessNodes', () => {
         },
         installStatus: 'installed',
         projectPath: '/team/default/process-nodes/app-1',
+        availableVersion: '0.1.0',
       },
     ]);
     expect(fetchApi.get).toHaveBeenCalledWith('/app/catalog?pageSize=100');
@@ -168,7 +174,7 @@ describe('getProcessNodes', () => {
     );
 
     const uploadPath = vi.mocked(fetchApi.postForm).mock.calls[0]?.[0];
-    const versionId = uploadPath?.split('/')[6];
+    const versionId = uploadPath?.split('/')[4];
     expect(uploadPath).toMatch(
       /^\/app\/remote-app-1\/versions\/[\w-]+\/resources\/source-archive$/,
     );
@@ -178,9 +184,9 @@ describe('getProcessNodes', () => {
       releaseNote: 'Initial release',
       definition: expect.objectContaining({ name: definition.name }),
     });
-    expect(fetchApi.postForm.mock.invocationCallOrder[0]).toBeLessThan(
-      fetchApi.post.mock.invocationCallOrder[0]!,
-    );
+    expect(
+      vi.mocked(fetchApi.postForm).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(fetchApi.post).mock.invocationCallOrder[0]!);
     expect(remove).toHaveBeenCalledWith('/tmp/workrun-source.tar.gz');
   });
 
@@ -191,7 +197,9 @@ describe('getProcessNodes', () => {
       size: 3,
     });
     vi.mocked(readFile).mockResolvedValueOnce(new Uint8Array([1, 2, 3]));
-    vi.mocked(fetchApi.postForm).mockRejectedValueOnce(new Error('upload failed'));
+    vi.mocked(fetchApi.postForm).mockRejectedValueOnce(
+      new Error('upload failed'),
+    );
     vi.mocked(remove).mockResolvedValueOnce(undefined);
 
     await expect(
@@ -206,5 +214,30 @@ describe('getProcessNodes', () => {
 
     expect(fetchApi.post).not.toHaveBeenCalled();
     expect(remove).toHaveBeenCalledWith('/tmp/workrun-source.tar.gz');
+  });
+});
+
+describe('prepareWorkflowProcessApps', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('leaves personal workflows local and does not query Team App releases', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(false);
+    const dsl = {
+      nodes: [
+        {
+          type: 'process',
+          data: {
+            processNodeId: 'local-app-1',
+            appRef: { source: 'local', localAppId: 'local-app-1' },
+          },
+        },
+      ],
+    };
+
+    await expect(
+      prepareWorkflowProcessApps(dsl, 'release-workflow-1'),
+    ).resolves.toBe(dsl);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(fetchApi.get).not.toHaveBeenCalled();
   });
 });

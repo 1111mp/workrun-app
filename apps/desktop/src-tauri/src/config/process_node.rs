@@ -78,6 +78,15 @@ pub struct IProcessNode {
     pub publication_status: ProcessNodePublicationStatus,
     #[serde(default)]
     pub remote_app_id: Option<String>,
+    /// Immutable server release identity for a downloaded Team App. Local and
+    /// legacy entries intentionally leave this absent.
+    #[serde(default)]
+    pub remote_release_id: Option<String>,
+    #[serde(default)]
+    pub remote_archive_sha256: Option<String>,
+    /// Team App installations are isolated per workflow release or draft.
+    #[serde(default)]
+    pub team_installation_scope: Option<String>,
 }
 
 /// The persisted Process Node catalog.
@@ -98,7 +107,16 @@ impl IProcessNodes {
     /// Loads the catalog once during global configuration initialization.
     /// A missing or malformed catalog must not prevent the application from starting.
     pub async fn new() -> Self {
-        match dirs::process_node_catalog_path() {
+        Self::load(dirs::process_node_catalog_path()).await
+    }
+
+    /// Workflow-scoped Team App installations are runtime caches, not Apps.
+    pub async fn new_team_releases() -> Self {
+        Self::load(dirs::team_process_node_catalog_path()).await
+    }
+
+    async fn load(path: Result<PathBuf>) -> Self {
+        match path {
             Ok(path) => match help::read_json::<Self>(&path).await {
                 Ok(nodes) => nodes,
                 Err(error) => {
@@ -119,6 +137,10 @@ impl IProcessNodes {
         help::save_json(&dirs::process_node_catalog_path()?, self, None).await
     }
 
+    pub async fn save_team_releases_file(&self) -> Result<()> {
+        help::save_json(&dirs::team_process_node_catalog_path()?, self, None).await
+    }
+
     /// Returns detached definitions so callers cannot alter the committed snapshot.
     pub fn get_process_nodes(&self) -> Vec<IProcessNode> {
         self.nodes.clone()
@@ -126,6 +148,26 @@ impl IProcessNodes {
 
     pub fn get_process_node(&self, id: &str) -> Option<IProcessNode> {
         self.nodes.iter().find(|node| node.id == id).cloned()
+    }
+
+    pub(crate) fn team_release_nodes(&self) -> Vec<IProcessNode> {
+        self.nodes
+            .iter()
+            .filter(|node| node.team_installation_scope.is_some())
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn remove_team_release_nodes(&mut self) {
+        self.nodes.retain(|node| node.team_installation_scope.is_none());
+    }
+
+    pub(crate) fn has_team_release(&self, node: &IProcessNode) -> bool {
+        self.nodes.iter().any(|current| {
+            current.remote_app_id == node.remote_app_id
+                && current.remote_release_id == node.remote_release_id
+                && current.team_installation_scope == node.team_installation_scope
+        })
     }
 
     #[cfg(test)]
@@ -217,4 +259,47 @@ fn validate_schemas(kind: &str, schemas: &BTreeMap<String, Value>) -> Result<()>
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: &str, scope: Option<&str>) -> IProcessNode {
+        IProcessNode {
+            id: id.into(),
+            name: "App".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            entry: PathBuf::from("main.py"),
+            project_root: None,
+            kind: ProcessNodeKind::Workflow,
+            tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
+            tool_risk_level: ToolRiskLevel::Low,
+            tool_permissions: vec![],
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            publication_status: ProcessNodePublicationStatus::Published,
+            remote_app_id: Some("00000000-0000-0000-0000-000000000001".into()),
+            remote_release_id: Some("00000000-0000-0000-0000-000000000002".into()),
+            remote_archive_sha256: None,
+            team_installation_scope: scope.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn team_release_cache_can_be_moved_out_of_the_apps_catalog() {
+        let app = node("00000000-0000-0000-0000-000000000010", None);
+        let cached_release = node("00000000-0000-0000-0000-000000000011", Some("release-workflow-1"));
+        let mut catalog = IProcessNodes::from_nodes(vec![app.clone(), cached_release.clone()]);
+
+        assert_eq!(catalog.team_release_nodes().len(), 1);
+        assert!(catalog.has_team_release(&cached_release));
+
+        catalog.remove_team_release_nodes();
+        assert_eq!(catalog.get_process_nodes().len(), 1);
+        assert_eq!(catalog.get_process_node(&app.id).map(|node| node.id), Some(app.id));
+    }
 }

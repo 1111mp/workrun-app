@@ -97,7 +97,10 @@ export class AppController {
   }
 
   @Get('catalog')
-  findPublishedCatalog(@Session() session: UserSession, @Query() query: ListAppsDto) {
+  findPublishedCatalog(
+    @Session() session: UserSession,
+    @Query() query: ListAppsDto,
+  ) {
     return this.appService.findPublishedCatalog(session.user.id, query);
   }
 
@@ -107,6 +110,27 @@ export class AppController {
     @Param('id') id: string,
   ) {
     return this.appService.findPublishedCatalogApp(session.user.id, id);
+  }
+
+  @Get('catalog/:id/releases/:releaseId')
+  findPublishedCatalogRelease(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+    @Param('releaseId') releaseId: string,
+  ) {
+    return this.appService.findPublishedCatalogRelease(
+      session.user.id,
+      id,
+      releaseId,
+    );
+  }
+
+  @Get('catalog/:id/releases')
+  findPublishedCatalogReleases(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+  ) {
+    return this.appService.findPublishedCatalogReleases(session.user.id, id);
   }
 
   /**
@@ -119,10 +143,27 @@ export class AppController {
     @Param('id') id: string,
     @Res() response: Response,
   ) {
-    const { resource, stream } = await this.appService.readPublishedSourceArchive(
-      session.user.id,
-      id,
-    );
+    const { resource, stream } =
+      await this.appService.readPublishedSourceArchive(session.user.id, id);
+    response.setHeader('Content-Type', 'application/gzip');
+    response.setHeader('Content-Length', resource.size);
+    response.setHeader('X-Workrun-Sha256', resource.sha256);
+    stream.pipe(response);
+  }
+
+  @Get('catalog/:id/releases/:releaseId/source-archive')
+  async downloadPublishedReleaseSourceArchive(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+    @Param('releaseId') releaseId: string,
+    @Res() response: Response,
+  ) {
+    const { resource, stream } =
+      await this.appService.readPublishedReleaseSourceArchive(
+        session.user.id,
+        id,
+        releaseId,
+      );
     response.setHeader('Content-Type', 'application/gzip');
     response.setHeader('Content-Length', resource.size);
     response.setHeader('X-Workrun-Sha256', resource.sha256);

@@ -70,6 +70,14 @@ export type RunRecord = RunRecordSummary & {
   events: RunEvent[];
 };
 
+export type MissingReplayDependency = {
+  remoteAppId: string;
+  releaseId: string;
+  version: string;
+  archiveSha256: string;
+  installationScope: string;
+};
+
 export type CreateRunRecord = {
   id: string;
   targetType: RunTargetType;
@@ -127,6 +135,12 @@ export function inspectRunRecord(id: string) {
 
 export function replayRun(sourceRunId: string) {
   return invoke<RunRecordSummary>('run_replay', { sourceRunId });
+}
+
+export function getReplayMissingDependencies(sourceRunId: string) {
+  return invoke<MissingReplayDependency[]>('run_replay_missing_dependencies', {
+    sourceRunId,
+  });
 }
 
 export function listActiveRuns() {
