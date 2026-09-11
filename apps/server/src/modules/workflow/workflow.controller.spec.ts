@@ -6,6 +6,10 @@ describe('WorkflowController', () => {
     create: vi.fn(),
     findAll: vi.fn(),
     findOne: vi.fn(),
+    findPublished: vi.fn(),
+    findPublishedCatalog: vi.fn(),
+    findReleases: vi.fn(),
+    publish: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
   };
@@ -48,5 +52,28 @@ describe('WorkflowController', () => {
       dto,
     );
     expect(workflowService.remove).toHaveBeenCalledWith('user-1', 'workflow-1');
+  });
+
+  it('publishes versions and exposes published workflows to the team', () => {
+    const dto = { version: '1.0.0', releaseNote: 'Initial release' };
+    controller.publish(session, 'workflow-1', dto);
+    controller.findReleases(session, 'workflow-1');
+    controller.findPublishedCatalog(session);
+    controller.findPublished(session, 'workflow-1');
+
+    expect(workflowService.publish).toHaveBeenCalledWith(
+      'user-1',
+      'workflow-1',
+      dto,
+    );
+    expect(workflowService.findReleases).toHaveBeenCalledWith(
+      'user-1',
+      'workflow-1',
+    );
+    expect(workflowService.findPublishedCatalog).toHaveBeenCalledWith('user-1');
+    expect(workflowService.findPublished).toHaveBeenCalledWith(
+      'user-1',
+      'workflow-1',
+    );
   });
 });

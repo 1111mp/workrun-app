@@ -11,6 +11,8 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         "dsl": request.dsl,
         "threadId": request.thread_id,
         "initialState": request.initial_state,
+        "releaseId": request.release_id,
+        "releaseVersion": request.release_version,
     });
     RunHistoryStore::create(CreateRunRecord {
         id: request.run_id.clone(),

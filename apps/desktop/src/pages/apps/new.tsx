@@ -31,9 +31,12 @@ import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
+import { isTeamMode } from '@/lib/constant';
 import {
+  createTeamProcessNodeDraft,
   createProcessNode,
   getProcessNodeDefaultRoot,
+  updateProcessNode,
   type ProcessNodeCreateStage,
 } from '@/services/process-node';
 
@@ -68,11 +71,23 @@ function CreateProcessNodePage() {
   });
 
   const create = useMutation({
-    mutationFn: (request: CreateProcessNodeForm) =>
-      createProcessNode(
+    mutationFn: async (request: CreateProcessNodeForm) => {
+      const node = await createProcessNode(
         { ...request, projectRoot: request.projectRoot || undefined },
         (progress) => setCreateStage(progress.stage),
-      ),
+      );
+      if (!isTeamMode()) return node;
+
+      setCreateStage('savingApp');
+      const remote = await createTeamProcessNodeDraft(node.definition);
+      // The local project remains the authoring source, while this ID binds
+      // its server Draft to later metadata saves and releases.
+      return updateProcessNode({
+        ...node.definition,
+        remoteAppId: remote.id,
+        publicationStatus: 'draft',
+      });
+    },
     onMutate: () => setCreateStage('creatingProject'),
     onSuccess: (node) => {
       void queryClient.invalidateQueries({ queryKey: ['apps'] });

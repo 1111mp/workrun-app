@@ -23,6 +23,7 @@ import {
 } from '@workspace/ui/components';
 import {
   FilePenLineIcon,
+  EyeIcon,
   GitBranchIcon,
   PlayIcon,
   PlusIcon,
@@ -44,7 +45,13 @@ import {
   type StoredWorkflow,
 } from '@/services/workflow';
 
-function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
+function WorkflowCard({
+  workflow,
+  readOnly = false,
+}: {
+  workflow: StoredWorkflow;
+  readOnly?: boolean;
+}) {
   const { t } = useTranslation();
   const { settings } = workflow.document;
   const inputCount = settings.inputSchema.fields.length;
@@ -64,9 +71,16 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
           {settings.description || t('workflows.noDescription')}
         </CardDescription>
         <CardAction>
-          <Badge variant='secondary' className='capitalize'>
-            {t(`workflows.modes.${settings.mode}`)}
-          </Badge>
+          <div className='flex items-center gap-1'>
+            {workflow.latestRelease ? (
+              <Badge variant='secondary'>v{workflow.latestRelease.version}</Badge>
+            ) : (
+              <Badge variant='outline'>{t('workflows.draft')}</Badge>
+            )}
+            <Badge variant='secondary' className='capitalize'>
+              {t(`workflows.modes.${settings.mode}`)}
+            </Badge>
+          </div>
         </CardAction>
       </CardHeader>
       <CardContent className='flex-1'>
@@ -103,22 +117,33 @@ function WorkflowCard({ workflow }: { workflow: StoredWorkflow }) {
           {t('workflows.canvas')}
         </span>
         <div className='ml-auto flex items-center gap-1.5'>
-          <Button
-            size='sm'
-            nativeButton={false}
-            render={<Link to={`/workflows/${workflow.id}?run=true`} />}
-          >
-            <PlayIcon data-icon='inline-start' />
-            {t('workflows.run')}
-          </Button>
+          {!readOnly ? (
+            <Button
+              size='sm'
+              nativeButton={false}
+              render={<Link to={`/workflows/${workflow.id}?run=true`} />}
+            >
+              <PlayIcon data-icon='inline-start' />
+              {t('workflows.run')}
+            </Button>
+          ) : null}
           <Button
             variant='outline'
             size='sm'
             nativeButton={false}
-            render={<Link to={`/workflows/${workflow.id}`} viewTransition />}
+            render={
+              <Link
+                to={`/workflows/${workflow.id}${readOnly ? '?catalog=true' : ''}`}
+                viewTransition
+              />
+            }
           >
-            <FilePenLineIcon data-icon='inline-start' />
-            {t('workflows.edit')}
+            {readOnly ? (
+              <EyeIcon data-icon='inline-start' />
+            ) : (
+              <FilePenLineIcon data-icon='inline-start' />
+            )}
+            {readOnly ? t('workflows.view') : t('workflows.edit')}
           </Button>
         </div>
       </CardFooter>
@@ -243,7 +268,11 @@ function WorkflowsPage() {
         {filteredWorkflows?.length ? (
           <section className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
             {filteredWorkflows.map((workflow) => (
-              <WorkflowCard key={workflow.id} workflow={workflow} />
+              <WorkflowCard
+                key={workflow.id}
+                workflow={workflow}
+                readOnly={workflow.editable === false}
+              />
             ))}
           </section>
         ) : null}

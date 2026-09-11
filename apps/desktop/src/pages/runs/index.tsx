@@ -293,6 +293,7 @@ function RunsPage() {
                   <ItemDescription>
                     {isWorkflow ? t('runs.workflow') : t('apps.app')} ·{' '}
                     {new Date(run.startedAt).toLocaleString(i18n.language)}
+                    {run.releaseVersion ? ` · v${run.releaseVersion}` : ''}
                     {run.durationMs !== undefined
                       ? t('runs.duration', {
                           seconds: (run.durationMs / 1000).toFixed(1),

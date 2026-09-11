@@ -2,6 +2,9 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { Edge, Node } from '@xyflow/react';
 
+import { isTeamMode } from '@/lib/constant';
+import { fetchApi } from '@/services/fetch-api';
+
 const workflowDocumentStorageKey = 'workrun.workflow.document';
 
 export type WorkflowDocument = {
@@ -15,6 +18,38 @@ export type StoredWorkflow = {
   createdAt: string;
   updatedAt: string;
   document: WorkflowDocument;
+  editable?: boolean;
+  releaseId?: string;
+  version?: string;
+  status?: 'draft' | 'published';
+  latestRelease?: {
+    version: string;
+    releaseNote: string;
+    publishedAt: string;
+  } | null;
+};
+
+export type WorkflowRelease = {
+  id: string;
+  workflowId: string;
+  version: string;
+  releaseNote: string;
+  document: WorkflowDocument;
+  publishedAt: string;
+};
+
+export type WorkflowOverviewQuery = {
+  pageSize?: number;
+  cursor?: string;
+  query?: string;
+  owner?: 'all' | 'mine' | 'others';
+  status?: 'draft' | 'published';
+  version?: string;
+};
+
+export type WorkflowOverviewPage = {
+  items: StoredWorkflow[];
+  nextCursor?: string;
 };
 
 type WorkflowPlanEdge = {
@@ -57,6 +92,8 @@ export type BackgroundWorkflowRunRequest = {
   input: Record<string, unknown>;
   outputView: unknown;
   targetSnapshot: unknown;
+  releaseId?: string;
+  releaseVersion?: string;
   dsl: Workflow;
   initialState: Record<string, unknown>;
   threadId: string;
@@ -259,20 +296,56 @@ export function clearLegacyWorkflowDocument() {
   window.localStorage.removeItem(workflowDocumentStorageKey);
 }
 
-export function getWorkflows() {
+export async function getWorkflows() {
+  if (isTeamMode()) return (await getWorkflowOverview()).items;
   return invoke<StoredWorkflow[]>('get_workflows');
 }
 
+export function getWorkflowOverview(query: WorkflowOverviewQuery = {}) {
+  const params = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') params.set(key, String(value));
+  });
+  const suffix = params.size ? `?${params}` : '';
+  return fetchApi.get<WorkflowOverviewPage>(`/workflow/overview${suffix}`);
+}
+
 export function createWorkflow(document: WorkflowDocument) {
+  if (isTeamMode()) {
+    return fetchApi.post<StoredWorkflow>('/workflow', { document });
+  }
   return invoke<StoredWorkflow>('create_workflow', { document });
 }
 
 export function getWorkflow(id: string) {
+  if (isTeamMode()) {
+    return fetchApi.get<StoredWorkflow>(`/workflow/${id}`);
+  }
   return invoke<StoredWorkflow>('get_workflow', { id });
 }
 
 export function updateWorkflow(id: string, document: WorkflowDocument) {
+  if (isTeamMode()) {
+    return fetchApi.patch<StoredWorkflow>(`/workflow/${id}`, {
+      document,
+    });
+  }
   return invoke<StoredWorkflow>('update_workflow', { id, document });
+}
+
+export function publishWorkflow(
+  id: string,
+  version: string,
+  releaseNote: string,
+) {
+  return fetchApi.post<WorkflowRelease>(`/workflow/${id}/releases`, {
+    version,
+    releaseNote,
+  });
+}
+
+export function getPublishedWorkflow(id: string) {
+  return fetchApi.get<StoredWorkflow>(`/workflow/team/${id}`);
 }
 
 export function compileWorkflow(dsl: Workflow) {

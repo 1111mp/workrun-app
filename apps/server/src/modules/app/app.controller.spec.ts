@@ -31,6 +31,7 @@ describe('AppController', () => {
     const dto = {
       id: '123e4567-e89b-12d3-a456-426614174000',
       version: '1.2.3',
+      releaseNote: 'Initial release',
     };
     const resourceDto = {
       format: 'tar.gz' as const,
@@ -64,7 +65,11 @@ describe('AppController', () => {
   it('checks a version against the authenticated app owner', () => {
     controller.hasVersion(session, 'app-1', '1.2.3');
 
-    expect(appService.hasVersion).toHaveBeenCalledWith('user-1', 'app-1', '1.2.3');
+    expect(appService.hasVersion).toHaveBeenCalledWith(
+      'user-1',
+      'app-1',
+      '1.2.3',
+    );
   });
 
   it('scopes reads to the authenticated user', () => {

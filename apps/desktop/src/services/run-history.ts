@@ -42,6 +42,8 @@ export type RunRecordSummary = {
   endedAt?: string;
   durationMs?: number;
   error?: string;
+  releaseId?: string;
+  releaseVersion?: string;
 };
 
 export type RunEvent = {

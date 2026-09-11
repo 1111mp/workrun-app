@@ -8,9 +8,10 @@ import {
   type Node,
   type ReactFlowInstance,
 } from '@xyflow/react';
+import type { TFunction } from 'i18next';
 import { Play, Redo2Icon, Undo2Icon } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
-import { type TFunction, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import { useStore } from 'zustand';
 
 import {
@@ -214,6 +215,7 @@ type WorkflowCanvasProps = {
   isRunning: boolean;
   runningNodeId: string | null;
   onRun: () => void;
+  readOnly?: boolean;
 };
 
 function WorkflowCanvas({
@@ -223,6 +225,7 @@ function WorkflowCanvas({
   isRunning,
   runningNodeId,
   onRun,
+  readOnly = false,
 }: WorkflowCanvasProps) {
   const { t } = useTranslation();
   const workflowStore = useWorkflowStoreApi();
@@ -338,7 +341,7 @@ function WorkflowCanvas({
 
   return (
     <>
-      <WorkflowSidebar onNodeDrop={addPaletteNode} />
+      {!readOnly ? <WorkflowSidebar onNodeDrop={addPaletteNode} /> : null}
       <SidebarInset>
         {header}
         <div className='flex min-h-0 flex-1'>
@@ -350,11 +353,13 @@ function WorkflowCanvas({
               edges={displayEdges}
               nodeTypes={nodeTypes}
               onInit={setReactFlowInstance}
-              onConnect={addConnection}
-              onNodeDragStart={startNodeDrag}
-              onNodeDragStop={onNodeDragStop}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
+              nodesDraggable={!readOnly}
+              nodesConnectable={!readOnly}
+              onConnect={readOnly ? undefined : addConnection}
+              onNodeDragStart={readOnly ? undefined : startNodeDrag}
+              onNodeDragStop={readOnly ? undefined : onNodeDragStop}
+              onNodesChange={readOnly ? undefined : onNodesChange}
+              onEdgesChange={readOnly ? undefined : onEdgesChange}
               onSelectionChange={({ nodes: selectedNodes }) =>
                 setSelectedNodeId(selectedNodes.at(-1)?.id ?? null)
               }
@@ -369,7 +374,7 @@ function WorkflowCanvas({
                     size='icon-sm'
                     aria-label={t('workflowEditor.undo')}
                     title={t('workflowEditor.undoShortcut')}
-                    disabled={!canUndo}
+                    disabled={readOnly || !canUndo}
                     onClick={() => {
                       const { undo, pastStates } =
                         workflowStore.temporal.getState();
@@ -383,7 +388,7 @@ function WorkflowCanvas({
                     size='icon-sm'
                     aria-label={t('workflowEditor.redo')}
                     title={t('workflowEditor.redoShortcut')}
-                    disabled={!canRedo}
+                    disabled={readOnly || !canRedo}
                     onClick={() => {
                       const { redo, futureStates } =
                         workflowStore.temporal.getState();
@@ -397,7 +402,7 @@ function WorkflowCanvas({
               <Panel position='top-right'>
                 <Button
                   variant='secondary'
-                  disabled={isRunning}
+                  disabled={readOnly || isRunning}
                   onClick={onRun}
                 >
                   {isRunning ? (

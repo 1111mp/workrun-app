@@ -4,6 +4,13 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   Button,
   Field,
   FieldGroup,
@@ -21,12 +28,14 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
+  Textarea,
 } from '@workspace/ui/components';
 import {
   ArrowLeftIcon,
   HistoryIcon,
   SaveIcon,
   Settings2Icon,
+  UploadIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -39,6 +48,7 @@ import { WorkflowHistory } from '@/components/workflow-history';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
+import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
 import {
   inspectRunRecord,
@@ -49,6 +59,7 @@ import {
 import {
   createWorkflow,
   createWorkflowDocument,
+  publishWorkflow,
   toWorkflowDocument,
   updateWorkflow,
   type StoredWorkflow,
@@ -68,12 +79,14 @@ import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
 
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
+  readOnly?: boolean;
   autoStartRun?: boolean;
   historicalRun?: RunRecord;
 };
 
 function WorkflowEditor({
   workflow,
+  readOnly,
   autoStartRun,
   historicalRun,
 }: WorkflowEditorProps) {
@@ -88,6 +101,7 @@ function WorkflowEditor({
     <WorkflowStoreProvider store={workflowStore}>
       <WorkflowEditorContent
         workflow={workflow}
+        readOnly={readOnly}
         autoStartRun={autoStartRun}
         historicalRun={historicalRun}
       />
@@ -97,11 +111,15 @@ function WorkflowEditor({
 
 function WorkflowEditorContent({
   workflow,
+  readOnly = false,
   autoStartRun,
   historicalRun,
 }: WorkflowEditorProps) {
-  const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [version, setVersion] = useState('1.0.0');
+  const [releaseNote, setReleaseNote] = useState('');
+  const [isPublishing, setIsPublishing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [viewingHistoricalRunId, setViewingHistoricalRunId] = useState<
     string | undefined
@@ -158,6 +176,8 @@ function WorkflowEditorContent({
     enabled: historyOpen && Boolean(workflow),
   });
 
+  const { t } = useTranslation();
+
   const runtime = historicalRun?.runtime as Record<string, unknown> | undefined;
   const restoredRun =
     typeof runtime?.threadId === 'string'
@@ -170,6 +190,8 @@ function WorkflowEditorContent({
     edges,
     workflowSettings,
     restoredRun,
+    workflow?.releaseId,
+    workflow?.version,
   );
 
   const restoreHistoricalRun = useWorkflowRunStore(
@@ -285,6 +307,40 @@ function WorkflowEditorContent({
       });
     }
   };
+
+  const publishCurrentWorkflow = async () => {
+    if (!workflow || !version.trim() || !releaseNote.trim()) return;
+    setIsPublishing(true);
+    try {
+      // Publication snapshots the current draft, so save unsaved canvas edits
+      // before asking the server to create the immutable release.
+      if (isDirty) {
+        await updateWorkflow(workflow.id, workflowDocument);
+        setSavedDocument(workflowDocumentSnapshot);
+      }
+      const release = await publishWorkflow(
+        workflow.id,
+        version.trim(),
+        releaseNote.trim(),
+      );
+      setPublishOpen(false);
+      setReleaseNote('');
+      void queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      toast.success(
+        t('workflowEditor.published', { version: release.version }),
+        {
+          toasterId: 'global',
+        },
+      );
+    } catch (error) {
+      toast.error(t('workflowEditor.publishFailed'), {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsPublishing(false);
+    }
+  };
   const workflowModes = [
     { value: 'task', label: t('workflows.modes.task') },
     { value: 'chat', label: t('workflows.modes.chat') },
@@ -293,6 +349,7 @@ function WorkflowEditorContent({
   return (
     <SidebarProvider className='relative flex size-full min-h-0! grow flex-row'>
       <WorkflowCanvas
+        readOnly={readOnly}
         isRunning={workflowRun.isRunning}
         runningNodeId={workflowRun.runningNodeId}
         onRun={workflowRun.startRun}
@@ -336,6 +393,7 @@ function WorkflowEditorContent({
                     id='workflow-name'
                     className='border-none'
                     value={workflowSettings.name}
+                    disabled={readOnly}
                     onChange={(event) =>
                       updateWorkflowSettings({ name: event.target.value })
                     }
@@ -348,6 +406,7 @@ function WorkflowEditorContent({
                   <Select
                     items={workflowModes}
                     value={workflowSettings.mode}
+                    disabled={readOnly}
                     onValueChange={(mode) =>
                       updateWorkflowSettings({ mode: mode as WorkflowMode })
                     }
@@ -386,35 +445,47 @@ function WorkflowEditorContent({
               </Tabs>
             </div>
             <div className='flex items-center gap-2'>
-              <Button
+              {!readOnly ? <Button
                 variant='ghost'
                 size='sm'
                 onClick={() => setSettingsOpen(true)}
               >
                 <Settings2Icon data-icon='inline-start' />
                 {t('workflowEditor.moreSettings')}
-              </Button>
-              <Button
-                size='sm'
-                disabled={Boolean(workflow) && !isDirty}
-                onClick={() => void saveWorkflow()}
-              >
-                <SaveIcon data-icon='inline-start' />
-                {workflow ? t('workflowEditor.save') : t('workflows.create')}
-              </Button>
+              </Button> : null}
+              {!readOnly ? (
+                <Button
+                  size='sm'
+                  disabled={Boolean(workflow) && !isDirty}
+                  onClick={() => void saveWorkflow()}
+                >
+                  <SaveIcon data-icon='inline-start' />
+                  {workflow ? t('workflowEditor.save') : t('workflows.create')}
+                </Button>
+              ) : null}
+              {isTeamMode() && workflow && !readOnly ? (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() => setPublishOpen(true)}
+                >
+                  <UploadIcon data-icon='inline-start' />
+                  {t('workflowEditor.publish')}
+                </Button>
+              ) : null}
             </div>
           </header>
         }
       >
-        <WorkflowNodeInspector
+        {!readOnly ? <WorkflowNodeInspector
           node={selectedNode}
           workflowId={workflow?.id}
           executableNodes={nodes.filter((node) => isExecutableNode(node.type))}
           modelProfiles={modelCatalog}
           onClose={clearSelection}
           onDataChange={updateNodeData}
-        />
-        <WorkflowSettingsPanel
+        /> : null}
+        {!readOnly ? <WorkflowSettingsPanel
           open={settingsOpen}
           settings={workflowSettings}
           executableNodes={nodes
@@ -429,8 +500,8 @@ function WorkflowEditorContent({
             }))}
           onOpenChange={setSettingsOpen}
           onSettingsChange={updateWorkflowSettings}
-        />
-        <WorkflowRunPanel
+        /> : null}
+        {!readOnly ? <WorkflowRunPanel
           settings={workflowSettings}
           nodes={nodes}
           onRun={workflowRun.startWorkflowRun}
@@ -448,7 +519,56 @@ function WorkflowEditorContent({
               restoreHistoricalRun.setRunPanelOpen(false);
             }
           }}
-        />
+        /> : null}
+        <AlertDialog open={publishOpen} onOpenChange={setPublishOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {t('workflowEditor.publishTitle')}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {t('workflowEditor.publishDescription')}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor='workflow-release-version'>
+                  {t('workflowEditor.version')}
+                </FieldLabel>
+                <Input
+                  id='workflow-release-version'
+                  value={version}
+                  disabled={isPublishing}
+                  onChange={(event) => setVersion(event.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor='workflow-release-note'>
+                  {t('workflowEditor.releaseNote')}
+                </FieldLabel>
+                <Textarea
+                  id='workflow-release-note'
+                  value={releaseNote}
+                  disabled={isPublishing}
+                  onChange={(event) => setReleaseNote(event.target.value)}
+                />
+              </Field>
+            </FieldGroup>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isPublishing}>
+                {t('workflowEditor.cancel')}
+              </AlertDialogCancel>
+              <Button
+                disabled={
+                  isPublishing || !version.trim() || !releaseNote.trim()
+                }
+                onClick={() => void publishCurrentWorkflow()}
+              >
+                {t('workflowEditor.publish')}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </WorkflowCanvas>
     </SidebarProvider>
   );

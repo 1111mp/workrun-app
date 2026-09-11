@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 
 import { WorkflowService } from './workflow.service';
@@ -11,12 +11,18 @@ describe('WorkflowService', () => {
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
+    updateOne: vi.fn(),
+  };
+  const releaseModel = {
+    create: vi.fn(),
+    find: vi.fn(),
+    exists: vi.fn(),
   };
   let service: WorkflowService;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new WorkflowService(model as any);
+    service = new WorkflowService(model as any, releaseModel as any);
   });
 
   it('creates a workflow owned by the authenticated user', async () => {
@@ -109,5 +115,61 @@ describe('WorkflowService', () => {
       { deletedAt: expect.any(Date), isDelete: true },
       { new: true },
     );
+  });
+
+  it('publishes an immutable snapshot of the current draft', async () => {
+    const draft = {
+      _id: 'mongo-workflow-1',
+      id: 'workflow-1',
+      document: { nodes: [{ id: 'start' }], edges: [], settings: {} },
+    };
+    model.findOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(draft) });
+    releaseModel.create.mockResolvedValue({
+      _id: 'mongo-release-1',
+      id: 'release-1',
+      version: '1.0.0',
+    });
+    model.updateOne.mockResolvedValue({});
+
+    await service.publish(ownerId, 'workflow-1', {
+      version: '1.0.0',
+      releaseNote: 'Initial release',
+    });
+
+    expect(releaseModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowId: 'workflow-1',
+        version: '1.0.0',
+        releaseNote: 'Initial release',
+        document: draft.document,
+        publishedAt: expect.any(Date),
+      }),
+    );
+    expect(model.updateOne).toHaveBeenCalledWith(
+      { _id: 'mongo-workflow-1' },
+      { latestReleaseId: 'mongo-release-1', status: 'published' },
+    );
+  });
+
+  it('rejects a release whose edges reference missing nodes', async () => {
+    model.findOne.mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'mongo-workflow-1',
+        id: 'workflow-1',
+        document: {
+          nodes: [{ id: 'start' }],
+          edges: [{ source: 'start', target: 'missing' }],
+          settings: {},
+        },
+      }),
+    });
+
+    await expect(
+      service.publish(ownerId, 'workflow-1', {
+        version: '1.0.0',
+        releaseNote: 'Initial release',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(releaseModel.create).not.toHaveBeenCalled();
   });
 });
