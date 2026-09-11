@@ -13,6 +13,7 @@ describe('AppService', () => {
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
+    updateOne: vi.fn(),
   };
   const appVersionModel = {
     aggregate: vi.fn(),
@@ -101,6 +102,7 @@ describe('AppService', () => {
     await service.createVersion(ownerId, 'app-1', {
       id: '123e4567-e89b-12d3-a456-426614174000',
       version: '1.2.3',
+      releaseNote: 'Initial release',
     });
 
     expect(appVersionModel.create).toHaveBeenCalledWith(
@@ -110,15 +112,28 @@ describe('AppService', () => {
         definition: expect.objectContaining({ version: '1.2.3' }),
         status: 'published',
         version: '1.2.3',
+        releaseNote: 'Initial release',
       }),
+    );
+    expect(model.updateOne).toHaveBeenCalledWith(
+      {
+        id: 'app-1',
+        isDelete: false,
+        ownerId: expect.any(Types.ObjectId),
+      },
+      expect.objectContaining({ version: '1.2.3' }),
     );
   });
 
   it('checks whether an owned app already has a version', async () => {
-    model.findOne.mockReturnValue({ lean: vi.fn().mockResolvedValue({ id: 'app-1' }) });
+    model.findOne.mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ id: 'app-1' }),
+    });
     appVersionModel.exists.mockResolvedValue({ _id: 'version-1' });
 
-    await expect(service.hasVersion(ownerId, 'app-1', '1.2.3')).resolves.toEqual({
+    await expect(
+      service.hasVersion(ownerId, 'app-1', '1.2.3'),
+    ).resolves.toEqual({
       exists: true,
     });
     expect(appVersionModel.exists).toHaveBeenCalledWith({
@@ -289,7 +304,9 @@ describe('AppService', () => {
     });
     model.findOne.mockReturnValue({ lean: appLean });
 
-    await expect(service.findPublishedCatalogApp(ownerId, 'app-1')).resolves.toEqual(
+    await expect(
+      service.findPublishedCatalogApp(ownerId, 'app-1'),
+    ).resolves.toEqual(
       expect.objectContaining({
         catalogVersionId: 'release-2',
         id: 'app-1',

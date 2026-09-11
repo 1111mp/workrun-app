@@ -73,6 +73,7 @@ import {
 import { AppPublishForm } from '@/components/forms';
 import { isTeamMode } from '@/lib/constant';
 import {
+  createTeamProcessNodeDraft,
   deleteProcessNode,
   deletePublishedProcessNode,
   getPublishedProcessNode,
@@ -80,7 +81,6 @@ import {
   getProcessNodeProjectVersion,
   hasPublishedProcessNodeVersion,
   listProcessNodeWorkflowReferences,
-  publishProcessNode,
   publishProcessNodeVersion,
   setProcessNodeProjectVersion,
   updateProcessNode,
@@ -603,7 +603,13 @@ function ProcessNodeDetailEditor({
   });
 
   const publish = useMutation({
-    mutationFn: async (version: string) => {
+    mutationFn: async ({
+      version,
+      releaseNote,
+    }: {
+      version: string;
+      releaseNote: string;
+    }) => {
       if (!draft.name.trim()) throw new Error(t('apps.new.nameRequired'));
 
       const remoteAppId = processNode.definition.remoteAppId;
@@ -629,7 +635,7 @@ function ProcessNodeDetailEditor({
 
       const remote = saved.definition.remoteAppId
         ? { id: saved.definition.remoteAppId }
-        : await publishProcessNode(saved.definition);
+        : await createTeamProcessNodeDraft(saved.definition);
 
       const publishedDefinition = saved.definition.remoteAppId
         ? saved.definition
@@ -643,11 +649,13 @@ function ProcessNodeDetailEditor({
             })
           ).definition;
 
-      await publishProcessNodeVersion(remote.id, saved.definition.id, version);
-
-      if (saved.definition.remoteAppId) {
-        await updatePublishedProcessNode(remote.id, saved.definition);
-      }
+      await publishProcessNodeVersion(
+        remote.id,
+        saved.definition.id,
+        version,
+        releaseNote,
+        saved.definition,
+      );
 
       return updateProcessNode({
         ...publishedDefinition,
@@ -676,9 +684,9 @@ function ProcessNodeDetailEditor({
   // const canPublish =
   //   isTeamMode() && processNode.definition.publicationStatus === 'draft';
 
-  const submitPublish = async (version: string) => {
+  const submitPublish = async (version: string, releaseNote: string) => {
     setDraft((current) => ({ ...current, version }));
-    await publish.mutateAsync(version);
+    await publish.mutateAsync({ version, releaseNote });
   };
 
   const remove = useMutation({

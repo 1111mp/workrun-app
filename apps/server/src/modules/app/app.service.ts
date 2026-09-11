@@ -92,14 +92,23 @@ export class AppService {
     }
 
     try {
-      return await this.appVersionModel.create({
+      const definition = this.versionDefinition(app, version, dto.definition);
+      const release = await this.appVersionModel.create({
         id: dto.id,
         appId: app.id,
         publishedAt: new Date(),
         status: 'published',
         version,
-        definition: this.versionDefinition(app, version),
+        releaseNote: dto.releaseNote.trim(),
+        definition,
       });
+      // The mutable App points to the catalog release only after its immutable
+      // snapshot exists, so an interrupted upload cannot advance the catalog.
+      await this.appModel.updateOne(
+        { id: app.id, ownerId: this.toOwnerId(ownerId), isDelete: false },
+        definition,
+      );
+      return release;
     } catch (error) {
       if (this.isDuplicateKey(error)) {
         throw new ConflictException(`App ${app.id}@${version} already exists`);
@@ -334,13 +343,17 @@ export class AppService {
       .findOne({ appId: id, version: app.version, status: 'published' })
       .lean();
     if (!release) {
-      throw new NotFoundException(`Published source for App ${id}@${app.version} was not found`);
+      throw new NotFoundException(
+        `Published source for App ${id}@${app.version} was not found`,
+      );
     }
     const resource = await this.appResourceModel
       .findOne({ appVersionId: release.id, kind: 'source_archive' })
       .lean();
     if (!resource) {
-      throw new NotFoundException(`Published source for App ${id}@${app.version} was not found`);
+      throw new NotFoundException(
+        `Published source for App ${id}@${app.version} was not found`,
+      );
     }
 
     return {
@@ -407,19 +420,51 @@ export class AppService {
     return app;
   }
 
-  private versionDefinition(app: App, version: string) {
+  private versionDefinition(
+    app: App,
+    version: string,
+    draft: Record<string, unknown> = {},
+  ) {
+    // Only the App's public definition can be supplied by a Draft. Ownership,
+    // deletion state, and the App identity remain server controlled.
     return {
-      description: app.description,
-      entry: app.entry,
-      inputs: app.inputs,
-      kind: app.kind,
-      name: app.name,
-      outputs: app.outputs,
-      toolExecutionPolicy: app.toolExecutionPolicy,
-      toolPermissions: app.toolPermissions,
-      toolRiskLevel: app.toolRiskLevel,
+      description:
+        typeof draft.description === 'string'
+          ? draft.description
+          : app.description,
+      entry: typeof draft.entry === 'string' ? draft.entry : app.entry,
+      inputs: this.objectDraft(draft.inputs, app.inputs),
+      kind:
+        draft.kind === 'tool' || draft.kind === 'workflow'
+          ? draft.kind
+          : app.kind,
+      name: typeof draft.name === 'string' ? draft.name : app.name,
+      outputs: this.objectDraft(draft.outputs, app.outputs),
+      toolExecutionPolicy:
+        draft.toolExecutionPolicy === 'auto' ||
+        draft.toolExecutionPolicy === 'ask_every_time'
+          ? draft.toolExecutionPolicy
+          : app.toolExecutionPolicy,
+      toolPermissions: Array.isArray(draft.toolPermissions)
+        ? draft.toolPermissions.filter(
+            (permission): permission is string =>
+              typeof permission === 'string',
+          )
+        : app.toolPermissions,
+      toolRiskLevel:
+        draft.toolRiskLevel === 'low' ||
+        draft.toolRiskLevel === 'medium' ||
+        draft.toolRiskLevel === 'high'
+          ? draft.toolRiskLevel
+          : app.toolRiskLevel,
       version,
     };
+  }
+
+  private objectDraft(value: unknown, fallback: Record<string, unknown>) {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : fallback;
   }
 
   private appDefinition(app: App) {

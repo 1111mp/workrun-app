@@ -10,7 +10,7 @@ impl RunHistoryStore {
             }
         }
         let mut sql = QueryBuilder::<Sqlite>::new(
-            "SELECT id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error FROM run_records WHERE 1 = 1",
+            "SELECT id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version FROM run_records WHERE 1 = 1",
         );
 
         if let Some(target_type) = query.target_type {
@@ -59,7 +59,7 @@ impl RunHistoryStore {
     pub async fn list_active() -> Result<Vec<RunRecordSummary>> {
         let pool = DBManager::global().pool()?;
         let rows = sqlx::query(
-            "SELECT id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') ORDER BY started_at DESC, id DESC",
+            "SELECT id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') ORDER BY started_at DESC, id DESC",
         )
         .fetch_all(&pool)
         .await?;
@@ -112,6 +112,8 @@ fn summary_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunRecordSummary> {
         ended_at: row.try_get("ended_at")?,
         duration_ms: row.try_get("duration_ms")?,
         error: row.try_get("error")?,
+        release_id: row.try_get("release_id")?,
+        release_version: row.try_get("release_version")?,
     })
 }
 

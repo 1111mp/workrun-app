@@ -9,6 +9,7 @@ type ApiResponse<T> = {
 };
 
 type FetchApiOptions = Omit<RequestInit, 'body' | 'method'>;
+const API_PREFIX = '/api/v1';
 
 /**
  * Calls the configured team API and unwraps its common response envelope.
@@ -122,7 +123,8 @@ export const fetchApi = {
 };
 
 function normalizePath(path: string) {
-  return path.startsWith('/') ? path : `/${path}`;
+  const resourcePath = path.startsWith('/') ? path : `/${path}`;
+  return `${API_PREFIX}${resourcePath}`;
 }
 
 function getErrorMessage(message: ApiResponse<unknown>['message'], status: number) {

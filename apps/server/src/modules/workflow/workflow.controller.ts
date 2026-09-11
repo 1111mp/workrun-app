@@ -6,11 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiCookieAuth } from '@nestjs/swagger';
 import { Session, type UserSession } from '@thallesp/nestjs-better-auth';
 
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
+import { ListWorkflowOverviewDto } from './dto/list-workflow-overview.dto';
+import { PublishWorkflowDto } from './dto/publish-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
 import { WorkflowService } from './workflow.service';
 
@@ -28,6 +31,38 @@ export class WorkflowController {
   @Get()
   findAll(@Session() session: UserSession) {
     return this.workflowService.findAll(session.user.id);
+  }
+
+  @Get('team')
+  findPublishedCatalog(@Session() session: UserSession) {
+    return this.workflowService.findPublishedCatalog(session.user.id);
+  }
+
+  @Get('overview')
+  findOverview(
+    @Session() session: UserSession,
+    @Query() query: ListWorkflowOverviewDto,
+  ) {
+    return this.workflowService.findOverview(session.user.id, query);
+  }
+
+  @Get('team/:id')
+  findPublished(@Session() session: UserSession, @Param('id') id: string) {
+    return this.workflowService.findPublished(session.user.id, id);
+  }
+
+  @Get(':id/releases')
+  findReleases(@Session() session: UserSession, @Param('id') id: string) {
+    return this.workflowService.findReleases(session.user.id, id);
+  }
+
+  @Post(':id/releases')
+  publish(
+    @Session() session: UserSession,
+    @Param('id') id: string,
+    @Body() dto: PublishWorkflowDto,
+  ) {
+    return this.workflowService.publish(session.user.id, id, dto);
   }
 
   @Get(':id')

@@ -12,6 +12,9 @@ export class AppVersion {
   @Prop({ required: true, immutable: true })
   version!: string;
 
+  @Prop({ required: true, immutable: true })
+  releaseNote!: string;
+
   @Prop({ enum: ['uploading', 'published'], default: 'uploading' })
   status!: 'uploading' | 'published';
 

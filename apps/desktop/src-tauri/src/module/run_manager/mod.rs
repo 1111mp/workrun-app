@@ -231,6 +231,8 @@ pub struct StartWorkflowRun {
     pub input: Value,
     pub output_view: Value,
     pub target_snapshot: Value,
+    pub release_id: Option<String>,
+    pub release_version: Option<String>,
     pub dsl: Value,
     pub initial_state: Value,
     pub thread_id: String,

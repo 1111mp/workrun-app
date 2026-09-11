@@ -11,16 +11,18 @@ import { useParams, useSearchParams } from 'react-router';
 
 import { WorkflowEditor } from '@/components';
 import { inspectRunRecord } from '@/services/run-history';
-import { getWorkflow } from '@/services/workflow';
+import { getPublishedWorkflow, getWorkflow } from '@/services/workflow';
 
 function WorkflowPage() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
+  const isPublishedView = searchParams.get('catalog') === 'true';
 
   const workflow = useQuery({
-    queryKey: ['workflows', id],
-    queryFn: () => getWorkflow(id!),
+    queryKey: ['workflows', id, isPublishedView ? 'published' : 'draft'],
+    queryFn: () =>
+      isPublishedView ? getPublishedWorkflow(id!) : getWorkflow(id!),
     enabled: Boolean(id),
   });
   const historicalRun = useQuery({
@@ -58,6 +60,7 @@ function WorkflowPage() {
       <WorkflowEditor
         key={workflow.data.id}
         workflow={workflow.data}
+        readOnly={isPublishedView}
         autoStartRun={searchParams.get('run') === 'true'}
         historicalRun={
           historicalRun.data?.targetType === 'workflow' &&

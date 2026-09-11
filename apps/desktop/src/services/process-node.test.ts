@@ -8,7 +8,7 @@ import { fetchApi } from '@/services/fetch-api';
 import {
   getProcessNodeProjectVersion,
   getProcessNodes,
-  publishProcessNode,
+  createTeamProcessNodeDraft,
   publishProcessNodeVersion,
 } from './process-node';
 
@@ -77,7 +77,7 @@ describe('getProcessNodes', () => {
         projectPath: '/team/default/process-nodes/app-1',
       },
     ]);
-    expect(fetchApi.get).toHaveBeenCalledWith('/api/v1/app/catalog?pageSize=100');
+    expect(fetchApi.get).toHaveBeenCalledWith('/app/catalog?pageSize=100');
     expect(invoke).toHaveBeenCalledWith('get_process_nodes');
   });
 
@@ -119,7 +119,7 @@ describe('getProcessNodes', () => {
     vi.mocked(fetchApi.post).mockResolvedValueOnce({ id: 'remote-app-1' });
 
     await expect(
-      publishProcessNode({
+      createTeamProcessNodeDraft({
         ...definition,
         publicationStatus: 'draft',
         remoteAppId: 'remote-app-1',
@@ -127,7 +127,7 @@ describe('getProcessNodes', () => {
       }),
     ).resolves.toEqual({ id: 'remote-app-1' });
 
-    expect(fetchApi.post).toHaveBeenCalledWith('/api/v1/app', {
+    expect(fetchApi.post).toHaveBeenCalledWith('/app', {
       name: definition.name,
       description: definition.description,
       version: definition.version,
@@ -159,16 +159,24 @@ describe('getProcessNodes', () => {
     vi.mocked(fetchApi.post).mockResolvedValueOnce({ id: 'version-1' });
     vi.mocked(remove).mockResolvedValueOnce(undefined);
 
-    await publishProcessNodeVersion('remote-app-1', 'app-1', '1.2.3');
+    await publishProcessNodeVersion(
+      'remote-app-1',
+      'app-1',
+      '1.2.3',
+      'Initial release',
+      definition,
+    );
 
     const uploadPath = vi.mocked(fetchApi.postForm).mock.calls[0]?.[0];
     const versionId = uploadPath?.split('/')[6];
     expect(uploadPath).toMatch(
-      /^\/api\/v1\/app\/remote-app-1\/versions\/[\w-]+\/resources\/source-archive$/,
+      /^\/app\/remote-app-1\/versions\/[\w-]+\/resources\/source-archive$/,
     );
-    expect(fetchApi.post).toHaveBeenCalledWith('/api/v1/app/remote-app-1/versions', {
+    expect(fetchApi.post).toHaveBeenCalledWith('/app/remote-app-1/versions', {
       id: versionId,
       version: '1.2.3',
+      releaseNote: 'Initial release',
+      definition: expect.objectContaining({ name: definition.name }),
     });
     expect(fetchApi.postForm.mock.invocationCallOrder[0]).toBeLessThan(
       fetchApi.post.mock.invocationCallOrder[0]!,
@@ -187,7 +195,13 @@ describe('getProcessNodes', () => {
     vi.mocked(remove).mockResolvedValueOnce(undefined);
 
     await expect(
-      publishProcessNodeVersion('remote-app-1', 'app-1', '1.2.3'),
+      publishProcessNodeVersion(
+        'remote-app-1',
+        'app-1',
+        '1.2.3',
+        'Initial release',
+        definition,
+      ),
     ).rejects.toThrow('upload failed');
 
     expect(fetchApi.post).not.toHaveBeenCalled();

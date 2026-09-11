@@ -120,6 +120,8 @@ pub struct RunRecordSummary {
     pub ended_at: Option<String>,
     pub duration_ms: Option<i64>,
     pub error: Option<String>,
+    pub release_id: Option<String>,
+    pub release_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

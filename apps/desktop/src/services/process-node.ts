@@ -177,7 +177,7 @@ async function getTeamAppCatalog() {
   let cursor: string | undefined;
   do {
     const page = await fetchApi.get<TeamAppList>(
-      `/api/v1/app/catalog?pageSize=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      `/app/catalog?pageSize=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
     );
     items.push(...page.items);
     cursor = page.nextCursor;
@@ -192,7 +192,7 @@ export function getProcessNode(id: string) {
 export async function getPublishedProcessNode(
   id: string,
 ): Promise<ProcessNode> {
-  const definition = await fetchApi.get<TeamApp>(`/api/v1/app/catalog/${id}`);
+  const definition = await fetchApi.get<TeamApp>(`/app/catalog/${id}`);
   return {
     definition: {
       ...definition,
@@ -221,7 +221,7 @@ export async function ensurePublishedProcessNode(
   }
 
   const { stream, headers } = await fetchApi.downloadStream(
-    `/api/v1/app/catalog/${encodeURIComponent(id)}/source-archive`,
+    `/app/catalog/${encodeURIComponent(id)}/source-archive`,
   );
   const sha256 = headers.get('x-workrun-sha256');
   if (!sha256)
@@ -310,9 +310,10 @@ function publishRequest(definition: ProcessNodeDefinition) {
   return request;
 }
 
-export function publishProcessNode(definition: ProcessNodeDefinition) {
+/** Creates the server-owned Draft that mirrors a newly initialized local App. */
+export function createTeamProcessNodeDraft(definition: ProcessNodeDefinition) {
   return fetchApi.post<{ id: string }>(
-    '/api/v1/app',
+    '/app',
     publishRequest(definition),
   );
 }
@@ -322,13 +323,13 @@ export function updatePublishedProcessNode(
   definition: ProcessNodeDefinition,
 ) {
   return fetchApi.patch<{ id: string }>(
-    `/api/v1/app/${remoteAppId}`,
+    `/app/${remoteAppId}`,
     publishRequest(definition),
   );
 }
 
 export function deletePublishedProcessNode(remoteAppId: string) {
-  return fetchApi.delete(`/api/v1/app/${remoteAppId}`);
+  return fetchApi.delete(`/app/${remoteAppId}`);
 }
 
 export function hasPublishedProcessNodeVersion(
@@ -336,7 +337,7 @@ export function hasPublishedProcessNodeVersion(
   version: string,
 ) {
   return fetchApi.get<{ exists: boolean }>(
-    `/api/v1/app/${remoteAppId}/versions/${encodeURIComponent(version)}`,
+    `/app/${remoteAppId}/versions/${encodeURIComponent(version)}`,
   );
 }
 
@@ -344,6 +345,8 @@ export async function publishProcessNodeVersion(
   remoteAppId: string,
   localAppId: string,
   version: string,
+  releaseNote: string,
+  definition: ProcessNodeDefinition,
 ) {
   const versionId = crypto.randomUUID();
   const archive = await getProcessNodeSourceArchive(localAppId);
@@ -360,16 +363,18 @@ export async function publishProcessNodeVersion(
       `${version}.tar.gz`,
     );
     await fetchApi.postForm(
-      `/api/v1/app/${remoteAppId}/versions/${versionId}/resources/source-archive`,
+      `/app/${remoteAppId}/versions/${versionId}/resources/source-archive`,
       form,
     );
   } finally {
     // The archive is only an upload staging file and must not accumulate in temp.
     await remove(archive.path).catch(() => undefined);
   }
-  await fetchApi.post<{ id: string }>(`/api/v1/app/${remoteAppId}/versions`, {
+  await fetchApi.post<{ id: string }>(`/app/${remoteAppId}/versions`, {
     id: versionId,
     version,
+    releaseNote,
+    definition: publishRequest(definition),
   });
 }
 

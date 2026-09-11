@@ -72,6 +72,8 @@ function useWorkflowRun(
   edges: Edge[],
   settings: WorkflowSettings,
   restoredRun?: { id: string; threadId: string },
+  releaseId?: string,
+  releaseVersion?: string,
 ) {
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
@@ -277,6 +279,8 @@ function useWorkflowRun(
         input,
         outputView: useWorkflowRunStore.getState().runView,
         targetSnapshot: toWorkflowDocument(nodes, edges, settings),
+        releaseId,
+        releaseVersion,
         dsl: toWorkflowDsl(workflowId, nodes, edges, settings),
         initialState: input,
         threadId,
