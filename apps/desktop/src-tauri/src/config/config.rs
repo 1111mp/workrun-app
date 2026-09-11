@@ -19,13 +19,10 @@ impl Config {
         static CONFIG: OnceCell<Config> = OnceCell::const_new();
         CONFIG
             .get_or_init(|| async {
-                let mut process_nodes = IProcessNodes::new().await;
-                let mut team_process_nodes = IProcessNodes::new_team_releases().await;
-                migrate_team_release_cache(&mut process_nodes, &mut team_process_nodes).await;
                 Self {
                     workflow_config: Draft::new(IWorkflows::new().await),
-                    process_node_config: Draft::new(process_nodes),
-                    team_process_node_config: Draft::new(team_process_nodes),
+                    process_node_config: Draft::new(IProcessNodes::new().await),
+                    team_process_node_config: Draft::new(IProcessNodes::new_team_releases().await),
                     mcp_server_config: Draft::new(IMcpServers::new().await),
                 }
             })
@@ -52,11 +49,10 @@ impl Config {
     pub async fn reload_workspace() {
         let config = Self::global().await;
         config.workflow_config.replace(IWorkflows::new().await);
-        let mut process_nodes = IProcessNodes::new().await;
-        let mut team_process_nodes = IProcessNodes::new_team_releases().await;
-        migrate_team_release_cache(&mut process_nodes, &mut team_process_nodes).await;
-        config.process_node_config.replace(process_nodes);
-        config.team_process_node_config.replace(team_process_nodes);
+        config.process_node_config.replace(IProcessNodes::new().await);
+        config
+            .team_process_node_config
+            .replace(IProcessNodes::new_team_releases().await);
         config.mcp_server_config.replace(IMcpServers::new().await);
     }
 
@@ -96,37 +92,4 @@ impl Config {
 
         logging!(info, Type::Config, "save all draft data finished");
     }
-}
-
-async fn migrate_team_release_cache(process_nodes: &mut IProcessNodes, team_process_nodes: &mut IProcessNodes) {
-    let legacy_nodes = process_nodes.team_release_nodes();
-    if legacy_nodes.is_empty() {
-        return;
-    }
-
-    let mut migrated_team_nodes = team_process_nodes.clone();
-    for node in legacy_nodes {
-        if !migrated_team_nodes.has_team_release(&node) {
-            migrated_team_nodes.add_process_node(node);
-        }
-    }
-    // Save the new registry before removing legacy entries so interrupted
-    // startup can always recover the downloaded release metadata.
-    if let Err(error) = migrated_team_nodes.save_team_releases_file().await {
-        logging!(error, Type::Config, "failed to migrate Team App releases: {error}");
-        return;
-    }
-
-    let mut migrated_process_nodes = process_nodes.clone();
-    migrated_process_nodes.remove_team_release_nodes();
-    if let Err(error) = migrated_process_nodes.save_file().await {
-        logging!(
-            error,
-            Type::Config,
-            "failed to remove migrated Team App releases: {error}"
-        );
-        return;
-    }
-    *process_nodes = migrated_process_nodes;
-    *team_process_nodes = migrated_team_nodes;
 }
