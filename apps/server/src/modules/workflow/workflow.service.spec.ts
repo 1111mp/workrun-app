@@ -18,11 +18,16 @@ describe('WorkflowService', () => {
     find: vi.fn(),
     exists: vi.fn(),
   };
+  const appService = { assertPublishedRelease: vi.fn() };
   let service: WorkflowService;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new WorkflowService(model as any, releaseModel as any);
+    service = new WorkflowService(
+      model as any,
+      releaseModel as any,
+      appService as any,
+    );
   });
 
   it('creates a workflow owned by the authenticated user', async () => {
@@ -149,6 +154,44 @@ describe('WorkflowService', () => {
       { _id: 'mongo-workflow-1' },
       { latestReleaseId: 'mongo-release-1', status: 'published' },
     );
+  });
+
+  it('rejects a Team App reference whose immutable archive no longer matches', async () => {
+    const document = {
+      nodes: [
+        {
+          id: 'process',
+          data: {
+            appRef: {
+              source: 'team',
+              remoteAppId: 'app-1',
+              releaseId: 'release-1',
+              archiveSha256: 'a'.repeat(64),
+            },
+          },
+        },
+      ],
+      edges: [],
+      settings: {},
+    };
+    model.findOne.mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'mongo-workflow-1',
+        id: 'workflow-1',
+        document,
+      }),
+    });
+    appService.assertPublishedRelease.mockRejectedValue(
+      new BadRequestException('archive changed'),
+    );
+
+    await expect(
+      service.publish(ownerId, 'workflow-1', {
+        version: '1.0.0',
+        releaseNote: 'Initial release',
+      }),
+    ).rejects.toThrow('archive changed');
+    expect(releaseModel.create).not.toHaveBeenCalled();
   });
 
   it('rejects a release whose edges reference missing nodes', async () => {

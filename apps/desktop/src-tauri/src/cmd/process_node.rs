@@ -25,6 +25,17 @@ pub async fn get_process_node(id: String) -> CmdResult<ProcessNode> {
 }
 
 #[tauri::command]
+pub async fn process_node_find_team_release(
+    remote_app_id: String,
+    release_id: String,
+    installation_scope: String,
+) -> CmdResult<Option<ProcessNode>> {
+    feat::process_node_find_team_release(&remote_app_id, &release_id, &installation_scope)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
 pub async fn process_node_open_project(id: String) -> CmdResult<()> {
     feat::process_node_open_project(&id).await.stringify_err()
 }

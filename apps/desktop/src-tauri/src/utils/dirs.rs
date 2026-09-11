@@ -64,6 +64,10 @@ impl WorkspacePaths {
         self.process_nodes_dir().join("catalog.json")
     }
 
+    pub fn team_process_node_catalog_path(&self) -> PathBuf {
+        self.process_nodes_dir().join("team-releases.json")
+    }
+
     pub fn mcp_server_dir(&self) -> PathBuf {
         self.root.join("mcp-servers")
     }
@@ -233,6 +237,11 @@ pub fn process_nodes_dir() -> Result<PathBuf> {
 /// Local catalog of Process Node definitions managed from Apps.
 pub fn process_node_catalog_path() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.process_node_catalog_path())
+}
+
+/// Local registry of Team App releases installed solely for workflow execution.
+pub fn team_process_node_catalog_path() -> Result<PathBuf> {
+    Ok(active_workspace_paths()?.team_process_node_catalog_path())
 }
 
 /// Root directory for locally managed MCP Servers.

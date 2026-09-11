@@ -24,6 +24,9 @@ fn definition() -> IProcessNode {
         outputs: BTreeMap::new(),
         publication_status: ProcessNodePublicationStatus::Published,
         remote_app_id: None,
+        remote_release_id: None,
+        remote_archive_sha256: None,
+        team_installation_scope: None,
     }
 }
 
@@ -120,6 +123,19 @@ fn project_path_is_nested_under_the_configured_root() {
     node.project_root = Some(root.clone());
 
     assert_eq!(ProcessNodeRegistry::project_path(&node).unwrap(), root.join(&node.id));
+}
+
+#[test]
+fn team_release_path_is_isolated_under_its_workflow_scope() {
+    let mut node = definition();
+    let root = std::env::temp_dir().join("workrun-apps");
+    node.project_root = Some(root.clone());
+    node.team_installation_scope = Some("release-workflow-1".into());
+
+    assert_eq!(
+        ProcessNodeRegistry::project_path(&node).unwrap(),
+        root.join("team").join("release-workflow-1").join(&node.id),
+    );
 }
 
 #[tokio::test]

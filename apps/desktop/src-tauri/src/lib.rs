@@ -111,6 +111,7 @@ pub fn run() {
             cmd::process_node::get_process_nodes,
             cmd::process_node::process_node_tool_list,
             cmd::process_node::get_process_node,
+            cmd::process_node::process_node_find_team_release,
             cmd::process_node::process_node_open_project,
             cmd::process_node::process_node_default_root,
             cmd::process_node::process_node_project_version,
@@ -142,6 +143,7 @@ pub fn run() {
             cmd::run_manager::process_node_run_start,
             cmd::run_manager::process_node_run_cancel,
             cmd::run_manager::run_replay,
+            cmd::run_manager::run_replay_missing_dependencies,
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,

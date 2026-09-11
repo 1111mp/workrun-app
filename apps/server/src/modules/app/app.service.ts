@@ -333,6 +333,94 @@ export class AppService {
     };
   }
 
+  /**
+   * Workflow releases pin an AppVersion ID, rather than the mutable catalog
+   * pointer. Keep this lookup separate so a later catalog update cannot alter
+   * a previously published workflow's dependency.
+   */
+  async findPublishedCatalogRelease(
+    _viewerId: string,
+    appId: string,
+    releaseId: string,
+  ) {
+    const [app, release] = await Promise.all([
+      this.appModel.findOne({ id: appId, isDelete: false }).lean(),
+      this.appVersionModel
+        .findOne({ id: releaseId, appId, status: 'published' })
+        .lean(),
+    ]);
+    if (!app || !release) {
+      throw new NotFoundException(
+        `Published App release ${appId}@${releaseId} was not found`,
+      );
+    }
+    const resource = await this.appResourceModel
+      .findOne({ appVersionId: release.id, kind: 'source_archive' })
+      .lean();
+    if (!resource) {
+      throw new NotFoundException(
+        `Published source for App release ${appId}@${releaseId} was not found`,
+      );
+    }
+    return {
+      ...release.definition,
+      id: appId,
+      createdAt: app.createdAt,
+      updatedAt: release.publishedAt,
+      publishedAt: release.publishedAt,
+      catalogVersionId: release.id,
+      ownerId: app.ownerId.toString(),
+      archiveSha256: resource.sha256,
+    };
+  }
+
+  async assertPublishedRelease(
+    appId: string,
+    releaseId: string,
+    archiveSha256: string,
+  ) {
+    const release = await this.findPublishedCatalogRelease(
+      '',
+      appId,
+      releaseId,
+    );
+    if (release.archiveSha256 !== archiveSha256) {
+      throw new BadRequestException(
+        `Published App release ${appId}@${releaseId} has a different source archive`,
+      );
+    }
+  }
+
+  async findPublishedCatalogReleases(_viewerId: string, appId: string) {
+    const app = await this.appModel
+      .findOne({ id: appId, isDelete: false })
+      .lean();
+    if (!app)
+      throw new NotFoundException(`Published App ${appId} was not found`);
+    const releases = await this.appVersionModel
+      .find({ appId, status: 'published' })
+      .sort({ publishedAt: -1, id: -1 })
+      .lean();
+    return Promise.all(
+      releases.map(async (release) => {
+        const resource = await this.appResourceModel
+          .findOne({ appVersionId: release.id, kind: 'source_archive' })
+          .lean();
+        // A release without its immutable source archive cannot be selected.
+        if (!resource) return null;
+        return {
+          id: release.id,
+          version: release.version,
+          releaseNote: release.releaseNote,
+          publishedAt: release.publishedAt,
+          archiveSha256: resource.sha256,
+        };
+      }),
+    ).then((items) =>
+      items.filter((item): item is NonNullable<typeof item> => Boolean(item)),
+    );
+  }
+
   async readPublishedSourceArchive(_viewerId: string, id: string) {
     const app = await this.appModel.findOne({ id, isDelete: false }).lean();
     if (!app) throw new NotFoundException(`Published App ${id} was not found`);
@@ -361,6 +449,31 @@ export class AppService {
       // Older AppResource records can contain a UUID-style fileId, while
       // GridFS requires a Mongo ObjectId. The published archive filename is
       // unique per version and remains a compatible lookup key for both.
+      stream: await this.staticFS.readByName(
+        APP_VERSION_RESOURCE_SCOPE,
+        resource.filename,
+      ),
+    };
+  }
+
+  async readPublishedReleaseSourceArchive(
+    viewerId: string,
+    appId: string,
+    releaseId: string,
+  ) {
+    // Resolve through the same release lookup as the JSON definition so the
+    // archive and its advertised checksum always identify one immutable unit.
+    await this.findPublishedCatalogRelease(viewerId, appId, releaseId);
+    const resource = await this.appResourceModel
+      .findOne({ appVersionId: releaseId, kind: 'source_archive' })
+      .lean();
+    if (!resource) {
+      throw new NotFoundException(
+        `Published source for App release ${appId}@${releaseId} was not found`,
+      );
+    }
+    return {
+      resource,
       stream: await this.staticFS.readByName(
         APP_VERSION_RESOURCE_SCOPE,
         resource.filename,

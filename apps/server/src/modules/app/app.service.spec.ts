@@ -26,10 +26,12 @@ describe('AppService', () => {
     create: vi.fn(),
     deleteOne: vi.fn(),
     exists: vi.fn(),
+    findOne: vi.fn(),
   };
   const staticFS = {
     remove: vi.fn(),
     write: vi.fn(),
+    readByName: vi.fn(),
   };
   let service: AppService;
 
@@ -314,6 +316,41 @@ describe('AppService', () => {
         version: '1.1.0',
       }),
     );
+  });
+
+  it('returns an exact published release with its immutable archive checksum', async () => {
+    const appLean = vi.fn().mockResolvedValue({
+      createdAt: new Date('2026-09-01T00:00:00.000Z'),
+      ownerId: new Types.ObjectId(ownerId),
+    });
+    const releaseLean = vi.fn().mockResolvedValue({
+      id: 'release-1',
+      definition: { name: 'Shared App', version: '1.0.0' },
+      publishedAt: new Date('2026-09-02T00:00:00.000Z'),
+    });
+    const resourceLean = vi.fn().mockResolvedValue({
+      sha256: 'a'.repeat(64),
+      filename: 'release-1.tar.gz',
+    });
+    model.findOne.mockReturnValue({ lean: appLean });
+    appVersionModel.findOne.mockReturnValue({ lean: releaseLean });
+    appResourceModel.findOne.mockReturnValue({ lean: resourceLean });
+
+    await expect(
+      service.findPublishedCatalogRelease(ownerId, 'app-1', 'release-1'),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        id: 'app-1',
+        catalogVersionId: 'release-1',
+        version: '1.0.0',
+        archiveSha256: 'a'.repeat(64),
+      }),
+    );
+    expect(appVersionModel.findOne).toHaveBeenCalledWith({
+      id: 'release-1',
+      appId: 'app-1',
+      status: 'published',
+    });
   });
 
   it('returns an app only when it belongs to the authenticated user', async () => {

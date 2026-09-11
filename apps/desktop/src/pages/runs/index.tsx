@@ -47,6 +47,11 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 
 import {
+  ensurePublishedProcessNode,
+  getPublishedProcessNodeRelease,
+} from '@/services/process-node';
+import {
+  getReplayMissingDependencies,
   listRunHistoryPage,
   replayRun,
   type RunHistoryCursor,
@@ -121,7 +126,39 @@ function RunsPage() {
     (run) => run.status === 'completed',
   ).length;
   const replay = useMutation({
-    mutationFn: replayRun,
+    mutationFn: async (sourceRunId: string) => {
+      const missing = await getReplayMissingDependencies(sourceRunId);
+      const toastId = `replay-dependencies-${sourceRunId}`;
+      try {
+        for (const dependency of missing) {
+          const release = await getPublishedProcessNodeRelease(
+            dependency.remoteAppId,
+            dependency.releaseId,
+          );
+          if (
+            release.definition.remoteArchiveSha256 !== dependency.archiveSha256
+          ) {
+            throw new Error(
+              `Team App ${dependency.remoteAppId} v${dependency.version} no longer matches this run`,
+            );
+          }
+          await ensurePublishedProcessNode(
+            release,
+            (progress) => {
+              toast.loading('Restoring Team App release', {
+                id: toastId,
+                toasterId: 'global',
+                description: `${dependency.remoteAppId} · v${dependency.version} — ${progress.stage}`,
+              });
+            },
+            dependency.installationScope,
+          );
+        }
+      } finally {
+        toast.dismiss(toastId);
+      }
+      return replayRun(sourceRunId);
+    },
     onSuccess: (run) => {
       void queryClient.invalidateQueries({ queryKey: ['run-history'] });
       openWorkspaceRun(run);

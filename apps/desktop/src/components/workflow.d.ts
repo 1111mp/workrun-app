@@ -148,6 +148,8 @@ type WorkflowProcessNodeData = WorkflowNodeStateConfig & {
   name: string;
   processNodeId: string;
   description: string;
+  /** Local Apps use a local ID; Team Apps pin an immutable server release. */
+  appRef?: import('@/services/process-node').ProcessAppRef;
 };
 type WorkflowProcessNode = WorkflowBaseNode & {
   type: 'process';

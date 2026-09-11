@@ -80,6 +80,8 @@ pub struct InstallProcessNodeArchiveRequest {
     pub definition: IProcessNode,
     pub archive_path: PathBuf,
     pub sha256: String,
+    pub release_id: String,
+    pub installation_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -128,6 +130,28 @@ pub async fn process_node_tool_list() -> Result<Vec<ToolDefinition>> {
 
 pub async fn process_node_inspect(id: &str) -> Result<ProcessNode> {
     Ok(ProcessNodeRegistry::with_installation(get_process_node(id).await?).await)
+}
+
+/// Team releases are immutable, so this lookup must include both identities.
+pub async fn process_node_find_team_release(
+    remote_app_id: &str,
+    release_id: &str,
+    installation_scope: &str,
+) -> Result<Option<ProcessNode>> {
+    let definition = Config::team_process_nodes()
+        .await
+        .data_arc()
+        .get_process_nodes()
+        .into_iter()
+        .find(|node| {
+            node.remote_app_id.as_deref() == Some(remote_app_id)
+                && node.remote_release_id.as_deref() == Some(release_id)
+                && node.team_installation_scope.as_deref() == Some(installation_scope)
+        });
+    Ok(match definition {
+        Some(definition) => Some(ProcessNodeRegistry::with_installation(definition).await),
+        None => None,
+    })
 }
 
 pub async fn process_node_open_project(id: &str) -> Result<()> {
@@ -200,13 +224,20 @@ pub async fn install_process_node_archive(
     progress: Channel<ProcessNodeInstallProgress>,
 ) -> Result<ProcessNode> {
     validate_process_node_definition(&request.definition)?;
+    if let Some(scope) = &request.installation_scope {
+        validate_team_installation_scope(scope)?;
+    }
     let remote_id = request.definition.id.clone();
-    let existing = Config::process_nodes()
-        .await
-        .data_arc()
-        .get_process_nodes()
-        .into_iter()
-        .find(|node| node.remote_app_id.as_deref() == Some(remote_id.as_str()));
+    let registry = if request.installation_scope.is_some() {
+        Config::team_process_nodes().await
+    } else {
+        Config::process_nodes().await
+    };
+    let existing = registry.data_arc().get_process_nodes().into_iter().find(|node| {
+        node.remote_app_id.as_deref() == Some(remote_id.as_str())
+            && node.remote_release_id.as_deref() == Some(request.release_id.as_str())
+            && node.team_installation_scope == request.installation_scope
+    });
 
     let mut definition = request.definition;
     definition.id = existing
@@ -214,6 +245,9 @@ pub async fn install_process_node_archive(
         .map(|node| node.id.clone())
         .unwrap_or_else(|| Uuid::now_v7().to_string());
     definition.remote_app_id = Some(remote_id);
+    definition.remote_release_id = Some(request.release_id);
+    definition.remote_archive_sha256 = Some(request.sha256.clone());
+    definition.team_installation_scope = request.installation_scope;
     definition.publication_status = ProcessNodePublicationStatus::Published;
     if let Some(existing) = &existing {
         // A catalog update must not silently move an App out of a user-chosen root.
@@ -274,12 +308,20 @@ pub async fn install_process_node_archive(
         return Err(error).with_context(|| format!("failed to activate Process Node {}", definition.id));
     }
 
-    let nodes = Config::process_nodes().await;
+    let nodes = if definition.team_installation_scope.is_some() {
+        Config::team_process_nodes().await
+    } else {
+        Config::process_nodes().await
+    };
     let _ = progress.send(ProcessNodeInstallProgress {
         stage: ProcessNodeInstallStage::SavingCatalog,
     });
     let saved = nodes
         .with_data_modify(|mut data| async move {
+            // A workflow release owns one local copy of each remote App. Once
+            // its replacement is committed, other releases in that scope can
+            // no longer be reached and are safe to remove from its cache.
+            let stale = stale_scoped_team_releases(&definition, data.get_process_nodes());
             if let Some(existing) = data.get_process_node(&definition.id) {
                 definition.created_at = existing.created_at;
                 if !data.replace_process_node(definition.clone()) {
@@ -288,13 +330,20 @@ pub async fn install_process_node_archive(
             } else {
                 data.add_process_node(definition.clone());
             }
+            for node in &stale {
+                data.remove_process_node(&node.id);
+            }
             validate_process_node_catalog(&data)?;
-            data.save_file().await?;
-            Ok((data, definition))
+            if definition.team_installation_scope.is_some() {
+                data.save_team_releases_file().await?;
+            } else {
+                data.save_file().await?;
+            }
+            Ok((data, (definition, stale)))
         })
         .await;
-    let definition = match saved {
-        Ok(definition) => definition,
+    let (definition, stale) = match saved {
+        Ok(result) => result,
         Err(error) => {
             let _ = tokio::fs::remove_dir_all(&project_path).await;
             if had_project {
@@ -305,6 +354,11 @@ pub async fn install_process_node_archive(
     };
     if had_project {
         let _ = tokio::fs::remove_dir_all(&backup_path).await;
+    }
+    for stale_definition in stale {
+        // Catalog removal already committed. A failed cleanup only leaves an
+        // orphaned cache directory; it must not undo the new release install.
+        let _ = ProcessNodeRegistry::delete_project(&stale_definition).await;
     }
     let node = ProcessNodeRegistry::with_installation(definition).await;
     let _ = progress.send(ProcessNodeInstallProgress {
@@ -353,6 +407,78 @@ fn verify_and_extract_source_archive(
             .with_context(|| format!("failed to extract {}", path.display()))?;
     }
     Ok(())
+}
+
+fn validate_team_installation_scope(scope: &str) -> Result<()> {
+    if scope.is_empty()
+        || !scope
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        bail!("Team App installation scope must use only letters, numbers, hyphens, and underscores");
+    }
+    Ok(())
+}
+
+fn stale_scoped_team_releases(replacement: &IProcessNode, installed: Vec<IProcessNode>) -> Vec<IProcessNode> {
+    let Some(scope) = replacement.team_installation_scope.as_ref() else {
+        return Vec::new();
+    };
+    installed
+        .into_iter()
+        .filter(|node| {
+            node.id != replacement.id
+                && node.remote_app_id == replacement.remote_app_id
+                && node.team_installation_scope.as_ref() == Some(scope)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod installation_scope_tests {
+    use super::stale_scoped_team_releases;
+    use crate::config::{IProcessNode, ProcessNodeKind, ProcessNodePublicationStatus, ToolExecutionPolicy};
+    use crate::module::tool_registry::ToolRiskLevel;
+    use std::collections::BTreeMap;
+
+    fn node(id: &str, remote_app_id: &str, release_id: &str, scope: &str) -> IProcessNode {
+        IProcessNode {
+            id: id.into(),
+            name: "App".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            entry: "main.py".into(),
+            project_root: None,
+            kind: ProcessNodeKind::Workflow,
+            tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
+            tool_risk_level: ToolRiskLevel::Low,
+            tool_permissions: Vec::new(),
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            publication_status: ProcessNodePublicationStatus::Published,
+            remote_app_id: Some(remote_app_id.into()),
+            remote_release_id: Some(release_id.into()),
+            remote_archive_sha256: Some("sha".into()),
+            team_installation_scope: Some(scope.into()),
+        }
+    }
+
+    #[test]
+    fn replacing_a_release_only_cleans_its_app_in_the_same_workflow_scope() {
+        let replacement = node("new", "app-a", "release-2", "release-workflow-a");
+        let stale = stale_scoped_team_releases(
+            &replacement,
+            vec![
+                node("old", "app-a", "release-1", "release-workflow-a"),
+                node("other-workflow", "app-a", "release-1", "release-workflow-b"),
+                node("other-app", "app-b", "release-1", "release-workflow-a"),
+            ],
+        );
+
+        assert_eq!(stale.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(), ["old"]);
+    }
 }
 
 fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive> {
@@ -447,6 +573,9 @@ pub async fn create_process_node(
             ProcessNodePublicationStatus::Published
         },
         remote_app_id: None,
+        remote_release_id: None,
+        remote_archive_sha256: None,
+        team_installation_scope: None,
     };
     validate_process_node_definition(&definition)?;
     ProcessNodeRegistry::initialize_project(&definition, progress.clone()).await?;
@@ -571,11 +700,14 @@ pub(crate) async fn run_process_node_for_tool(
 
 pub(crate) async fn get_process_node(id: &str) -> Result<IProcessNode> {
     validate_process_node_id(id)?;
-    Config::process_nodes()
+    if let Some(node) = Config::process_nodes().await.data_arc().get_process_node(id) {
+        return Ok(node);
+    }
+    Config::team_process_nodes()
         .await
         .data_arc()
         .get_process_node(id)
-        .ok_or_else(|| anyhow::anyhow!("Process Node is not in the catalog: {id}"))
+        .ok_or_else(|| anyhow::anyhow!("Process Node is not in the local registry: {id}"))
 }
 
 fn workflow_uses_process_node(document: &serde_json::Value, id: &str) -> bool {

@@ -1,11 +1,33 @@
 use super::events::{finish_run, publish_run_status, publish_value_event};
 use super::execution::workflow_resume_runtime;
 use super::*;
+use crate::{
+    config::Config,
+    module::process_node::{ProcessNodeInstallStatus, ProcessNodeRegistry},
+};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingReplayDependency {
+    pub remote_app_id: String,
+    pub release_id: String,
+    pub version: String,
+    pub archive_sha256: String,
+    pub installation_scope: String,
+}
 
 pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
     if request.run_id.trim().is_empty() || request.thread_id.trim().is_empty() {
         bail!("run id and thread id are required");
     }
+    // Persist the immutable Team App coordinates separately from the executable
+    // local IDs. Replay and cache cleanup must not infer these from a mutable catalog.
+    let release_or_draft = request
+        .release_id
+        .clone()
+        .unwrap_or_else(|| format!("draft-{}", request.target_id));
+    let installation_scope = format!("release-{release_or_draft}");
+    let dependencies = team_app_dependencies(&request.dsl, &installation_scope);
     let runtime = json!({
         "kind": "workflow",
         "dsl": request.dsl,
@@ -13,6 +35,7 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         "initialState": request.initial_state,
         "releaseId": request.release_id,
         "releaseVersion": request.release_version,
+        "dependencies": dependencies,
     });
     RunHistoryStore::create(CreateRunRecord {
         id: request.run_id.clone(),
@@ -32,6 +55,44 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
     Ok(())
 }
 
+fn team_app_dependencies(dsl: &Value, installation_scope: &str) -> Vec<Value> {
+    let mut dependencies = std::collections::BTreeMap::new();
+    let Some(nodes) = dsl.get("nodes").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    for node in nodes {
+        let Some(data) = node.get("data").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(app_ref) = data.get("appRef").and_then(Value::as_object) else {
+            continue;
+        };
+        let (Some(remote_app_id), Some(release_id), Some(version), Some(archive_sha256)) = (
+            app_ref.get("remoteAppId").and_then(Value::as_str),
+            app_ref.get("releaseId").and_then(Value::as_str),
+            app_ref.get("version").and_then(Value::as_str),
+            app_ref.get("archiveSha256").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if app_ref.get("source").and_then(Value::as_str) != Some("team") {
+            continue;
+        }
+        dependencies.insert(
+            format!("{remote_app_id}:{release_id}:{archive_sha256}"),
+            json!({
+                "remoteAppId": remote_app_id,
+                "releaseId": release_id,
+                "version": version,
+                "archiveSha256": archive_sha256,
+                "installationScope": installation_scope,
+                "localAppId": data.get("processNodeId").cloned(),
+            }),
+        );
+    }
+    dependencies.into_values().collect()
+}
+
 /// Creates a fresh queued execution from an immutable terminal history entry.
 /// It intentionally does not try to revive a process or workflow checkpoint
 /// that disappeared with the previous native process.
@@ -44,6 +105,7 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
     ) {
         bail!("only a finished run can be replayed");
     }
+    ensure_replay_dependencies_installed(&source.runtime).await?;
     let run_id = uuid::Uuid::new_v4().to_string();
     let output_view = replay_output_view(target_type);
     RunHistoryStore::create(CreateRunRecord {
@@ -62,6 +124,75 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
     publish_run_status(&run_id, RunStatus::Queued)?;
     RunManager::global().supervisor.notify();
     Ok(RunHistoryStore::inspect(&run_id).await?.summary)
+}
+
+async fn ensure_replay_dependencies_installed(runtime: &Value) -> Result<()> {
+    let missing = missing_replay_dependencies(runtime).await?;
+    if !missing.is_empty() {
+        bail!(
+            "Cannot replay because these Team App releases are not installed: {}",
+            missing
+                .iter()
+                .map(|dependency| format!("{} v{}", dependency.remote_app_id, dependency.version))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(())
+}
+
+pub async fn replay_missing_dependencies(source_run_id: &str) -> Result<Vec<MissingReplayDependency>> {
+    let source = RunHistoryStore::inspect(source_run_id).await?;
+    missing_replay_dependencies(&source.runtime).await
+}
+
+async fn missing_replay_dependencies(runtime: &Value) -> Result<Vec<MissingReplayDependency>> {
+    let Some(dependencies) = runtime.get("dependencies").and_then(Value::as_array) else {
+        // Runs created before immutable Team App references were introduced
+        // retain their legacy replay behavior.
+        return Ok(Vec::new());
+    };
+    let installed = Config::team_process_nodes().await.data_arc().get_process_nodes();
+    let mut missing = Vec::new();
+    for dependency in dependencies {
+        let (Some(remote_app_id), Some(release_id), Some(archive_sha256), Some(installation_scope)) = (
+            dependency.get("remoteAppId").and_then(Value::as_str),
+            dependency.get("releaseId").and_then(Value::as_str),
+            dependency.get("archiveSha256").and_then(Value::as_str),
+            dependency.get("installationScope").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let available = installed.iter().find(|node| {
+            node.remote_app_id.as_deref() == Some(remote_app_id)
+                && node.remote_release_id.as_deref() == Some(release_id)
+                && node.remote_archive_sha256.as_deref() == Some(archive_sha256)
+                && node.team_installation_scope.as_deref() == Some(installation_scope)
+        });
+        let is_ready = match available {
+            Some(node) => matches!(
+                ProcessNodeRegistry::with_installation(node.clone())
+                    .await
+                    .install_status,
+                ProcessNodeInstallStatus::Installed
+            ),
+            None => false,
+        };
+        if !is_ready {
+            missing.push(MissingReplayDependency {
+                remote_app_id: remote_app_id.to_string(),
+                release_id: release_id.to_string(),
+                version: dependency
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .unwrap_or(release_id)
+                    .to_string(),
+                archive_sha256: archive_sha256.to_string(),
+                installation_scope: installation_scope.to_string(),
+            });
+        }
+    }
+    Ok(missing)
 }
 
 fn replay_output_view(target_type: RunTargetType) -> Value {
@@ -103,7 +234,7 @@ fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod replay_tests {
-    use super::{replay_output_view, replay_runtime};
+    use super::{replay_output_view, replay_runtime, team_app_dependencies};
     use serde_json::json;
 
     #[test]
@@ -142,6 +273,38 @@ mod replay_tests {
         assert_eq!(view["thoughts"], json!([]));
         assert_eq!(view["processLogs"], json!([]));
         assert_eq!(view["execution"], json!([]));
+    }
+
+    #[test]
+    fn runtime_dependencies_preserve_team_release_and_local_execution_id() {
+        let dependencies = team_app_dependencies(
+            &json!({
+                "nodes": [{
+                    "data": {
+                        "processNodeId": "local-app-1",
+                        "appRef": {
+                            "source": "team",
+                            "remoteAppId": "remote-app-1",
+                            "releaseId": "release-1",
+                            "version": "1.2.3",
+                            "archiveSha256": "abc"
+                        }
+                    }
+                }]
+            }),
+            "release-release-1",
+        );
+        assert_eq!(
+            dependencies,
+            vec![json!({
+                "remoteAppId": "remote-app-1",
+                "releaseId": "release-1",
+                "version": "1.2.3",
+                "archiveSha256": "abc",
+                "installationScope": "release-release-1",
+                "localAppId": "local-app-1",
+            })]
+        );
     }
 }
 

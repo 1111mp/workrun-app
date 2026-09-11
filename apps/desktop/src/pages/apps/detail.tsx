@@ -60,6 +60,7 @@ import {
   PlusIcon,
   SaveIcon,
   Trash2Icon,
+  UploadIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -809,15 +810,23 @@ function ProcessNodeDetailEditor({
             }
           }}
         >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {t('apps.detail.publishTitle')}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {t('apps.detail.publishDescription')}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
+          <AlertDialogContent className='max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg! gap-0 overflow-y-auto p-0'>
+            <div className='via-background relative overflow-hidden border-b bg-linear-to-br from-violet-500/12 to-sky-500/10 px-5 pt-5 pb-4 sm:px-6 sm:pt-6'>
+              <div className='absolute -top-12 -right-10 size-36 rounded-full bg-violet-500/10 blur-2xl' />
+              <AlertDialogHeader className='relative grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-3 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
+                <AlertDialogMedia className='mb-0 size-10 rounded-xl border border-violet-500/20 bg-violet-500/10 text-violet-700 shadow-sm dark:text-violet-300'>
+                  <UploadIcon className='size-5' />
+                </AlertDialogMedia>
+                <div className='min-w-0 space-y-1.5'>
+                  <AlertDialogTitle className='text-lg font-semibold tracking-tight'>
+                    {t('apps.detail.publishTitle')}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription className='max-w-md text-sm leading-5'>
+                    {t('apps.detail.publishDescription')}
+                  </AlertDialogDescription>
+                </div>
+              </AlertDialogHeader>
+            </div>
             <AppPublishForm
               defaultVersion={projectVersion.data ?? draft.version}
               isLoadingDefaultVersion={projectVersion.isFetching}

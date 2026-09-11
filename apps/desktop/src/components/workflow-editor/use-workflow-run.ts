@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
+import { prepareWorkflowProcessApps } from '@/services/process-node';
 import { resolvePendingAction } from '@/services/run-history';
 import {
   resolveAskUserQuestion,
@@ -31,6 +32,33 @@ type SubworkflowContext = {
   threadId: string;
   path: string[];
 };
+
+function preparationDescription({
+  appName,
+  version,
+  progress,
+}: import('@/services/process-node').WorkflowProcessNodePreparationProgress) {
+  const stage = progress.stage;
+  if (stage === 'downloading') {
+    const percent = progress.totalBytes
+      ? Math.min(
+          100,
+          Math.round((progress.downloadedBytes / progress.totalBytes) * 100),
+        )
+      : undefined;
+    return `${appName} · v${version} — ${percent === undefined ? 'Downloading' : `Downloading ${percent}%`}`;
+  }
+  const labels: Record<Exclude<typeof stage, 'downloading'>, string> = {
+    checkingVersion: 'Checking release',
+    verifying: 'Verifying archive',
+    extracting: 'Installing files',
+    syncingDependencies: 'Syncing dependencies',
+    activating: 'Activating release',
+    savingCatalog: 'Saving local App',
+    completed: 'Ready',
+  };
+  return `${appName} · v${version} — ${labels[stage]}`;
+}
 
 function getSubworkflowContext(value: unknown): SubworkflowContext | undefined {
   if (!value || typeof value !== 'object') return undefined;
@@ -74,6 +102,7 @@ function useWorkflowRun(
   restoredRun?: { id: string; threadId: string },
   releaseId?: string,
   releaseVersion?: string,
+  ensureWorkflowId?: () => Promise<string>,
 ) {
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
@@ -252,6 +281,20 @@ function useWorkflowRun(
       });
       return;
     }
+    let executionWorkflowId = workflowId;
+    if (ensureWorkflowId) {
+      try {
+        // A Team App workspace must belong to a persisted workflow, so the
+        // first run creates that workflow before downloading its App files.
+        executionWorkflowId = await ensureWorkflowId();
+      } catch (error) {
+        toast.error('Workflow could not start', {
+          toasterId: 'global',
+          description: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+    }
     if (pendingFrame.current !== undefined) {
       cancelAnimationFrame(pendingFrame.current);
       pendingFrame.current = undefined;
@@ -269,23 +312,39 @@ function useWorkflowRun(
     const id = crypto.randomUUID();
     runId.current = id;
     store.startWorkflowRun(input, settings.mode, chatTurnId.current);
+    const preparationToastId = `workflow-preparation-${id}`;
+    let isPreparingTeamApp = false;
     try {
       unlistenRunEvents.current?.();
       unlistenRunEvents.current = await subscribeWorkflowRun(id, handleEvent);
+      const dsl = await prepareWorkflowProcessApps(
+        toWorkflowDsl(executionWorkflowId, nodes, edges, settings),
+        `release-${releaseId ?? `draft-${executionWorkflowId}`}`,
+        (progress) => {
+          isPreparingTeamApp = true;
+          toast.loading('Preparing Team Apps', {
+            id: preparationToastId,
+            toasterId: 'global',
+            description: preparationDescription(progress),
+          });
+        },
+      );
+      if (isPreparingTeamApp) toast.dismiss(preparationToastId);
       await startBackgroundWorkflowRun({
         runId: id,
-        targetId: workflowId,
+        targetId: executionWorkflowId,
         targetName: settings.name,
         input,
         outputView: useWorkflowRunStore.getState().runView,
         targetSnapshot: toWorkflowDocument(nodes, edges, settings),
         releaseId,
         releaseVersion,
-        dsl: toWorkflowDsl(workflowId, nodes, edges, settings),
+        dsl,
         initialState: input,
         threadId,
       });
     } catch (error) {
+      if (isPreparingTeamApp) toast.dismiss(preparationToastId);
       unlistenRunEvents.current?.();
       unlistenRunEvents.current = undefined;
       store.projectFailedRun(

@@ -19,6 +19,21 @@ export type ToolExecutionPolicy = 'ask_every_time' | 'auto';
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
 export type ProcessNodePublicationStatus = 'draft' | 'published';
 
+export type ProcessAppRef =
+  | {
+      source: 'local';
+      localAppId: string;
+      version?: string;
+      sourceHash?: string;
+    }
+  | {
+      source: 'team';
+      remoteAppId: string;
+      releaseId: string;
+      version: string;
+      archiveSha256: string;
+    };
+
 export type ProcessNodeDefinition = {
   id: string;
   name: string;
@@ -36,6 +51,9 @@ export type ProcessNodeDefinition = {
   outputs: Record<string, unknown>;
   publicationStatus?: ProcessNodePublicationStatus;
   remoteAppId?: string;
+  remoteReleaseId?: string;
+  remoteArchiveSha256?: string;
+  teamInstallationScope?: string;
   ownerId?: string;
 };
 
@@ -56,11 +74,20 @@ type ProcessNodeSourceArchive = {
 type TeamApp = ProcessNodeDefinition & {
   catalogVersionId: string;
   publishedAt: string;
+  archiveSha256?: string;
 };
 
 type TeamAppList = {
   items: TeamApp[];
   nextCursor?: string;
+};
+
+export type ProcessNodeRelease = {
+  id: string;
+  version: string;
+  releaseNote: string;
+  publishedAt: string;
+  archiveSha256: string;
 };
 
 export type ProcessNodeWorkflowReference = {
@@ -104,6 +131,12 @@ export type ProcessNodePreparationProgress =
         | 'completed';
     };
 
+export type WorkflowProcessNodePreparationProgress = {
+  appName: string;
+  version: string;
+  progress: ProcessNodePreparationProgress;
+};
+
 export type ProcessNodeRunResult = {
   sync: DependencySyncResult;
   execution: {
@@ -138,6 +171,8 @@ export async function getProcessNodes() {
         {
           definition: {
             ...definition,
+            remoteAppId: definition.id,
+            remoteReleaseId: definition.catalogVersionId,
             inputs: definition.inputs ?? {},
             outputs: definition.outputs ?? {},
           },
@@ -196,6 +231,8 @@ export async function getPublishedProcessNode(
   return {
     definition: {
       ...definition,
+      remoteAppId: id,
+      remoteReleaseId: definition.catalogVersionId,
       inputs: definition.inputs ?? {},
       outputs: definition.outputs ?? {},
     },
@@ -205,14 +242,52 @@ export async function getPublishedProcessNode(
   };
 }
 
+export async function getPublishedProcessNodeRelease(
+  id: string,
+  releaseId: string,
+): Promise<ProcessNode> {
+  const definition = await fetchApi.get<TeamApp>(
+    `/app/catalog/${encodeURIComponent(id)}/releases/${encodeURIComponent(releaseId)}`,
+  );
+  return {
+    definition: {
+      ...definition,
+      remoteAppId: id,
+      remoteReleaseId: releaseId,
+      remoteArchiveSha256: definition.archiveSha256,
+      inputs: definition.inputs ?? {},
+      outputs: definition.outputs ?? {},
+    },
+    projectPath: '',
+    installStatus: 'notInstalled',
+    availableVersion: definition.version,
+  };
+}
+
+export function listPublishedProcessNodeReleases(id: string) {
+  return fetchApi.get<ProcessNodeRelease[]>(
+    `/app/catalog/${encodeURIComponent(id)}/releases`,
+  );
+}
+
 /** Download with the authenticated webview session, then let native code verify and unpack it. */
 export async function ensurePublishedProcessNode(
   node: ProcessNode,
   onProgress?: (progress: ProcessNodePreparationProgress) => void,
+  installationScope?: string,
 ): Promise<ProcessNode> {
   onProgress?.({ stage: 'checkingVersion' });
   const id = node.definition.remoteAppId ?? node.definition.id;
-  const remote = await getPublishedProcessNode(id);
+  const catalog = await getPublishedProcessNode(id);
+  const releaseId =
+    node.definition.remoteReleaseId ??
+    (
+      catalog.definition as ProcessNodeDefinition & {
+        catalogVersionId?: string;
+      }
+    ).catalogVersionId;
+  if (!releaseId) throw new Error('Published App is missing its release ID');
+  const remote = await getPublishedProcessNodeRelease(id, releaseId);
   if (
     node.installStatus === 'installed' &&
     node.definition.version === remote.definition.version
@@ -221,7 +296,7 @@ export async function ensurePublishedProcessNode(
   }
 
   const { stream, headers } = await fetchApi.downloadStream(
-    `/app/catalog/${encodeURIComponent(id)}/source-archive`,
+    `/app/catalog/${encodeURIComponent(id)}/releases/${encodeURIComponent(releaseId)}/source-archive`,
   );
   const sha256 = headers.get('x-workrun-sha256');
   if (!sha256)
@@ -250,13 +325,65 @@ export async function ensurePublishedProcessNode(
     const progress = new Channel<ProcessNodePreparationProgress>();
     if (onProgress) progress.onmessage = onProgress;
     return await invoke<ProcessNode>('process_node_install_archive', {
-      request: { definition: remote.definition, archivePath, sha256 },
+      request: {
+        definition: remote.definition,
+        archivePath,
+        sha256,
+        releaseId,
+        installationScope,
+      },
       progress,
     });
   } finally {
     // Native code has consumed the archive before this Promise settles.
     await remove(archivePath).catch(() => undefined);
   }
+}
+
+/** Resolve immutable Team App references to local IDs before native execution. */
+export async function prepareWorkflowProcessApps<T>(
+  dsl: T,
+  installationScope: string,
+  onProgress?: (progress: WorkflowProcessNodePreparationProgress) => void,
+): Promise<T> {
+  if (!isTeamMode() || !dsl || typeof dsl !== 'object') return dsl;
+  const cloned = structuredClone(dsl) as {
+    nodes?: Array<{ type?: string; data?: Record<string, unknown> }>;
+  };
+  for (const node of cloned.nodes ?? []) {
+    const ref = node.data?.appRef as ProcessAppRef | undefined;
+    if (node.type !== 'process' || ref?.source !== 'team') continue;
+    const appName =
+      typeof node.data?.name === 'string' && node.data.name.trim()
+        ? node.data.name
+        : ref.remoteAppId;
+    const report = (progress: ProcessNodePreparationProgress) =>
+      onProgress?.({ appName, version: ref.version, progress });
+    const installed = await invoke<ProcessNode | null>(
+      'process_node_find_team_release',
+      {
+        remoteAppId: ref.remoteAppId,
+        releaseId: ref.releaseId,
+        installationScope,
+      },
+    );
+    const local =
+      installed?.installStatus === 'installed' &&
+      installed.definition.remoteArchiveSha256 === ref.archiveSha256
+        ? installed
+        : await ensurePublishedProcessNode(
+            await getPublishedProcessNodeRelease(
+              ref.remoteAppId,
+              ref.releaseId,
+            ),
+            report,
+            installationScope,
+          );
+    if (!node.data) node.data = {};
+    // Rust executes local IDs only; retain appRef in the snapshot for audit.
+    node.data.processNodeId = local.definition.id;
+  }
+  return cloned as T;
 }
 
 export function getProcessNodeProjectVersion(id: string) {
@@ -304,6 +431,8 @@ function publishRequest(definition: ProcessNodeDefinition) {
     projectRoot: _projectRoot,
     publicationStatus: _publicationStatus,
     remoteAppId: _remoteAppId,
+    remoteReleaseId: _remoteReleaseId,
+    remoteArchiveSha256: _remoteArchiveSha256,
     ownerId: _ownerId,
     ...request
   } = definition;
@@ -312,10 +441,7 @@ function publishRequest(definition: ProcessNodeDefinition) {
 
 /** Creates the server-owned Draft that mirrors a newly initialized local App. */
 export function createTeamProcessNodeDraft(definition: ProcessNodeDefinition) {
-  return fetchApi.post<{ id: string }>(
-    '/app',
-    publishRequest(definition),
-  );
+  return fetchApi.post<{ id: string }>('/app', publishRequest(definition));
 }
 
 export function updatePublishedProcessNode(

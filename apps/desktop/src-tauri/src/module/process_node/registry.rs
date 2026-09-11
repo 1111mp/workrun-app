@@ -13,6 +13,13 @@ impl ProcessNodeRegistry {
     }
 
     pub fn project_path(definition: &IProcessNode) -> Result<PathBuf> {
+        if let Some(scope) = &definition.team_installation_scope {
+            let root = match &definition.project_root {
+                Some(root) => root.clone(),
+                None => Self::root_dir()?,
+            };
+            return Ok(root.join("team").join(scope).join(&definition.id));
+        }
         match &definition.project_root {
             Some(root) => Ok(root.join(&definition.id)),
             None => Ok(Self::root_dir()?.join(&definition.id)),

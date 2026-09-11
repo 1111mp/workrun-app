@@ -9,6 +9,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 
+import { AppService } from '../app/app.service';
 import { BetterAuthUser } from '../user/schemas/better-auth-user.schema';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { ListWorkflowOverviewDto } from './dto/list-workflow-overview.dto';
@@ -27,6 +28,7 @@ export class WorkflowService {
     private readonly workflowModel: Model<WorkflowDocument>,
     @InjectModel(WorkflowRelease.name)
     private readonly workflowReleaseModel: Model<WorkflowReleaseDocument>,
+    private readonly appService: AppService,
   ) {}
 
   create(ownerId: string, dto: CreateWorkflowDto) {
@@ -80,6 +82,7 @@ export class WorkflowService {
     const workflow = await this.getOwnedWorkflow(ownerId, id);
     const version = dto.version.trim();
     this.validatePublishableDocument(workflow.document);
+    await this.validateTeamAppReferences(workflow.document);
 
     try {
       const release = await this.workflowReleaseModel.create({
@@ -344,5 +347,57 @@ export class WorkflowService {
         );
       }
     }
+  }
+
+  private async validateTeamAppReferences(document: { nodes: unknown[] }) {
+    const references = new Map<
+      string,
+      {
+        appId: string;
+        releaseId: string;
+        archiveSha256: string;
+      }
+    >();
+    for (const node of document.nodes) {
+      if (!node || typeof node !== 'object') continue;
+      const data = 'data' in node ? node.data : undefined;
+      if (!data || typeof data !== 'object') continue;
+      const appRef = 'appRef' in data ? data.appRef : undefined;
+      if (!appRef || typeof appRef !== 'object' || !('source' in appRef)) {
+        // Legacy local processNodeId references remain publishable.
+        continue;
+      }
+      if (appRef.source !== 'team') continue;
+      const { remoteAppId, releaseId, archiveSha256 } = appRef as Record<
+        string,
+        unknown
+      >;
+      if (
+        typeof remoteAppId !== 'string' ||
+        typeof releaseId !== 'string' ||
+        typeof archiveSha256 !== 'string' ||
+        !remoteAppId ||
+        !releaseId ||
+        !archiveSha256
+      ) {
+        throw new BadRequestException(
+          'Team App references must pin an App release and source archive',
+        );
+      }
+      references.set(`${remoteAppId}:${releaseId}:${archiveSha256}`, {
+        appId: remoteAppId,
+        releaseId,
+        archiveSha256,
+      });
+    }
+    await Promise.all(
+      [...references.values()].map((reference) =>
+        this.appService.assertPublishedRelease(
+          reference.appId,
+          reference.releaseId,
+          reference.archiveSha256,
+        ),
+      ),
+    );
   }
 }

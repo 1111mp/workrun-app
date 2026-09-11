@@ -42,7 +42,14 @@ import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { getProcessNodes } from '@/services/process-node';
+import { isTeamMode } from '@/lib/constant';
+import {
+  getProcessNodes,
+  getPublishedProcessNode,
+  getPublishedProcessNodeRelease,
+  listPublishedProcessNodeReleases,
+  type ProcessAppRef,
+} from '@/services/process-node';
 import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
 import { getWorkflows } from '@/services/workflow';
@@ -653,6 +660,22 @@ function WorkflowNodeInspector({
     queryFn: getProcessNodes,
     enabled: node?.type === 'process',
   });
+  const selectedProcessAppRef = data.appRef as ProcessAppRef | undefined;
+  const processNodeReleases = useQuery({
+    queryKey: [
+      'processNodeReleases',
+      selectedProcessAppRef?.source === 'team'
+        ? selectedProcessAppRef.remoteAppId
+        : undefined,
+    ],
+    queryFn: () =>
+      listPublishedProcessNodeReleases(
+        (selectedProcessAppRef as Extract<ProcessAppRef, { source: 'team' }>)
+          .remoteAppId,
+      ),
+    enabled:
+      node?.type === 'process' && selectedProcessAppRef?.source === 'team',
+  });
   const tools = useQuery({
     queryKey: ['tools'],
     queryFn: listTools,
@@ -1012,10 +1035,14 @@ function WorkflowNodeInspector({
         );
       case 'process': {
         const selectedId = getText(data, 'processNodeId');
+        const appRef = selectedProcessAppRef;
         const selectedApp = processNodes.data?.find(
           (processNode) =>
             processNode.definition.kind === 'workflow' &&
-            processNode.definition.id === selectedId,
+            (processNode.definition.id === selectedId ||
+              (appRef?.source === 'team' &&
+                (processNode.definition.remoteAppId ??
+                  processNode.definition.id) === appRef.remoteAppId)),
         );
         return (
           <FieldGroup className='gap-7'>
@@ -1034,7 +1061,9 @@ function WorkflowNodeInspector({
             <InspectorSection
               title={t('workflowEditor.inspector.appConnection')}
               description={t(
-                'workflowEditor.inspector.appConnectionDescription',
+                isTeamMode()
+                  ? 'workflowEditor.inspector.teamAppConnectionDescription'
+                  : 'workflowEditor.inspector.appConnectionDescription',
               )}
             >
               <Field>
@@ -1042,24 +1071,58 @@ function WorkflowNodeInspector({
                   {t('workflowEditor.inspector.app')}
                 </Label>
                 <FieldDescription>
-                  The selected local app receives this node’s authorized State
-                  view as JSON on stdin and returns its result with{' '}
-                  <code>process.result()</code>.
+                  {t(
+                    isTeamMode()
+                      ? 'workflowEditor.inspector.teamAppExecutionDescription'
+                      : 'workflowEditor.inspector.appExecutionDescription',
+                  )}
                 </FieldDescription>
                 <Select
                   value={selectedId}
-                  onValueChange={(processNodeId) => {
+                  onValueChange={async (processNodeId) => {
                     const app = processNodes.data?.find(
                       (processNode) =>
                         processNode.definition.kind === 'workflow' &&
                         processNode.definition.id === processNodeId,
                     );
+                    if (isTeamMode() && app) {
+                      const remoteAppId =
+                        app.definition.remoteAppId ?? app.definition.id;
+                      const catalog =
+                        await getPublishedProcessNode(remoteAppId);
+                      const releaseId = catalog.definition.remoteReleaseId;
+                      if (!releaseId)
+                        throw new Error(
+                          'Published App is missing its release ID',
+                        );
+                      const release = await getPublishedProcessNodeRelease(
+                        remoteAppId,
+                        releaseId,
+                      );
+                      updateData({
+                        processNodeId: app.definition.id,
+                        appRef: {
+                          source: 'team',
+                          remoteAppId,
+                          releaseId,
+                          version: release.definition.version,
+                          archiveSha256:
+                            release.definition.remoteArchiveSha256 ?? '',
+                        } satisfies ProcessAppRef,
+                        description: app.definition.description,
+                      });
+                      return;
+                    }
                     updateData({
                       processNodeId,
-                      ...(app && {
-                        // name: app.definition.name,
-                        description: app.definition.description,
-                      }),
+                      appRef: app
+                        ? ({
+                            source: 'local',
+                            localAppId: app.definition.id,
+                            version: app.definition.version,
+                          } satisfies ProcessAppRef)
+                        : undefined,
+                      ...(app && { description: app.definition.description }),
                     });
                   }}
                 >
@@ -1068,15 +1131,20 @@ function WorkflowNodeInspector({
                       {selectedApp?.definition.name ??
                         (processNodes.isLoading
                           ? t('workflowEditor.inspector.loadingApps')
-                          : t('workflowEditor.inspector.selectInstalledApp'))}
+                          : t(
+                              isTeamMode()
+                                ? 'workflowEditor.inspector.selectTeamApp'
+                                : 'workflowEditor.inspector.selectInstalledApp',
+                            ))}
                     </span>
                   </SelectTrigger>
                   <SelectContent>
                     {processNodes.data
                       ?.filter(
                         (processNode) =>
-                          processNode.installStatus === 'installed' &&
-                          processNode.definition.kind === 'workflow',
+                          processNode.definition.kind === 'workflow' &&
+                          (isTeamMode() ||
+                            processNode.installStatus === 'installed'),
                       )
                       .map((processNode) => (
                         <SelectItem
@@ -1090,10 +1158,56 @@ function WorkflowNodeInspector({
                 </Select>
                 {selectedId && !selectedApp ? (
                   <FieldDescription className='text-destructive'>
-                    {t('workflowEditor.inspector.selectedAppUnavailable')}
+                    {t(
+                      isTeamMode()
+                        ? 'workflowEditor.inspector.selectedTeamAppUnavailable'
+                        : 'workflowEditor.inspector.selectedAppUnavailable',
+                    )}
                   </FieldDescription>
                 ) : null}
               </Field>
+              {appRef?.source === 'team' ? (
+                <Field>
+                  <Label htmlFor='process-node-version'>Version</Label>
+                  <FieldDescription>
+                    This workflow is locked to the selected release until you
+                    explicitly choose another version.
+                  </FieldDescription>
+                  <Select
+                    value={appRef.releaseId}
+                    onValueChange={async (releaseId) => {
+                      const release = processNodeReleases.data?.find(
+                        (item) => item.id === releaseId,
+                      );
+                      if (!release) return;
+                      // Keep the server-provided hash with the reference so a
+                      // cached local project cannot satisfy a different archive.
+                      updateData({
+                        appRef: {
+                          ...appRef,
+                          releaseId: release.id,
+                          version: release.version,
+                          archiveSha256: release.archiveSha256,
+                        } satisfies ProcessAppRef,
+                      });
+                    }}
+                  >
+                    <SelectTrigger id='process-node-version' className='w-full'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {processNodeReleases.data?.map((release) => (
+                        <SelectItem key={release.id} value={release.id}>
+                          v{release.version}
+                          {release.releaseNote
+                            ? ` — ${release.releaseNote}`
+                            : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              ) : null}
               <TextareaField
                 id='process-description'
                 label={t('workflowEditor.inspector.description')}

@@ -5,6 +5,7 @@ import {
   Button,
   Field,
   FieldError,
+  FieldGroup,
   FieldLabel,
   Input,
   Spinner,
@@ -52,13 +53,19 @@ export function AppPublishForm({
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
-    defaultValues: { version: defaultVersion, releaseNote: '' },
+    defaultValues: {
+      version: defaultVersion,
+      releaseNote: t('apps.detail.releaseNoteDefault'),
+    },
   });
 
   useEffect(() => {
     // The version arrives after opening the dialog, so update the form default.
-    form.reset({ version: defaultVersion, releaseNote: '' });
-  }, [defaultVersion, form]);
+    form.reset({
+      version: defaultVersion,
+      releaseNote: t('apps.detail.releaseNoteDefault'),
+    });
+  }, [defaultVersion, form, t]);
 
   const onSubmitHandler = async ({
     version,
@@ -75,59 +82,61 @@ export function AppPublishForm({
 
   return (
     <form onSubmit={form.handleSubmit(onSubmitHandler)}>
-      <Controller
-        name='version'
-        control={form.control}
-        render={({ field, fieldState }) => (
-          <Field data-invalid={fieldState.invalid}>
-            <FieldLabel htmlFor='process-node-publish-version'>
-              {t('apps.detail.version')}
-            </FieldLabel>
-            <Input
-              {...field}
-              id='process-node-publish-version'
-              disabled={isLoadingDefaultVersion || isSubmitting}
-              aria-invalid={fieldState.invalid}
-              onChange={(event) => {
-                field.onChange(event);
-                form.clearErrors('root');
-              }}
-            />
-            {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
-          </Field>
-        )}
-      />
-      <Controller
-        name='releaseNote'
-        control={form.control}
-        render={({ field, fieldState }) => (
-          <Field className='mt-4' data-invalid={fieldState.invalid}>
-            <FieldLabel htmlFor='process-node-publish-release-note'>
-              {t('apps.detail.releaseNote')}
-            </FieldLabel>
-            <Textarea
-              {...field}
-              id='process-node-publish-release-note'
-              disabled={isSubmitting}
-              aria-invalid={fieldState.invalid}
-              onChange={(event) => {
-                field.onChange(event);
-                form.clearErrors('root');
-              }}
-            />
-            {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
-          </Field>
-        )}
-      />
-      {/* {form.formState.errors.root?.message ? (
-        <Alert className='mt-4' variant='destructive'>
-          <CircleAlertIcon />
-          <AlertDescription>
-            {form.formState.errors.root.message}
-          </AlertDescription>
-        </Alert>
-      ) : null} */}
-      <AlertDialogFooter className='mt-6'>
+      <div className='px-5 py-5 sm:px-6'>
+        <FieldGroup className='gap-4'>
+          <Controller
+            name='version'
+            control={form.control}
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor='process-node-publish-version'>
+                  {t('apps.detail.version')}
+                </FieldLabel>
+                <Input
+                  {...field}
+                  id='process-node-publish-version'
+                  disabled={isLoadingDefaultVersion || isSubmitting}
+                  aria-invalid={fieldState.invalid}
+                  className='font-mono'
+                  onChange={(event) => {
+                    field.onChange(event);
+                    form.clearErrors('root');
+                  }}
+                />
+                {fieldState.invalid && (
+                  <FieldError errors={[fieldState.error]} />
+                )}
+              </Field>
+            )}
+          />
+          <Controller
+            name='releaseNote'
+            control={form.control}
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor='process-node-publish-release-note'>
+                  {t('apps.detail.releaseNote')}
+                </FieldLabel>
+                <Textarea
+                  {...field}
+                  id='process-node-publish-release-note'
+                  disabled={isSubmitting}
+                  aria-invalid={fieldState.invalid}
+                  className='min-h-24 resize-y'
+                  onChange={(event) => {
+                    field.onChange(event);
+                    form.clearErrors('root');
+                  }}
+                />
+                {fieldState.invalid && (
+                  <FieldError errors={[fieldState.error]} />
+                )}
+              </Field>
+            )}
+          />
+        </FieldGroup>
+      </div>
+      <AlertDialogFooter className='mx-0 mb-0 px-5 py-4 sm:px-6'>
         <AlertDialogCancel disabled={isSubmitting}>
           {t('apps.new.cancel')}
         </AlertDialogCancel>
