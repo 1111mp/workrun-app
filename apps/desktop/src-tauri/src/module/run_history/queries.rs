@@ -1,5 +1,9 @@
 use super::*;
 
+// Every query that is converted into a RunRecordSummary must include these
+// derived fields: they are stored inside runtime_json rather than as columns.
+const RUN_RECORD_SUMMARY_COLUMNS: &str = "id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version";
+
 impl RunHistoryStore {
     pub async fn list(query: RunHistoryQuery) -> Result<RunHistoryPage> {
         let pool = DBManager::global().pool()?;
@@ -9,9 +13,9 @@ impl RunHistoryStore {
                 bail!("run history cursor requires an id and started_at");
             }
         }
-        let mut sql = QueryBuilder::<Sqlite>::new(
-            "SELECT id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version FROM run_records WHERE 1 = 1",
-        );
+        let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
+        sql.push(RUN_RECORD_SUMMARY_COLUMNS)
+            .push(" FROM run_records WHERE 1 = 1");
 
         if let Some(target_type) = query.target_type {
             sql.push(" AND target_type = ").push_bind(target_type.as_str());
@@ -58,17 +62,23 @@ impl RunHistoryStore {
 
     pub async fn list_active() -> Result<Vec<RunRecordSummary>> {
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query(
-            "SELECT id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') ORDER BY started_at DESC, id DESC",
-        )
-        .fetch_all(&pool)
-        .await?;
+        let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
+        let rows = sql
+            .push(RUN_RECORD_SUMMARY_COLUMNS)
+            .push(" FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') ORDER BY started_at DESC, id DESC")
+            .build()
+            .fetch_all(&pool)
+            .await?;
         rows.iter().map(summary_from_row).collect()
     }
     pub async fn inspect(id: &str) -> Result<RunRecord> {
         let pool = DBManager::global().pool()?;
-        let row = sqlx::query("SELECT id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, input_json, output_view_json, target_snapshot_json, runtime_json FROM run_records WHERE id = ?")
-            .bind(id)
+        let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
+        let row = sql
+            .push(RUN_RECORD_SUMMARY_COLUMNS)
+            .push(", input_json, output_view_json, target_snapshot_json, runtime_json FROM run_records WHERE id = ")
+            .push_bind(id)
+            .build()
             .fetch_optional(&pool)
             .await?
             .ok_or_else(|| anyhow::anyhow!("run record was not found: {id}"))?;
@@ -119,4 +129,31 @@ fn summary_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunRecordSummary> {
 
 fn json_column(value: String) -> Result<Value> {
     serde_json::from_str(&value).context("stored run history contains invalid JSON")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RUN_RECORD_SUMMARY_COLUMNS, summary_from_row};
+    use sqlx::{QueryBuilder, Sqlite, sqlite::SqlitePoolOptions};
+
+    #[tokio::test]
+    async fn summary_projection_includes_release_fields_from_runtime_json() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
+        let row = sql
+            .push(RUN_RECORD_SUMMARY_COLUMNS)
+            .push(" FROM (SELECT 'run-1' AS id, 'workflow' AS target_type, 'workflow-1' AS target_id, 'Workflow' AS target_name, 'running' AS status, '2026-09-11T00:00:00Z' AS started_at, NULL AS ended_at, NULL AS duration_ms, NULL AS error, '{\"releaseId\":\"release-1\",\"releaseVersion\":\"1.2.3\"}' AS runtime_json)")
+            .build()
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let summary = summary_from_row(&row).unwrap();
+        assert_eq!(summary.release_id.as_deref(), Some("release-1"));
+        assert_eq!(summary.release_version.as_deref(), Some("1.2.3"));
+    }
 }
