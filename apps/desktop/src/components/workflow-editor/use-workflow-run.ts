@@ -9,6 +9,7 @@ import {
   resolveAskUserQuestion,
   resolveHumanReview,
   resumeBackgroundWorkflowRun,
+  retryFailedBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
   subscribeWorkflowRun,
   toWorkflowDocument,
@@ -16,7 +17,7 @@ import {
   type ToolConfirmationDecision,
   type WorkflowRunEvent,
 } from '@/services/workflow';
-import { useWorkflowRunStore } from '@/stores';
+import { useRunWorkspaceStore, useWorkflowRunStore } from '@/stores';
 
 type MessageEvent = Extract<WorkflowRunEvent, { type: 'message' }>;
 type BufferedMessageEvent = Omit<MessageEvent, 'content'> & {
@@ -379,6 +380,22 @@ function useWorkflowRun(
     });
   };
 
+  const retryFailedWorkflowRun = async () => {
+    const sourceRunId = runId.current;
+    if (!sourceRunId) return;
+    try {
+      const retry = await retryFailedBackgroundWorkflowRun(sourceRunId);
+      // The retry is a separate durable run. Open its history-backed workspace
+      // instead of reusing this editor's event subscription for the failed run.
+      useRunWorkspaceStore.getState().openRun(retry);
+    } catch (error) {
+      toast.error('Could not retry failed workflow', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   const startRun = () => {
     if (settings.mode === 'chat') {
       chatThreadId.current = crypto.randomUUID();
@@ -533,6 +550,7 @@ function useWorkflowRun(
     resolvePendingHumanReview,
     resolvePendingAskUserQuestion,
     resumeWorkflowRun,
+    retryFailedWorkflowRun,
   };
 }
 

@@ -14,7 +14,7 @@ pub(super) async fn execute_claimed_run(run_id: &str) {
     .await;
     if let Err(error) = result {
         let message = error.to_string();
-        if publish_error(run_id, &message).await.is_err() {
+        if publish_error(run_id, &error).await.is_err() {
             let _ = finish_run(run_id, RunStatus::Failed, Some(message)).await;
         }
         RunManager::global().workflow_sessions.lock().remove(run_id);

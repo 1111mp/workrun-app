@@ -1,8 +1,12 @@
 use super::*;
 
-pub(super) async fn publish_error(run_id: &str, message: &str) -> Result<()> {
+pub(super) async fn publish_error(run_id: &str, error: &anyhow::Error) -> Result<()> {
+    let message = error.to_string();
+    let failed_node = failed_node(error);
     let sequence = RunHistoryStore::last_sequence(run_id).await? + 1;
-    let event = StreamEvent::error(message, None);
+    // The error event is durable history, so retain the ADK node identity here
+    // instead of trying to reconstruct it later from a human-readable message.
+    let event = StreamEvent::error(&message, failed_node.as_deref());
     RunHistoryStore::append_events(
         run_id,
         AppendRunEvents {
@@ -23,7 +27,33 @@ pub(super) async fn publish_error(run_id: &str, message: &str) -> Result<()> {
             event: serde_json::to_value(event)?,
         },
     )?;
-    finish_run(run_id, RunStatus::Failed, Some(message.to_string())).await
+    finish_run(run_id, RunStatus::Failed, Some(message)).await
+}
+
+fn failed_node(error: &anyhow::Error) -> Option<String> {
+    error
+        .chain()
+        .find_map(|cause| match cause.downcast_ref::<adk_rust::graph::GraphError>() {
+            Some(adk_rust::graph::GraphError::NodeExecutionFailed { node, .. })
+            | Some(adk_rust::graph::GraphError::NodeTimedOut { node, .. }) => Some(node.clone()),
+            _ => None,
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_the_failed_node_from_an_adk_error_chain() {
+        let error = anyhow::Error::new(adk_rust::graph::GraphError::NodeExecutionFailed {
+            node: "send-report".to_string(),
+            message: "network unavailable".to_string(),
+        });
+        let failed_node = failed_node(&error);
+
+        assert_eq!(failed_node.as_deref(), Some("send-report"));
+    }
 }
 
 pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<bool> {

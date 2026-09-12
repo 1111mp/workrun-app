@@ -1,6 +1,14 @@
 import { listen } from '@tauri-apps/api/event';
 import type { Node } from '@xyflow/react';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   Badge,
   Button,
   Drawer,
@@ -11,6 +19,7 @@ import {
 } from '@workspace/ui/components';
 import { PinIcon, XIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 
 import {
   AppRunOutputPanel,
@@ -22,7 +31,10 @@ import {
   type RunRecord,
   type RunStatus,
 } from '@/services/run-history';
-import type { WorkflowRunEvent } from '@/services/workflow';
+import {
+  retryFailedBackgroundWorkflowRun,
+  type WorkflowRunEvent,
+} from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 import { replayWorkflowRunView } from '@/stores/workflow-run.store';
 
@@ -57,6 +69,7 @@ function RunWorkspace() {
   const {
     tabs,
     activeRunId,
+    openRun,
     open,
     focusRun,
     closeRun,
@@ -66,6 +79,7 @@ function RunWorkspace() {
   } = useRunWorkspaceStore();
   const activeTab = tabs.find((tab) => tab.id === activeRunId);
   const [record, setRecord] = useState<RunRecord>();
+  const [retrySourceRunId, setRetrySourceRunId] = useState<string>();
   // Keep the previous response while a new tab loads, but never render it for
   // a different run. This avoids a synchronous effect update just to clear UI.
   const activeRecord = record?.id === activeRunId ? record : undefined;
@@ -111,6 +125,23 @@ function RunWorkspace() {
       },
     };
   }, [activeRecord, activeTab?.targetType]);
+
+  const retryFailedWorkflow = () => {
+    if (!retrySourceRunId) return;
+    void retryFailedBackgroundWorkflowRun(retrySourceRunId)
+      .then(openRun)
+      .catch((error: unknown) => {
+        toast.error('Could not retry failed workflow', {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      });
+    setRetrySourceRunId(undefined);
+  };
+
+  const requestFailedWorkflowRetry = () => {
+    if (!activeRecord || activeRecord.targetType !== 'workflow' || activeRecord.status !== 'failed') return;
+    setRetrySourceRunId(activeRecord.id);
+  };
 
   useEffect(() => {
     if (!activeRunId || !open) return;
@@ -168,7 +199,8 @@ function RunWorkspace() {
 
   if (activeTab?.targetType === 'workflow' && workflowRun) {
     return (
-      <Drawer
+      <>
+        <Drawer
         open={open}
         showSwipeHandle
         snapPoints={['31rem', 1]}
@@ -182,10 +214,25 @@ function RunWorkspace() {
             run={workflowRun.run}
             workflowNodes={workflowRun.nodes}
             onClose={() => setOpen(false)}
-            onRunAgain={() => undefined}
+            onRunAgain={requestFailedWorkflowRetry}
           />
         </DrawerContent>
-      </Drawer>
+        </Drawer>
+        <AlertDialog open={Boolean(retrySourceRunId)} onOpenChange={(open) => !open && setRetrySourceRunId(undefined)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Earlier completed nodes will not run again. The failed node may have already performed an external action, such as sending a message or updating a record.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={retryFailedWorkflow}>Retry failed node</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
     );
   }
 

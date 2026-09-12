@@ -126,6 +126,43 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
     Ok(RunHistoryStore::inspect(&run_id).await?.summary)
 }
 
+/// Create a new execution branch from the last checkpoint of a failed workflow.
+/// The source record remains immutable, which keeps its failure evidence intact
+/// while the new run owns all events produced by the resumed execution.
+pub async fn retry_failed_workflow(source_run_id: &str) -> Result<RunRecordSummary> {
+    let source = RunHistoryStore::inspect(source_run_id).await?;
+    if source.summary.target_type != "workflow" || source.summary.status != "failed" {
+        bail!("only a failed workflow can be retried from its checkpoint");
+    }
+    ensure_replay_dependencies_installed(&source.runtime).await?;
+
+    let session = workflow_session_from_runtime(&source.runtime)?;
+    let dsl: WorkflowDsl = serde_json::from_value(session.dsl.clone())?;
+    let config = BaseConfig::workrun().await.latest_arc();
+    let compiled = workflow_module::compile(dsl, &config, None).await?;
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let thread_id = uuid::Uuid::new_v4().to_string();
+    compiled.fork_latest_checkpoint(&session.thread_id, &thread_id).await?;
+
+    let runtime = retry_failed_runtime(source.runtime, source_run_id, &thread_id)?;
+    RunHistoryStore::create(CreateRunRecord {
+        id: run_id.clone(),
+        target_type: RunTargetType::Workflow,
+        target_id: source.summary.target_id,
+        target_name: source.summary.target_name,
+        status: RunStatus::Queued,
+        started_at: chrono::Utc::now().to_rfc3339(),
+        input: source.input,
+        output_view: replay_output_view(RunTargetType::Workflow),
+        target_snapshot: source.target_snapshot,
+        runtime,
+    })
+    .await?;
+    publish_run_status(&run_id, RunStatus::Queued)?;
+    RunManager::global().supervisor.notify();
+    Ok(RunHistoryStore::inspect(&run_id).await?.summary)
+}
+
 async fn ensure_replay_dependencies_installed(runtime: &Value) -> Result<()> {
     let missing = missing_replay_dependencies(runtime).await?;
     if !missing.is_empty() {
@@ -232,9 +269,20 @@ fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     Ok(runtime)
 }
 
+fn retry_failed_runtime(mut runtime: Value, source_run_id: &str, thread_id: &str) -> Result<Value> {
+    let object = runtime.as_object_mut().context("run runtime metadata is invalid")?;
+    // A fork starts at the failed frontier. Reusing the old thread would append
+    // to the failed run's checkpoint history and make later retries ambiguous.
+    object.insert("threadId".to_string(), json!(thread_id));
+    object.insert("resume".to_string(), Value::Bool(true));
+    object.remove("toolConfirmation");
+    object.insert("retryOf".to_string(), json!(source_run_id));
+    Ok(runtime)
+}
+
 #[cfg(test)]
 mod replay_tests {
-    use super::{replay_output_view, replay_runtime, team_app_dependencies};
+    use super::{replay_output_view, replay_runtime, retry_failed_runtime, team_app_dependencies};
     use serde_json::json;
 
     #[test]
@@ -305,6 +353,21 @@ mod replay_tests {
                 "localAppId": "local-app-1",
             })]
         );
+    }
+
+    #[test]
+    fn failed_retry_runtime_resumes_a_forked_thread() {
+        let runtime = retry_failed_runtime(
+            json!({ "kind": "workflow", "threadId": "original", "toolConfirmation": {} }),
+            "failed-run",
+            "retry-thread",
+        )
+        .unwrap();
+
+        assert_eq!(runtime["threadId"], "retry-thread");
+        assert_eq!(runtime["resume"], true);
+        assert_eq!(runtime["retryOf"], "failed-run");
+        assert!(runtime.get("toolConfirmation").is_none());
     }
 }
 

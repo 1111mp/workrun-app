@@ -364,6 +364,46 @@ impl WorkflowStateCheckpointer {
         })
     }
 
+    /// Fork the latest durable frontier into a fresh execution thread.
+    ///
+    /// Going through the wrapped checkpointer's normal `save` method would
+    /// serialize the *current* bridge state, not the source checkpoint's private
+    /// state. Copy the stored checkpoint through the inner checkpointer instead
+    /// so a failed-run retry retains encrypted state and ACL metadata.
+    pub async fn fork_latest_checkpoint(&self, source_thread_id: &str, target_thread_id: &str) -> Result<Checkpoint> {
+        let mut checkpoint = self
+            .inner
+            .load(source_thread_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no resumable checkpoint was found for this run"))?;
+
+        // Validate before copying so a corrupt or unrelated checkpoint cannot be
+        // used to resume a workflow that merely happens to share a thread ID.
+        let metadata = checkpoint
+            .metadata
+            .get(STATE_CHECKPOINT_METADATA_KEY)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("workflow state checkpoint is missing"))?;
+        let saved: WorkflowStateCheckpoint = serde_json::from_value(metadata)?;
+        if saved.version != STATE_CHECKPOINT_VERSION
+            || saved.workflow_id != self.workflow_id
+            || saved.workflow_fingerprint != self.workflow_fingerprint
+        {
+            anyhow::bail!("checkpoint does not match this workflow version");
+        }
+        if checkpoint.pending_nodes.len() != 1 {
+            // A fan-out frontier has no single "failed node" to restart. Keep
+            // v1 precise rather than unexpectedly re-running sibling branches.
+            anyhow::bail!("retry from checkpoint currently requires one pending workflow node");
+        }
+
+        checkpoint.thread_id = target_thread_id.to_string();
+        checkpoint.checkpoint_id = Uuid::new_v4().to_string();
+        checkpoint.created_at = chrono::Utc::now();
+        self.inner.save(&checkpoint).await?;
+        Ok(checkpoint)
+    }
+
     fn checkpoint_metadata(&self) -> GraphResult<Value> {
         let bridge = self
             .bridge
@@ -905,6 +945,47 @@ mod tests {
         assert_eq!(
             bridge.lock().unwrap().raw_state.runtime().global_get("email"),
             Some(&json!("alice@example.com"))
+        );
+    }
+
+    #[tokio::test]
+    async fn forked_checkpoint_keeps_private_state_and_the_pending_frontier() {
+        let bridge = Arc::new(Mutex::new(
+            WorkflowStateBridge::from_initial_state(json!({"email": "alice@example.com"})).unwrap(),
+        ));
+        {
+            let mut bridge = bridge.lock().unwrap();
+            bridge.node_state("prepare").create("draft", json!("private")).unwrap();
+        }
+        let checkpointer = WorkflowStateCheckpointer::new(
+            Arc::new(MemoryCheckpointer::new()),
+            Arc::clone(&bridge),
+            "workflow-1",
+            "fingerprint-1",
+        )
+        .unwrap();
+        checkpointer
+            .save(&Checkpoint::new(
+                "failed-thread",
+                GraphState::new(),
+                3,
+                vec!["failed-node".to_string()],
+            ))
+            .await
+            .unwrap();
+
+        let forked = checkpointer
+            .fork_latest_checkpoint("failed-thread", "retry-thread")
+            .await
+            .unwrap();
+        assert_eq!(forked.thread_id, "retry-thread");
+        assert_eq!(forked.pending_nodes, vec!["failed-node"]);
+
+        *bridge.lock().unwrap() = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        checkpointer.load("retry-thread").await.unwrap();
+        assert_eq!(
+            bridge.lock().unwrap().node_state("prepare").get("draft").unwrap(),
+            Some(&json!("private"))
         );
     }
 

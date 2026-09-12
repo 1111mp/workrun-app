@@ -138,6 +138,7 @@ pub fn run() {
             cmd::run_history::run_history_resolve_pending_action,
             cmd::run_manager::workflow_run_start,
             cmd::run_manager::workflow_run_resume,
+            cmd::run_manager::workflow_run_retry_failed,
             cmd::run_manager::workflow_run_resolve_action,
             cmd::run_manager::workflow_run_cancel,
             cmd::run_manager::process_node_run_start,

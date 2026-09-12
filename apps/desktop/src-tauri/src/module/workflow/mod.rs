@@ -350,6 +350,15 @@ pub struct CompiledWorkflow {
 }
 
 impl CompiledWorkflow {
+    /// Branch the newest durable frontier so a failed run can be retried without
+    /// mutating its history or re-executing work that completed before it.
+    pub async fn fork_latest_checkpoint(&self, source_thread_id: &str, target_thread_id: &str) -> Result<()> {
+        self.state_checkpointer
+            .fork_latest_checkpoint(source_thread_id, target_thread_id)
+            .await?;
+        Ok(())
+    }
+
     /// Execute the graph while forwarding ordered node and model events to the
     /// caller. The final `Done` stream event is retained as the command result.
     pub async fn run_stream<F>(

@@ -4,6 +4,7 @@ import type { Edge, Node } from '@xyflow/react';
 
 import { isTeamMode } from '@/lib/constant';
 import { fetchApi } from '@/services/fetch-api';
+import type { RunRecordSummary } from '@/services/run-history';
 
 const workflowDocumentStorageKey = 'workrun.workflow.document';
 
@@ -386,6 +387,11 @@ export function resumeBackgroundWorkflowRun(
   return invoke('workflow_run_resume', {
     request: { runId, toolConfirmation },
   });
+}
+
+/** Starts a new run from the failed run's latest checkpoint. */
+export function retryFailedBackgroundWorkflowRun(sourceRunId: string) {
+  return invoke<RunRecordSummary>('workflow_run_retry_failed', { sourceRunId });
 }
 
 export function resolveBackgroundWorkflowAction(

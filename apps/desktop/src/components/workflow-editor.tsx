@@ -555,6 +555,7 @@ function WorkflowEditorContent({
             nodes={nodes}
             onRun={workflowRun.startWorkflowRun}
             onResume={workflowRun.resumeWorkflowRun}
+            onRetryFailed={workflowRun.retryFailedWorkflowRun}
             readOnly={Boolean(historicalRun || viewingHistoricalRunId)}
             onHistoricalClose={() => {
               if (historicalRun) {

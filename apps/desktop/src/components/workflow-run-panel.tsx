@@ -1,4 +1,12 @@
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   Button,
   Drawer,
   DrawerContent,
@@ -32,6 +40,7 @@ type WorkflowRunPanelProps = {
   nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
   onResume: () => void;
+  onRetryFailed: () => void;
   readOnly?: boolean;
   onHistoricalClose?: () => void;
 };
@@ -199,6 +208,7 @@ function WorkflowRunPanel({
   nodes,
   onRun,
   onResume,
+  onRetryFailed,
   readOnly = false,
   onHistoricalClose,
 }: WorkflowRunPanelProps) {
@@ -220,18 +230,23 @@ function WorkflowRunPanel({
   );
 
   const isRunning = run.status === 'running';
+  const [retryConfirmationOpen, setRetryConfirmationOpen] = useState(false);
   const formKey = `${open}:${JSON.stringify(settings)}`;
   const runAgain = () => {
     if (run.status === 'interrupted') {
       onResume();
       return;
     }
-    // A failed run has no resumable checkpoint, so retry from its original input.
+    if (run.status === 'failed') {
+      setRetryConfirmationOpen(true);
+      return;
+    }
     if (lastRunInput) onRun(lastRunInput);
   };
 
   return (
-    <Drawer
+    <>
+      <Drawer
       open={open}
       defaultHorizontalSnapPoint='31rem'
       horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
@@ -284,7 +299,29 @@ function WorkflowRunPanel({
           </>
         )}
       </DrawerContent>
-    </Drawer>
+      </Drawer>
+      <AlertDialog open={retryConfirmationOpen} onOpenChange={setRetryConfirmationOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Earlier completed nodes will not run again. The failed node may have already performed an external action, such as sending a message or updating a record.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setRetryConfirmationOpen(false);
+                onRetryFailed();
+              }}
+            >
+              Retry failed node
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
