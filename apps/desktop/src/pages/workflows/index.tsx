@@ -73,7 +73,9 @@ function WorkflowCard({
         <CardAction>
           <div className='flex items-center gap-1'>
             {workflow.latestRelease ? (
-              <Badge variant='secondary'>v{workflow.latestRelease.version}</Badge>
+              <Badge variant='secondary'>
+                v{workflow.latestRelease.version}
+              </Badge>
             ) : (
               <Badge variant='outline'>{t('workflows.draft')}</Badge>
             )}
@@ -117,16 +119,22 @@ function WorkflowCard({
           {t('workflows.canvas')}
         </span>
         <div className='ml-auto flex items-center gap-1.5'>
-          {!readOnly ? (
-            <Button
-              size='sm'
-              nativeButton={false}
-              render={<Link to={`/workflows/${workflow.id}?run=true`} />}
-            >
-              <PlayIcon data-icon='inline-start' />
-              {t('workflows.run')}
-            </Button>
-          ) : null}
+          <Button
+            size='sm'
+            nativeButton={false}
+            render={
+              <Link
+                to={
+                  readOnly
+                    ? `/workflows/${workflow.id}?catalog=true&run=true`
+                    : `/workflows/${workflow.id}?run=true`
+                }
+              />
+            }
+          >
+            <PlayIcon data-icon='inline-start' />
+            {t('workflows.run')}
+          </Button>
           <Button
             variant='outline'
             size='sm'

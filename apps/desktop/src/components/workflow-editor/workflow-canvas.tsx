@@ -215,6 +215,7 @@ type WorkflowCanvasProps = {
   isRunning: boolean;
   runningNodeId: string | null;
   onRun: () => void;
+  canRun?: boolean;
   readOnly?: boolean;
 };
 
@@ -225,6 +226,7 @@ function WorkflowCanvas({
   isRunning,
   runningNodeId,
   onRun,
+  canRun = true,
   readOnly = false,
 }: WorkflowCanvasProps) {
   const { t } = useTranslation();
@@ -402,7 +404,7 @@ function WorkflowCanvas({
               <Panel position='top-right'>
                 <Button
                   variant='secondary'
-                  disabled={readOnly || isRunning}
+                  disabled={!canRun || isRunning}
                   onClick={onRun}
                 >
                   {isRunning ? (
