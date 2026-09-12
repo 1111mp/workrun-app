@@ -1105,6 +1105,7 @@ function WorkflowNodeInspector({
                           source: 'team',
                           remoteAppId,
                           releaseId,
+                          appName: release.definition.name,
                           version: release.definition.version,
                           archiveSha256:
                             release.definition.remoteArchiveSha256 ?? '',
@@ -1119,6 +1120,7 @@ function WorkflowNodeInspector({
                         ? ({
                             source: 'local',
                             localAppId: app.definition.id,
+                            appName: app.definition.name,
                             version: app.definition.version,
                           } satisfies ProcessAppRef)
                         : undefined,

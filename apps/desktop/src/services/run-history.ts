@@ -44,6 +44,7 @@ export type RunRecordSummary = {
   error?: string;
   releaseId?: string;
   releaseVersion?: string;
+  appVersion?: string;
 };
 
 export type RunEvent = {

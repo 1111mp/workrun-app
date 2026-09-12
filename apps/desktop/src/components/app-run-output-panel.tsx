@@ -221,6 +221,9 @@ function AppRunOutputPanel({
             <DrawerHeader>
               <DrawerTitle>
                 {t('apps.history.outputTitle')} · {run.node.definition.name}
+                {run.node.definition.version
+                  ? ` · v${run.node.definition.version}`
+                  : ''}
               </DrawerTitle>
               <DrawerDescription className='flex items-center gap-1.5'>
                 <StatusIcon className='size-3.5' />

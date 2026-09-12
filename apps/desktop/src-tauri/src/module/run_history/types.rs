@@ -122,6 +122,7 @@ pub struct RunRecordSummary {
     pub error: Option<String>,
     pub release_id: Option<String>,
     pub release_version: Option<String>,
+    pub app_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

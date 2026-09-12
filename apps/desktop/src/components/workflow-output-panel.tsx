@@ -3,6 +3,7 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
+  Badge,
   Bubble,
   BubbleContent,
   Button,
@@ -136,6 +137,22 @@ function nodeDisplayName(
   if (typeof data?.label === 'string' && data.label.trim()) return data.label;
   if (typeof data?.title === 'string' && data.title.trim()) return data.title;
   return 'Unknown node';
+}
+
+function processNodeInfo(workflowNodes: Node[], nodeId: string) {
+  const node = workflowNodes.find((item) => item.id === nodeId);
+  if (node?.type !== 'process') return undefined;
+  const appRef = node.data?.appRef;
+  const ref = appRef && typeof appRef === 'object' ? appRef : undefined;
+  const appName =
+    ref && 'appName' in ref && typeof ref.appName === 'string'
+      ? ref.appName.trim()
+      : undefined;
+  const version =
+    ref && 'version' in ref && typeof ref.version === 'string'
+      ? ref.version.trim()
+      : undefined;
+  return { appName, version };
 }
 
 type WorkflowTraceEntry = {
@@ -812,6 +829,22 @@ function WorkflowRunOutput({
   const output = run.messages.map((message) => message.content).join('\n\n');
   const displayNodeName = (nodeId: string) =>
     nodeDisplayName(run, workflowNodes, nodeId);
+  const appIdentity = (nodeId: string) => {
+    const app = processNodeInfo(workflowNodes, nodeId);
+    if (!app) return null;
+    return (
+      <div className='mt-2 flex items-center gap-2 px-1 text-sm'>
+        <span className='font-medium'>
+          {app.appName || displayNodeName(nodeId)}
+        </span>
+        {app.version ? (
+          <Badge className='font-mono text-xs' variant='secondary'>
+            v{app.version}
+          </Badge>
+        ) : null}
+      </div>
+    );
+  };
   const execution: WorkflowRunExecution[] =
     run.execution.length > 0
       ? run.execution
@@ -907,6 +940,7 @@ function WorkflowRunOutput({
                               : ''}
                           </MarkerContent>
                         </Marker>
+                        {appIdentity(entry.nodeId)}
                         <TraceResult entry={entry} />
                         <ExecutionOutput
                           label={t('workflowEditor.output.processOutput')}
@@ -1012,6 +1046,7 @@ function WorkflowRunOutput({
                                         : ''}
                                     </MarkerContent>
                                   </Marker>
+                                  {appIdentity(entry.nodeId)}
                                   <TraceResult
                                     entry={entry}
                                     showAgentResponse={false}

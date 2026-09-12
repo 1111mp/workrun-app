@@ -572,6 +572,11 @@ function AppHistoryDrawer({
                         >
                           {t(`apps.runStatus.${record.status}`)}
                         </Badge>
+                        {record.appVersion ? (
+                          <Badge variant='secondary' className='font-mono'>
+                            v{record.appVersion}
+                          </Badge>
+                        ) : null}
                         <Button
                           size='sm'
                           onClick={() => void viewOutput(record.id)}

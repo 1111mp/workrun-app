@@ -1,8 +1,8 @@
 use super::*;
 
-// Every query that is converted into a RunRecordSummary must include these
-// derived fields: they are stored inside runtime_json rather than as columns.
-const RUN_RECORD_SUMMARY_COLUMNS: &str = "id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version";
+// Versions are immutable run metadata, so history lists read them from the
+// snapshot rather than the mutable App catalog.
+const RUN_RECORD_SUMMARY_COLUMNS: &str = "id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version, json_extract(target_snapshot_json, '$.version') AS app_version";
 
 impl RunHistoryStore {
     pub async fn list(query: RunHistoryQuery) -> Result<RunHistoryPage> {
@@ -124,6 +124,7 @@ fn summary_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunRecordSummary> {
         error: row.try_get("error")?,
         release_id: row.try_get("release_id")?,
         release_version: row.try_get("release_version")?,
+        app_version: row.try_get("app_version")?,
     })
 }
 
@@ -137,7 +138,7 @@ mod tests {
     use sqlx::{QueryBuilder, Sqlite, sqlite::SqlitePoolOptions};
 
     #[tokio::test]
-    async fn summary_projection_includes_release_fields_from_runtime_json() {
+    async fn summary_projection_includes_release_and_app_versions() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -146,7 +147,7 @@ mod tests {
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
         let row = sql
             .push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(" FROM (SELECT 'run-1' AS id, 'workflow' AS target_type, 'workflow-1' AS target_id, 'Workflow' AS target_name, 'running' AS status, '2026-09-11T00:00:00Z' AS started_at, NULL AS ended_at, NULL AS duration_ms, NULL AS error, '{\"releaseId\":\"release-1\",\"releaseVersion\":\"1.2.3\"}' AS runtime_json)")
+            .push(" FROM (SELECT 'run-1' AS id, 'app' AS target_type, 'app-1' AS target_id, 'App' AS target_name, 'running' AS status, '2026-09-11T00:00:00Z' AS started_at, NULL AS ended_at, NULL AS duration_ms, NULL AS error, '{\"releaseId\":\"release-1\",\"releaseVersion\":\"1.2.3\"}' AS runtime_json, '{\"version\":\"2.0.0\"}' AS target_snapshot_json)")
             .build()
             .fetch_one(&pool)
             .await
@@ -155,5 +156,6 @@ mod tests {
         let summary = summary_from_row(&row).unwrap();
         assert_eq!(summary.release_id.as_deref(), Some("release-1"));
         assert_eq!(summary.release_version.as_deref(), Some("1.2.3"));
+        assert_eq!(summary.app_version.as_deref(), Some("2.0.0"));
     }
 }

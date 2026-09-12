@@ -23,6 +23,7 @@ export type ProcessAppRef =
   | {
       source: 'local';
       localAppId: string;
+      appName?: string;
       version?: string;
       sourceHash?: string;
     }
@@ -30,6 +31,7 @@ export type ProcessAppRef =
       source: 'team';
       remoteAppId: string;
       releaseId: string;
+      appName?: string;
       version: string;
       archiveSha256: string;
     };
