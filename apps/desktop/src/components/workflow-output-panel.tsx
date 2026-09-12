@@ -58,6 +58,7 @@ import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
+import type { RunSpan } from '@/services/run-history';
 import type {
   WorkflowRunExecution,
   WorkflowRunMessage,
@@ -73,6 +74,7 @@ type WorkflowOutputPanelProps = {
   isChat?: boolean;
   onSend?: (initialState: Record<string, unknown>) => void;
   readOnly?: boolean;
+  spans?: RunSpan[];
 };
 
 function statusLabel(run: WorkflowRunView, t: (key: string) => string) {
@@ -813,6 +815,76 @@ function ThinkingProcess({
   );
 }
 
+function RunTelemetry({ spans }: { spans: RunSpan[] }) {
+  if (spans.length === 0) return null;
+  const workflowNodes = spans.filter((span) => span.kind === 'workflow_node').length;
+  const toolCalls = spans.filter((span) => span.kind === 'tool_call').length;
+  const inputTokens = spans.reduce((total, span) => total + (span.inputTokens ?? 0), 0);
+  const outputTokens = spans.reduce((total, span) => total + (span.outputTokens ?? 0), 0);
+  const totalTokens = spans.reduce((total, span) => total + (span.totalTokens ?? 0), 0);
+
+  return (
+    <Collapsible className='bg-card overflow-hidden rounded-xl border shadow-sm'>
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant='ghost'
+            className='group hover:bg-muted/60 h-auto w-full justify-between rounded-none px-3 py-3'
+          />
+        }
+      >
+        <span className='flex items-center gap-2.5'>
+          <span className='bg-primary/10 text-primary flex size-8 items-center justify-center rounded-lg'>
+            <TerminalIcon className='size-4' />
+          </span>
+          <span className='flex flex-col items-start'>
+            <span className='text-sm font-semibold'>Runtime diagnostics</span>
+            <span className='text-muted-foreground text-xs'>
+              {workflowNodes} workflow step{workflowNodes === 1 ? '' : 's'} · {toolCalls} tool call{toolCalls === 1 ? '' : 's'}
+              {totalTokens ? ` · ${totalTokens} tokens (${inputTokens} in / ${outputTokens} out)` : ''}
+            </span>
+          </span>
+        </span>
+        <ChevronDownIcon className='text-muted-foreground size-4 transition-transform group-data-panel-open/button:rotate-180' />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='divide-y border-t'>
+        {spans.map((span) => {
+          const label = span.toolName ?? span.nodeName ?? span.nodeId ?? span.kind.replaceAll('_', ' ');
+          const tokens = span.totalTokens
+            ? `${span.totalTokens}${span.totalTokensEstimated ? '~' : ''} tokens`
+            : undefined;
+          const tokenBreakdown = [
+            span.cacheReadTokens ? `${span.cacheReadTokens} cache read` : undefined,
+            span.cacheWriteTokens ? `${span.cacheWriteTokens} cache write` : undefined,
+            span.reasoningTokens ? `${span.reasoningTokens} reasoning` : undefined,
+            span.audioInputTokens || span.audioOutputTokens
+              ? `${span.audioInputTokens ?? 0} audio in / ${span.audioOutputTokens ?? 0} audio out`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          return (
+            <div key={span.id} className='flex items-center gap-3 px-3 py-2.5 text-sm'>
+              <div className='min-w-0 flex-1'>
+                <div className='truncate font-medium'>{label}</div>
+                {tokenBreakdown ? <div className='text-muted-foreground truncate text-xs'>{tokenBreakdown}</div> : null}
+              </div>
+              <span className='text-muted-foreground shrink-0 text-xs'>{span.kind.replaceAll('_', ' ')}</span>
+              {tokens ? <span className='text-muted-foreground shrink-0 font-mono text-xs'>{tokens}</span> : null}
+              <span className={span.status === 'failed' ? 'text-destructive shrink-0 text-xs' : 'text-muted-foreground shrink-0 text-xs'}>
+                {span.status}
+              </span>
+              <span className='text-muted-foreground w-14 shrink-0 text-right font-mono text-xs'>
+                {span.durationMs === undefined ? '—' : `${span.durationMs}ms`}
+              </span>
+            </div>
+          );
+        })}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function WorkflowRunOutput({
   run,
   workflowNodes,
@@ -822,6 +894,7 @@ function WorkflowRunOutput({
   isChat = false,
   onSend,
   readOnly = false,
+  spans = [],
 }: WorkflowOutputPanelProps) {
   const { t } = useTranslation();
   const [message, setMessage] = useState('');
@@ -1115,6 +1188,7 @@ function WorkflowRunOutput({
                     </Collapsible>
                   </MessageScrollerItem>
                 )}
+                <RunTelemetry spans={spans} />
               </MessageScrollerContent>
             </MessageScrollerViewport>
             <MessageScrollerButton />

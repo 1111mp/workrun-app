@@ -6,8 +6,8 @@ use crate::{
     module::{
         python_runtime::PythonOutputChunk,
         run_history::{
-            AppendRunEvents, CreatePendingAction, CreateRunRecord, NewRunEvent, RunHistoryStore, RunRecordSummary,
-            RunStatus, RunTargetType,
+            AppendRunEvents, CreatePendingAction, CreateRunRecord, CreateRunSpan, FinishRunSpan, NewRunEvent,
+            RunHistoryStore, RunRecordSummary, RunStatus, RunTargetType, TelemetrySpanKind, TelemetrySpanStatus,
         },
         workflow::{self as workflow_module, ToolConfirmationDecisionRequest, WorkflowDsl},
     },

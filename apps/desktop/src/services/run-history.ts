@@ -53,6 +53,31 @@ export type RunEvent = {
   createdAt: string;
 };
 
+export type RunSpan = {
+  id: string;
+  kind: 'workflow_node' | 'agent' | 'model_call' | 'tool_call';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  nodeId?: string;
+  nodeName?: string;
+  provider?: string;
+  model?: string;
+  toolName?: string;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  totalTokensEstimated: boolean;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  audioInputTokens?: number;
+  audioOutputTokens?: number;
+  estimatedCostMicrousd?: number;
+  isByok?: boolean;
+};
+
 export type RunHistoryCursor = {
   id: string;
   startedAt: string;
@@ -63,12 +88,47 @@ export type RunHistoryPage = {
   nextCursor?: RunHistoryCursor;
 };
 
+export type MetricSummary = {
+  count: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  successRate?: number;
+  averageDurationMs?: number;
+  p50DurationMs?: number;
+  p95DurationMs?: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadTokens: number;
+  estimatedCostMicrousd: number;
+};
+
+export type VersionMetricSummary = MetricSummary & {
+  releaseVersion: string;
+};
+
+export type SpanMetricSummary = MetricSummary & {
+  kind: RunSpan['kind'];
+  nodeId?: string;
+  provider?: string;
+  model?: string;
+  toolName?: string;
+};
+
+export type RunObservability = {
+  overall: MetricSummary;
+  versions: VersionMetricSummary[];
+  spans: SpanMetricSummary[];
+};
+
 export type RunRecord = RunRecordSummary & {
   input?: Record<string, unknown>;
   outputView: unknown;
   targetSnapshot: unknown;
   runtime: unknown;
   events: RunEvent[];
+  spans: RunSpan[];
 };
 
 export type MissingReplayDependency = {
@@ -132,6 +192,14 @@ export function listRunHistoryPage(
 
 export function inspectRunRecord(id: string) {
   return invoke<RunRecord>('run_history_inspect', { id });
+}
+
+export function getWorkflowObservability(query: {
+  workflowId: string;
+  startedAfter?: string;
+  startedBefore?: string;
+}) {
+  return invoke<RunObservability>('run_history_observability', { query });
 }
 
 export function replayRun(sourceRunId: string) {

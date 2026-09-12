@@ -97,6 +97,11 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
             },
         )
         .await?;
+        if let Err(error) = project_telemetry_span(&run_id, &event).await {
+            // Telemetry is a derived projection. A damaged projection must not
+            // turn an otherwise durable workflow event into a failed run.
+            log::warn!("failed to project workflow telemetry for run {run_id}: {error:#}");
+        }
         emit_on_main_thread(
             "run-event",
             RunEventEnvelope {
@@ -108,6 +113,207 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
         sequence += 1;
     }
     Ok(has_pending_action)
+}
+
+async fn project_telemetry_span(run_id: &str, event: &Value) -> Result<()> {
+    let Some(event_type) = event.get("type").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let Some(node_id) = event.get("node").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if matches!(event_type, "agent.tool_call" | "agent.tool_result" | "agent.tool_error") {
+        return project_tool_span(run_id, node_id, event_type, event.get("data")).await;
+    }
+    if event_type == "agent.model_call" {
+        return project_model_span(run_id, node_id, event.get("data")).await;
+    }
+    let step = event.get("step").and_then(Value::as_i64).unwrap_or_default();
+    let span_id = format!("{run_id}:workflow-node:{node_id}:{step}");
+    let attributes = json!({ "step": step });
+    match event_type {
+        "node_start" => {
+            RunHistoryStore::create_span(CreateRunSpan {
+                id: span_id,
+                run_id: run_id.to_string(),
+                parent_span_id: None,
+                kind: TelemetrySpanKind::WorkflowNode,
+                status: TelemetrySpanStatus::Running,
+                node_id: Some(node_id.to_string()),
+                node_name: None,
+                provider: None,
+                model: None,
+                tool_name: None,
+                started_at: chrono::Utc::now().to_rfc3339(),
+                attributes,
+            })
+            .await
+        },
+        "node_end" => {
+            let duration_ms = event.get("duration_ms").and_then(Value::as_i64).unwrap_or_default();
+            RunHistoryStore::finish_span(
+                &span_id,
+                FinishRunSpan {
+                    status: TelemetrySpanStatus::Completed,
+                    ended_at: chrono::Utc::now().to_rfc3339(),
+                    duration_ms: Some(duration_ms),
+                    input_tokens: None,
+                    output_tokens: None,
+                    total_tokens: None,
+                    total_tokens_estimated: false,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    audio_input_tokens: None,
+                    audio_output_tokens: None,
+                    estimated_cost_microusd: None,
+                    is_byok: None,
+                    error_code: None,
+                    error_message: None,
+                    attributes,
+                },
+            )
+            .await
+        },
+        _ => Ok(()),
+    }
+}
+
+async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -> Result<()> {
+    let Some(data) = data.and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let Some(call_id) = data
+        .get("modelCallId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(model) = data
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())
+    else {
+        return Ok(());
+    };
+    let occurred_at = data
+        .get("occurredAt")
+        .and_then(Value::as_str)
+        .filter(|timestamp| !timestamp.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let span_id = format!("{run_id}:model:{call_id}");
+    let attributes = json!({ "modelCallId": call_id });
+    RunHistoryStore::create_span(CreateRunSpan {
+        id: span_id.clone(),
+        run_id: run_id.to_string(),
+        parent_span_id: None,
+        kind: TelemetrySpanKind::ModelCall,
+        status: TelemetrySpanStatus::Running,
+        node_id: Some(node_id.to_string()),
+        node_name: None,
+        provider: None,
+        model: Some(model.to_string()),
+        tool_name: None,
+        started_at: occurred_at.clone(),
+        attributes: attributes.clone(),
+    })
+    .await?;
+    RunHistoryStore::finish_span(
+        &span_id,
+        FinishRunSpan {
+            status: TelemetrySpanStatus::Completed,
+            ended_at: occurred_at,
+            // Event timestamps identify completion, not request start. Preserve
+            // the unknown latency as NULL instead of inventing a zero duration.
+            duration_ms: None,
+            input_tokens: data.get("inputTokens").and_then(Value::as_i64),
+            output_tokens: data.get("outputTokens").and_then(Value::as_i64),
+            total_tokens: data.get("totalTokens").and_then(Value::as_i64),
+            total_tokens_estimated: data
+                .get("totalTokensEstimated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            cache_read_tokens: data.get("cacheReadTokens").and_then(Value::as_i64),
+            cache_write_tokens: data.get("cacheWriteTokens").and_then(Value::as_i64),
+            reasoning_tokens: data.get("reasoningTokens").and_then(Value::as_i64),
+            audio_input_tokens: data.get("audioInputTokens").and_then(Value::as_i64),
+            audio_output_tokens: data.get("audioOutputTokens").and_then(Value::as_i64),
+            estimated_cost_microusd: data.get("estimatedCostMicrousd").and_then(Value::as_i64),
+            is_byok: data.get("isByok").and_then(Value::as_bool),
+            error_code: None,
+            error_message: None,
+            attributes,
+        },
+    )
+    .await
+}
+
+async fn project_tool_span(run_id: &str, node_id: &str, event_type: &str, data: Option<&Value>) -> Result<()> {
+    let Some(data) = data.and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let Some(call_id) = data.get("callId").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    let Some(tool_name) = data.get("tool").and_then(Value::as_str).filter(|name| !name.is_empty()) else {
+        return Ok(());
+    };
+    let span_id = format!("{run_id}:tool:{call_id}");
+    // Inputs and outputs remain in the redacted event journal. The span stores
+    // only identity fields needed for duration and reliability aggregation.
+    let attributes = json!({ "callId": call_id });
+    match event_type {
+        "agent.tool_call" => {
+            RunHistoryStore::create_span(CreateRunSpan {
+                id: span_id,
+                run_id: run_id.to_string(),
+                parent_span_id: None,
+                kind: TelemetrySpanKind::ToolCall,
+                status: TelemetrySpanStatus::Running,
+                node_id: Some(node_id.to_string()),
+                node_name: data.get("name").and_then(Value::as_str).map(str::to_string),
+                provider: None,
+                model: None,
+                tool_name: Some(tool_name.to_string()),
+                started_at: chrono::Utc::now().to_rfc3339(),
+                attributes,
+            })
+            .await
+        },
+        "agent.tool_result" | "agent.tool_error" => {
+            let duration_ms = data.get("durationMs").and_then(Value::as_i64).unwrap_or_default();
+            RunHistoryStore::finish_span(
+                &span_id,
+                FinishRunSpan {
+                    status: if event_type == "agent.tool_result" {
+                        TelemetrySpanStatus::Completed
+                    } else {
+                        TelemetrySpanStatus::Failed
+                    },
+                    ended_at: chrono::Utc::now().to_rfc3339(),
+                    duration_ms: Some(duration_ms),
+                    input_tokens: None,
+                    output_tokens: None,
+                    total_tokens: None,
+                    total_tokens_estimated: false,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    audio_input_tokens: None,
+                    audio_output_tokens: None,
+                    estimated_cost_microusd: None,
+                    is_byok: None,
+                    error_code: None,
+                    error_message: None,
+                    attributes,
+                },
+            )
+            .await
+        },
+        _ => Ok(()),
+    }
 }
 
 pub(super) async fn execute_app(run_id: &str, target_id: &str, handle: Arc<AppRunHandle>) -> Result<()> {

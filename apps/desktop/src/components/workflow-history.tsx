@@ -14,10 +14,15 @@ import {
   ItemTitle,
   Spinner,
 } from '@workspace/ui/components';
-import { HistoryIcon, PlayIcon } from 'lucide-react';
+import { ActivityIcon, HistoryIcon, PlayIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import type { RunRecordSummary, RunStatus } from '@/services/run-history';
+import type {
+  RunObservability,
+  RunRecordSummary,
+  RunStatus,
+  SpanMetricSummary,
+} from '@/services/run-history';
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
   queued: 'border-muted-foreground/30 bg-muted text-muted-foreground',
@@ -37,6 +42,8 @@ function WorkflowHistory({
   isLoading,
   hasMore,
   isLoadingMore,
+  observability,
+  isObservabilityLoading,
   onLoadMore,
   onView,
 }: {
@@ -44,6 +51,8 @@ function WorkflowHistory({
   isLoading: boolean;
   hasMore: boolean;
   isLoadingMore: boolean;
+  observability?: RunObservability;
+  isObservabilityLoading: boolean;
   onLoadMore: () => void;
   onView: (id: string) => void;
 }) {
@@ -63,6 +72,10 @@ function WorkflowHistory({
             {t('workflowEditor.history.description')}
           </p>
         </div>
+        <ObservabilitySummary
+          observability={observability}
+          isLoading={isObservabilityLoading}
+        />
         {isLoading ? (
           <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-8 text-sm'>
             <Spinner /> {t('workflowEditor.history.loading')}
@@ -138,6 +151,96 @@ function WorkflowHistory({
       </div>
     </div>
   );
+}
+
+function ObservabilitySummary({
+  observability,
+  isLoading,
+}: {
+  observability?: RunObservability;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-3 text-sm'>
+        <Spinner /> Calculating local metrics…
+      </div>
+    );
+  }
+  if (!observability || observability.overall.count === 0) return null;
+
+  const { overall } = observability;
+  const attention = [...observability.spans]
+    .filter((span) => span.failedCount > 0)
+    .sort((left, right) => right.failedCount - left.failedCount || (right.p95DurationMs ?? 0) - (left.p95DurationMs ?? 0))
+    .slice(0, 3);
+  return (
+    <section className='bg-card overflow-hidden rounded-xl border shadow-sm'>
+      <div className='flex items-center gap-2 border-b px-4 py-3'>
+        <span className='bg-violet-500/10 text-violet-700 flex size-7 items-center justify-center rounded-lg dark:text-violet-300'>
+          <ActivityIcon className='size-4' />
+        </span>
+        <div>
+          <h3 className='text-sm font-semibold'>Runtime health</h3>
+          <p className='text-muted-foreground text-xs'>All local runs for this workflow</p>
+        </div>
+      </div>
+      <div className='grid grid-cols-2 divide-x divide-y sm:grid-cols-4 sm:divide-y-0'>
+        <MetricCell label='Runs' value={String(overall.count)} detail={`${overall.completedCount} completed`} />
+        <MetricCell label='Success rate' value={formatRate(overall.successRate)} detail={`${overall.failedCount} failed`} />
+        <MetricCell label='P95 duration' value={formatDuration(overall.p95DurationMs)} detail={`Average ${formatDuration(overall.averageDurationMs)}`} />
+        <MetricCell label='Model tokens' value={formatNumber(overall.totalTokens)} detail={`${formatNumber(overall.inputTokens)} in / ${formatNumber(overall.outputTokens)} out`} />
+      </div>
+      {attention.length > 0 ? (
+        <div className='border-t px-4 py-3'>
+          <p className='text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase'>Needs attention</p>
+          <div className='space-y-1.5'>
+            {attention.map((span) => (
+              <AttentionRow key={spanKey(span)} span={span} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function MetricCell({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className='min-w-0 px-4 py-3'>
+      <p className='text-muted-foreground text-xs'>{label}</p>
+      <p className='mt-1 truncate text-lg font-semibold tracking-tight'>{value}</p>
+      <p className='text-muted-foreground mt-0.5 truncate text-xs'>{detail}</p>
+    </div>
+  );
+}
+
+function AttentionRow({ span }: { span: SpanMetricSummary }) {
+  const label = span.toolName ?? span.model ?? span.nodeId ?? span.kind.replaceAll('_', ' ');
+  return (
+    <div className='bg-muted/50 flex items-center gap-3 rounded-md px-3 py-2 text-sm'>
+      <span className='min-w-0 flex-1 truncate font-medium'>{label}</span>
+      <span className='text-destructive shrink-0 text-xs'>{span.failedCount} failed</span>
+      <span className='text-muted-foreground shrink-0 font-mono text-xs'>{formatDuration(span.p95DurationMs)}</span>
+    </div>
+  );
+}
+
+function formatRate(rate: number | undefined) {
+  return rate === undefined ? '—' : `${Math.round(rate * 100)}%`;
+}
+
+function formatDuration(duration: number | undefined) {
+  if (duration === undefined) return '—';
+  return duration >= 1_000 ? `${(duration / 1_000).toFixed(1)}s` : `${duration}ms`;
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat().format(value);
+}
+
+function spanKey(span: SpanMetricSummary) {
+  return [span.kind, span.nodeId, span.provider, span.model, span.toolName].join(':');
 }
 
 export { WorkflowHistory };

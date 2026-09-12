@@ -22,6 +22,7 @@ name = "workrun_lib"
 [dependencies]
 adk-agent = { version = "2.2.0", features = ["guardrails"] }
 adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", "graph-sqlite", "groq", "mcp-http", "ollama", "skills-progressive-disclosure"] }
+adk-telemetry = { version = "2.2.0", features = ["otlp"] }
 aes-gcm = "0.11.1"
 anyhow = { workspace = true }
 base64 = "0.23.1"
@@ -80,6 +81,7 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7.19", features = ["rt"] }
+tracing = "0.1.44"
 url = "2.5.8"
 uuid = { workspace = true, features = ["v4"] }
 walkdir = { workspace = true }

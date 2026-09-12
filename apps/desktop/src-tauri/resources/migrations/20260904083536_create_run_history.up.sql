@@ -59,6 +59,49 @@ CREATE TABLE run_events (
 CREATE INDEX idx_run_events_run_sequence
   ON run_events(run_id, sequence);
 
+-- run_spans is the queryable telemetry projection. Raw content remains in
+-- the redacted event journal rather than becoming a second sensitive store.
+CREATE TABLE run_spans (
+  id TEXT PRIMARY KEY NOT NULL,
+  run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE CASCADE,
+  parent_span_id TEXT REFERENCES run_spans(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('workflow_node', 'agent', 'model_call', 'tool_call')),
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
+  node_id TEXT,
+  node_name TEXT,
+  provider TEXT,
+  model TEXT,
+  tool_name TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  duration_ms INTEGER,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  total_tokens INTEGER,
+  total_tokens_estimated INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens_estimated IN (0, 1)),
+  cache_read_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  reasoning_tokens INTEGER,
+  audio_input_tokens INTEGER,
+  audio_output_tokens INTEGER,
+  estimated_cost_microusd INTEGER,
+  is_byok INTEGER CHECK (is_byok IN (0, 1)),
+  error_code TEXT,
+  error_message TEXT,
+  attributes_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_run_spans_run_time
+  ON run_spans(run_id, started_at ASC, id ASC);
+
+CREATE INDEX idx_run_spans_parent
+  ON run_spans(parent_span_id);
+
+CREATE INDEX idx_run_spans_kind_model
+  ON run_spans(kind, provider, model);
+
 -- A pending action is separate from the run status: many runs may wait at
 -- once, while the UI chooses only one action to present at a time.
 CREATE TABLE run_pending_actions (

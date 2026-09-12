@@ -1,13 +1,14 @@
 use super::events::{execute_app, finish_run, persist_events, publish_error, publish_value_event};
 use super::workflow::workflow_session_from_runtime;
 use super::*;
+use tracing::Instrument as _;
 
 pub(super) async fn execute_claimed_run(run_id: &str) {
     let result = async {
         let record = RunHistoryStore::inspect(run_id).await?;
         match record.summary.target_type.as_str() {
             "app" => execute_claimed_app(run_id, &record.summary.target_id).await,
-            "workflow" => execute_claimed_workflow(run_id, record.runtime).await,
+            "workflow" => execute_claimed_workflow(run_id, &record.summary.target_id, record.runtime).await,
             target_type => bail!("unsupported queued run target type: {target_type}"),
         }
     }
@@ -34,8 +35,9 @@ async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
     result
 }
 
-async fn execute_claimed_workflow(run_id: &str, runtime: Value) -> Result<()> {
+async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Value) -> Result<()> {
     let session = workflow_session_from_runtime(&runtime)?;
+    let workflow_version = runtime.get("releaseVersion").and_then(Value::as_str).unwrap_or("draft");
     let resume = runtime.get("resume").and_then(Value::as_bool).unwrap_or(false);
     let tool_confirmation = runtime
         .get("toolConfirmation")
@@ -53,7 +55,18 @@ async fn execute_claimed_workflow(run_id: &str, runtime: Value) -> Result<()> {
         .workflow_cancellations
         .lock()
         .insert(run_id.to_string(), cancellation.clone());
-    let result = execute_workflow(run_id, session, resume, tool_confirmation, cancellation).await;
+    // Keep the root span attached across await points so ADK's model and tool
+    // spans become children of the durable Workrun run they belong to.
+    let run_span = tracing::info_span!(
+        "workrun.workflow.run",
+        workrun.run.id = %run_id,
+        workrun.workflow.id = %workflow_id,
+        workrun.workflow.version = %workflow_version,
+        workrun.thread.id = %session.thread_id,
+    );
+    let result = execute_workflow(run_id, session, resume, tool_confirmation, cancellation)
+        .instrument(run_span)
+        .await;
     RunManager::global().workflow_cancellations.lock().remove(run_id);
     result
 }

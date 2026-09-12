@@ -54,6 +54,7 @@ import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
 import {
   inspectRunRecord,
+  getWorkflowObservability,
   listRunHistoryPage,
   type RunHistoryCursor,
   type RunRecord,
@@ -184,6 +185,11 @@ function WorkflowEditorContent({
       }),
     initialPageParam: undefined as RunHistoryCursor | undefined,
     getNextPageParam: (page) => page.nextCursor,
+    enabled: historyOpen && Boolean(activeWorkflow),
+  });
+  const workflowObservability = useQuery({
+    queryKey: ['run-observability', activeWorkflow?.id],
+    queryFn: () => getWorkflowObservability({ workflowId: activeWorkflow!.id }),
     enabled: historyOpen && Boolean(activeWorkflow),
   });
 
@@ -397,6 +403,8 @@ function WorkflowEditorContent({
               isLoading={workflowHistory.isLoading}
               hasMore={workflowHistory.hasNextPage}
               isLoadingMore={workflowHistory.isFetchingNextPage}
+              observability={workflowObservability.data}
+              isObservabilityLoading={workflowObservability.isLoading}
               onLoadMore={() => void workflowHistory.fetchNextPage()}
               onView={(id) => void openHistoricalRun(id)}
             />

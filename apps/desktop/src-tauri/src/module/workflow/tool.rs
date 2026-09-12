@@ -181,6 +181,10 @@ impl Tool for ManagedTool {
         ensure_tool_args_safe(&args)?;
 
         validate_tool_value(&self.definition.input_schema, &args, "input")?;
+        // A model may invoke the same tool repeatedly within one Agent turn.
+        // Preserve a call-local ID so history can pair each request and result.
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let started_at = std::time::Instant::now();
 
         if let Some(on_event) = &self.on_event {
             send_guarded_event(
@@ -189,6 +193,7 @@ impl Tool for ManagedTool {
                     &self.agent_node_id,
                     "agent.tool_call",
                     json!({
+                        "callId": call_id,
                         "tool": self.name(),
                         "name": self.definition.display_name,
                         "input": args,
@@ -196,53 +201,80 @@ impl Tool for ManagedTool {
                 ),
             );
         }
-        let execution_args = resolve_execution_args(
-            &self.state,
-            &self.agent_node_id,
-            &args,
-            &self.state_bindings,
-            &self.definition.input_schema,
-        )?;
-        let timeout = std::time::Duration::from_secs(self.timeout_seconds);
-        let result = match &self.executor {
-            ManagedToolExecutor::Process => {
-                let run = tokio::time::timeout(
-                    timeout,
-                    crate::feat::run_process_node_for_tool(
-                        &self.definition.id,
-                        &execution_args,
-                        // Buffer process output so secrets split across chunks
-                        // cannot pass through the event channel undetected.
-                        Arc::new(|_| {}),
-                    ),
-                )
-                .await
-                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?
-                .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
-                if let Some(on_event) = &self.on_event {
-                    for (stream, data) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
-                        if !data.is_empty() {
-                            // Tool App stdout/stderr is an explicit local debugging
-                            // surface. Preserve it verbatim for the workflow Output UI;
-                            // the workflow author is responsible for what the tool prints.
-                            let _ = on_event.send(StreamEvent::custom(
-                                &self.agent_node_id,
-                                "agent.tool_output",
-                                json!({ "tool": self.name(), "stream": stream, "data": data }),
-                            ));
+        let execution = async {
+            let execution_args = resolve_execution_args(
+                &self.state,
+                &self.agent_node_id,
+                &args,
+                &self.state_bindings,
+                &self.definition.input_schema,
+            )?;
+            let timeout = std::time::Duration::from_secs(self.timeout_seconds);
+            let result = match &self.executor {
+                ManagedToolExecutor::Process => {
+                    let run = tokio::time::timeout(
+                        timeout,
+                        crate::feat::run_process_node_for_tool(
+                            &self.definition.id,
+                            &execution_args,
+                            // Buffer process output so secrets split across chunks
+                            // cannot pass through the event channel undetected.
+                            Arc::new(|_| {}),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?
+                    .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+                    if let Some(on_event) = &self.on_event {
+                        for (stream, data) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
+                            if !data.is_empty() {
+                                // Tool App stdout/stderr is an explicit local debugging
+                                // surface. Preserve it verbatim for the workflow Output UI;
+                                // the workflow author is responsible for what the tool prints.
+                                let _ = on_event.send(StreamEvent::custom(
+                                    &self.agent_node_id,
+                                    "agent.tool_output",
+                                    json!({ "tool": self.name(), "stream": stream, "data": data }),
+                                ));
+                            }
                         }
                     }
+                    run.result
+                },
+                ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, execution_args))
+                    .await
+                    .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
+            };
+            validate_tool_value(&self.definition.output_schema, &result, "output")?;
+            Ok::<_, adk_rust::AdkError>(result)
+        }
+        .await;
+        let result = match execution {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(on_event) = &self.on_event {
+                    // Record failure without duplicating the possibly sensitive tool error.
+                    send_guarded_event(
+                        on_event,
+                        StreamEvent::custom(
+                            &self.agent_node_id,
+                            "agent.tool_error",
+                            json!({
+                                "callId": call_id,
+                                "durationMs": started_at.elapsed().as_millis() as u64,
+                                "tool": self.name(),
+                                "name": self.definition.display_name,
+                            }),
+                        ),
+                    );
                 }
-                run.result
+                return Err(error);
             },
-            ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, execution_args))
-                .await
-                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
         };
 
-        validate_tool_value(&self.definition.output_schema, &result, "output")?;
-
         let trace = redact_json(&json!({
+            "callId": call_id,
+            "durationMs": started_at.elapsed().as_millis() as u64,
             "tool": self.name(),
             "name": self.definition.display_name,
             "input": args,

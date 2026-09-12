@@ -536,6 +536,15 @@ pub(super) fn agent_output_updates(
     }
     let event = redact_json(&event);
     if let Some(on_event) = on_event {
+        for model_call in events
+            .iter()
+            .filter_map(|event| model_call_telemetry(event, endpoint_or_model))
+        {
+            // ADK carries provider-reported usage on final Agent events. Emit
+            // only that summary; response text and request payload stay out of
+            // the telemetry projection.
+            send_guarded_event(on_event, StreamEvent::custom(node_id, "agent.model_call", model_call));
+        }
         send_guarded_event(
             on_event,
             StreamEvent::custom(node_id, "workflow.node_result", event.clone()),
@@ -570,4 +579,125 @@ pub(super) fn agent_output_updates(
         updates.extend(values.clone());
     }
     Ok(updates)
+}
+
+#[derive(Debug, PartialEq)]
+struct WorkrunUsageSnapshot {
+    input_tokens: i64,
+    output_tokens: i64,
+    total_tokens: i64,
+    total_tokens_estimated: bool,
+    cache_read_tokens: Option<i64>,
+    cache_write_tokens: Option<i64>,
+    reasoning_tokens: Option<i64>,
+    audio_input_tokens: Option<i64>,
+    audio_output_tokens: Option<i64>,
+    estimated_cost_microusd: Option<i64>,
+    is_byok: Option<bool>,
+}
+
+impl WorkrunUsageSnapshot {
+    fn from_adk(usage: &adk_rust::UsageMetadata) -> Self {
+        let input_tokens = usage.prompt_token_count.max(0) as i64;
+        let output_tokens = usage.candidates_token_count.max(0) as i64;
+        let reported_total_tokens = usage.total_token_count.max(0) as i64;
+        // ADK's total count is not optional. Treat a zero total with nonzero
+        // input/output as omitted provider data, rather than reporting zero.
+        let total_tokens_estimated = reported_total_tokens == 0 && input_tokens + output_tokens > 0;
+        Self {
+            input_tokens,
+            output_tokens,
+            total_tokens: total_tokens_estimated
+                .then_some(input_tokens + output_tokens)
+                .unwrap_or(reported_total_tokens),
+            total_tokens_estimated,
+            cache_read_tokens: usage.cache_read_input_token_count.map(|value| value.max(0) as i64),
+            cache_write_tokens: usage.cache_creation_input_token_count.map(|value| value.max(0) as i64),
+            reasoning_tokens: usage.thinking_token_count.map(|value| value.max(0) as i64),
+            audio_input_tokens: usage.audio_input_token_count.map(|value| value.max(0) as i64),
+            audio_output_tokens: usage.audio_output_token_count.map(|value| value.max(0) as i64),
+            estimated_cost_microusd: usage
+                .cost
+                .filter(|cost| cost.is_finite() && *cost >= 0.0)
+                .map(|cost| (cost * 1_000_000.0).round() as i64),
+            is_byok: usage.is_byok,
+        }
+    }
+}
+
+fn model_call_telemetry(event: &adk_rust::Event, model: &str) -> Option<Value> {
+    let usage = WorkrunUsageSnapshot::from_adk(event.llm_response.usage_metadata.as_ref()?);
+    Some(json!({
+        "modelCallId": event.id,
+        "model": model,
+        "occurredAt": event.timestamp.to_rfc3339(),
+        "inputTokens": usage.input_tokens,
+        "outputTokens": usage.output_tokens,
+        "totalTokens": usage.total_tokens,
+        "totalTokensEstimated": usage.total_tokens_estimated,
+        "cacheReadTokens": usage.cache_read_tokens,
+        "cacheWriteTokens": usage.cache_write_tokens,
+        "reasoningTokens": usage.reasoning_tokens,
+        "audioInputTokens": usage.audio_input_tokens,
+        "audioOutputTokens": usage.audio_output_tokens,
+        "estimatedCostMicrousd": usage.estimated_cost_microusd,
+        "isByok": usage.is_byok,
+    }))
+}
+
+#[cfg(test)]
+mod usage_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn maps_every_supported_adk_usage_field() {
+        let snapshot = WorkrunUsageSnapshot::from_adk(&adk_rust::UsageMetadata {
+            prompt_token_count: 100,
+            candidates_token_count: 25,
+            total_token_count: 160,
+            cache_read_input_token_count: Some(80),
+            cache_creation_input_token_count: Some(10),
+            thinking_token_count: Some(35),
+            audio_input_token_count: Some(4),
+            audio_output_token_count: Some(5),
+            cost: Some(0.000123),
+            is_byok: Some(true),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            snapshot,
+            WorkrunUsageSnapshot {
+                input_tokens: 100,
+                output_tokens: 25,
+                total_tokens: 160,
+                total_tokens_estimated: false,
+                cache_read_tokens: Some(80),
+                cache_write_tokens: Some(10),
+                reasoning_tokens: Some(35),
+                audio_input_tokens: Some(4),
+                audio_output_tokens: Some(5),
+                estimated_cost_microusd: Some(123),
+                is_byok: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn estimates_missing_total_without_inventing_optional_usage() {
+        let snapshot = WorkrunUsageSnapshot::from_adk(&adk_rust::UsageMetadata {
+            prompt_token_count: 4,
+            candidates_token_count: 2,
+            total_token_count: 0,
+            cost: Some(-1.0),
+            ..Default::default()
+        });
+
+        assert_eq!(snapshot.total_tokens, 6);
+        assert!(snapshot.total_tokens_estimated);
+        assert_eq!(snapshot.cache_read_tokens, None);
+        assert_eq!(snapshot.reasoning_tokens, None);
+        assert_eq!(snapshot.estimated_cost_microusd, None);
+        assert_eq!(snapshot.is_byok, None);
+    }
 }

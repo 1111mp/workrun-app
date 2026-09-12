@@ -1,6 +1,6 @@
 use crate::{
     config::{BaseConfig, Config},
-    core::handle,
+    core::{handle, telemetry},
     logging,
     module::{mcp_server::McpServerRegistry, run_manager},
     utils::{dirs, logging::Type},
@@ -30,6 +30,7 @@ pub async fn restart_app() {
     Config::apply_all_and_save_file().await;
 
     run_manager::shutdown_supervisor().await;
+    telemetry::shutdown();
 
     if let Err(error) = McpServerRegistry::shutdown_all().await {
         logging!(error, Type::System, "Failed to stop MCP servers: {}", error);
