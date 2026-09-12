@@ -240,4 +240,51 @@ describe('prepareWorkflowProcessApps', () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(fetchApi.get).not.toHaveBeenCalled();
   });
+
+  it('uses the release-scoped Team App installation for a published workflow', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValueOnce({
+      definition: {
+        ...definition,
+        id: 'local-app-1',
+        remoteArchiveSha256: 'a'.repeat(64),
+      },
+      installStatus: 'installed',
+      projectPath: '/team/release-workflow-1/process-nodes/local-app-1',
+    });
+    const dsl = {
+      nodes: [
+        {
+          type: 'process',
+          data: {
+            name: 'Shared App',
+            appRef: {
+              source: 'team' as const,
+              remoteAppId: 'remote-app-1',
+              releaseId: 'app-release-1',
+              version: '1.2.3',
+              archiveSha256: 'a'.repeat(64),
+            },
+          },
+        },
+      ],
+    };
+
+    await expect(
+      prepareWorkflowProcessApps(dsl, 'release-workflow-1'),
+    ).resolves.toEqual({
+      nodes: [
+        {
+          type: 'process',
+          data: expect.objectContaining({ processNodeId: 'local-app-1' }),
+        },
+      ],
+    });
+    expect(invoke).toHaveBeenCalledWith('process_node_find_team_release', {
+      remoteAppId: 'remote-app-1',
+      releaseId: 'app-release-1',
+      installationScope: 'release-workflow-1',
+    });
+    expect(fetchApi.get).not.toHaveBeenCalled();
+  });
 });

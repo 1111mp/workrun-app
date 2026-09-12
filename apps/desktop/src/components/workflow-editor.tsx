@@ -82,6 +82,7 @@ import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
   readOnly?: boolean;
+  allowRun?: boolean;
   autoStartRun?: boolean;
   historicalRun?: RunRecord;
 };
@@ -89,6 +90,7 @@ type WorkflowEditorProps = {
 function WorkflowEditor({
   workflow,
   readOnly,
+  allowRun,
   autoStartRun,
   historicalRun,
 }: WorkflowEditorProps) {
@@ -104,6 +106,7 @@ function WorkflowEditor({
       <WorkflowEditorContent
         workflow={workflow}
         readOnly={readOnly}
+        allowRun={allowRun}
         autoStartRun={autoStartRun}
         historicalRun={historicalRun}
       />
@@ -114,6 +117,7 @@ function WorkflowEditor({
 function WorkflowEditorContent({
   workflow,
   readOnly = false,
+  allowRun = false,
   autoStartRun,
   historicalRun,
 }: WorkflowEditorProps) {
@@ -381,6 +385,9 @@ function WorkflowEditorContent({
         isRunning={workflowRun.isRunning}
         runningNodeId={workflowRun.runningNodeId}
         onRun={workflowRun.startRun}
+        // A catalog release is immutable, but its pinned execution recipe is
+        // safe to run. All editing controls remain governed by readOnly.
+        canRun={!readOnly || allowRun}
         canvasContent={
           historyOpen && activeWorkflow ? (
             <WorkflowHistory
@@ -542,7 +549,7 @@ function WorkflowEditorContent({
             onSettingsChange={updateWorkflowSettings}
           />
         ) : null}
-        {!readOnly ? (
+        {!readOnly || allowRun ? (
           <WorkflowRunPanel
             settings={workflowSettings}
             nodes={nodes}
