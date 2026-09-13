@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 // Versions are immutable run metadata, so history lists read them from the
 // snapshot rather than the mutable App catalog.
-const RUN_RECORD_SUMMARY_COLUMNS: &str = "id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version, json_extract(target_snapshot_json, '$.version') AS app_version";
+const RUN_RECORD_SUMMARY_COLUMNS: &str = "id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version, json_extract(target_snapshot_json, '$.version') AS app_version, (SELECT SUM(CASE WHEN total_tokens IS NOT NULL THEN total_tokens WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) END) FROM run_spans WHERE run_id = run_records.id AND kind = 'model_call') AS model_tokens, (SELECT SUM(estimated_cost_microusd) FROM run_spans WHERE run_id = run_records.id AND kind = 'model_call') AS model_estimated_cost_microusd";
 
 impl RunHistoryStore {
     pub async fn list(query: RunHistoryQuery) -> Result<RunHistoryPage> {
@@ -127,6 +127,7 @@ impl RunHistoryStore {
         }
         if query.started_after.as_deref().is_some_and(str::is_empty)
             || query.started_before.as_deref().is_some_and(str::is_empty)
+            || query.release_version.as_deref().is_some_and(str::is_empty)
         {
             bail!("observability timestamps cannot be empty");
         }
@@ -146,6 +147,7 @@ async fn observability_run_rows(
     );
     sql.push_bind(&query.workflow_id)
         .push(" AND status IN ('completed', 'failed', 'cancelled', 'interrupted')");
+    append_observability_version_filter(&mut sql, query);
     append_observability_time_filter(&mut sql, query);
     Ok(sql.build().fetch_all(pool).await?)
 }
@@ -159,8 +161,16 @@ async fn observability_span_rows(
     );
     sql.push_bind(&query.workflow_id)
         .push(" AND run_records.status IN ('completed', 'failed', 'cancelled', 'interrupted')");
+    append_observability_version_filter(&mut sql, query);
     append_observability_time_filter(&mut sql, query);
     Ok(sql.build().fetch_all(pool).await?)
+}
+
+fn append_observability_version_filter(sql: &mut QueryBuilder<Sqlite>, query: &RunObservabilityQuery) {
+    if let Some(release_version) = &query.release_version {
+        sql.push(" AND json_extract(run_records.runtime_json, '$.releaseVersion') = ")
+            .push_bind(release_version);
+    }
 }
 
 fn append_observability_time_filter(sql: &mut QueryBuilder<Sqlite>, query: &RunObservabilityQuery) {
@@ -396,6 +406,8 @@ fn summary_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunRecordSummary> {
         release_id: row.try_get("release_id")?,
         release_version: row.try_get("release_version")?,
         app_version: row.try_get("app_version")?,
+        model_tokens: row.try_get("model_tokens")?,
+        model_estimated_cost_microusd: row.try_get("model_estimated_cost_microusd")?,
     })
 }
 
@@ -418,10 +430,11 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
+        let mut sql = QueryBuilder::<Sqlite>::new("");
         let row = sql
+            .push("WITH run_spans(run_id, kind, total_tokens, input_tokens, output_tokens, estimated_cost_microusd) AS (VALUES ('run-1', 'model_call', NULL, 12, 8, 123), ('run-1', 'tool_call', 99, NULL, NULL, 999)) SELECT ")
             .push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(" FROM (SELECT 'run-1' AS id, 'app' AS target_type, 'app-1' AS target_id, 'App' AS target_name, 'running' AS status, '2026-09-11T00:00:00Z' AS started_at, NULL AS ended_at, NULL AS duration_ms, NULL AS error, '{\"releaseId\":\"release-1\",\"releaseVersion\":\"1.2.3\"}' AS runtime_json, '{\"version\":\"2.0.0\"}' AS target_snapshot_json)")
+            .push(" FROM (SELECT 'run-1' AS id, 'app' AS target_type, 'app-1' AS target_id, 'App' AS target_name, 'running' AS status, '2026-09-11T00:00:00Z' AS started_at, NULL AS ended_at, NULL AS duration_ms, NULL AS error, '{\"releaseId\":\"release-1\",\"releaseVersion\":\"1.2.3\"}' AS runtime_json, '{\"version\":\"2.0.0\"}' AS target_snapshot_json) AS run_records")
             .build()
             .fetch_one(&pool)
             .await
@@ -431,6 +444,8 @@ mod tests {
         assert_eq!(summary.release_id.as_deref(), Some("release-1"));
         assert_eq!(summary.release_version.as_deref(), Some("1.2.3"));
         assert_eq!(summary.app_version.as_deref(), Some("2.0.0"));
+        assert_eq!(summary.model_tokens, Some(20));
+        assert_eq!(summary.model_estimated_cost_microusd, Some(123));
     }
 
     #[test]
@@ -492,6 +507,7 @@ mod tests {
 
         let query = RunObservabilityQuery {
             workflow_id: "workflow-1".into(),
+            release_version: None,
             started_after: None,
             started_before: None,
         };
@@ -505,5 +521,16 @@ mod tests {
         assert_eq!(summary.overall.total_tokens, 15);
         assert_eq!(summary.versions[0].release_version, "1.0.0");
         assert_eq!(summary.spans.len(), 2);
+
+        let no_match = RunObservabilityQuery {
+            release_version: Some("2.0.0".into()),
+            ..query
+        };
+        let summary = aggregate_observability(
+            observability_run_rows(&pool, &no_match).await.unwrap(),
+            observability_span_rows(&pool, &no_match).await.unwrap(),
+        );
+        assert_eq!(summary.overall.count, 0);
+        assert!(summary.spans.is_empty());
     }
 }

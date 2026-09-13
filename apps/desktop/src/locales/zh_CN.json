@@ -477,7 +477,30 @@
       "executions": "工作流执行记录",
       "description": "无需离开此工作流即可查看过去的运行。",
       "loading": "正在加载运行记录…",
-      "emptyDescription": "运行此工作流以创建第一条记录。"
+      "emptyDescription": "运行此工作流以创建第一条记录。",
+      "observability": {
+        "calculating": "正在计算本地指标…",
+        "runtimeHealth": "运行健康度",
+        "localRuns": "所选时间范围内的本地运行",
+        "timeRange": "时间范围",
+        "periods": {
+          "7d": "7 天",
+          "30d": "30 天",
+          "all": "全部"
+        },
+        "version": "版本",
+        "allVersions": "全部版本",
+        "runs": "运行次数",
+        "completed": "已完成 {{count}} 次",
+        "successRate": "成功率",
+        "failed": "失败 {{count}} 次",
+        "p95Duration": "P95 耗时",
+        "average": "平均 {{duration}}",
+        "modelTokens": "模型 Token",
+        "inputOutput": "输入 {{inputTokens}} / 输出 {{outputTokens}}",
+        "tokens": "{{count}} tokens",
+        "needsAttention": "需要关注"
+      }
     },
     "settings": {
       "description": "定义工作流说明及每次运行可接受的参数。",
@@ -597,6 +620,36 @@
       "send": "发送",
       "copyAll": "复制全部",
       "close": "关闭",
+      "telemetry": {
+        "modelUsage": "模型用量",
+        "modelUsageSummary": "{{totalTokens}} tokens · 输入 {{inputTokens}} / 输出 {{outputTokens}} · {{count}} 次模型调用{{cost}}",
+        "modelCall": "模型调用 {{index}}",
+        "noUsageDetails": "服务商未返回用量明细",
+        "tokens": "{{count}}{{estimated}} tokens",
+        "inputOutput": "输入 {{inputTokens}} / 输出 {{outputTokens}}",
+        "cacheRead": "缓存读取 {{count}}",
+        "cacheWrite": "缓存写入 {{count}}",
+        "reasoning": "推理 {{count}}",
+        "audioInputOutput": "音频输入 {{inputTokens}} / 音频输出 {{outputTokens}}",
+        "runModelUsage": "本次运行的模型用量",
+        "runModelUsageSummary": "输入 {{inputTokens}} · 输出 {{outputTokens}} · {{modelCalls}} 次模型调用 · {{count}} 个智能体",
+        "estimatedCost": "预估 {{cost}}",
+        "runtimeDiagnostics": "运行诊断",
+        "runtimeSummary": "{{workflowNodes}} 个工作流节点 · {{toolCalls}} 次工具调用",
+        "runtimeTokens": "{{totalTokens}} tokens（输入 {{inputTokens}} / 输出 {{outputTokens}}）",
+        "spanKinds": {
+          "workflow_node": "工作流节点",
+          "agent": "智能体",
+          "model_call": "模型调用",
+          "tool_call": "工具调用"
+        },
+        "spanStatuses": {
+          "running": "运行中",
+          "completed": "已完成",
+          "failed": "失败",
+          "cancelled": "已取消"
+        }
+      },
       "status": {
         "running": "运行中",
         "completed": "已完成",

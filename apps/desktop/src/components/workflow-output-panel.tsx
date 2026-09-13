@@ -128,9 +128,6 @@ function nodeDisplayName(
   workflowNodes: Node[],
   nodeId: string,
 ) {
-  const name = run.nodes.find((node) => node.id === nodeId)?.name;
-  if (name) return name;
-
   const node = workflowNodes.find((node) => node.id === nodeId);
   const data = node?.data;
   if (typeof data?.workflowName === 'string' && data.workflowName.trim())
@@ -138,7 +135,18 @@ function nodeDisplayName(
   if (typeof data?.name === 'string' && data.name.trim()) return data.name;
   if (typeof data?.label === 'string' && data.label.trim()) return data.label;
   if (typeof data?.title === 'string' && data.title.trim()) return data.title;
+
+  const name = run.nodes.find((node) => node.id === nodeId)?.name?.trim();
+  // Older run snapshots used the internal ID when a node had no display name.
+  // Never surface that fallback now that diagnostics are user-facing.
+  if (name && name !== nodeId) return name;
   return 'Unknown node';
+}
+
+function isProcessToolName(name?: string) {
+  return /^process_[0-9a-f]{8}(?:_[0-9a-f]{4}){3}_[0-9a-f]{12}$/i.test(
+    name ?? '',
+  );
 }
 
 function processNodeInfo(workflowNodes: Node[], nodeId: string) {
@@ -468,12 +476,131 @@ function SubworkflowExecution({ entry }: { entry: WorkflowTraceEntry }) {
   );
 }
 
+function tokenCount(span: RunSpan) {
+  return span.totalTokens ?? (span.inputTokens ?? 0) + (span.outputTokens ?? 0);
+}
+
+function formatCost(microusd: number) {
+  return `$${(microusd / 1_000_000).toFixed(microusd >= 10_000 ? 2 : 4)}`;
+}
+
+function ModelUsage({ nodeId, spans }: { nodeId: string; spans: RunSpan[] }) {
+  const { t } = useTranslation();
+  const modelCalls = spans.filter(
+    (span) => span.kind === 'model_call' && span.nodeId === nodeId,
+  );
+  if (modelCalls.length === 0) return null;
+
+  const inputTokens = modelCalls.reduce(
+    (total, span) => total + (span.inputTokens ?? 0),
+    0,
+  );
+  const outputTokens = modelCalls.reduce(
+    (total, span) => total + (span.outputTokens ?? 0),
+    0,
+  );
+  const totalTokens = modelCalls.reduce(
+    (total, span) => total + tokenCount(span),
+    0,
+  );
+  const cost = modelCalls.reduce(
+    (total, span) => total + (span.estimatedCostMicrousd ?? 0),
+    0,
+  );
+
+  return (
+    <Collapsible className='bg-muted/35 mt-3 overflow-hidden rounded-md border'>
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant='ghost'
+            className='group h-auto w-full justify-between rounded-none px-3 py-2'
+          />
+        }
+      >
+        <span className='flex min-w-0 flex-col items-start'>
+          <span className='text-sm font-medium'>
+            {t('workflowEditor.output.telemetry.modelUsage')}
+          </span>
+          <span className='text-muted-foreground text-xs'>
+            {t('workflowEditor.output.telemetry.modelUsageSummary', {
+              count: modelCalls.length,
+              totalTokens,
+              inputTokens,
+              outputTokens,
+              cost: cost > 0 ? ` · ${formatCost(cost)}` : '',
+            })}
+          </span>
+        </span>
+        <ChevronDownIcon className='text-muted-foreground size-4 transition-transform group-data-panel-open/button:rotate-180' />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='divide-y border-t'>
+        {modelCalls.map((span, index) => {
+          const details = [
+            t('workflowEditor.output.telemetry.inputOutput', {
+              inputTokens: span.inputTokens ?? 0,
+              outputTokens: span.outputTokens ?? 0,
+            }),
+            span.cacheReadTokens
+              ? t('workflowEditor.output.telemetry.cacheRead', {
+                  count: span.cacheReadTokens,
+                })
+              : undefined,
+            span.cacheWriteTokens
+              ? t('workflowEditor.output.telemetry.cacheWrite', {
+                  count: span.cacheWriteTokens,
+                })
+              : undefined,
+            span.reasoningTokens
+              ? t('workflowEditor.output.telemetry.reasoning', {
+                  count: span.reasoningTokens,
+                })
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          return (
+            <div
+              key={span.id}
+              className='flex items-center gap-3 px-3 py-2 text-sm'
+            >
+              <div className='min-w-0 flex-1'>
+                <div className='truncate font-medium'>
+                  {span.model ??
+                    t('workflowEditor.output.telemetry.modelCall', {
+                      index: index + 1,
+                    })}
+                </div>
+                <div className='text-muted-foreground truncate text-xs'>
+                  {details ||
+                    t('workflowEditor.output.telemetry.noUsageDetails')}
+                </div>
+              </div>
+              <span className='text-muted-foreground shrink-0 font-mono text-xs'>
+                {t('workflowEditor.output.telemetry.tokens', {
+                  count: tokenCount(span),
+                  estimated: span.totalTokensEstimated ? '~' : '',
+                })}
+              </span>
+              <span className='text-muted-foreground w-12 shrink-0 text-right font-mono text-xs'>
+                {span.durationMs == null ? '—' : `${span.durationMs}ms`}
+              </span>
+            </div>
+          );
+        })}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function TraceResult({
   entry,
   showAgentResponse = true,
+  spans = [],
 }: {
   entry: WorkflowTraceEntry;
   showAgentResponse?: boolean;
+  spans?: RunSpan[];
 }) {
   const result =
     typeof entry.result === 'object' && entry.result !== null
@@ -581,6 +708,7 @@ function TraceResult({
               : 'Response ready.'}
           </p>
           <ToolCalls calls={toolCalls} />
+          <ModelUsage nodeId={entry.nodeId} spans={spans} />
         </>
       );
     }
@@ -598,6 +726,7 @@ function TraceResult({
     return (
       <>
         <ToolCalls calls={toolCalls} />
+        <ModelUsage nodeId={entry.nodeId} spans={spans} />
         {responses.length > 0 ? (
           <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
             {responses.map((response, index) => (
@@ -815,13 +944,31 @@ function ThinkingProcess({
   );
 }
 
-function RunTelemetry({ spans }: { spans: RunSpan[] }) {
+function RunTelemetry({
+  spans,
+  nodeName,
+}: {
+  spans: RunSpan[];
+  nodeName: (nodeId: string) => string;
+}) {
+  const { t } = useTranslation();
   if (spans.length === 0) return null;
-  const workflowNodes = spans.filter((span) => span.kind === 'workflow_node').length;
+  const workflowNodes = spans.filter(
+    (span) => span.kind === 'workflow_node',
+  ).length;
   const toolCalls = spans.filter((span) => span.kind === 'tool_call').length;
-  const inputTokens = spans.reduce((total, span) => total + (span.inputTokens ?? 0), 0);
-  const outputTokens = spans.reduce((total, span) => total + (span.outputTokens ?? 0), 0);
-  const totalTokens = spans.reduce((total, span) => total + (span.totalTokens ?? 0), 0);
+  const inputTokens = spans.reduce(
+    (total, span) => total + (span.inputTokens ?? 0),
+    0,
+  );
+  const outputTokens = spans.reduce(
+    (total, span) => total + (span.outputTokens ?? 0),
+    0,
+  );
+  const totalTokens = spans.reduce(
+    (total, span) => total + (span.totalTokens ?? 0),
+    0,
+  );
 
   return (
     <Collapsible className='bg-card overflow-hidden rounded-xl border shadow-sm'>
@@ -838,10 +985,21 @@ function RunTelemetry({ spans }: { spans: RunSpan[] }) {
             <TerminalIcon className='size-4' />
           </span>
           <span className='flex flex-col items-start'>
-            <span className='text-sm font-semibold'>Runtime diagnostics</span>
+            <span className='text-sm font-semibold'>
+              {t('workflowEditor.output.telemetry.runtimeDiagnostics')}
+            </span>
             <span className='text-muted-foreground text-xs'>
-              {workflowNodes} workflow step{workflowNodes === 1 ? '' : 's'} · {toolCalls} tool call{toolCalls === 1 ? '' : 's'}
-              {totalTokens ? ` · ${totalTokens} tokens (${inputTokens} in / ${outputTokens} out)` : ''}
+              {t('workflowEditor.output.telemetry.runtimeSummary', {
+                workflowNodes,
+                toolCalls,
+              })}
+              {totalTokens
+                ? ` · ${t('workflowEditor.output.telemetry.runtimeTokens', {
+                    totalTokens,
+                    inputTokens,
+                    outputTokens,
+                  })}`
+                : ''}
             </span>
           </span>
         </span>
@@ -849,39 +1007,150 @@ function RunTelemetry({ spans }: { spans: RunSpan[] }) {
       </CollapsibleTrigger>
       <CollapsibleContent className='divide-y border-t'>
         {spans.map((span) => {
-          const label = span.toolName ?? span.nodeName ?? span.nodeId ?? span.kind.replaceAll('_', ' ');
+          // Process Apps need a stable, identifier-safe model tool name. Their
+          // display name is persisted separately in nodeName for the UI.
+          const toolName = isProcessToolName(span.toolName)
+            ? span.nodeName
+            : span.toolName;
+          const label =
+            toolName ??
+            span.nodeName ??
+            (span.nodeId ? nodeName(span.nodeId) : undefined) ??
+            span.kind.replaceAll('_', ' ');
           const tokens = span.totalTokens
-            ? `${span.totalTokens}${span.totalTokensEstimated ? '~' : ''} tokens`
+            ? t('workflowEditor.output.telemetry.tokens', {
+                count: span.totalTokens,
+                estimated: span.totalTokensEstimated ? '~' : '',
+              })
             : undefined;
           const tokenBreakdown = [
-            span.cacheReadTokens ? `${span.cacheReadTokens} cache read` : undefined,
-            span.cacheWriteTokens ? `${span.cacheWriteTokens} cache write` : undefined,
-            span.reasoningTokens ? `${span.reasoningTokens} reasoning` : undefined,
+            span.cacheReadTokens
+              ? t('workflowEditor.output.telemetry.cacheRead', {
+                  count: span.cacheReadTokens,
+                })
+              : undefined,
+            span.cacheWriteTokens
+              ? t('workflowEditor.output.telemetry.cacheWrite', {
+                  count: span.cacheWriteTokens,
+                })
+              : undefined,
+            span.reasoningTokens
+              ? t('workflowEditor.output.telemetry.reasoning', {
+                  count: span.reasoningTokens,
+                })
+              : undefined,
             span.audioInputTokens || span.audioOutputTokens
-              ? `${span.audioInputTokens ?? 0} audio in / ${span.audioOutputTokens ?? 0} audio out`
+              ? t('workflowEditor.output.telemetry.audioInputOutput', {
+                  inputTokens: span.audioInputTokens ?? 0,
+                  outputTokens: span.audioOutputTokens ?? 0,
+                })
               : undefined,
           ]
             .filter(Boolean)
             .join(' · ');
           return (
-            <div key={span.id} className='flex items-center gap-3 px-3 py-2.5 text-sm'>
+            <div
+              key={span.id}
+              className='flex items-center gap-3 px-3 py-2.5 text-sm'
+            >
               <div className='min-w-0 flex-1'>
                 <div className='truncate font-medium'>{label}</div>
-                {tokenBreakdown ? <div className='text-muted-foreground truncate text-xs'>{tokenBreakdown}</div> : null}
+                {tokenBreakdown ? (
+                  <div className='text-muted-foreground truncate text-xs'>
+                    {tokenBreakdown}
+                  </div>
+                ) : null}
               </div>
-              <span className='text-muted-foreground shrink-0 text-xs'>{span.kind.replaceAll('_', ' ')}</span>
-              {tokens ? <span className='text-muted-foreground shrink-0 font-mono text-xs'>{tokens}</span> : null}
-              <span className={span.status === 'failed' ? 'text-destructive shrink-0 text-xs' : 'text-muted-foreground shrink-0 text-xs'}>
-                {span.status}
+              <span className='text-muted-foreground shrink-0 text-xs'>
+                {t(`workflowEditor.output.telemetry.spanKinds.${span.kind}`)}
+              </span>
+              {tokens ? (
+                <span className='text-muted-foreground shrink-0 font-mono text-xs'>
+                  {tokens}
+                </span>
+              ) : null}
+              <span
+                className={
+                  span.status === 'failed'
+                    ? 'text-destructive shrink-0 text-xs'
+                    : 'text-muted-foreground shrink-0 text-xs'
+                }
+              >
+                {t(
+                  `workflowEditor.output.telemetry.spanStatuses.${span.status}`,
+                )}
               </span>
               <span className='text-muted-foreground w-14 shrink-0 text-right font-mono text-xs'>
-                {span.durationMs === undefined ? '—' : `${span.durationMs}ms`}
+                {span.durationMs == null ? '—' : `${span.durationMs}ms`}
               </span>
             </div>
           );
         })}
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+function RunModelUsage({ spans }: { spans: RunSpan[] }) {
+  const { t } = useTranslation();
+  const modelCalls = spans.filter((span) => span.kind === 'model_call');
+  if (modelCalls.length === 0) return null;
+
+  const totalTokens = modelCalls.reduce(
+    (total, span) => total + tokenCount(span),
+    0,
+  );
+  const inputTokens = modelCalls.reduce(
+    (total, span) => total + (span.inputTokens ?? 0),
+    0,
+  );
+  const outputTokens = modelCalls.reduce(
+    (total, span) => total + (span.outputTokens ?? 0),
+    0,
+  );
+  const cost = modelCalls.reduce(
+    (total, span) => total + (span.estimatedCostMicrousd ?? 0),
+    0,
+  );
+  const agents = new Set(
+    modelCalls
+      .map((span) => span.nodeId)
+      .filter((nodeId): nodeId is string => Boolean(nodeId)),
+  ).size;
+
+  return (
+    <div className='bg-primary/[0.04] border-primary/15 rounded-xl border px-3 py-3'>
+      <div className='flex items-center justify-between gap-3'>
+        <div className='min-w-0'>
+          <p className='text-sm font-semibold'>
+            {t('workflowEditor.output.telemetry.runModelUsage')}
+          </p>
+          <p className='text-muted-foreground mt-0.5 text-xs'>
+            {t('workflowEditor.output.telemetry.runModelUsageSummary', {
+              count: agents,
+              inputTokens,
+              outputTokens,
+              modelCalls: modelCalls.length,
+            })}
+          </p>
+        </div>
+        <div className='shrink-0 text-right'>
+          <p className='font-mono text-base font-semibold'>
+            {t('workflowEditor.output.telemetry.tokens', {
+              count: totalTokens,
+              estimated: '',
+            })}
+          </p>
+          {cost > 0 ? (
+            <p className='text-muted-foreground font-mono text-xs'>
+              {t('workflowEditor.output.telemetry.estimatedCost', {
+                cost: formatCost(cost),
+              })}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -974,6 +1243,7 @@ function WorkflowRunOutput({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 p-4'>
+                <RunModelUsage spans={spans} />
                 {!isChat && execution.length > 0 && (
                   <MessageScrollerItem messageId='execution-start'>
                     <div>
@@ -1014,7 +1284,7 @@ function WorkflowRunOutput({
                           </MarkerContent>
                         </Marker>
                         {appIdentity(entry.nodeId)}
-                        <TraceResult entry={entry} />
+                        <TraceResult entry={entry} spans={spans} />
                         <ExecutionOutput
                           label={t('workflowEditor.output.processOutput')}
                           log={log}
@@ -1123,6 +1393,7 @@ function WorkflowRunOutput({
                                   <TraceResult
                                     entry={entry}
                                     showAgentResponse={false}
+                                    spans={spans}
                                   />
                                   <ExecutionOutput
                                     label={t(
@@ -1188,7 +1459,7 @@ function WorkflowRunOutput({
                     </Collapsible>
                   </MessageScrollerItem>
                 )}
-                <RunTelemetry spans={spans} />
+                <RunTelemetry spans={spans} nodeName={displayNodeName} />
               </MessageScrollerContent>
             </MessageScrollerViewport>
             <MessageScrollerButton />

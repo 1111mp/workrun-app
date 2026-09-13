@@ -112,6 +112,11 @@ impl IProcessNodes {
 
     /// Workflow-scoped Team App installations are runtime caches, not Apps.
     pub async fn new_team_releases() -> Self {
+        // Personal workspaces cannot resolve Team App releases, so this cache
+        // is intentionally absent until a Team workspace needs it.
+        if !dirs::is_team_workspace() {
+            return Self::default();
+        }
         Self::load(dirs::team_process_node_catalog_path()).await
     }
 
@@ -138,6 +143,9 @@ impl IProcessNodes {
     }
 
     pub async fn save_team_releases_file(&self) -> Result<()> {
+        if !dirs::is_team_workspace() {
+            return Ok(());
+        }
         help::save_json(&dirs::team_process_node_catalog_path()?, self, None).await
     }
 
@@ -239,4 +247,17 @@ fn validate_schemas(kind: &str, schemas: &BTreeMap<String, Value>) -> Result<()>
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IProcessNodes;
+
+    #[tokio::test]
+    async fn personal_workspace_skips_team_release_cache_io() {
+        let releases = IProcessNodes::new_team_releases().await;
+
+        assert!(releases.get_process_nodes().is_empty());
+        releases.save_team_releases_file().await.unwrap();
+    }
 }

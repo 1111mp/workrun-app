@@ -54,6 +54,16 @@ mod tests {
 
         assert_eq!(failed_node.as_deref(), Some("send-report"));
     }
+
+    #[test]
+    fn extracts_a_custom_workflow_event_type() {
+        let event = json!({
+            "type": "custom",
+            "event_type": "agent.model_call",
+        });
+
+        assert_eq!(workflow_event_type(&event), Some("agent.model_call"));
+    }
 }
 
 pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<bool> {
@@ -116,7 +126,7 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
 }
 
 async fn project_telemetry_span(run_id: &str, event: &Value) -> Result<()> {
-    let Some(event_type) = event.get("type").and_then(Value::as_str) else {
+    let Some(event_type) = workflow_event_type(event) else {
         return Ok(());
     };
     let Some(node_id) = event.get("node").and_then(Value::as_str) else {
@@ -179,6 +189,18 @@ async fn project_telemetry_span(run_id: &str, event: &Value) -> Result<()> {
     }
 }
 
+fn workflow_event_type(event: &Value) -> Option<&str> {
+    let event_type = event.get("type").and_then(Value::as_str)?;
+    if event_type == "custom" {
+        // StreamEvent::custom keeps its domain event name separate from the
+        // transport type. Project that name so model and tool spans are not
+        // silently skipped as generic custom events.
+        event.get("event_type").and_then(Value::as_str)
+    } else {
+        Some(event_type)
+    }
+}
+
 async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -> Result<()> {
     let Some(data) = data.and_then(Value::as_object) else {
         return Ok(());
@@ -197,12 +219,18 @@ async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -
     else {
         return Ok(());
     };
-    let occurred_at = data
-        .get("occurredAt")
+    let started_at = data
+        .get("startedAt")
         .and_then(Value::as_str)
         .filter(|timestamp| !timestamp.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let ended_at = data
+        .get("endedAt")
+        .and_then(Value::as_str)
+        .filter(|timestamp| !timestamp.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| started_at.clone());
     let span_id = format!("{run_id}:model:{call_id}");
     let attributes = json!({ "modelCallId": call_id });
     RunHistoryStore::create_span(CreateRunSpan {
@@ -216,7 +244,7 @@ async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -
         provider: None,
         model: Some(model.to_string()),
         tool_name: None,
-        started_at: occurred_at.clone(),
+        started_at,
         attributes: attributes.clone(),
     })
     .await?;
@@ -224,10 +252,8 @@ async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -
         &span_id,
         FinishRunSpan {
             status: TelemetrySpanStatus::Completed,
-            ended_at: occurred_at,
-            // Event timestamps identify completion, not request start. Preserve
-            // the unknown latency as NULL instead of inventing a zero duration.
-            duration_ms: None,
+            ended_at,
+            duration_ms: data.get("durationMs").and_then(Value::as_i64),
             input_tokens: data.get("inputTokens").and_then(Value::as_i64),
             output_tokens: data.get("outputTokens").and_then(Value::as_i64),
             total_tokens: data.get("totalTokens").and_then(Value::as_i64),

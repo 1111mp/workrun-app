@@ -88,6 +88,8 @@ type WorkflowEditorProps = {
   historicalRun?: RunRecord;
 };
 
+type ObservabilityPeriod = '7d' | '30d' | 'all';
+
 function WorkflowEditor({
   workflow,
   readOnly,
@@ -128,8 +130,17 @@ function WorkflowEditorContent({
   const [releaseNote, setReleaseNote] = useState('');
   const [isPublishing, setIsPublishing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [observabilityPeriod, setObservabilityPeriod] =
+    useState<ObservabilityPeriod>('30d');
+  const [observabilityStartedAfter, setObservabilityStartedAfter] = useState(
+    () => periodStart('30d'),
+  );
+  const [observabilityVersion, setObservabilityVersion] = useState('all');
   const [viewingHistoricalRunId, setViewingHistoricalRunId] = useState<
     string | undefined
+  >();
+  const [viewingHistoricalRun, setViewingHistoricalRun] = useState<
+    RunRecord | undefined
   >();
   const [createdWorkflow, setCreatedWorkflow] = useState<
     StoredWorkflow | undefined
@@ -188,9 +199,33 @@ function WorkflowEditorContent({
     enabled: historyOpen && Boolean(activeWorkflow),
   });
   const workflowObservability = useQuery({
-    queryKey: ['run-observability', activeWorkflow?.id],
-    queryFn: () => getWorkflowObservability({ workflowId: activeWorkflow!.id }),
+    queryKey: [
+      'run-observability',
+      activeWorkflow?.id,
+      observabilityStartedAfter,
+    ],
+    queryFn: () =>
+      getWorkflowObservability({
+        workflowId: activeWorkflow!.id,
+        startedAfter: observabilityStartedAfter,
+      }),
     enabled: historyOpen && Boolean(activeWorkflow),
+  });
+  const selectedVersionObservability = useQuery({
+    queryKey: [
+      'run-observability',
+      activeWorkflow?.id,
+      observabilityStartedAfter,
+      observabilityVersion,
+    ],
+    queryFn: () =>
+      getWorkflowObservability({
+        workflowId: activeWorkflow!.id,
+        startedAfter: observabilityStartedAfter,
+        releaseVersion: observabilityVersion,
+      }),
+    enabled:
+      historyOpen && Boolean(activeWorkflow) && observabilityVersion !== 'all',
   });
 
   const { t } = useTranslation();
@@ -228,6 +263,18 @@ function WorkflowEditorContent({
     activeWorkflow?.version,
     isTeamMode() && !activeWorkflow ? createWorkflowForTeamRun : undefined,
   );
+  const liveRunRecord = useQuery({
+    queryKey: [
+      'run-history-inspect',
+      workflowRun.runId,
+      workflowRun.telemetryRevision,
+    ],
+    queryFn: () => inspectRunRecord(workflowRun.runId!),
+    // Historical output is an immutable snapshot. Only the editor's own run
+    // needs to refetch when the native runtime reports new model usage.
+    enabled:
+      Boolean(workflowRun.runId) && !historicalRun && !viewingHistoricalRunId,
+  });
 
   const restoreHistoricalRun = useWorkflowRunStore(
     useShallow((state) => ({
@@ -277,6 +324,7 @@ function WorkflowEditorContent({
       restoreHistoricalRun.setShowRunOutput(true);
       restoreHistoricalRun.setRunPanelOpen(true);
       setViewingHistoricalRunId(id);
+      setViewingHistoricalRun(record);
     } catch (error) {
       toast.error(t('workflowEditor.history.loadOutputFailed'), {
         toasterId: 'global',
@@ -404,7 +452,22 @@ function WorkflowEditorContent({
               hasMore={workflowHistory.hasNextPage}
               isLoadingMore={workflowHistory.isFetchingNextPage}
               observability={workflowObservability.data}
-              isObservabilityLoading={workflowObservability.isLoading}
+              scopedObservability={selectedVersionObservability.data}
+              isObservabilityLoading={
+                observabilityVersion === 'all'
+                  ? workflowObservability.isLoading
+                  : selectedVersionObservability.isLoading
+              }
+              period={observabilityPeriod}
+              onPeriodChange={(period) => {
+                // Freeze the range boundary on selection. Regenerating it during
+                // render changes React Query's key and causes repeated refetches.
+                setObservabilityPeriod(period);
+                setObservabilityStartedAfter(periodStart(period));
+                setObservabilityVersion('all');
+              }}
+              selectedVersion={observabilityVersion}
+              onSelectedVersionChange={setObservabilityVersion}
               onLoadMore={() => void workflowHistory.fetchNextPage()}
               onView={(id) => void openHistoricalRun(id)}
             />
@@ -565,6 +628,11 @@ function WorkflowEditorContent({
             onResume={workflowRun.resumeWorkflowRun}
             onRetryFailed={workflowRun.retryFailedWorkflowRun}
             readOnly={Boolean(historicalRun || viewingHistoricalRunId)}
+            spans={
+              historicalRun?.spans ??
+              viewingHistoricalRun?.spans ??
+              liveRunRecord.data?.spans
+            }
             onHistoricalClose={() => {
               if (historicalRun) {
                 // This store outlives the history page. Reset it before returning
@@ -574,6 +642,7 @@ function WorkflowEditorContent({
                 void navigate(-1);
               } else {
                 setViewingHistoricalRunId(undefined);
+                setViewingHistoricalRun(undefined);
                 restoreHistoricalRun.setRunPanelOpen(false);
               }
             }}
@@ -647,6 +716,12 @@ function WorkflowEditorContent({
       </WorkflowCanvas>
     </SidebarProvider>
   );
+}
+
+function periodStart(period: ObservabilityPeriod) {
+  if (period === 'all') return undefined;
+  const days = period === '7d' ? 7 : 30;
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1_000).toISOString();
 }
 
 function isExecutableNode(type: string | undefined) {

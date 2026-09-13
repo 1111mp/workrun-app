@@ -108,6 +108,8 @@ function useWorkflowRun(
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
     useState(false);
+  const [activeRunId, setActiveRunId] = useState<string>();
+  const [telemetryRevision, setTelemetryRevision] = useState(0);
   const store = useWorkflowRunStore(
     useShallow((state) => ({
       runningNodeId: state.runningNodeId,
@@ -232,6 +234,11 @@ function useWorkflowRun(
   };
 
   const handleEvent = (event: WorkflowRunEvent) => {
+    if (event.type === 'custom' && event.event_type === 'agent.model_call') {
+      // The native runtime persists this span before emitting the event. A
+      // revision lets the output panel refresh precisely when usage is ready.
+      setTelemetryRevision((revision) => revision + 1);
+    }
     handleTerminalEvent(event);
     if (event.type === 'message') {
       if (event.content) queue(event);
@@ -248,6 +255,7 @@ function useWorkflowRun(
   useEffect(() => {
     if (!restoredRun) return;
     runId.current = restoredRun.id;
+    setActiveRunId(restoredRun.id);
     runThreadId.current = restoredRun.threadId;
     let disposed = false;
     // Keep this restored-run subscription intact while routing events through
@@ -312,6 +320,7 @@ function useWorkflowRun(
     runThreadId.current = threadId;
     const id = crypto.randomUUID();
     runId.current = id;
+    setTelemetryRevision(0);
     store.startWorkflowRun(input, settings.mode, chatTurnId.current);
     const preparationToastId = `workflow-preparation-${id}`;
     let isPreparingTeamApp = false;
@@ -344,6 +353,9 @@ function useWorkflowRun(
         initialState: input,
         threadId,
       });
+      // The create command has returned, so the inspection query cannot race
+      // the SQLite record creation for this newly started run.
+      setActiveRunId(id);
     } catch (error) {
       if (isPreparingTeamApp) toast.dismiss(preparationToastId);
       unlistenRunEvents.current?.();
@@ -356,6 +368,7 @@ function useWorkflowRun(
         description: error instanceof Error ? error.message : String(error),
       });
       runId.current = undefined;
+      setActiveRunId(undefined);
     }
   };
 
@@ -551,6 +564,8 @@ function useWorkflowRun(
     resolvePendingAskUserQuestion,
     resumeWorkflowRun,
     retryFailedWorkflowRun,
+    runId: activeRunId,
+    telemetryRevision,
   };
 }
 

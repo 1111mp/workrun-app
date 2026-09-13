@@ -45,6 +45,8 @@ export type RunRecordSummary = {
   releaseId?: string;
   releaseVersion?: string;
   appVersion?: string;
+  modelTokens?: number | null;
+  modelEstimatedCostMicrousd?: number | null;
 };
 
 export type RunEvent = {
@@ -196,6 +198,7 @@ export function inspectRunRecord(id: string) {
 
 export function getWorkflowObservability(query: {
   workflowId: string;
+  releaseVersion?: string;
   startedAfter?: string;
   startedBefore?: string;
 }) {

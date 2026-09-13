@@ -22,6 +22,7 @@ import type {
   RunRecordSummary,
   RunStatus,
   SpanMetricSummary,
+  VersionMetricSummary,
 } from '@/services/run-history';
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
@@ -43,7 +44,12 @@ function WorkflowHistory({
   hasMore,
   isLoadingMore,
   observability,
+  scopedObservability,
   isObservabilityLoading,
+  period,
+  onPeriodChange,
+  selectedVersion,
+  onSelectedVersionChange,
   onLoadMore,
   onView,
 }: {
@@ -52,7 +58,12 @@ function WorkflowHistory({
   hasMore: boolean;
   isLoadingMore: boolean;
   observability?: RunObservability;
+  scopedObservability?: RunObservability;
   isObservabilityLoading: boolean;
+  period: '7d' | '30d' | 'all';
+  onPeriodChange: (period: '7d' | '30d' | 'all') => void;
+  selectedVersion: string;
+  onSelectedVersionChange: (version: string) => void;
   onLoadMore: () => void;
   onView: (id: string) => void;
 }) {
@@ -74,7 +85,12 @@ function WorkflowHistory({
         </div>
         <ObservabilitySummary
           observability={observability}
+          scopedObservability={scopedObservability}
           isLoading={isObservabilityLoading}
+          period={period}
+          onPeriodChange={onPeriodChange}
+          selectedVersion={selectedVersion}
+          onSelectedVersionChange={onSelectedVersionChange}
         />
         {isLoading ? (
           <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-8 text-sm'>
@@ -99,6 +115,28 @@ function WorkflowHistory({
                             seconds: (run.durationMs / 1000).toFixed(1),
                           })
                         : t('apps.history.durationUnavailable')}
+                      {typeof run.modelTokens === 'number'
+                        ? ` · ${t(
+                            'workflowEditor.history.observability.tokens',
+                            {
+                              count: formatNumber(
+                                run.modelTokens,
+                                i18n.language,
+                              ),
+                            },
+                          )}`
+                        : ''}
+                      {typeof run.modelEstimatedCostMicrousd === 'number'
+                        ? ` · ${t(
+                            'workflowEditor.output.telemetry.estimatedCost',
+                            {
+                              cost: formatUsd(
+                                run.modelEstimatedCostMicrousd,
+                                i18n.language,
+                              ),
+                            },
+                          )}`
+                        : ''}
                       {run.error ? ` · ${run.error}` : ''}
                     </ItemDescription>
                   </ItemContent>
@@ -155,45 +193,138 @@ function WorkflowHistory({
 
 function ObservabilitySummary({
   observability,
+  scopedObservability,
   isLoading,
+  period,
+  onPeriodChange,
+  selectedVersion,
+  onSelectedVersionChange,
 }: {
   observability?: RunObservability;
+  scopedObservability?: RunObservability;
   isLoading: boolean;
+  period: '7d' | '30d' | 'all';
+  onPeriodChange: (period: '7d' | '30d' | 'all') => void;
+  selectedVersion: string;
+  onSelectedVersionChange: (version: string) => void;
 }) {
+  const { t, i18n } = useTranslation();
   if (isLoading) {
     return (
       <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-3 text-sm'>
-        <Spinner /> Calculating local metrics…
+        <Spinner /> {t('workflowEditor.history.observability.calculating')}
       </div>
     );
   }
   if (!observability || observability.overall.count === 0) return null;
 
-  const { overall } = observability;
-  const attention = [...observability.spans]
+  const scoped =
+    selectedVersion === 'all' ? observability : scopedObservability;
+  if (!scoped) return null;
+  const { overall } = scoped;
+  const attention = [...scoped.spans]
     .filter((span) => span.failedCount > 0)
-    .sort((left, right) => right.failedCount - left.failedCount || (right.p95DurationMs ?? 0) - (left.p95DurationMs ?? 0))
+    .sort(
+      (left, right) =>
+        right.failedCount - left.failedCount ||
+        (right.p95DurationMs ?? 0) - (left.p95DurationMs ?? 0),
+    )
     .slice(0, 3);
   return (
     <section className='bg-card overflow-hidden rounded-xl border shadow-sm'>
-      <div className='flex items-center gap-2 border-b px-4 py-3'>
-        <span className='bg-violet-500/10 text-violet-700 flex size-7 items-center justify-center rounded-lg dark:text-violet-300'>
+      <div className='flex flex-wrap items-center gap-2 border-b px-4 py-3'>
+        <span className='flex size-7 items-center justify-center rounded-lg bg-violet-500/10 text-violet-700 dark:text-violet-300'>
           <ActivityIcon className='size-4' />
         </span>
         <div>
-          <h3 className='text-sm font-semibold'>Runtime health</h3>
-          <p className='text-muted-foreground text-xs'>All local runs for this workflow</p>
+          <h3 className='text-sm font-semibold'>
+            {t('workflowEditor.history.observability.runtimeHealth')}
+          </h3>
+          <p className='text-muted-foreground text-xs'>
+            {t('workflowEditor.history.observability.localRuns')}
+          </p>
+        </div>
+        <div
+          className='ml-auto flex items-center gap-1'
+          aria-label={t('workflowEditor.history.observability.timeRange')}
+        >
+          {(['7d', '30d', 'all'] as const).map((value) => (
+            <Button
+              key={value}
+              size='sm'
+              variant={period === value ? 'secondary' : 'ghost'}
+              onClick={() => onPeriodChange(value)}
+            >
+              {t(`workflowEditor.history.observability.periods.${value}`)}
+            </Button>
+          ))}
         </div>
       </div>
+      {observability.versions.length > 1 ? (
+        <div className='flex flex-wrap items-center gap-3 border-t px-4 py-3'>
+          <label
+            className='text-muted-foreground text-xs font-medium'
+            htmlFor='observability-version'
+          >
+            {t('workflowEditor.history.observability.version')}
+          </label>
+          <select
+            id='observability-version'
+            className='bg-background border-input h-8 rounded-md border px-2 text-xs'
+            value={selectedVersion}
+            onChange={(event) => onSelectedVersionChange(event.target.value)}
+          >
+            <option value='all'>
+              {t('workflowEditor.history.observability.allVersions')}
+            </option>
+            {observability.versions.map((version) => (
+              <option
+                key={version.releaseVersion}
+                value={version.releaseVersion}
+              >
+                {version.releaseVersion}
+              </option>
+            ))}
+          </select>
+          <VersionComparison versions={observability.versions} />
+        </div>
+      ) : null}
       <div className='grid grid-cols-2 divide-x divide-y sm:grid-cols-4 sm:divide-y-0'>
-        <MetricCell label='Runs' value={String(overall.count)} detail={`${overall.completedCount} completed`} />
-        <MetricCell label='Success rate' value={formatRate(overall.successRate)} detail={`${overall.failedCount} failed`} />
-        <MetricCell label='P95 duration' value={formatDuration(overall.p95DurationMs)} detail={`Average ${formatDuration(overall.averageDurationMs)}`} />
-        <MetricCell label='Model tokens' value={formatNumber(overall.totalTokens)} detail={`${formatNumber(overall.inputTokens)} in / ${formatNumber(overall.outputTokens)} out`} />
+        <MetricCell
+          label={t('workflowEditor.history.observability.runs')}
+          value={String(overall.count)}
+          detail={t('workflowEditor.history.observability.completed', {
+            count: overall.completedCount,
+          })}
+        />
+        <MetricCell
+          label={t('workflowEditor.history.observability.successRate')}
+          value={formatRate(overall.successRate)}
+          detail={t('workflowEditor.history.observability.failed', {
+            count: overall.failedCount,
+          })}
+        />
+        <MetricCell
+          label={t('workflowEditor.history.observability.p95Duration')}
+          value={formatDuration(overall.p95DurationMs)}
+          detail={t('workflowEditor.history.observability.average', {
+            duration: formatDuration(overall.averageDurationMs),
+          })}
+        />
+        <MetricCell
+          label={t('workflowEditor.history.observability.modelTokens')}
+          value={formatNumber(overall.totalTokens, i18n.language)}
+          detail={t('workflowEditor.history.observability.inputOutput', {
+            inputTokens: formatNumber(overall.inputTokens, i18n.language),
+            outputTokens: formatNumber(overall.outputTokens, i18n.language),
+          })}
+        />
       </div>
       {attention.length > 0 ? (
         <div className='border-t px-4 py-3'>
-          <p className='text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase'>Needs attention</p>
+          <p className='text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase'>
+            {t('workflowEditor.history.observability.needsAttention')}
+          </p>
           <div className='space-y-1.5'>
             {attention.map((span) => (
               <AttentionRow key={spanKey(span)} span={span} />
@@ -205,23 +336,67 @@ function ObservabilitySummary({
   );
 }
 
-function MetricCell({ label, value, detail }: { label: string; value: string; detail: string }) {
+function VersionComparison({ versions }: { versions: VersionMetricSummary[] }) {
+  const { t, i18n } = useTranslation();
+  return (
+    <div className='flex min-w-0 flex-1 gap-2 overflow-x-auto'>
+      {versions.map((version) => (
+        <div
+          key={version.releaseVersion}
+          className='bg-muted/50 min-w-36 rounded-md px-2.5 py-1.5 text-xs'
+        >
+          <p className='font-medium'>{version.releaseVersion}</p>
+          <p className='text-muted-foreground mt-0.5'>
+            {formatRate(version.successRate)} ·{' '}
+            {formatDuration(version.p95DurationMs)} ·{' '}
+            {t('workflowEditor.history.observability.tokens', {
+              count: formatNumber(version.totalTokens, i18n.language),
+            })}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MetricCell({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
   return (
     <div className='min-w-0 px-4 py-3'>
       <p className='text-muted-foreground text-xs'>{label}</p>
-      <p className='mt-1 truncate text-lg font-semibold tracking-tight'>{value}</p>
+      <p className='mt-1 truncate text-lg font-semibold tracking-tight'>
+        {value}
+      </p>
       <p className='text-muted-foreground mt-0.5 truncate text-xs'>{detail}</p>
     </div>
   );
 }
 
 function AttentionRow({ span }: { span: SpanMetricSummary }) {
-  const label = span.toolName ?? span.model ?? span.nodeId ?? span.kind.replaceAll('_', ' ');
+  const { t } = useTranslation();
+  const label =
+    span.toolName ??
+    span.model ??
+    span.nodeId ??
+    span.kind.replaceAll('_', ' ');
   return (
     <div className='bg-muted/50 flex items-center gap-3 rounded-md px-3 py-2 text-sm'>
       <span className='min-w-0 flex-1 truncate font-medium'>{label}</span>
-      <span className='text-destructive shrink-0 text-xs'>{span.failedCount} failed</span>
-      <span className='text-muted-foreground shrink-0 font-mono text-xs'>{formatDuration(span.p95DurationMs)}</span>
+      <span className='text-destructive shrink-0 text-xs'>
+        {t('workflowEditor.history.observability.failed', {
+          count: span.failedCount,
+        })}
+      </span>
+      <span className='text-muted-foreground shrink-0 font-mono text-xs'>
+        {formatDuration(span.p95DurationMs)}
+      </span>
     </div>
   );
 }
@@ -232,15 +407,31 @@ function formatRate(rate: number | undefined) {
 
 function formatDuration(duration: number | undefined) {
   if (duration === undefined) return '—';
-  return duration >= 1_000 ? `${(duration / 1_000).toFixed(1)}s` : `${duration}ms`;
+  return duration >= 1_000
+    ? `${(duration / 1_000).toFixed(1)}s`
+    : `${duration}ms`;
 }
 
-function formatNumber(value: number) {
-  return new Intl.NumberFormat().format(value);
+function formatNumber(value: number, locale: string) {
+  return new Intl.NumberFormat(locale).format(value);
+}
+
+function formatUsd(microusd: number, locale: string) {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 6,
+  }).format(microusd / 1_000_000);
 }
 
 function spanKey(span: SpanMetricSummary) {
-  return [span.kind, span.nodeId, span.provider, span.model, span.toolName].join(':');
+  return [
+    span.kind,
+    span.nodeId,
+    span.provider,
+    span.model,
+    span.toolName,
+  ].join(':');
 }
 
 export { WorkflowHistory };

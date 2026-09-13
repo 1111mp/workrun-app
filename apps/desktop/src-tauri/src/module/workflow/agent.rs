@@ -59,10 +59,11 @@ pub(super) async fn add_local_agent_node(
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("agent node `{id}` references unknown model `{profile_id}`"))?;
     let label = format!("{}/{}", model.id, model.model);
+    let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
     let mut agent = LlmAgentBuilder::new(id.clone())
         .description(description)
         .instruction(instruction)
-        .model(create_model(&model, config)?)
+        .model(model)
         .input_guardrails(input_guardrails())
         .output_guardrails(output_guardrails())
         .tool_guardrails(tool_guardrails());
@@ -236,6 +237,99 @@ pub(super) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result
                 .map(|url| OllamaConfig::with_host(url, &model.model))
                 .unwrap_or_else(|| OllamaConfig::new(&model.model)),
         )?),
+    })
+}
+
+struct InstrumentedLlm {
+    inner: Arc<dyn Llm>,
+    node_id: String,
+    model: String,
+    on_event: Option<Channel<StreamEvent>>,
+}
+
+fn model_response_is_final(response: &adk_rust::LlmResponse) -> bool {
+    !response.partial
+}
+
+/// Measures the provider request stream itself, excluding the Agent's tool work
+/// and output processing that happen around it.
+#[async_trait::async_trait]
+impl Llm for InstrumentedLlm {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    async fn generate_content(
+        &self,
+        request: adk_rust::prelude::LlmRequest,
+        stream: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        let started_at = chrono::Utc::now();
+        let started_elapsed = Instant::now();
+        let response_stream = self.inner.generate_content(request, stream).await?;
+        let node_id = self.node_id.clone();
+        let model = self.model.clone();
+        let on_event = self.on_event.clone();
+        Ok(Box::pin(async_stream::stream! {
+            tokio::pin!(response_stream);
+            let mut emitted_model_call = false;
+            while let Some(response) = response_stream.next().await {
+                match response {
+                    Ok(response) => {
+                        // A tool-call response finishes this model request but
+                        // keeps the Agent turn open. `partial`, not
+                        // `turn_complete`, marks the final provider chunk.
+                        if model_response_is_final(&response) && !emitted_model_call {
+                            if let Some(on_event) = &on_event {
+                                let ended_at = chrono::Utc::now();
+                                send_guarded_event(
+                                    on_event,
+                                    StreamEvent::custom(
+                                        &node_id,
+                                        "agent.model_call",
+                                        model_call_telemetry(
+                                            &response,
+                                            &model,
+                                            started_at,
+                                            ended_at,
+                                            started_elapsed.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+                                        ),
+                                    ),
+                                );
+                            }
+                            emitted_model_call = true;
+                        }
+                        yield Ok(response);
+                    }
+                    Err(error) => {
+                        yield Err(error);
+                        return;
+                    }
+                }
+            }
+        }))
+    }
+
+    fn schema_adapter(&self) -> &dyn adk_rust::SchemaAdapter {
+        self.inner.schema_adapter()
+    }
+
+    fn uses_interactions_api(&self) -> bool {
+        self.inner.uses_interactions_api()
+    }
+}
+
+pub(super) fn instrumented_model(
+    model: Arc<dyn Llm>,
+    node_id: &str,
+    model_label: &str,
+    on_event: Option<Channel<StreamEvent>>,
+) -> Arc<dyn Llm> {
+    Arc::new(InstrumentedLlm {
+        inner: model,
+        node_id: node_id.to_string(),
+        model: model_label.to_string(),
+        on_event,
     })
 }
 
@@ -536,15 +630,6 @@ pub(super) fn agent_output_updates(
     }
     let event = redact_json(&event);
     if let Some(on_event) = on_event {
-        for model_call in events
-            .iter()
-            .filter_map(|event| model_call_telemetry(event, endpoint_or_model))
-        {
-            // ADK carries provider-reported usage on final Agent events. Emit
-            // only that summary; response text and request payload stay out of
-            // the telemetry projection.
-            send_guarded_event(on_event, StreamEvent::custom(node_id, "agent.model_call", model_call));
-        }
         send_guarded_event(
             on_event,
             StreamEvent::custom(node_id, "workflow.node_result", event.clone()),
@@ -625,29 +710,59 @@ impl WorkrunUsageSnapshot {
     }
 }
 
-fn model_call_telemetry(event: &adk_rust::Event, model: &str) -> Option<Value> {
-    let usage = WorkrunUsageSnapshot::from_adk(event.llm_response.usage_metadata.as_ref()?);
-    Some(json!({
-        "modelCallId": event.id,
+fn model_call_telemetry(
+    response: &adk_rust::LlmResponse,
+    model: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+    ended_at: chrono::DateTime<chrono::Utc>,
+    duration_ms: i64,
+) -> Value {
+    let usage = response.usage_metadata.as_ref().map(WorkrunUsageSnapshot::from_adk);
+    json!({
+        "modelCallId": uuid::Uuid::new_v4().to_string(),
         "model": model,
-        "occurredAt": event.timestamp.to_rfc3339(),
-        "inputTokens": usage.input_tokens,
-        "outputTokens": usage.output_tokens,
-        "totalTokens": usage.total_tokens,
-        "totalTokensEstimated": usage.total_tokens_estimated,
-        "cacheReadTokens": usage.cache_read_tokens,
-        "cacheWriteTokens": usage.cache_write_tokens,
-        "reasoningTokens": usage.reasoning_tokens,
-        "audioInputTokens": usage.audio_input_tokens,
-        "audioOutputTokens": usage.audio_output_tokens,
-        "estimatedCostMicrousd": usage.estimated_cost_microusd,
-        "isByok": usage.is_byok,
-    }))
+        "startedAt": started_at.to_rfc3339(),
+        "endedAt": ended_at.to_rfc3339(),
+        "durationMs": duration_ms,
+        "inputTokens": usage.as_ref().map(|usage| usage.input_tokens),
+        "outputTokens": usage.as_ref().map(|usage| usage.output_tokens),
+        "totalTokens": usage.as_ref().map(|usage| usage.total_tokens),
+        "totalTokensEstimated": usage.as_ref().map(|usage| usage.total_tokens_estimated).unwrap_or(false),
+        "cacheReadTokens": usage.as_ref().and_then(|usage| usage.cache_read_tokens),
+        "cacheWriteTokens": usage.as_ref().and_then(|usage| usage.cache_write_tokens),
+        "reasoningTokens": usage.as_ref().and_then(|usage| usage.reasoning_tokens),
+        "audioInputTokens": usage.as_ref().and_then(|usage| usage.audio_input_tokens),
+        "audioOutputTokens": usage.as_ref().and_then(|usage| usage.audio_output_tokens),
+        "estimatedCostMicrousd": usage.as_ref().and_then(|usage| usage.estimated_cost_microusd),
+        "isByok": usage.as_ref().and_then(|usage| usage.is_byok),
+    })
 }
 
 #[cfg(test)]
 mod usage_snapshot_tests {
     use super::*;
+    use futures::{StreamExt, stream};
+
+    struct FinalToolCallResponseLlm;
+
+    #[async_trait::async_trait]
+    impl Llm for FinalToolCallResponseLlm {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        async fn generate_content(
+            &self,
+            _request: adk_rust::LlmRequest,
+            _stream: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            Ok(Box::pin(stream::iter([Ok(adk_rust::LlmResponse {
+                partial: false,
+                turn_complete: false,
+                ..Default::default()
+            })])))
+        }
+    }
 
     #[test]
     fn maps_every_supported_adk_usage_field() {
@@ -699,5 +814,74 @@ mod usage_snapshot_tests {
         assert_eq!(snapshot.reasoning_tokens, None);
         assert_eq!(snapshot.estimated_cost_microusd, None);
         assert_eq!(snapshot.is_byok, None);
+    }
+
+    #[test]
+    fn includes_measured_duration_in_model_call_telemetry() {
+        let response = adk_rust::LlmResponse {
+            usage_metadata: Some(adk_rust::UsageMetadata {
+                prompt_token_count: 10,
+                candidates_token_count: 5,
+                total_token_count: 15,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let now = chrono::Utc::now();
+        let telemetry = model_call_telemetry(&response, "gemini-test", now, now, 321);
+
+        assert_eq!(telemetry["durationMs"], 321);
+        assert_eq!(telemetry["inputTokens"], 10);
+        assert_eq!(telemetry["outputTokens"], 5);
+    }
+
+    #[test]
+    fn tool_call_response_is_final_even_when_agent_turn_continues() {
+        let response = adk_rust::LlmResponse {
+            partial: false,
+            turn_complete: false,
+            ..Default::default()
+        };
+
+        assert!(model_response_is_final(&response));
+    }
+
+    #[tokio::test]
+    async fn emits_model_telemetry_before_the_agent_stops_polling_after_a_tool_call() {
+        let emitted = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let received = Arc::clone(&emitted);
+        let on_event = Channel::new(move |payload| {
+            if let tauri::ipc::InvokeResponseBody::Json(payload) = payload {
+                received
+                    .lock()
+                    .expect("test event list is available")
+                    .push(serde_json::from_str(&payload).expect("stream event is JSON"));
+            }
+            Ok(())
+        });
+        let model = instrumented_model(
+            Arc::new(FinalToolCallResponseLlm),
+            "agent",
+            "gemini-test",
+            Some(on_event),
+        );
+        let mut responses = model
+            .generate_content(adk_rust::LlmRequest::new("test", vec![]), true)
+            .await
+            .expect("test model creates a response stream");
+
+        let response = responses
+            .next()
+            .await
+            .expect("final response is yielded")
+            .expect("final response succeeds");
+
+        assert!(model_response_is_final(&response));
+        let emitted = emitted.lock().expect("test event list is available");
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0]["event_type"], "agent.model_call");
+        assert_eq!(emitted[0]["data"]["model"], "gemini-test");
+        assert!(emitted[0]["data"]["durationMs"].is_i64());
     }
 }

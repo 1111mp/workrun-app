@@ -487,7 +487,32 @@
       "executions": "Workflow executions",
       "description": "Review past runs without leaving this workflow.",
       "loading": "Loading runs…",
-      "emptyDescription": "Run this workflow to create its first record."
+      "emptyDescription": "Run this workflow to create its first record.",
+      "observability": {
+        "calculating": "Calculating local metrics…",
+        "runtimeHealth": "Runtime health",
+        "localRuns": "Local runs in the selected range",
+        "timeRange": "Time range",
+        "periods": {
+          "7d": "7 days",
+          "30d": "30 days",
+          "all": "All"
+        },
+        "version": "Version",
+        "allVersions": "All versions",
+        "runs": "Runs",
+        "completed_one": "{{count}} completed",
+        "completed_other": "{{count}} completed",
+        "successRate": "Success rate",
+        "failed_one": "{{count}} failed",
+        "failed_other": "{{count}} failed",
+        "p95Duration": "P95 duration",
+        "average": "Average {{duration}}",
+        "modelTokens": "Model tokens",
+        "inputOutput": "{{inputTokens}} input / {{outputTokens}} output",
+        "tokens": "{{count}} tokens",
+        "needsAttention": "Needs attention"
+      }
     },
     "settings": {
       "description": "Define a description and the parameters each run accepts.",
@@ -607,6 +632,38 @@
       "send": "Send",
       "copyAll": "Copy all",
       "close": "Close",
+      "telemetry": {
+        "modelUsage": "Model usage",
+        "modelUsageSummary_one": "{{totalTokens}} tokens · {{inputTokens}} input / {{outputTokens}} output · {{count}} model call{{cost}}",
+        "modelUsageSummary_other": "{{totalTokens}} tokens · {{inputTokens}} input / {{outputTokens}} output · {{count}} model calls{{cost}}",
+        "modelCall": "Model call {{index}}",
+        "noUsageDetails": "No usage details reported",
+        "tokens": "{{count}}{{estimated}} tokens",
+        "inputOutput": "{{inputTokens}} input / {{outputTokens}} output",
+        "cacheRead": "{{count}} cache read",
+        "cacheWrite": "{{count}} cache write",
+        "reasoning": "{{count}} reasoning",
+        "audioInputOutput": "{{inputTokens}} audio input / {{outputTokens}} audio output",
+        "runModelUsage": "This run’s model usage",
+        "runModelUsageSummary_one": "{{inputTokens}} input · {{outputTokens}} output · {{modelCalls}} model calls across {{count}} agent",
+        "runModelUsageSummary_other": "{{inputTokens}} input · {{outputTokens}} output · {{modelCalls}} model calls across {{count}} agents",
+        "estimatedCost": "{{cost}} estimated",
+        "runtimeDiagnostics": "Runtime diagnostics",
+        "runtimeSummary": "{{workflowNodes}} workflow steps · {{toolCalls}} tool calls",
+        "runtimeTokens": "{{totalTokens}} tokens ({{inputTokens}} input / {{outputTokens}} output)",
+        "spanKinds": {
+          "workflow_node": "workflow node",
+          "agent": "agent",
+          "model_call": "model call",
+          "tool_call": "tool call"
+        },
+        "spanStatuses": {
+          "running": "running",
+          "completed": "completed",
+          "failed": "failed",
+          "cancelled": "cancelled"
+        }
+      },
       "status": {
         "running": "Running",
         "completed": "Completed",

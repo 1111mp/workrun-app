@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 
 import { WorkflowRunOutput } from '@/components/workflow-output-panel';
+import type { RunSpan } from '@/services/run-history';
 import { useWorkflowRunStore } from '@/stores';
 
 type RunValues = Record<string, string | boolean>;
@@ -43,6 +44,7 @@ type WorkflowRunPanelProps = {
   onRetryFailed: () => void;
   readOnly?: boolean;
   onHistoricalClose?: () => void;
+  spans?: RunSpan[];
 };
 
 const chatMessageInput: WorkflowInput = {
@@ -211,6 +213,7 @@ function WorkflowRunPanel({
   onRetryFailed,
   readOnly = false,
   onHistoricalClose,
+  spans,
 }: WorkflowRunPanelProps) {
   const { t } = useTranslation();
   const {
@@ -247,65 +250,72 @@ function WorkflowRunPanel({
   return (
     <>
       <Drawer
-      open={open}
-      defaultHorizontalSnapPoint='31rem'
-      horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
-      swipeDirection='right'
-      onOpenChange={(open) => {
-        if (!open && readOnly) onHistoricalClose?.();
-        else onOpenChange(open);
-      }}
-    >
-      <DrawerContent>
-        {settings.mode === 'chat' ? (
-          <WorkflowRunOutput
-            run={run}
-            workflowNodes={nodes}
-            isRunning={isRunning}
-            isChat
-            readOnly={readOnly}
-            onRunAgain={runAgain}
-            onSend={onRun}
-            onClose={() =>
-              readOnly ? onHistoricalClose?.() : onOpenChange(false)
-            }
-          />
-        ) : showOutput ? (
-          <WorkflowRunOutput
-            run={run}
-            workflowNodes={nodes}
-            isRunning={isRunning}
-            readOnly={readOnly}
-            onRunAgain={runAgain}
-            onClose={() =>
-              readOnly ? onHistoricalClose?.() : onOpenChange(false)
-            }
-          />
-        ) : (
-          <>
-            <DrawerHeader>
-              <DrawerTitle>{t('workflowEditor.testRun')}</DrawerTitle>
-              <DrawerDescription>
-                {t('workflowEditor.testRunDescription')}
-              </DrawerDescription>
-            </DrawerHeader>
-            <WorkflowRunForm
-              key={formKey}
-              settings={settings}
+        open={open}
+        defaultHorizontalSnapPoint='31rem'
+        horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
+        swipeDirection='right'
+        onOpenChange={(open) => {
+          if (!open && readOnly) onHistoricalClose?.();
+          else onOpenChange(open);
+        }}
+      >
+        <DrawerContent>
+          {settings.mode === 'chat' ? (
+            <WorkflowRunOutput
+              run={run}
+              workflowNodes={nodes}
               isRunning={isRunning}
-              onClose={() => onOpenChange(false)}
-              onRun={onRun}
+              isChat
+              readOnly={readOnly}
+              onRunAgain={runAgain}
+              onSend={onRun}
+              onClose={() =>
+                readOnly ? onHistoricalClose?.() : onOpenChange(false)
+              }
+              spans={spans}
             />
-          </>
-        )}
-      </DrawerContent>
+          ) : showOutput ? (
+            <WorkflowRunOutput
+              run={run}
+              workflowNodes={nodes}
+              isRunning={isRunning}
+              readOnly={readOnly}
+              onRunAgain={runAgain}
+              onClose={() =>
+                readOnly ? onHistoricalClose?.() : onOpenChange(false)
+              }
+              spans={spans}
+            />
+          ) : (
+            <>
+              <DrawerHeader>
+                <DrawerTitle>{t('workflowEditor.testRun')}</DrawerTitle>
+                <DrawerDescription>
+                  {t('workflowEditor.testRunDescription')}
+                </DrawerDescription>
+              </DrawerHeader>
+              <WorkflowRunForm
+                key={formKey}
+                settings={settings}
+                isRunning={isRunning}
+                onClose={() => onOpenChange(false)}
+                onRun={onRun}
+              />
+            </>
+          )}
+        </DrawerContent>
       </Drawer>
-      <AlertDialog open={retryConfirmationOpen} onOpenChange={setRetryConfirmationOpen}>
+      <AlertDialog
+        open={retryConfirmationOpen}
+        onOpenChange={setRetryConfirmationOpen}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
             <AlertDialogDescription>
-              Earlier completed nodes will not run again. The failed node may have already performed an external action, such as sending a message or updating a record.
+              Earlier completed nodes will not run again. The failed node may
+              have already performed an external action, such as sending a
+              message or updating a record.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

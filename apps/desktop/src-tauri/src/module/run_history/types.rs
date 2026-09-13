@@ -139,6 +139,7 @@ pub struct RunHistoryQuery {
 #[serde(rename_all = "camelCase")]
 pub struct RunObservabilityQuery {
     pub workflow_id: String,
+    pub release_version: Option<String>,
     pub started_after: Option<String>,
     pub started_before: Option<String>,
 }
@@ -260,6 +261,8 @@ pub struct RunRecordSummary {
     pub release_id: Option<String>,
     pub release_version: Option<String>,
     pub app_version: Option<String>,
+    pub model_tokens: Option<i64>,
+    pub model_estimated_cost_microusd: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
