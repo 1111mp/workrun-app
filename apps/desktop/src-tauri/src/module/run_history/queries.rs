@@ -16,7 +16,9 @@ impl RunHistoryStore {
         }
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
         sql.push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(" FROM run_records WHERE 1 = 1");
+            // Evaluation runs retain a normal run record for trace inspection,
+            // but are not production history or runtime-health evidence.
+            .push(" FROM run_records WHERE json_extract(runtime_json, '$.evaluationProfile') IS NULL");
 
         if let Some(target_type) = query.target_type {
             sql.push(" AND target_type = ").push_bind(target_type.as_str());
@@ -66,7 +68,7 @@ impl RunHistoryStore {
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
         let rows = sql
             .push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(" FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') ORDER BY started_at DESC, id DESC")
+            .push(" FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') AND json_extract(runtime_json, '$.evaluationProfile') IS NULL ORDER BY started_at DESC, id DESC")
             .build()
             .fetch_all(&pool)
             .await?;
@@ -146,7 +148,7 @@ async fn observability_run_rows(
         "SELECT status, duration_ms, json_extract(runtime_json, '$.releaseVersion') AS release_version FROM run_records WHERE target_type = 'workflow' AND target_id = ",
     );
     sql.push_bind(&query.workflow_id)
-        .push(" AND status IN ('completed', 'failed', 'cancelled', 'interrupted')");
+        .push(" AND status IN ('completed', 'failed', 'cancelled', 'interrupted') AND json_extract(runtime_json, '$.evaluationProfile') IS NULL");
     append_observability_version_filter(&mut sql, query);
     append_observability_time_filter(&mut sql, query);
     Ok(sql.build().fetch_all(pool).await?)
@@ -160,7 +162,7 @@ async fn observability_span_rows(
         "SELECT run_spans.kind, run_spans.status, run_spans.node_id, run_spans.provider, run_spans.model, run_spans.tool_name, run_spans.duration_ms, run_spans.input_tokens, run_spans.output_tokens, run_spans.total_tokens, run_spans.cache_read_tokens, run_spans.estimated_cost_microusd, json_extract(run_records.runtime_json, '$.releaseVersion') AS release_version FROM run_spans JOIN run_records ON run_records.id = run_spans.run_id WHERE run_records.target_type = 'workflow' AND run_records.target_id = ",
     );
     sql.push_bind(&query.workflow_id)
-        .push(" AND run_records.status IN ('completed', 'failed', 'cancelled', 'interrupted')");
+        .push(" AND run_records.status IN ('completed', 'failed', 'cancelled', 'interrupted') AND json_extract(run_records.runtime_json, '$.evaluationProfile') IS NULL");
     append_observability_version_filter(&mut sql, query);
     append_observability_time_filter(&mut sql, query);
     Ok(sql.build().fetch_all(pool).await?)

@@ -1,3 +1,4 @@
+pub mod evaluation;
 pub mod ipc;
 pub mod mcp_server;
 pub mod process_node;

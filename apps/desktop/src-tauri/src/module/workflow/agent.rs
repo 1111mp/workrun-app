@@ -28,6 +28,7 @@ pub(super) async fn add_local_agent_node(
     on_event: Option<Channel<StreamEvent>>,
     state: SharedWorkflowState,
     state_config: WorkflowNodeStateConfig,
+    execution_profile: WorkflowExecutionProfile,
 ) -> Result<StateGraph> {
     let id = node.id.clone();
     let description = string_data(node, "description").unwrap_or_default();
@@ -86,7 +87,7 @@ pub(super) async fn add_local_agent_node(
             ToolSource::Process => ManagedToolExecutor::Process,
             ToolSource::Mcp => ManagedToolExecutor::Mcp(crate::feat::resolve_mcp_tool(&tool.id).await?.1),
         };
-        let managed_tool: Arc<dyn Tool> = Arc::new(ManagedTool::new(
+        let managed_tool: Arc<dyn Tool> = Arc::new(ManagedTool::new_with_profile(
             tool,
             executor,
             id.clone(),
@@ -97,6 +98,7 @@ pub(super) async fn add_local_agent_node(
             tool_bindings,
             max_tool_calls,
             tool_timeout_seconds.into(),
+            execution_profile.clone(),
         ));
         managed_tools.insert(tool_id, managed_tool);
     }

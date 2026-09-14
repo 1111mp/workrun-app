@@ -122,6 +122,7 @@ pub(super) struct ManagedTool {
     state_bindings: Vec<ToolStateBinding>,
     max_tool_calls: u32,
     timeout_seconds: u64,
+    execution_profile: WorkflowExecutionProfile,
 }
 
 impl ManagedTool {
@@ -137,6 +138,35 @@ impl ManagedTool {
         max_tool_calls: u32,
         timeout_seconds: u64,
     ) -> Self {
+        Self::new_with_profile(
+            definition,
+            executor,
+            agent_node_id,
+            on_event,
+            tool_calls,
+            tool_trace,
+            state,
+            state_bindings,
+            max_tool_calls,
+            timeout_seconds,
+            WorkflowExecutionProfile::Production,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_with_profile(
+        definition: ToolDefinition,
+        executor: ManagedToolExecutor,
+        agent_node_id: String,
+        on_event: Option<Channel<StreamEvent>>,
+        tool_calls: Arc<AtomicU32>,
+        tool_trace: Arc<Mutex<Vec<Value>>>,
+        state: SharedWorkflowState,
+        state_bindings: Vec<ToolStateBinding>,
+        max_tool_calls: u32,
+        timeout_seconds: u64,
+        execution_profile: WorkflowExecutionProfile,
+    ) -> Self {
         Self {
             definition,
             executor,
@@ -148,6 +178,7 @@ impl ManagedTool {
             state_bindings,
             max_tool_calls,
             timeout_seconds,
+            execution_profile,
         }
     }
 }
@@ -202,6 +233,10 @@ impl Tool for ManagedTool {
             );
         }
         let execution = async {
+            if let Some(result) = evaluation_fixture_result(&self.execution_profile, self.name(), &args)? {
+                validate_tool_value(&self.definition.output_schema, &result, "fixture output")?;
+                return Ok::<_, adk_rust::AdkError>(result);
+            }
             let execution_args = resolve_execution_args(
                 &self.state,
                 &self.agent_node_id,
@@ -295,6 +330,25 @@ impl Tool for ManagedTool {
         // the Agent and therefore crosses the visible-state boundary again.
         Ok(redact_json(&result))
     }
+}
+
+/// Evaluation must fail closed: a fixture mismatch can never fall through to
+/// the Process or MCP executor that would perform a real external operation.
+fn evaluation_fixture_result(
+    profile: &WorkflowExecutionProfile,
+    tool: &str,
+    args: &Value,
+) -> adk_rust::Result<Option<Value>> {
+    let WorkflowExecutionProfile::Evaluation(profile) = profile else {
+        return Ok(None);
+    };
+    profile
+        .tool_fixtures
+        .iter()
+        .find(|fixture| fixture.tool == tool && fixture.args == *args)
+        .map(|fixture| fixture.result.clone())
+        .ok_or_else(|| adk_rust::AdkError::tool(format!("Test Mode blocked unmocked tool `{tool}`")))
+        .map(Some)
 }
 
 fn resolve_execution_args(
@@ -516,6 +570,28 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("recipient")
+        );
+    }
+
+    #[test]
+    fn evaluation_profile_returns_only_an_exact_fixture_match() {
+        let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
+            tool_fixtures: vec![EvaluationToolFixture {
+                tool: "cancel_order".to_string(),
+                args: json!({ "orderId": "42" }),
+                result: json!({ "cancelled": true }),
+            }],
+        });
+
+        assert_eq!(
+            evaluation_fixture_result(&profile, "cancel_order", &json!({ "orderId": "42" })).unwrap(),
+            Some(json!({ "cancelled": true }))
+        );
+        assert!(
+            evaluation_fixture_result(&profile, "cancel_order", &json!({ "orderId": "43" }))
+                .unwrap_err()
+                .to_string()
+                .contains("blocked unmocked tool")
         );
     }
 }

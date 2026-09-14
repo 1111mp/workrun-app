@@ -127,3 +127,97 @@ CREATE INDEX idx_run_pending_actions_status_created
 
 CREATE INDEX idx_run_pending_actions_claim
   ON run_pending_actions(status, claimed_by, created_at ASC, id ASC);
+
+-- Evaluation configuration belongs to the product database. A workflow ID is
+-- intentionally not a foreign key because a deleted workflow must not erase
+-- the immutable evidence retained by an evaluation run snapshot.
+CREATE TABLE evaluation_suites (
+  id TEXT PRIMARY KEY NOT NULL,
+  workflow_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_evaluation_suites_workflow_name
+  ON evaluation_suites(workflow_id, name COLLATE NOCASE);
+
+CREATE TABLE evaluation_cases (
+  id TEXT PRIMARY KEY NOT NULL,
+  suite_id TEXT NOT NULL REFERENCES evaluation_suites(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  position INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  target_agent_id TEXT,
+  input_json TEXT NOT NULL DEFAULT '{}',
+  expectation_json TEXT NOT NULL DEFAULT '{}',
+  fixture_json TEXT NOT NULL DEFAULT '{}',
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(suite_id, position)
+);
+
+CREATE INDEX idx_evaluation_cases_suite_position
+  ON evaluation_cases(suite_id, position ASC, id ASC);
+
+CREATE INDEX idx_evaluation_cases_active_suite_position
+  ON evaluation_cases(suite_id, deleted_at, position ASC, id ASC);
+
+-- A run freezes all mutable inputs. Re-scoring a historical execution must not
+-- accidentally use today's workflow or Case definition.
+CREATE TABLE evaluation_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  suite_id TEXT NOT NULL REFERENCES evaluation_suites(id) ON DELETE RESTRICT,
+  workflow_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+  workflow_snapshot_json TEXT NOT NULL,
+  suite_snapshot_json TEXT NOT NULL,
+  execution_profile_json TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  duration_ms INTEGER,
+  total_cases INTEGER NOT NULL DEFAULT 0,
+  passed_cases INTEGER NOT NULL DEFAULT 0,
+  failed_cases INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER,
+  estimated_cost_microusd INTEGER,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_evaluation_runs_suite_started
+  ON evaluation_runs(suite_id, started_at DESC, id DESC);
+
+CREATE INDEX idx_evaluation_runs_workflow_started
+  ON evaluation_runs(workflow_id, started_at DESC, id DESC);
+
+CREATE TABLE evaluation_case_results (
+  id TEXT PRIMARY KEY NOT NULL,
+  evaluation_run_id TEXT NOT NULL REFERENCES evaluation_runs(id) ON DELETE CASCADE,
+  evaluation_case_id TEXT NOT NULL REFERENCES evaluation_cases(id) ON DELETE RESTRICT,
+  workflow_run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
+  case_snapshot_json TEXT NOT NULL,
+  execution_status TEXT NOT NULL CHECK (execution_status IN ('queued', 'running', 'completed', 'blocked', 'failed', 'cancelled')),
+  verdict TEXT NOT NULL CHECK (verdict IN ('pending', 'passed', 'failed', 'error', 'skipped')),
+  score REAL,
+  criteria_results_json TEXT NOT NULL DEFAULT '[]',
+  normalized_trace_json TEXT NOT NULL DEFAULT '{}',
+  actual_output_json TEXT NOT NULL DEFAULT '{}',
+  failure_reason TEXT,
+  duration_ms INTEGER,
+  total_tokens INTEGER,
+  estimated_cost_microusd INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(evaluation_run_id, evaluation_case_id)
+);
+
+CREATE INDEX idx_evaluation_case_results_run_verdict
+  ON evaluation_case_results(evaluation_run_id, verdict, id ASC);
+
+CREATE INDEX idx_evaluation_case_results_workflow_run
+  ON evaluation_case_results(workflow_run_id);

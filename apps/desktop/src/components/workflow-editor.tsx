@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useQueryClient,
@@ -34,6 +35,7 @@ import {
 } from '@workspace/ui/components';
 import {
   ArrowLeftIcon,
+  BeakerIcon,
   HistoryIcon,
   SaveIcon,
   Settings2Icon,
@@ -46,6 +48,7 @@ import { toast } from 'sonner';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
+import { WorkflowEvaluations } from '@/components/workflow-evaluations';
 import { WorkflowHistory } from '@/components/workflow-history';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
@@ -64,6 +67,7 @@ import {
   createWorkflowDocument,
   publishWorkflow,
   toWorkflowDocument,
+  toWorkflowDsl,
   updateWorkflow,
   type StoredWorkflow,
   type WorkflowDocument,
@@ -130,6 +134,7 @@ function WorkflowEditorContent({
   const [releaseNote, setReleaseNote] = useState('');
   const [isPublishing, setIsPublishing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [evaluationsOpen, setEvaluationsOpen] = useState(false);
   const [observabilityPeriod, setObservabilityPeriod] =
     useState<ObservabilityPeriod>('30d');
   const [observabilityStartedAfter, setObservabilityStartedAfter] = useState(
@@ -210,6 +215,8 @@ function WorkflowEditorContent({
         startedAfter: observabilityStartedAfter,
       }),
     enabled: historyOpen && Boolean(activeWorkflow),
+    // Keep the current metrics visible while a changed time range is fetched.
+    placeholderData: keepPreviousData,
   });
   const selectedVersionObservability = useQuery({
     queryKey: [
@@ -226,6 +233,8 @@ function WorkflowEditorContent({
       }),
     enabled:
       historyOpen && Boolean(activeWorkflow) && observabilityVersion !== 'all',
+    // Version changes should update the existing card instead of remounting it.
+    placeholderData: keepPreviousData,
   });
 
   const { t } = useTranslation();
@@ -443,7 +452,24 @@ function WorkflowEditorContent({
         // safe to run. All editing controls remain governed by readOnly.
         canRun={!readOnly || allowRun}
         canvasContent={
-          historyOpen && activeWorkflow ? (
+          evaluationsOpen && activeWorkflow ? (
+            <WorkflowEvaluations
+              workflowId={activeWorkflow.id}
+              workflowSnapshot={{
+                targetName: workflowSettings.name,
+                targetSnapshot: workflowDocument,
+                dsl: toWorkflowDsl(
+                  activeWorkflow.id,
+                  nodes,
+                  edges,
+                  workflowSettings,
+                ),
+                releaseId: activeWorkflow.releaseId,
+                releaseVersion: activeWorkflow.version,
+              }}
+              onViewWorkflowRun={(runId) => void openHistoricalRun(runId)}
+            />
+          ) : historyOpen && activeWorkflow ? (
             <WorkflowHistory
               runs={
                 workflowHistory.data?.pages.flatMap((page) => page.items) ?? []
@@ -536,8 +562,17 @@ function WorkflowEditorContent({
                 </Field>
               </FieldGroup>
               <Tabs
-                value={historyOpen ? 'history' : 'canvas'}
-                onValueChange={(value) => setHistoryOpen(value === 'history')}
+                value={
+                  evaluationsOpen
+                    ? 'evaluations'
+                    : historyOpen
+                      ? 'history'
+                      : 'canvas'
+                }
+                onValueChange={(value) => {
+                  setHistoryOpen(value === 'history');
+                  setEvaluationsOpen(value === 'evaluations');
+                }}
               >
                 <TabsList aria-label={t('workflowEditor.view')}>
                   <TabsTrigger value='canvas'>
@@ -546,6 +581,10 @@ function WorkflowEditorContent({
                   <TabsTrigger value='history' disabled={!activeWorkflow}>
                     <HistoryIcon data-icon='inline-start' />
                     {t('workflowEditor.history.title')}
+                  </TabsTrigger>
+                  <TabsTrigger value='evaluations' disabled={!activeWorkflow}>
+                    <BeakerIcon data-icon='inline-start' />
+                    评测
                   </TabsTrigger>
                 </TabsList>
               </Tabs>

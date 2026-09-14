@@ -251,6 +251,36 @@ pub struct ToolConfirmationDecisionRequest {
     pub approved: bool,
 }
 
+/// Evaluation runs must opt into this profile; normal editor runs always keep
+/// production behavior. It prevents a Case from silently enabling real tools.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowExecutionProfile {
+    #[default]
+    Production,
+    Evaluation(EvaluationExecutionProfile),
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationExecutionProfile {
+    #[serde(default)]
+    pub tool_fixtures: Vec<EvaluationToolFixture>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationToolFixture {
+    pub tool: String,
+    #[serde(default = "empty_json_object")]
+    pub args: Value,
+    pub result: Value,
+}
+
+fn empty_json_object() -> Value {
+    json!({})
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubworkflowContext {
@@ -532,7 +562,25 @@ pub async fn compile(
     on_event: Option<Channel<StreamEvent>>,
 ) -> Result<CompiledWorkflow> {
     let path = (!dsl.id.is_empty()).then(|| vec![dsl.id.clone()]).unwrap_or_default();
-    compile_with_path(dsl, config, on_event, path).await
+    compile_with_path(dsl, config, on_event, path, WorkflowExecutionProfile::Production).await
+}
+
+/// Compiles an Agent-only workflow for fixture-only evaluation execution.
+pub async fn compile_for_evaluation(
+    dsl: WorkflowDsl,
+    config: &IWorkrun,
+    on_event: Option<Channel<StreamEvent>>,
+    profile: EvaluationExecutionProfile,
+) -> Result<CompiledWorkflow> {
+    let path = (!dsl.id.is_empty()).then(|| vec![dsl.id.clone()]).unwrap_or_default();
+    compile_with_path(
+        dsl,
+        config,
+        on_event,
+        path,
+        WorkflowExecutionProfile::Evaluation(profile),
+    )
+    .await
 }
 
 pub(super) async fn compile_with_path(
@@ -540,6 +588,7 @@ pub(super) async fn compile_with_path(
     config: &IWorkrun,
     on_event: Option<Channel<StreamEvent>>,
     workflow_path: Vec<String>,
+    execution_profile: WorkflowExecutionProfile,
 ) -> Result<CompiledWorkflow> {
     validate_output_schema(&dsl.output_schema)?;
     let nodes: HashMap<_, _> = dsl.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
@@ -553,6 +602,16 @@ pub(super) async fn compile_with_path(
     }
     if !dsl.nodes.iter().any(|node| node.kind == "end") {
         bail!("workflow must contain at least one end node");
+    }
+    if matches!(execution_profile, WorkflowExecutionProfile::Evaluation(_))
+        && dsl
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind.as_str(), "process" | "remote_agent" | "codeact_agent"))
+    {
+        // These nodes bypass ManagedTool. Test Mode blocks them until each has
+        // a fixture adapter, rather than claiming an unsafe partial sandbox.
+        bail!("evaluation mode currently supports Agent nodes only");
     }
 
     for node in &dsl.nodes {
@@ -674,6 +733,7 @@ pub(super) async fn compile_with_path(
                 Arc::clone(&state),
                 node_state_config(node, &executable_ids)?,
                 workflow_path.clone(),
+                execution_profile.clone(),
             )?,
             "terminate" => add_terminate_node(graph, node, on_event.clone()),
             // Build the LLM only at execution time. This keeps `compile` pure
@@ -686,6 +746,7 @@ pub(super) async fn compile_with_path(
                     on_event.clone(),
                     Arc::clone(&state),
                     node_state_config(node, &executable_ids)?,
+                    execution_profile.clone(),
                 )
                 .await?
             },

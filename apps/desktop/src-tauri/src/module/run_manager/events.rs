@@ -397,7 +397,16 @@ pub(super) async fn complete_app_cancellation(run_id: &str) -> Result<()> {
 }
 
 pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> Result<()> {
-    RunHistoryStore::finish_execution(run_id, status, error).await?;
+    RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
+    if let Err(error) = crate::module::evaluation::EvaluationStore::complete_workflow_run(
+        run_id,
+        matches!(status, RunStatus::Completed),
+        error.as_deref(),
+    )
+    .await
+    {
+        log::warn!("failed to complete evaluation result for run {run_id}: {error:#}");
+    }
     // Output events precede the durable status update. Publish a separate
     // notification afterwards so shell-level active-run queries cannot retain
     // the stale "running" result from that earlier event.

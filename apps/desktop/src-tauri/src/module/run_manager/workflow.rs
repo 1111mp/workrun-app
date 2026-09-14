@@ -33,6 +33,7 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         "dsl": request.dsl,
         "threadId": request.thread_id,
         "initialState": request.initial_state,
+        "evaluationProfile": request.evaluation_profile,
         "releaseId": request.release_id,
         "releaseVersion": request.release_version,
         "dependencies": dependencies,

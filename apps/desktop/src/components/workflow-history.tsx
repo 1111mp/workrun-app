@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   Badge,
   Button,
@@ -17,6 +18,7 @@ import {
 import { ActivityIcon, HistoryIcon, PlayIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { getProcessNodes, type ProcessNode } from '@/services/process-node';
 import type {
   RunObservability,
   RunRecordSummary,
@@ -68,6 +70,10 @@ function WorkflowHistory({
   onView: (id: string) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const processNodes = useQuery({
+    queryKey: ['processNodes'],
+    queryFn: getProcessNodes,
+  });
   return (
     <div className='bg-muted/20 flex min-h-0 flex-1 flex-col overflow-y-auto bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] p-5 sm:p-7 dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]'>
       <div className='mx-auto flex w-full max-w-4xl flex-col gap-5'>
@@ -91,6 +97,7 @@ function WorkflowHistory({
           onPeriodChange={onPeriodChange}
           selectedVersion={selectedVersion}
           onSelectedVersionChange={onSelectedVersionChange}
+          processNodes={processNodes.data ?? []}
         />
         {isLoading ? (
           <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-8 text-sm'>
@@ -199,6 +206,7 @@ function ObservabilitySummary({
   onPeriodChange,
   selectedVersion,
   onSelectedVersionChange,
+  processNodes,
 }: {
   observability?: RunObservability;
   scopedObservability?: RunObservability;
@@ -207,6 +215,7 @@ function ObservabilitySummary({
   onPeriodChange: (period: '7d' | '30d' | 'all') => void;
   selectedVersion: string;
   onSelectedVersionChange: (version: string) => void;
+  processNodes: ProcessNode[];
 }) {
   const { t, i18n } = useTranslation();
   if (isLoading) {
@@ -327,7 +336,11 @@ function ObservabilitySummary({
           </p>
           <div className='space-y-1.5'>
             {attention.map((span) => (
-              <AttentionRow key={spanKey(span)} span={span} />
+              <AttentionRow
+                key={spanKey(span)}
+                span={span}
+                processNodes={processNodes}
+              />
             ))}
           </div>
         </div>
@@ -379,10 +392,16 @@ function MetricCell({
   );
 }
 
-function AttentionRow({ span }: { span: SpanMetricSummary }) {
+function AttentionRow({
+  span,
+  processNodes,
+}: {
+  span: SpanMetricSummary;
+  processNodes: ProcessNode[];
+}) {
   const { t } = useTranslation();
   const label =
-    span.toolName ??
+    processToolDisplayName(span.toolName, processNodes) ??
     span.model ??
     span.nodeId ??
     span.kind.replaceAll('_', ' ');
@@ -398,6 +417,20 @@ function AttentionRow({ span }: { span: SpanMetricSummary }) {
         {formatDuration(span.p95DurationMs)}
       </span>
     </div>
+  );
+}
+
+function processToolDisplayName(
+  name: string | undefined,
+  processNodes: ProcessNode[],
+) {
+  const matched =
+    /^process_([0-9a-f]{8}(?:_[0-9a-f]{4}){3}_[0-9a-f]{12})$/i.exec(name ?? '');
+  if (!matched) return name;
+  const id = matched[1].replaceAll('_', '-');
+  return (
+    processNodes.find((node) => node.definition.id === id)?.definition.name ??
+    name
   );
 }
 

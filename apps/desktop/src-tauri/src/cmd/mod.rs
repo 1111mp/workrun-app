@@ -4,6 +4,7 @@ use anyhow::Result;
 pub type CmdResult<T = ()> = Result<T, String>;
 
 pub mod app;
+pub mod evaluation;
 pub mod ipc;
 pub mod mcp_server;
 pub mod model;

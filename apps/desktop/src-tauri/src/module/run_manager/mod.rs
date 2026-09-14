@@ -9,7 +9,7 @@ use crate::{
             AppendRunEvents, CreatePendingAction, CreateRunRecord, CreateRunSpan, FinishRunSpan, NewRunEvent,
             RunHistoryStore, RunRecordSummary, RunStatus, RunTargetType, TelemetrySpanKind, TelemetrySpanStatus,
         },
-        workflow::{self as workflow_module, ToolConfirmationDecisionRequest, WorkflowDsl},
+        workflow::{self as workflow_module, EvaluationExecutionProfile, ToolConfirmationDecisionRequest, WorkflowDsl},
     },
     process::AsyncHandler,
     singleton,
@@ -236,6 +236,9 @@ pub struct StartWorkflowRun {
     pub dsl: Value,
     pub initial_state: Value,
     pub thread_id: String,
+    /// Present only for an Evaluation Case. Its fixtures are persisted in the
+    /// run runtime snapshot and never supplied by a normal editor run.
+    pub evaluation_profile: Option<EvaluationExecutionProfile>,
 }
 
 #[derive(Debug, Deserialize)]

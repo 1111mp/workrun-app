@@ -46,6 +46,13 @@ async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Valu
         .map(serde_json::from_value)
         .transpose()
         .context("workflow resume confirmation is invalid")?;
+    let evaluation_profile = runtime
+        .get("evaluationProfile")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("workflow evaluation profile is invalid")?;
     RunManager::global()
         .workflow_sessions
         .lock()
@@ -64,9 +71,16 @@ async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Valu
         workrun.workflow.version = %workflow_version,
         workrun.thread.id = %session.thread_id,
     );
-    let result = execute_workflow(run_id, session, resume, tool_confirmation, cancellation)
-        .instrument(run_span)
-        .await;
+    let result = execute_workflow(
+        run_id,
+        session,
+        resume,
+        tool_confirmation,
+        evaluation_profile,
+        cancellation,
+    )
+    .instrument(run_span)
+    .await;
     RunManager::global().workflow_cancellations.lock().remove(run_id);
     result
 }
@@ -94,6 +108,7 @@ async fn execute_workflow(
     session: WorkflowSession,
     resume: bool,
     tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+    evaluation_profile: Option<workflow_module::EvaluationExecutionProfile>,
     cancellation: CancellationToken,
 ) -> Result<()> {
     let dsl: WorkflowDsl = serde_json::from_value(session.dsl)?;
@@ -115,7 +130,10 @@ async fn execute_workflow(
         });
         // Node-level events contain structured Process results and control-node
         // decisions; route them through the same durable writer as graph events.
-        let compiled = workflow_module::compile(dsl, &config, Some(node_events)).await?;
+        let compiled = match evaluation_profile {
+            Some(profile) => workflow_module::compile_for_evaluation(dsl, &config, Some(node_events), profile).await?,
+            None => workflow_module::compile(dsl, &config, Some(node_events)).await?,
+        };
         let event_sender = events.clone();
         let run = compiled.run_stream(
             initial_state,

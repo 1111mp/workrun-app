@@ -10974,6 +10974,7 @@ name = "workrun"
 version = "0.1.0"
 dependencies = [
  "adk-agent",
+ "adk-eval",
  "adk-rust",
  "adk-telemetry",
  "aes-gcm",
