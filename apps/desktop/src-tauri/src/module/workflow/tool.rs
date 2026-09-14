@@ -233,10 +233,9 @@ impl Tool for ManagedTool {
             );
         }
         let execution = async {
-            if let Some(result) = evaluation_fixture_result(&self.execution_profile, self.name(), &args)? {
-                validate_tool_value(&self.definition.output_schema, &result, "fixture output")?;
-                return Ok::<_, adk_rust::AdkError>(result);
-            }
+            // Fixtures model the tool boundary, not the model-visible request.
+            // Resolve authorized bindings first, but keep `args` for events and
+            // traces so plaintext credentials never become evaluation evidence.
             let execution_args = resolve_execution_args(
                 &self.state,
                 &self.agent_node_id,
@@ -244,6 +243,14 @@ impl Tool for ManagedTool {
                 &self.state_bindings,
                 &self.definition.input_schema,
             )?;
+            if let Some(result) = evaluation_fixture_result(
+                &self.execution_profile,
+                self.name(),
+                &execution_args,
+            )? {
+                validate_tool_value(&self.definition.output_schema, &result, "fixture output")?;
+                return Ok::<_, adk_rust::AdkError>(result);
+            }
             let timeout = std::time::Duration::from_secs(self.timeout_seconds);
             let result = match &self.executor {
                 ManagedToolExecutor::Process => {
@@ -525,16 +532,27 @@ mod tests {
                 .unwrap();
         }
 
-        assert_eq!(
-            resolve_execution_args(
+        let execution_args = resolve_execution_args(
                 &state,
                 "agent",
                 &json!({"recipient": "[EMAIL REDACTED]"}),
                 &[],
                 &json!({"type": "object", "properties": {"recipient": {"type": "string"}}, "required": ["recipient"]}),
             )
-            .unwrap(),
-            json!({"recipient": "alice@example.com"})
+            .unwrap();
+        assert_eq!(execution_args, json!({"recipient": "alice@example.com"}));
+        let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
+            tool_fixtures: vec![EvaluationToolFixture {
+                tool: "lookup_customer".to_string(),
+                args: json!({"recipient": "alice@example.com"}),
+                result: json!({"found": true}),
+            }],
+        });
+        // A fixture must use the resolved execution value, never the visible
+        // redaction marker the model used to construct its request.
+        assert_eq!(
+            evaluation_fixture_result(&profile, "lookup_customer", &execution_args).unwrap(),
+            Some(json!({"found": true}))
         );
     }
 

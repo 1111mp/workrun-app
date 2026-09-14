@@ -3,6 +3,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import {
@@ -86,6 +87,7 @@ import {
   type EvaluationSuite,
   type EvaluationWorkflowSnapshot,
 } from '@/services/evaluation';
+import { listTools, type ToolDefinition } from '@/services/tool';
 
 type MatchAlgorithm = 'exact' | 'contains' | 'levenshtein';
 type AssertionSubject = 'final_json' | 'final_text';
@@ -129,6 +131,30 @@ type SafetyAssertionDraft = {
   fieldPaths: string;
   forbiddenText: string;
 };
+
+function workflowToolIds(snapshot: EvaluationWorkflowSnapshot) {
+  const dsl = snapshot.dsl as {
+    nodes?: Array<{ data?: { toolIds?: unknown } }>;
+  };
+  return new Set(
+    dsl.nodes?.flatMap((node) =>
+      Array.isArray(node.data?.toolIds)
+        ? node.data.toolIds.filter((id): id is string => typeof id === 'string')
+        : [],
+    ) ?? [],
+  );
+}
+
+function toolLabel(tool: ToolDefinition) {
+  return tool.sourceName
+    ? `${tool.sourceName} · ${tool.displayName}`
+    : tool.displayName;
+}
+
+function selectedToolLabel(name: string, tools: ToolDefinition[]) {
+  const tool = tools.find((candidate) => candidate.name === name);
+  return tool ? toolLabel(tool) : name;
+}
 const RESULT_STYLE: Record<EvaluationCaseResult['verdict'], string> = {
   pending: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   passed:
@@ -137,6 +163,52 @@ const RESULT_STYLE: Record<EvaluationCaseResult['verdict'], string> = {
   error:
     'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
 };
+
+type RunOutcome = 'passed' | 'failed' | 'running' | 'queued';
+
+const RUN_OUTCOME_STYLE: Record<
+  RunOutcome,
+  { label: string; badge: string; rail: string; meter: string }
+> = {
+  passed: {
+    label: '通过',
+    badge:
+      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    rail: 'border-l-emerald-500',
+    meter: 'bg-emerald-500',
+  },
+  failed: {
+    label: '失败',
+    badge: 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300',
+    rail: 'border-l-rose-500',
+    meter: 'bg-rose-500',
+  },
+  running: {
+    label: '运行中',
+    badge: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+    rail: 'border-l-sky-500',
+    meter: 'bg-sky-500',
+  },
+  queued: {
+    label: '等待中',
+    badge:
+      'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+    rail: 'border-l-amber-500',
+    meter: 'bg-amber-500',
+  },
+};
+
+function runOutcome(run: {
+  status: string;
+  totalCases: number;
+  passedCases: number;
+  failedCases: number;
+}): RunOutcome {
+  if (run.status === 'queued') return 'queued';
+  if (run.status === 'running') return 'running';
+  if (run.failedCases > 0 || run.passedCases < run.totalCases) return 'failed';
+  return 'passed';
+}
 
 function jsonObject(value: string, label: string) {
   const parsed: unknown = JSON.parse(value);
@@ -498,7 +570,6 @@ export function WorkflowEvaluations({
     queryKey: ['evaluation-case-results', activeRunId],
     queryFn: () => listEvaluationCaseResults(activeRunId!),
     enabled: Boolean(activeRunId),
-    refetchInterval: activeRunId ? 1200 : false,
     // Preserve the detail panel while switching between entries in Run history.
     placeholderData: keepPreviousData,
   });
@@ -506,7 +577,6 @@ export function WorkflowEvaluations({
     queryKey: ['evaluation-run', activeRunId],
     queryFn: () => inspectEvaluationRun(activeRunId!),
     enabled: Boolean(activeRunId),
-    refetchInterval: activeRunId ? 1200 : false,
     placeholderData: keepPreviousData,
   });
   const runHistory = useQuery({
@@ -514,6 +584,13 @@ export function WorkflowEvaluations({
     queryFn: () => listEvaluationRuns(effectiveSuiteId!),
     enabled: Boolean(effectiveSuiteId),
   });
+  const toolCatalog = useQuery({
+    queryKey: ['tool-catalog'],
+    queryFn: listTools,
+  });
+  const configuredToolIds = workflowToolIds(workflowSnapshot);
+  const configuredTools =
+    toolCatalog.data?.filter((tool) => configuredToolIds.has(tool.id)) ?? [];
 
   useEffect(() => {
     const rows = results.data;
@@ -538,6 +615,33 @@ export function WorkflowEvaluations({
         startingNext.current = false;
       });
   }, [activeRunId, queryClient, results.data]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<{ runId: string }>('run-status-changed', ({ payload }) => {
+      // Workflow completion is emitted only after EvaluationStore has scored
+      // its linked Case, so this event is the durable replacement for polling.
+      if (!results.data?.some((row) => row.workflowRunId === payload.runId))
+        return;
+      void queryClient.invalidateQueries({
+        queryKey: ['evaluation-case-results', activeRunId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['evaluation-run', activeRunId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['evaluation-run-history', effectiveSuiteId],
+      });
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [activeRunId, effectiveSuiteId, queryClient, results.data]);
 
   const openSuiteEditor = (suite?: EvaluationSuite) => {
     setEditingSuite(suite);
@@ -907,7 +1011,7 @@ export function WorkflowEvaluations({
           </Button>
         </div>
 
-        <div className='grid min-h-108 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]'>
+        <div className='grid min-h-108 min-w-0 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]'>
           <aside className='bg-card rounded-xl border p-2'>
             {suites.isLoading ? (
               <div className='text-muted-foreground flex items-center gap-2 p-3 text-sm'>
@@ -938,7 +1042,7 @@ export function WorkflowEvaluations({
             ) : null}
           </aside>
 
-          <section className='bg-card rounded-xl border p-4 sm:p-5'>
+          <section className='bg-card min-w-0 rounded-xl border p-4 sm:p-5'>
             {!selectedSuite ? (
               <Empty className='min-h-72 border-none'>
                 <EmptyHeader>
@@ -960,7 +1064,7 @@ export function WorkflowEvaluations({
                       {selectedSuite.description || '尚未添加说明'}
                     </p>
                   </div>
-                  <div className='flex gap-2'>
+                  <div className='flex flex-wrap justify-end gap-2'>
                     <Button
                       variant='ghost'
                       size='icon-sm'
@@ -1016,7 +1120,7 @@ export function WorkflowEvaluations({
                     </Button>
                   </div>
                 </div>
-                <div className='grid gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]'>
+                <div className='grid gap-5 min-[1900px]:grid-cols-[minmax(0,1fr)_18rem]'>
                   <div className='flex flex-col gap-2'>
                     <div className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
                       Cases
@@ -1045,58 +1149,60 @@ export function WorkflowEvaluations({
                         <Badge variant={item.enabled ? 'secondary' : 'outline'}>
                           {item.enabled ? '已启用' : '已停用'}
                         </Badge>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={`${item.enabled ? '停用' : '启用'} ${item.name}`}
-                          onClick={() => void updateCaseEnabled(item)}
-                        >
-                          <PowerIcon />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={`上移 ${item.name}`}
-                          disabled={item.position === 0}
-                          onClick={() => void moveCase(item, -1)}
-                        >
-                          <ArrowUpIcon />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={`下移 ${item.name}`}
-                          disabled={
-                            item.position === (cases.data?.length ?? 1) - 1
-                          }
-                          onClick={() => void moveCase(item, 1)}
-                        >
-                          <ArrowDownIcon />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={`复制 ${item.name}`}
-                          onClick={() => void duplicateCase(item)}
-                        >
-                          <CopyIcon />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={`编辑 ${item.name}`}
-                          onClick={() => openCaseEditor(item)}
-                        >
-                          <PencilIcon />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={`删除 ${item.name}`}
-                          onClick={() => setDeleteCase(item)}
-                        >
-                          <Trash2Icon />
-                        </Button>
+                        <div className='ml-auto flex flex-wrap items-center justify-end gap-1'>
+                          <Button
+                            variant='ghost'
+                            size='icon-sm'
+                            aria-label={`${item.enabled ? '停用' : '启用'} ${item.name}`}
+                            onClick={() => void updateCaseEnabled(item)}
+                          >
+                            <PowerIcon />
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            size='icon-sm'
+                            aria-label={`上移 ${item.name}`}
+                            disabled={item.position === 0}
+                            onClick={() => void moveCase(item, -1)}
+                          >
+                            <ArrowUpIcon />
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            size='icon-sm'
+                            aria-label={`下移 ${item.name}`}
+                            disabled={
+                              item.position === (cases.data?.length ?? 1) - 1
+                            }
+                            onClick={() => void moveCase(item, 1)}
+                          >
+                            <ArrowDownIcon />
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            size='icon-sm'
+                            aria-label={`复制 ${item.name}`}
+                            onClick={() => void duplicateCase(item)}
+                          >
+                            <CopyIcon />
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            size='icon-sm'
+                            aria-label={`编辑 ${item.name}`}
+                            onClick={() => openCaseEditor(item)}
+                          >
+                            <PencilIcon />
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            size='icon-sm'
+                            aria-label={`删除 ${item.name}`}
+                            onClick={() => setDeleteCase(item)}
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </div>
                       </div>
                     ))}
                     {!cases.isLoading && !cases.data?.length ? (
@@ -1105,14 +1211,28 @@ export function WorkflowEvaluations({
                       </p>
                     ) : null}
                   </div>
-                  <div className='border-border/70 bg-muted/30 rounded-lg border p-3'>
+                  <div className='border-border/70 bg-muted/20 rounded-xl border p-3.5 shadow-sm'>
                     <div className='mb-3 flex items-center justify-between'>
-                      <span className='text-xs font-medium tracking-wider uppercase'>
-                        Latest rund
-                      </span>
+                      <div>
+                        <span className='text-muted-foreground text-[10px] font-semibold tracking-[0.16em] uppercase'>
+                          当前评测
+                        </span>
+                        <p className='mt-0.5 text-sm font-semibold'>运行概览</p>
+                      </div>
                       {activeRunId ? (
-                        <Badge variant='outline'>
-                          {completed}/{results.data?.length ?? 0}
+                        <Badge
+                          className={
+                            runDetail.data
+                              ? RUN_OUTCOME_STYLE[runOutcome(runDetail.data)]
+                                  .badge
+                              : undefined
+                          }
+                          variant='outline'
+                        >
+                          {runDetail.data
+                            ? RUN_OUTCOME_STYLE[runOutcome(runDetail.data)]
+                                .label
+                            : `${completed}/${results.data?.length ?? 0}`}
                         </Badge>
                       ) : null}
                     </div>
@@ -1122,32 +1242,71 @@ export function WorkflowEvaluations({
                         中逐条执行。
                       </p>
                     ) : null}
-                    {runDetail.data ? (
-                      <div className='text-muted-foreground mb-3 grid grid-cols-2 gap-x-3 gap-y-1 border-y py-2 text-xs'>
-                        <span>状态</span>
-                        <span className='text-foreground text-right font-medium'>
-                          {runDetail.data.status}
-                        </span>
-                        <span>通过率</span>
-                        <span className='text-foreground text-right font-medium'>
-                          {runDetail.data.totalCases
-                            ? `${Math.round((runDetail.data.passedCases / runDetail.data.totalCases) * 100)}%`
-                            : '—'}
-                        </span>
-                        <span>Token</span>
-                        <span className='text-foreground text-right font-medium'>
-                          {formatNumber(runDetail.data.totalTokens)}
-                        </span>
-                        <span>成本</span>
-                        <span className='text-foreground text-right font-medium'>
-                          {formatCost(runDetail.data.estimatedCostMicrousd)}
-                        </span>
-                        <span>耗时</span>
-                        <span className='text-foreground text-right font-medium'>
-                          {formatDuration(runDetail.data.durationMs)}
-                        </span>
-                      </div>
-                    ) : null}
+                    {runDetail.data
+                      ? (() => {
+                          const rate = runDetail.data.totalCases
+                            ? Math.round(
+                                (runDetail.data.passedCases /
+                                  runDetail.data.totalCases) *
+                                  100,
+                              )
+                            : 0;
+                          const style =
+                            RUN_OUTCOME_STYLE[runOutcome(runDetail.data)];
+                          return (
+                            <div className='bg-background/70 mb-4 rounded-lg border p-3'>
+                              <div className='mb-2 flex items-end justify-between'>
+                                <div>
+                                  <span className='text-2xl font-semibold tracking-tight'>
+                                    {rate}%
+                                  </span>
+                                  <span className='text-muted-foreground ml-1 text-xs'>
+                                    通过率
+                                  </span>
+                                </div>
+                                <span className='text-muted-foreground text-xs'>
+                                  {runDetail.data.passedCases}/
+                                  {runDetail.data.totalCases} Cases
+                                </span>
+                              </div>
+                              <div className='bg-muted h-1.5 overflow-hidden rounded-full'>
+                                <div
+                                  className={`h-full rounded-full transition-all ${style.meter}`}
+                                  style={{ width: `${rate}%` }}
+                                />
+                              </div>
+                              <div className='mt-3 grid grid-cols-3 gap-2 text-center'>
+                                <div>
+                                  <div className='text-muted-foreground text-[10px] uppercase'>
+                                    耗时
+                                  </div>
+                                  <div className='mt-0.5 text-xs font-medium'>
+                                    {formatDuration(runDetail.data.durationMs)}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className='text-muted-foreground text-[10px] uppercase'>
+                                    成本
+                                  </div>
+                                  <div className='mt-0.5 text-xs font-medium'>
+                                    {formatCost(
+                                      runDetail.data.estimatedCostMicrousd,
+                                    )}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className='text-muted-foreground text-[10px] uppercase'>
+                                    Token
+                                  </div>
+                                  <div className='mt-0.5 text-xs font-medium'>
+                                    {formatNumber(runDetail.data.totalTokens)}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()
+                      : null}
                     <div className='flex flex-col gap-2'>
                       {results.data?.map((result) => (
                         <button
@@ -1197,36 +1356,64 @@ export function WorkflowEvaluations({
                         ；完成当前用例后会自动继续下一条。
                       </p>
                     ) : null}
-                    <div className='mt-5 border-t pt-3'>
-                      <div className='mb-2 text-xs font-medium tracking-wider uppercase'>
-                        Run history
+                    <div className='mt-5 border-t pt-4'>
+                      <div className='mb-3 flex items-center justify-between'>
+                        <div>
+                          <div className='text-muted-foreground text-[10px] font-semibold tracking-[0.16em] uppercase'>
+                            运行历史
+                          </div>
+                          <p className='text-muted-foreground mt-0.5 text-xs'>
+                            最近 30 次快照
+                          </p>
+                        </div>
+                        <Badge variant='outline' className='text-[10px]'>
+                          {runHistory.data?.length ?? 0}
+                        </Badge>
                       </div>
-                      <div className='flex max-h-52 flex-col gap-1 overflow-y-auto'>
+                      <div className='flex max-h-72 flex-col gap-2 overflow-y-auto pr-0.5'>
                         {runHistory.data?.map((run) => {
                           const rate = run.totalCases
                             ? Math.round(
                                 (run.passedCases / run.totalCases) * 100,
                               )
                             : 0;
+                          const outcome = runOutcome(run);
+                          const style = RUN_OUTCOME_STYLE[outcome];
                           return (
                             <button
                               key={run.id}
                               type='button'
                               onClick={() => setActiveRunId(run.id)}
-                              className={`rounded-md border px-2 py-2 text-left text-xs ${run.id === activeRunId ? 'border-primary bg-primary/5' : 'hover:bg-muted/60'}`}
+                              className={`grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border p-2 text-left transition-colors ${run.id === activeRunId ? 'border-primary bg-primary/5 ring-primary/10 shadow-sm ring-1' : 'bg-background/60 hover:bg-background hover:shadow-sm'}`}
                             >
-                              <div className='flex items-center justify-between gap-2'>
-                                <span>
-                                  {new Date(run.startedAt).toLocaleString()}
+                              <div
+                                className={`flex size-10 flex-col items-center justify-center rounded-md text-[10px] font-semibold ${style.badge}`}
+                              >
+                                <span className='text-sm leading-none'>
+                                  {rate}
                                 </span>
-                                <Badge variant='outline'>{rate}%</Badge>
+                                <span className='mt-0.5 opacity-75'>%</span>
                               </div>
-                              <div className='text-muted-foreground mt-1 flex justify-between gap-2'>
-                                <span>
-                                  {formatCost(run.estimatedCostMicrousd)}
-                                </span>
-                                <span>{formatDuration(run.durationMs)}</span>
+                              <div className='min-w-0'>
+                                <div className='flex items-center gap-2'>
+                                  <span className='truncate text-xs font-medium'>
+                                    {new Date(run.startedAt).toLocaleString()}
+                                  </span>
+                                  <span className='text-muted-foreground shrink-0 text-[10px]'>
+                                    {run.passedCases}/{run.totalCases} 通过
+                                  </span>
+                                </div>
+                                <div className='text-muted-foreground mt-1 flex gap-2 text-[10px]'>
+                                  <span>
+                                    {formatCost(run.estimatedCostMicrousd)}
+                                  </span>
+                                  <span className='text-border'>·</span>
+                                  <span>{formatDuration(run.durationMs)}</span>
+                                </div>
                               </div>
+                              <Badge className={style.badge} variant='outline'>
+                                {style.label}
+                              </Badge>
                             </button>
                           );
                         })}
@@ -1849,21 +2036,40 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>工具名称</FieldLabel>
-                          <Input
+                          <FieldLabel>工具</FieldLabel>
+                          <Select
                             value={call.name}
-                            placeholder='crm.lookup_customer'
-                            onChange={(event) =>
+                            onValueChange={(value) =>
                               setToolTrajectory((current) => ({
                                 ...current,
                                 calls: current.calls.map((item) =>
                                   item.id === call.id
-                                    ? { ...item, name: event.target.value }
+                                    ? { ...item, name: value ?? '' }
                                     : item,
                                 ),
                               }))
                             }
-                          />
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder='选择当前 Workflow 的工具'>
+                                {call.name
+                                  ? selectedToolLabel(
+                                      call.name,
+                                      configuredTools,
+                                    )
+                                  : undefined}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {configuredTools.map((tool) => (
+                                  <SelectItem key={tool.id} value={tool.name}>
+                                    {toolLabel(tool)}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
                         </Field>
                         <Field>
                           <FieldLabel>调用次数</FieldLabel>
@@ -2014,20 +2220,39 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>工具名称</FieldLabel>
-                          <Input
+                          <FieldLabel>工具</FieldLabel>
+                          <Select
                             value={fixture.tool}
-                            placeholder='crm.lookup_customer'
-                            onChange={(event) =>
+                            onValueChange={(value) =>
                               setFixtureDrafts((current) =>
                                 current.map((item) =>
                                   item.id === fixture.id
-                                    ? { ...item, tool: event.target.value }
+                                    ? { ...item, tool: value ?? '' }
                                     : item,
                                 ),
                               )
                             }
-                          />
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder='选择当前 Workflow 的工具'>
+                                {fixture.tool
+                                  ? selectedToolLabel(
+                                      fixture.tool,
+                                      configuredTools,
+                                    )
+                                  : undefined}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {configuredTools.map((tool) => (
+                                  <SelectItem key={tool.id} value={tool.name}>
+                                    {toolLabel(tool)}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
                         </Field>
                         <Field>
                           <FieldLabel>匹配参数 JSON</FieldLabel>
