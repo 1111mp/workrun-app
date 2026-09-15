@@ -14,6 +14,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
   Button,
+  Checkbox,
   Field,
   FieldGroup,
   FieldLabel,
@@ -55,6 +56,13 @@ import { WorkflowRunPanel } from '@/components/workflow-run-panel';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
+import {
+  getEvaluationQualityGate,
+  latestEvaluationRunForWorkflow,
+  listEvaluationRuns,
+  recordEvaluationQualityGateOverride,
+  listEvaluationQualityGateAudits,
+} from '@/services/evaluation';
 import {
   inspectRunRecord,
   getWorkflowObservability,
@@ -130,6 +138,8 @@ function WorkflowEditorContent({
 }: WorkflowEditorProps) {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [publishOverride, setPublishOverride] = useState(false);
+  const [publishOverrideReason, setPublishOverrideReason] = useState('');
   const [version, setVersion] = useState('1.0.0');
   const [releaseNote, setReleaseNote] = useState('');
   const [isPublishing, setIsPublishing] = useState(false);
@@ -218,6 +228,69 @@ function WorkflowEditorContent({
     // Keep the current metrics visible while a changed time range is fetched.
     placeholderData: keepPreviousData,
   });
+  const latestEvaluation = useQuery({
+    queryKey: ['evaluation-workflow-latest', activeWorkflow?.id],
+    queryFn: () => latestEvaluationRunForWorkflow(activeWorkflow!.id),
+    enabled: Boolean(activeWorkflow),
+  });
+  const qualityGate = useQuery({
+    queryKey: ['evaluation-quality-gate', activeWorkflow?.id],
+    queryFn: () => getEvaluationQualityGate(activeWorkflow!.id),
+    enabled: Boolean(activeWorkflow),
+  });
+  const qualityGateAudits = useQuery({
+    queryKey: ['evaluation-quality-gate-audits', activeWorkflow?.id],
+    queryFn: () => listEvaluationQualityGateAudits(activeWorkflow!.id),
+    enabled: historyOpen && Boolean(activeWorkflow),
+  });
+  const requiredSuiteRuns = useQuery({
+    queryKey: [
+      'evaluation-required-suite-runs',
+      qualityGate.data?.requiredSuiteIds,
+    ],
+    queryFn: async () =>
+      Promise.all(
+        (qualityGate.data?.requiredSuiteIds ?? []).map(async (suiteId) => ({
+          suiteId,
+          run: (await listEvaluationRuns(suiteId))[0],
+        })),
+      ),
+    enabled: Boolean(qualityGate.data?.requiredSuiteIds.length),
+  });
+  const gateReasons = qualityGate.data
+    ? [
+        ...(qualityGate.data.requireEvaluation && !latestEvaluation.data
+          ? ['需要至少一次评测']
+          : []),
+        ...(qualityGate.data.minPassRate !== null &&
+        qualityGate.data.minPassRate !== undefined &&
+        latestEvaluation.data &&
+        latestEvaluation.data.totalCases > 0 &&
+        latestEvaluation.data.passedCases / latestEvaluation.data.totalCases <
+          qualityGate.data.minPassRate
+          ? ['通过率低于门槛']
+          : []),
+        ...(qualityGate.data.maxCostMicrousd &&
+        latestEvaluation.data &&
+        (latestEvaluation.data.estimatedCostMicrousd ?? 0) >
+          qualityGate.data.maxCostMicrousd
+          ? ['成本超过门槛']
+          : []),
+        ...(qualityGate.data.maxDurationMs &&
+        latestEvaluation.data &&
+        (latestEvaluation.data.durationMs ?? 0) > qualityGate.data.maxDurationMs
+          ? ['耗时超过门槛']
+          : []),
+        ...(requiredSuiteRuns.data
+          ?.filter(
+            (item) =>
+              !item.run ||
+              item.run.status !== 'completed' ||
+              item.run.failedCases > 0,
+          )
+          .map((item) => `必检 Suite ${item.suiteId} 未通过`) ?? []),
+      ]
+    : [];
   const selectedVersionObservability = useQuery({
     queryKey: [
       'run-observability',
@@ -418,6 +491,20 @@ function WorkflowEditorContent({
         version.trim(),
         releaseNote.trim(),
       );
+      if (gateReasons.length && qualityGate.data) {
+        void recordEvaluationQualityGateOverride({
+          workflowId: activeWorkflow.id,
+          releaseVersion: release.version,
+          reason: publishOverrideReason.trim(),
+          gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
+          evaluationSnapshot: latestEvaluation.data ?? {},
+        }).catch((error) =>
+          toast.error('发布已完成，但质量门审计记录失败', {
+            toasterId: 'global',
+            description: String(error),
+          }),
+        );
+      }
       setPublishOpen(false);
       setReleaseNote('');
       void queryClient.invalidateQueries({ queryKey: ['workflows'] });
@@ -478,6 +565,7 @@ function WorkflowEditorContent({
               hasMore={workflowHistory.hasNextPage}
               isLoadingMore={workflowHistory.isFetchingNextPage}
               observability={workflowObservability.data}
+              qualityGateAudits={qualityGateAudits.data ?? []}
               scopedObservability={selectedVersionObservability.data}
               isObservabilityLoading={
                 observabilityVersion === 'all'
@@ -618,6 +706,8 @@ function WorkflowEditorContent({
                   size='sm'
                   onClick={() => {
                     setReleaseNote(t('workflowEditor.releaseNoteDefault'));
+                    setPublishOverride(false);
+                    setPublishOverrideReason('');
                     setPublishOpen(true);
                   }}
                 >
@@ -707,6 +797,44 @@ function WorkflowEditorContent({
             </div>
 
             <div className='px-5 py-5 sm:px-6'>
+              <div
+                className={`mb-4 rounded-lg border p-3 text-sm ${latestEvaluation.data && latestEvaluation.data.failedCases === 0 && latestEvaluation.data.status === 'completed' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300'}`}
+              >
+                {gateReasons.length
+                  ? `质量门未通过：${gateReasons.join('、')}。可确认旁路后发布。`
+                  : latestEvaluation.data
+                    ? `质量门通过：最近评测 ${latestEvaluation.data.passedCases}/${latestEvaluation.data.totalCases} 通过。`
+                    : '未配置质量门。'}
+              </div>
+              {gateReasons.length ? (
+                <Field orientation='horizontal' className='mb-4'>
+                  <Checkbox
+                    id='publish-quality-override'
+                    checked={publishOverride}
+                    onCheckedChange={(checked) =>
+                      setPublishOverride(checked === true)
+                    }
+                  />
+                  <FieldLabel htmlFor='publish-quality-override'>
+                    我确认旁路此次质量门
+                  </FieldLabel>
+                </Field>
+              ) : null}
+              {gateReasons.length ? (
+                <Field className='mb-4'>
+                  <FieldLabel htmlFor='publish-quality-override-reason'>
+                    旁路原因
+                  </FieldLabel>
+                  <Textarea
+                    id='publish-quality-override-reason'
+                    value={publishOverrideReason}
+                    onChange={(event) =>
+                      setPublishOverrideReason(event.target.value)
+                    }
+                    placeholder='说明为何本次可以接受质量门未通过。'
+                  />
+                </Field>
+              ) : null}
               <FieldGroup className='gap-4'>
                 <Field>
                   <FieldLabel htmlFor='workflow-release-version'>
@@ -742,7 +870,11 @@ function WorkflowEditorContent({
               </AlertDialogCancel>
               <Button
                 disabled={
-                  isPublishing || !version.trim() || !releaseNote.trim()
+                  isPublishing ||
+                  !version.trim() ||
+                  !releaseNote.trim() ||
+                  (gateReasons.length > 0 && !publishOverride) ||
+                  (gateReasons.length > 0 && !publishOverrideReason.trim())
                 }
                 onClick={() => void publishCurrentWorkflow()}
               >

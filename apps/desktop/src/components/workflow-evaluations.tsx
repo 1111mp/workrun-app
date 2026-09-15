@@ -59,6 +59,8 @@ import {
   PlayIcon,
   PlusIcon,
   PowerIcon,
+  Settings2Icon,
+  ShieldCheckIcon,
   TestTubeDiagonalIcon,
   Trash2Icon,
   UploadIcon,
@@ -73,19 +75,27 @@ import {
   createEvaluationSuite,
   deleteEvaluationCase,
   deleteEvaluationSuite,
+  getEvaluationQualityGate,
   inspectEvaluationRun,
   listEvaluationCaseResults,
   listEvaluationCases,
   listEvaluationRuns,
+  summarizeEvaluationVersions,
+  compareEvaluationVersions,
   listEvaluationSuites,
   reorderEvaluationCases,
+  restoreEvaluationCase,
   startNextEvaluationCase,
   updateEvaluationCase,
   updateEvaluationSuite,
+  updateEvaluationQualityGate,
   type EvaluationCase,
   type EvaluationCaseResult,
   type EvaluationSuite,
   type EvaluationWorkflowSnapshot,
+  type EvaluationVersionSummary,
+  type EvaluationVersionCaseDiff,
+  type EvaluationQualityGate,
 } from '@/services/evaluation';
 import { listTools, type ToolDefinition } from '@/services/tool';
 
@@ -514,8 +524,16 @@ export function WorkflowEvaluations({
   const queryClient = useQueryClient();
   const [selectedSuiteId, setSelectedSuiteId] = useState<string>();
   const [activeRunId, setActiveRunId] = useState<string>();
+  const [baselineVersion, setBaselineVersion] = useState<string>();
+  const [candidateVersion, setCandidateVersion] = useState<string>();
+  const [showArchivedCases, setShowArchivedCases] = useState(false);
   const [selectedResult, setSelectedResult] = useState<EvaluationCaseResult>();
   const [suiteDialogOpen, setSuiteDialogOpen] = useState(false);
+  const [qualityGateOpen, setQualityGateOpen] = useState(false);
+  const [qualityGate, setQualityGate] = useState<EvaluationQualityGate>({
+    requireEvaluation: false,
+    requiredSuiteIds: [],
+  });
   const [caseDialogOpen, setCaseDialogOpen] = useState(false);
   const [editingSuite, setEditingSuite] = useState<EvaluationSuite>();
   const [editingCase, setEditingCase] = useState<EvaluationCase>();
@@ -548,6 +566,10 @@ export function WorkflowEvaluations({
     queryKey: ['evaluation-suites', workflowId],
     queryFn: () => listEvaluationSuites(workflowId),
   });
+  const savedQualityGate = useQuery({
+    queryKey: ['evaluation-quality-gate', workflowId],
+    queryFn: () => getEvaluationQualityGate(workflowId),
+  });
   // Keep the first Suite as a render-time default. It avoids an extra render
   // after query completion while preserving an explicit user selection.
   const effectiveSuiteId = selectedSuiteId ?? suites.data?.[0]?.id;
@@ -561,9 +583,33 @@ export function WorkflowEvaluations({
     setSelectedResult(undefined);
     setSelectedSuiteId(suiteId);
   };
+  const openQualityGate = () => {
+    setQualityGate(
+      savedQualityGate.data ?? {
+        requireEvaluation: false,
+        requiredSuiteIds: [],
+      },
+    );
+    setQualityGateOpen(true);
+  };
+  const saveQualityGate = async () => {
+    try {
+      await updateEvaluationQualityGate(workflowId, qualityGate);
+      await queryClient.invalidateQueries({
+        queryKey: ['evaluation-quality-gate', workflowId],
+      });
+      setQualityGateOpen(false);
+      toast.success('已保存发布质量门', { toasterId: 'global' });
+    } catch (error) {
+      toast.error('无法保存发布质量门', {
+        toasterId: 'global',
+        description: String(error),
+      });
+    }
+  };
   const cases = useQuery({
-    queryKey: ['evaluation-cases', effectiveSuiteId],
-    queryFn: () => listEvaluationCases(effectiveSuiteId!),
+    queryKey: ['evaluation-cases', effectiveSuiteId, showArchivedCases],
+    queryFn: () => listEvaluationCases(effectiveSuiteId!, showArchivedCases),
     enabled: Boolean(effectiveSuiteId),
   });
   const results = useQuery({
@@ -583,6 +629,37 @@ export function WorkflowEvaluations({
     queryKey: ['evaluation-run-history', effectiveSuiteId],
     queryFn: () => listEvaluationRuns(effectiveSuiteId!),
     enabled: Boolean(effectiveSuiteId),
+  });
+  const versionSummary = useQuery({
+    queryKey: ['evaluation-version-summary', effectiveSuiteId],
+    queryFn: () => summarizeEvaluationVersions(effectiveSuiteId!),
+    enabled: Boolean(effectiveSuiteId),
+  });
+  const baseline = versionSummary.data?.find(
+    (item) => versionKey(item) === baselineVersion,
+  );
+  const candidate = versionSummary.data?.find(
+    (item) => versionKey(item) === candidateVersion,
+  );
+  const versionDiff = useQuery({
+    queryKey: [
+      'evaluation-version-diff',
+      effectiveSuiteId,
+      baseline?.releaseVersion,
+      candidate?.releaseVersion,
+    ],
+    queryFn: () =>
+      compareEvaluationVersions(
+        effectiveSuiteId!,
+        baseline!.releaseVersion,
+        candidate!.releaseVersion,
+      ),
+    enabled: Boolean(
+      effectiveSuiteId &&
+      baseline &&
+      candidate &&
+      baselineVersion !== candidateVersion,
+    ),
   });
   const toolCatalog = useQuery({
     queryKey: ['tool-catalog'],
@@ -893,6 +970,17 @@ export function WorkflowEvaluations({
       });
     }
   };
+  const restoreCase = async (item: EvaluationCase) => {
+    try {
+      await restoreEvaluationCase(item.id);
+      await refreshCases();
+    } catch (error) {
+      toast.error('无法恢复用例', {
+        toasterId: 'global',
+        description: String(error),
+      });
+    }
+  };
 
   const completed =
     results.data?.filter((row) => row.verdict !== 'pending').length ?? 0;
@@ -1006,9 +1094,14 @@ export function WorkflowEvaluations({
               为当前工作流保存可重复运行的输入、断言和安全 fixture。
             </p>
           </div>
-          <Button size='sm' onClick={() => openSuiteEditor()}>
-            <PlusIcon data-icon='inline-start' /> 新建评测集
-          </Button>
+          <div className='flex gap-2'>
+            <Button variant='outline' size='sm' onClick={openQualityGate}>
+              <Settings2Icon data-icon='inline-start' /> 发布质量门
+            </Button>
+            <Button size='sm' onClick={() => openSuiteEditor()}>
+              <PlusIcon data-icon='inline-start' /> 新建评测集
+            </Button>
+          </div>
         </div>
 
         <div className='grid min-h-108 min-w-0 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]'>
@@ -1122,8 +1215,17 @@ export function WorkflowEvaluations({
                 </div>
                 <div className='grid gap-5 min-[1900px]:grid-cols-[minmax(0,1fr)_18rem]'>
                   <div className='flex flex-col gap-2'>
-                    <div className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
-                      Cases
+                    <div className='flex items-center justify-between'>
+                      <div className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
+                        Cases
+                      </div>
+                      <Button
+                        variant='ghost'
+                        size='sm'
+                        onClick={() => setShowArchivedCases((value) => !value)}
+                      >
+                        {showArchivedCases ? '隐藏归档' : '查看归档'}
+                      </Button>
                     </div>
                     {cases.isLoading ? (
                       <div className='text-muted-foreground flex items-center gap-2 py-6 text-sm'>
@@ -1147,8 +1249,21 @@ export function WorkflowEvaluations({
                           </div>
                         </div>
                         <Badge variant={item.enabled ? 'secondary' : 'outline'}>
-                          {item.enabled ? '已启用' : '已停用'}
+                          {item.archived
+                            ? '已归档'
+                            : item.enabled
+                              ? '已启用'
+                              : '已停用'}
                         </Badge>
+                        {item.archived ? (
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            onClick={() => void restoreCase(item)}
+                          >
+                            恢复
+                          </Button>
+                        ) : null}
                         <div className='ml-auto flex flex-wrap items-center justify-end gap-1'>
                           <Button
                             variant='ghost'
@@ -1424,6 +1539,116 @@ export function WorkflowEvaluations({
                         ) : null}
                       </div>
                     </div>
+                    {versionSummary.data && versionSummary.data.length > 1 ? (
+                      <div className='mt-5 border-t pt-4'>
+                        <div className='text-muted-foreground mb-3 text-[10px] font-semibold tracking-[0.16em] uppercase'>
+                          版本比较
+                        </div>
+                        <div className='grid gap-2'>
+                          <Select
+                            value={baselineVersion}
+                            // The Select can clear its value with null, while this state uses undefined.
+                            onValueChange={(value) =>
+                              setBaselineVersion(value ?? undefined)
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder='选择基线版本' />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {versionSummary.data.map((version) => (
+                                  <SelectItem
+                                    key={versionKey(version)}
+                                    value={versionKey(version)}
+                                  >
+                                    {version.releaseVersion}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <Select
+                            value={candidateVersion}
+                            // Keep cleared Select values consistent with the optional state type.
+                            onValueChange={(value) =>
+                              setCandidateVersion(value ?? undefined)
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder='选择候选版本' />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {versionSummary.data.map((version) => (
+                                  <SelectItem
+                                    key={versionKey(version)}
+                                    value={versionKey(version)}
+                                  >
+                                    {version.releaseVersion}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {baseline && candidate ? (
+                          <>
+                            <div className='text-muted-foreground mt-3 grid grid-cols-3 gap-y-1 text-xs'>
+                              <span />
+                              <span className='text-center'>
+                                {baseline.releaseVersion}
+                              </span>
+                              <span className='text-center'>
+                                {candidate.releaseVersion}
+                              </span>
+                              <span>通过率</span>
+                              <span className='text-center'>
+                                {versionPassRate(baseline)}%
+                              </span>
+                              <span className='text-center'>
+                                {versionPassRate(candidate)}%
+                              </span>
+                              <span>成本</span>
+                              <span className='text-center'>
+                                {formatCost(baseline.estimatedCostMicrousd)}
+                              </span>
+                              <span className='text-center'>
+                                {formatCost(candidate.estimatedCostMicrousd)}
+                              </span>
+                              <span>耗时</span>
+                              <span className='text-center'>
+                                {formatDuration(baseline.totalDurationMs)}
+                              </span>
+                              <span className='text-center'>
+                                {formatDuration(candidate.totalDurationMs)}
+                              </span>
+                            </div>
+                            {versionDiff.data?.length ? (
+                              <div className='mt-3 flex flex-col gap-1'>
+                                {versionDiff.data.map((diff) => (
+                                  <div
+                                    key={diff.caseId}
+                                    className='flex justify-between gap-2 text-xs'
+                                  >
+                                    <span className='truncate'>
+                                      {diff.name}
+                                    </span>
+                                    <Badge variant='outline'>
+                                      {versionDiffLabel(diff)}
+                                    </Badge>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className='text-muted-foreground mt-3 text-xs'>
+                                没有可报告的 Case 差异。
+                              </p>
+                            )}
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -1432,39 +1657,219 @@ export function WorkflowEvaluations({
         </div>
       </div>
 
-      <Dialog open={suiteDialogOpen} onOpenChange={setSuiteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {editingSuite ? '编辑评测集' : '新建评测集'}
-            </DialogTitle>
-            <DialogDescription>
-              将一组会共同运行的回归用例放入同一个评测集。
-            </DialogDescription>
+      <Dialog open={qualityGateOpen} onOpenChange={setQualityGateOpen}>
+        <DialogContent className='max-w-2xl! gap-0 overflow-hidden p-0'>
+          <DialogHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-amber-500/12 to-violet-500/10 px-6 py-6 pr-14'>
+            <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(38_92%_50%/0.14)_1px,transparent_1px)] bg-size-[14px_14px] opacity-70' />
+            <div className='relative flex items-start gap-3'>
+              <div className='bg-background/70 flex size-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 text-amber-700 shadow-sm dark:text-amber-300'>
+                <ShieldCheckIcon className='size-5' />
+              </div>
+              <div>
+                <DialogTitle className='text-lg'>发布质量门</DialogTitle>
+                <DialogDescription className='mt-1 max-w-xl leading-5'>
+                  为 Workflow
+                  设定发布前必须满足的评测标准；未通过时仍需明确确认旁路。
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor='evaluation-suite-name'>名称</FieldLabel>
-              <Input
-                id='evaluation-suite-name'
-                value={suiteName}
-                onChange={(event) => setSuiteName(event.target.value)}
-                autoFocus
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor='evaluation-suite-description'>
-                说明
-              </FieldLabel>
-              <Textarea
-                id='evaluation-suite-description'
-                value={suiteDescription}
-                onChange={(event) => setSuiteDescription(event.target.value)}
-              />
-            </Field>
-          </FieldGroup>
-          <DialogFooter>
-            <Button variant='outline' onClick={() => setSuiteDialogOpen(false)}>
+          <div className='max-h-[min(68vh,620px)] overflow-y-auto px-6 py-6'>
+            <FieldGroup className='gap-7'>
+              <Field orientation='horizontal'>
+                <Checkbox
+                  id='gate-require-evaluation'
+                  checked={qualityGate.requireEvaluation}
+                  onCheckedChange={(checked) =>
+                    setQualityGate((current) => ({
+                      ...current,
+                      requireEvaluation: checked === true,
+                    }))
+                  }
+                />
+                <FieldLabel htmlFor='gate-require-evaluation'>
+                  必须至少有一次评测
+                </FieldLabel>
+              </Field>
+              <FieldSet className='rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 sm:p-5'>
+                <FieldLegend>总体阈值</FieldLegend>
+                <FieldDescription>
+                  以下指标基于最近一次评测运行。
+                </FieldDescription>
+                <div className='mt-4 grid gap-4 sm:grid-cols-3'>
+                  <Field>
+                    <FieldLabel>最低通过率（%）</FieldLabel>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={100}
+                      value={
+                        qualityGate.minPassRate == null
+                          ? ''
+                          : qualityGate.minPassRate * 100
+                      }
+                      onChange={(event) =>
+                        setQualityGate((current) => ({
+                          ...current,
+                          minPassRate:
+                            event.target.value === ''
+                              ? null
+                              : Number(event.target.value) / 100,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel>最大成本（USD）</FieldLabel>
+                    <Input
+                      type='number'
+                      min={0}
+                      step='0.01'
+                      value={
+                        qualityGate.maxCostMicrousd == null
+                          ? ''
+                          : qualityGate.maxCostMicrousd / 1_000_000
+                      }
+                      onChange={(event) =>
+                        setQualityGate((current) => ({
+                          ...current,
+                          maxCostMicrousd:
+                            event.target.value === ''
+                              ? null
+                              : Math.round(
+                                  Number(event.target.value) * 1_000_000,
+                                ),
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel>最大耗时（秒）</FieldLabel>
+                    <Input
+                      type='number'
+                      min={0}
+                      value={
+                        qualityGate.maxDurationMs == null
+                          ? ''
+                          : qualityGate.maxDurationMs / 1000
+                      }
+                      onChange={(event) =>
+                        setQualityGate((current) => ({
+                          ...current,
+                          maxDurationMs:
+                            event.target.value === ''
+                              ? null
+                              : Math.round(Number(event.target.value) * 1000),
+                        }))
+                      }
+                    />
+                  </Field>
+                </div>
+              </FieldSet>
+              <FieldSet className='rounded-xl border p-4 sm:p-5'>
+                <FieldLegend>发布必检评测集</FieldLegend>
+                <FieldDescription>
+                  列出的 Suite 最近一次运行必须通过。
+                </FieldDescription>
+                <FieldGroup className='mt-2 gap-2'>
+                  {suites.data?.map((suite) => (
+                    <Field key={suite.id} orientation='horizontal'>
+                      <Checkbox
+                        id={`gate-suite-${suite.id}`}
+                        checked={qualityGate.requiredSuiteIds.includes(
+                          suite.id,
+                        )}
+                        onCheckedChange={(checked) =>
+                          setQualityGate((current) => ({
+                            ...current,
+                            requiredSuiteIds:
+                              checked === true
+                                ? [...current.requiredSuiteIds, suite.id]
+                                : current.requiredSuiteIds.filter(
+                                    (id) => id !== suite.id,
+                                  ),
+                          }))
+                        }
+                      />
+                      <Label htmlFor={`gate-suite-${suite.id}`}>
+                        {suite.name}
+                      </Label>
+                    </Field>
+                  ))}
+                </FieldGroup>
+              </FieldSet>
+            </FieldGroup>
+          </div>
+          <DialogFooter className='border-t px-6 py-4'>
+            <Button variant='outline' onClick={() => setQualityGateOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={() => void saveQualityGate()}>保存质量门</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={suiteDialogOpen} onOpenChange={setSuiteDialogOpen}>
+        <DialogContent
+          className='max-w-xl! gap-0 overflow-hidden p-0'
+          showCloseButton={!saving}
+        >
+          <DialogHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/12 to-violet-500/10 px-6 py-6 pr-14'>
+            <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.16)_1px,transparent_1px)] bg-size-[14px_14px] opacity-70' />
+            <div className='relative flex items-start gap-3'>
+              <div className='bg-background/70 flex size-10 shrink-0 items-center justify-center rounded-xl border border-sky-500/20 text-sky-700 shadow-sm dark:text-sky-300'>
+                <BeakerIcon className='size-5' />
+              </div>
+              <div className='min-w-0'>
+                <DialogTitle className='text-lg'>
+                  {editingSuite ? '编辑评测集' : '新建评测集'}
+                </DialogTitle>
+                <DialogDescription className='mt-1 max-w-md leading-5'>
+                  将一组会共同运行的回归用例放入同一个评测集，方便持续验证工作流的关键路径。
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className='px-6 py-6'>
+            <FieldSet className='bg-muted/20 rounded-xl border p-4 sm:p-5'>
+              <FieldLegend>评测集详情</FieldLegend>
+              <FieldDescription>
+                使用清晰的名称区分不同的回归场景；说明可帮助团队理解覆盖范围。
+              </FieldDescription>
+              <FieldGroup className='mt-5 gap-5'>
+                <Field>
+                  <FieldLabel htmlFor='evaluation-suite-name'>名称</FieldLabel>
+                  <Input
+                    id='evaluation-suite-name'
+                    value={suiteName}
+                    placeholder='例如：客户信息查询回归'
+                    onChange={(event) => setSuiteName(event.target.value)}
+                    autoFocus
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor='evaluation-suite-description'>
+                    说明 <span className='text-muted-foreground font-normal'>（可选）</span>
+                  </FieldLabel>
+                  <Textarea
+                    id='evaluation-suite-description'
+                    className='min-h-24 resize-y'
+                    placeholder='例如：覆盖 CRM 查询、权限边界与敏感信息保护。'
+                    value={suiteDescription}
+                    onChange={(event) =>
+                      setSuiteDescription(event.target.value)
+                    }
+                  />
+                </Field>
+              </FieldGroup>
+            </FieldSet>
+          </div>
+          <DialogFooter className='border-t px-6 py-4'>
+            <Button
+              variant='outline'
+              disabled={saving}
+              onClick={() => setSuiteDialogOpen(false)}
+            >
               取消
             </Button>
             <Button
@@ -2635,6 +3040,28 @@ function formatCost(value?: number | null) {
 
 function formatDuration(value?: number | null) {
   return typeof value === 'number' ? `${(value / 1000).toFixed(1)}s` : '—';
+}
+
+function versionKey(version: EvaluationVersionSummary) {
+  return `${version.releaseId ?? 'draft'}:${version.releaseVersion}`;
+}
+
+function versionPassRate(version: EvaluationVersionSummary) {
+  return version.totalCases
+    ? Math.round((version.passedCases / version.totalCases) * 100)
+    : 0;
+}
+
+function versionDiffLabel(diff: EvaluationVersionCaseDiff) {
+  return (
+    {
+      added: '新增 Case',
+      removed: '仅基线存在',
+      regressed: '新增失败',
+      fixed: '已修复',
+      persistent_failure: '持续失败',
+    } as const
+  )[diff.kind];
 }
 
 function adkTestFile(suite: EvaluationSuite, cases: EvaluationCase[]) {

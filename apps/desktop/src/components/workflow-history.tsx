@@ -18,6 +18,7 @@ import {
 import { ActivityIcon, HistoryIcon, PlayIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import type { QualityGateAudit } from '@/services/evaluation';
 import { getProcessNodes, type ProcessNode } from '@/services/process-node';
 import type {
   RunObservability,
@@ -46,6 +47,7 @@ function WorkflowHistory({
   hasMore,
   isLoadingMore,
   observability,
+  qualityGateAudits,
   scopedObservability,
   isObservabilityLoading,
   period,
@@ -60,6 +62,7 @@ function WorkflowHistory({
   hasMore: boolean;
   isLoadingMore: boolean;
   observability?: RunObservability;
+  qualityGateAudits: QualityGateAudit[];
   scopedObservability?: RunObservability;
   isObservabilityLoading: boolean;
   period: '7d' | '30d' | 'all';
@@ -89,6 +92,29 @@ function WorkflowHistory({
             {t('workflowEditor.history.description')}
           </p>
         </div>
+        {qualityGateAudits.length ? (
+          <div className='rounded-xl border border-amber-500/25 bg-amber-500/5 p-4'>
+            <div className='mb-2 text-xs font-semibold tracking-wider uppercase'>
+              质量门旁路审计
+            </div>
+            <div className='flex flex-col gap-2'>
+              {qualityGateAudits.map((audit) => (
+                <div
+                  key={audit.id}
+                  className='bg-background/70 rounded-md border p-2 text-xs'
+                >
+                  <div className='flex justify-between gap-3'>
+                    <span className='font-medium'>v{audit.releaseVersion}</span>
+                    <span className='text-muted-foreground'>
+                      {new Date(audit.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className='mt-1'>{audit.reason}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <ObservabilitySummary
           observability={observability}
           scopedObservability={scopedObservability}

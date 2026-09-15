@@ -221,3 +221,23 @@ CREATE INDEX idx_evaluation_case_results_run_verdict
 
 CREATE INDEX idx_evaluation_case_results_workflow_run
   ON evaluation_case_results(workflow_run_id);
+
+CREATE TABLE evaluation_quality_gates (
+  workflow_id TEXT PRIMARY KEY NOT NULL,
+  policy_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE evaluation_quality_gate_audits (
+  id TEXT PRIMARY KEY NOT NULL,
+  workflow_id TEXT NOT NULL,
+  release_version TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT 'local-user',
+  reason TEXT NOT NULL,
+  gate_snapshot_json TEXT NOT NULL,
+  evaluation_snapshot_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_evaluation_quality_gate_audits_workflow_created
+  ON evaluation_quality_gate_audits(workflow_id, created_at DESC);

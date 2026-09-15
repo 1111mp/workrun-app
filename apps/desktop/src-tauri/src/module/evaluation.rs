@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::Row;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     core::db::DBManager,
@@ -23,6 +24,38 @@ use crate::{
 
 fn empty_json_object() -> Value {
     json!({})
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationQualityGate {
+    #[serde(default)] pub require_evaluation: bool,
+    pub min_pass_rate: Option<f64>,
+    pub max_cost_microusd: Option<i64>,
+    pub max_duration_ms: Option<i64>,
+    #[serde(default)] pub required_suite_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordQualityGateOverride {
+    pub workflow_id: String,
+    pub release_version: String,
+    pub reason: String,
+    pub gate_snapshot: Value,
+    pub evaluation_snapshot: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityGateAuditSummary {
+    pub id: String,
+    pub release_version: String,
+    pub actor: String,
+    pub reason: String,
+    pub gate_snapshot: Value,
+    pub evaluation_snapshot: Value,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,6 +137,7 @@ pub struct EvaluationCaseSummary {
     pub description: String,
     pub position: i64,
     pub enabled: bool,
+    pub archived: bool,
     pub target_agent_id: Option<String>,
     pub input: Value,
     pub expectation: Value,
@@ -147,6 +181,28 @@ pub struct EvaluationRunDetail {
     pub total_tokens: Option<i64>,
     pub estimated_cost_microusd: Option<i64>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationVersionSummary {
+    pub release_id: Option<String>,
+    pub release_version: String,
+    pub run_count: i64,
+    pub total_cases: i64,
+    pub passed_cases: i64,
+    pub total_duration_ms: i64,
+    pub estimated_cost_microusd: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationVersionCaseDiff {
+    pub case_id: String,
+    pub name: String,
+    pub baseline_verdict: Option<String>,
+    pub candidate_verdict: Option<String>,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -195,6 +251,40 @@ struct EvaluationWorkflowSnapshot {
 pub struct EvaluationStore;
 
 impl EvaluationStore {
+    pub async fn record_quality_gate_override(request: RecordQualityGateOverride) -> Result<()> {
+        if request.workflow_id.trim().is_empty() || request.release_version.trim().is_empty() || request.reason.trim().is_empty() {
+            bail!("workflow, release version, and override reason are required");
+        }
+        let pool = DBManager::global().pool()?;
+        // Audit payloads are snapshots so later policy edits cannot rewrite why
+        // a specific release was allowed through a failed gate.
+        sqlx::query("INSERT INTO evaluation_quality_gate_audits (id, workflow_id, release_version, reason, gate_snapshot_json, evaluation_snapshot_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(request.workflow_id).bind(request.release_version).bind(request.reason).bind(request.gate_snapshot.to_string()).bind(request.evaluation_snapshot.to_string()).bind(chrono::Utc::now().to_rfc3339()).execute(&pool).await?;
+        Ok(())
+    }
+
+    pub async fn list_quality_gate_audits(workflow_id: &str) -> Result<Vec<QualityGateAuditSummary>> {
+        let pool = DBManager::global().pool()?;
+        let rows = sqlx::query("SELECT id, release_version, actor, reason, gate_snapshot_json, evaluation_snapshot_json, created_at FROM evaluation_quality_gate_audits WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 50")
+            .bind(workflow_id).fetch_all(&pool).await?;
+        rows.into_iter().map(|row| Ok(QualityGateAuditSummary { id: row.try_get("id")?, release_version: row.try_get("release_version")?, actor: row.try_get("actor")?, reason: row.try_get("reason")?, gate_snapshot: serde_json::from_str(&row.try_get::<String, _>("gate_snapshot_json")?)?, evaluation_snapshot: serde_json::from_str(&row.try_get::<String, _>("evaluation_snapshot_json")?)?, created_at: row.try_get("created_at")? })).collect()
+    }
+    pub async fn get_quality_gate(workflow_id: &str) -> Result<EvaluationQualityGate> {
+        let pool = DBManager::global().pool()?;
+        let value = sqlx::query("SELECT policy_json FROM evaluation_quality_gates WHERE workflow_id = ?")
+            .bind(workflow_id).fetch_optional(&pool).await?
+            .map(|row| row.try_get::<String, _>("policy_json")).transpose()?;
+        Ok(value.map(|json| serde_json::from_str(&json)).transpose()?.unwrap_or_default())
+    }
+
+    pub async fn update_quality_gate(workflow_id: &str, policy: EvaluationQualityGate) -> Result<()> {
+        if workflow_id.trim().is_empty() { bail!("workflow id is required"); }
+        if policy.min_pass_rate.is_some_and(|value| !(0.0..=1.0).contains(&value)) { bail!("minimum pass rate must be between 0 and 1"); }
+        let pool = DBManager::global().pool()?;
+        sqlx::query("INSERT INTO evaluation_quality_gates (workflow_id, policy_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(workflow_id) DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at")
+            .bind(workflow_id).bind(serde_json::to_string(&policy)?).bind(chrono::Utc::now().to_rfc3339()).execute(&pool).await?;
+        Ok(())
+    }
     /// Completes the linked Case after Run History is durable. Evaluation
     /// bookkeeping never changes the Workflow Run's terminal status.
     pub async fn complete_workflow_run(workflow_run_id: &str, completed: bool, error: Option<&str>) -> Result<()> {
@@ -364,7 +454,7 @@ impl EvaluationStore {
             name: request.name,
             description: request.description,
             position: created_position,
-            enabled: request.enabled,
+            enabled: request.enabled, archived: false,
             target_agent_id: request.target_agent_id,
             input: request.input,
             expectation: serde_json::to_value(request.expectation)?,
@@ -374,15 +464,15 @@ impl EvaluationStore {
         })
     }
 
-    pub async fn list_cases(suite_id: &str) -> Result<Vec<EvaluationCaseSummary>> {
+    pub async fn list_cases(suite_id: &str, include_archived: bool) -> Result<Vec<EvaluationCaseSummary>> {
         if suite_id.trim().is_empty() {
             bail!("suite id is required");
         }
         let pool = DBManager::global().pool()?;
         let rows = sqlx::query(
-            "SELECT id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, created_at, updated_at FROM evaluation_cases WHERE suite_id = ? AND deleted_at IS NULL ORDER BY position ASC, id ASC",
+            "SELECT id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, deleted_at, created_at, updated_at FROM evaluation_cases WHERE suite_id = ? AND (? OR deleted_at IS NULL) ORDER BY deleted_at IS NOT NULL ASC, position ASC, id ASC",
         )
-        .bind(suite_id)
+        .bind(suite_id).bind(include_archived)
         .fetch_all(&pool)
         .await?;
         rows.into_iter().map(case_from_row).collect()
@@ -401,7 +491,7 @@ impl EvaluationStore {
         if updated.rows_affected() == 0 {
             bail!("evaluation case was not found");
         }
-        let row = sqlx::query("SELECT id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, created_at, updated_at FROM evaluation_cases WHERE id = ?")
+        let row = sqlx::query("SELECT id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, deleted_at, created_at, updated_at FROM evaluation_cases WHERE id = ?")
             .bind(&request.id).fetch_one(&pool).await?;
         case_from_row(row)
     }
@@ -412,6 +502,14 @@ impl EvaluationStore {
         let deleted = sqlx::query("UPDATE evaluation_cases SET deleted_at = ?, enabled = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
             .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
         if deleted.rows_affected() == 0 { bail!("evaluation case was not found"); }
+        Ok(())
+    }
+
+    pub async fn restore_case(id: &str) -> Result<()> {
+        let pool = DBManager::global().pool()?;
+        let restored = sqlx::query("UPDATE evaluation_cases SET deleted_at = NULL, enabled = 1, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL")
+            .bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
+        if restored.rows_affected() == 0 { bail!("archived evaluation case was not found"); }
         Ok(())
     }
 
@@ -457,7 +555,7 @@ impl EvaluationStore {
             bail!("evaluation suite does not belong to the requested workflow");
         }
         let cases = sqlx::query(
-            "SELECT id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, created_at, updated_at FROM evaluation_cases WHERE suite_id = ? AND enabled = 1 AND deleted_at IS NULL ORDER BY position ASC, id ASC",
+            "SELECT id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, deleted_at, created_at, updated_at FROM evaluation_cases WHERE suite_id = ? AND enabled = 1 AND deleted_at IS NULL ORDER BY position ASC, id ASC",
         )
         .bind(&request.suite_id)
         .fetch_all(&mut *transaction)
@@ -669,6 +767,63 @@ impl EvaluationStore {
             ended_at: row.try_get("ended_at")?, duration_ms: row.try_get("duration_ms")?, passed_cases: row.try_get("passed_cases")?, failed_cases: row.try_get("failed_cases")?, total_tokens: row.try_get("total_tokens")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?, error: row.try_get("error")?,
         })).collect()
     }
+
+    pub async fn summarize_versions(suite_id: &str) -> Result<Vec<EvaluationVersionSummary>> {
+        if suite_id.trim().is_empty() { bail!("suite id is required"); }
+        let pool = DBManager::global().pool()?;
+        // Draft snapshots predate releases, so they deliberately form a
+        // separate comparable cohort instead of being attributed to a release.
+        let rows = sqlx::query("SELECT json_extract(workflow_snapshot_json, '$.releaseId') AS release_id, COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') AS release_version, COUNT(*) AS run_count, SUM(total_cases) AS total_cases, SUM(passed_cases) AS passed_cases, SUM(COALESCE(duration_ms, 0)) AS total_duration_ms, SUM(COALESCE(estimated_cost_microusd, 0)) AS estimated_cost_microusd FROM evaluation_runs WHERE suite_id = ? GROUP BY release_id, release_version ORDER BY MAX(started_at) DESC")
+            .bind(suite_id).fetch_all(&pool).await?;
+        rows.into_iter().map(|row| Ok(EvaluationVersionSummary {
+            release_id: row.try_get("release_id")?, release_version: row.try_get("release_version")?, run_count: row.try_get("run_count")?, total_cases: row.try_get("total_cases")?, passed_cases: row.try_get("passed_cases")?, total_duration_ms: row.try_get("total_duration_ms")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
+        })).collect()
+    }
+
+    pub async fn compare_versions(suite_id: &str, baseline: &str, candidate: &str) -> Result<Vec<EvaluationVersionCaseDiff>> {
+        let pool = DBManager::global().pool()?;
+        let latest_sql = "SELECT id FROM evaluation_runs WHERE suite_id = ? AND COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') = ? ORDER BY started_at DESC, id DESC LIMIT 1";
+        let baseline_run = sqlx::query_scalar::<_, String>(latest_sql)
+            .bind(suite_id).bind(baseline).fetch_optional(&pool).await?;
+        let candidate_run = sqlx::query_scalar::<_, String>(latest_sql)
+            .bind(suite_id).bind(candidate).fetch_optional(&pool).await?;
+        let read_cases = |run_id: Option<String>| async {
+            let Some(run_id) = run_id else { return Ok::<HashMap<String, (String, String)>, sqlx::Error>(HashMap::new()); };
+            let rows = sqlx::query("SELECT evaluation_case_id, case_snapshot_json, verdict FROM evaluation_case_results WHERE evaluation_run_id = ?")
+                .bind(run_id).fetch_all(&pool).await?;
+            Ok(rows.into_iter().map(|row| {
+                let id: String = row.try_get("evaluation_case_id")?;
+                let snapshot: Value = serde_json::from_str(&row.try_get::<String, _>("case_snapshot_json")?).unwrap_or_default();
+                Ok((id, (snapshot.get("name").and_then(Value::as_str).unwrap_or("评测用例").to_string(), row.try_get("verdict")?)))
+            }).collect::<Result<HashMap<_, _>, sqlx::Error>>()?)
+        };
+        let before = read_cases(baseline_run).await?;
+        let after = read_cases(candidate_run).await?;
+        let ids: HashSet<_> = before.keys().chain(after.keys()).cloned().collect();
+        Ok(ids.into_iter().filter_map(|id| {
+            let base = before.get(&id); let next = after.get(&id);
+            let failed = |value: Option<&(String, String)>| value.is_some_and(|(_, verdict)| matches!(verdict.as_str(), "failed" | "error"));
+            let kind = match (base, next) {
+                (None, Some(_)) => "added", (Some(_), None) => "removed",
+                _ if !failed(base) && failed(next) => "regressed",
+                _ if failed(base) && !failed(next) => "fixed",
+                _ if failed(base) && failed(next) => "persistent_failure",
+                _ => return None,
+            };
+            Some(EvaluationVersionCaseDiff { case_id: id, name: next.or(base).map(|value| value.0.clone()).unwrap_or_default(), baseline_verdict: base.map(|value| value.1.clone()), candidate_verdict: next.map(|value| value.1.clone()), kind: kind.to_string() })
+        }).collect())
+    }
+
+    pub async fn latest_run_for_workflow(workflow_id: &str) -> Result<Option<EvaluationRunDetail>> {
+        if workflow_id.trim().is_empty() { bail!("workflow id is required"); }
+        let pool = DBManager::global().pool()?;
+        let row = sqlx::query("SELECT id, suite_id, workflow_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE workflow_id = ? ORDER BY started_at DESC, id DESC LIMIT 1")
+            .bind(workflow_id).fetch_optional(&pool).await?;
+        row.map(|row| Ok(EvaluationRunDetail {
+            summary: EvaluationRunSummary { id: row.try_get("id")?, suite_id: row.try_get("suite_id")?, workflow_id: row.try_get("workflow_id")?, status: row.try_get("status")?, total_cases: row.try_get("total_cases")?, started_at: row.try_get("started_at")? },
+            ended_at: row.try_get("ended_at")?, duration_ms: row.try_get("duration_ms")?, passed_cases: row.try_get("passed_cases")?, failed_cases: row.try_get("failed_cases")?, total_tokens: row.try_get("total_tokens")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?, error: row.try_get("error")?,
+        })).transpose()
+    }
 }
 
 #[derive(Default)]
@@ -760,6 +915,7 @@ fn case_from_row(row: sqlx::sqlite::SqliteRow) -> Result<EvaluationCaseSummary> 
         description: row.try_get("description")?,
         position: row.try_get("position")?,
         enabled: row.try_get("enabled")?,
+        archived: row.try_get::<Option<String>, _>("deleted_at")?.is_some(),
         target_agent_id: row.try_get("target_agent_id")?,
         input: serde_json::from_str(&row.try_get::<String, _>("input_json")?)?,
         expectation: serde_json::from_str(&row.try_get::<String, _>("expectation_json")?)?,
