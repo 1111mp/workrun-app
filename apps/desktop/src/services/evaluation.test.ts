@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   compareEvaluationVersions,
   listEvaluationCases,
+  latestEvaluationRunsForWorkflowSnapshot,
   recordEvaluationQualityGateOverride,
   restoreEvaluationCase,
   updateEvaluationQualityGate,
@@ -43,6 +44,25 @@ describe('evaluation service contracts', () => {
       suiteId: 'suite-1',
       baseline: '1.0.0',
       candidate: '2.0.0',
+    });
+  });
+
+  it('queries only runs that match the current workflow snapshot', async () => {
+    vi.mocked(invoke).mockResolvedValue([]);
+    const workflowSnapshot = {
+      targetName: 'Checkout',
+      targetSnapshot: { nodes: [{ id: 'agent-1' }] },
+      dsl: { nodes: [{ id: 'agent-1' }] },
+    };
+
+    await latestEvaluationRunsForWorkflowSnapshot(
+      'workflow-1',
+      workflowSnapshot,
+    );
+
+    expect(invoke).toHaveBeenCalledWith('evaluation_workflow_snapshot_runs', {
+      workflowId: 'workflow-1',
+      workflowSnapshot,
     });
   });
 

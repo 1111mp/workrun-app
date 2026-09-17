@@ -58,8 +58,7 @@ import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
 import {
   getEvaluationQualityGate,
-  latestEvaluationRunForWorkflow,
-  listEvaluationRuns,
+  latestEvaluationRunsForWorkflowSnapshot,
   recordEvaluationQualityGateOverride,
   listEvaluationQualityGateAudits,
 } from '@/services/evaluation';
@@ -195,6 +194,20 @@ function WorkflowEditorContent({
   const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
   const isDirty = workflowDocumentSnapshot !== savedDocument;
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const evaluationWorkflowSnapshot = activeWorkflow
+    ? {
+        targetName: workflowSettings.name,
+        targetSnapshot: workflowDocument,
+        dsl: toWorkflowDsl(
+          activeWorkflow.id,
+          nodes,
+          edges,
+          workflowSettings,
+        ),
+        releaseId: activeWorkflow.releaseId,
+        releaseVersion: activeWorkflow.version,
+      }
+    : undefined;
 
   const { data: modelCatalog } = useQuery({
     queryKey: ['modelCatalog'],
@@ -228,10 +241,20 @@ function WorkflowEditorContent({
     // Keep the current metrics visible while a changed time range is fetched.
     placeholderData: keepPreviousData,
   });
-  const latestEvaluation = useQuery({
-    queryKey: ['evaluation-workflow-latest', activeWorkflow?.id],
-    queryFn: () => latestEvaluationRunForWorkflow(activeWorkflow!.id),
-    enabled: Boolean(activeWorkflow),
+  const candidateEvaluationRuns = useQuery({
+    queryKey: [
+      'evaluation-workflow-snapshot-runs',
+      activeWorkflow?.id,
+      workflowDocumentSnapshot,
+      activeWorkflow?.releaseId,
+      activeWorkflow?.version,
+    ],
+    queryFn: () =>
+      latestEvaluationRunsForWorkflowSnapshot(
+        activeWorkflow!.id,
+        evaluationWorkflowSnapshot!,
+      ),
+    enabled: Boolean(activeWorkflow && evaluationWorkflowSnapshot),
   });
   const qualityGate = useQuery({
     queryKey: ['evaluation-quality-gate', activeWorkflow?.id],
@@ -243,52 +266,57 @@ function WorkflowEditorContent({
     queryFn: () => listEvaluationQualityGateAudits(activeWorkflow!.id),
     enabled: historyOpen && Boolean(activeWorkflow),
   });
-  const requiredSuiteRuns = useQuery({
-    queryKey: [
-      'evaluation-required-suite-runs',
-      qualityGate.data?.requiredSuiteIds,
-    ],
-    queryFn: async () =>
-      Promise.all(
-        (qualityGate.data?.requiredSuiteIds ?? []).map(async (suiteId) => ({
-          suiteId,
-          run: (await listEvaluationRuns(suiteId))[0],
-        })),
-      ),
-    enabled: Boolean(qualityGate.data?.requiredSuiteIds.length),
-  });
+  const latestCandidateEvaluation = candidateEvaluationRuns.data?.[0];
+  const hasQualityGateRules = Boolean(
+    qualityGate.data?.requireEvaluation ||
+      (qualityGate.data?.minPassRate !== null &&
+        qualityGate.data?.minPassRate !== undefined) ||
+      (qualityGate.data?.maxCostMicrousd !== null &&
+        qualityGate.data?.maxCostMicrousd !== undefined) ||
+      (qualityGate.data?.maxDurationMs !== null &&
+        qualityGate.data?.maxDurationMs !== undefined) ||
+      qualityGate.data?.requiredSuiteIds.length,
+  );
   const gateReasons = qualityGate.data
     ? [
-        ...(qualityGate.data.requireEvaluation && !latestEvaluation.data
-          ? ['需要至少一次评测']
+        ...(hasQualityGateRules && !latestCandidateEvaluation
+          ? ['当前候选版本尚未评测']
+          : []),
+        ...(latestCandidateEvaluation &&
+        latestCandidateEvaluation.status !== 'completed'
+          ? ['当前候选版本评测未完成']
           : []),
         ...(qualityGate.data.minPassRate !== null &&
         qualityGate.data.minPassRate !== undefined &&
-        latestEvaluation.data &&
-        latestEvaluation.data.totalCases > 0 &&
-        latestEvaluation.data.passedCases / latestEvaluation.data.totalCases <
+        latestCandidateEvaluation?.status === 'completed' &&
+        latestCandidateEvaluation.totalCases > 0 &&
+        latestCandidateEvaluation.passedCases /
+          latestCandidateEvaluation.totalCases <
           qualityGate.data.minPassRate
           ? ['通过率低于门槛']
           : []),
-        ...(qualityGate.data.maxCostMicrousd &&
-        latestEvaluation.data &&
-        (latestEvaluation.data.estimatedCostMicrousd ?? 0) >
+        ...(qualityGate.data.maxCostMicrousd !== null &&
+        qualityGate.data.maxCostMicrousd !== undefined &&
+        latestCandidateEvaluation?.status === 'completed' &&
+        (latestCandidateEvaluation.estimatedCostMicrousd ?? 0) >
           qualityGate.data.maxCostMicrousd
           ? ['成本超过门槛']
           : []),
-        ...(qualityGate.data.maxDurationMs &&
-        latestEvaluation.data &&
-        (latestEvaluation.data.durationMs ?? 0) > qualityGate.data.maxDurationMs
+        ...(qualityGate.data.maxDurationMs !== null &&
+        qualityGate.data.maxDurationMs !== undefined &&
+        latestCandidateEvaluation?.status === 'completed' &&
+        (latestCandidateEvaluation.durationMs ?? 0) >
+          qualityGate.data.maxDurationMs
           ? ['耗时超过门槛']
           : []),
-        ...(requiredSuiteRuns.data
-          ?.filter(
-            (item) =>
-              !item.run ||
-              item.run.status !== 'completed' ||
-              item.run.failedCases > 0,
-          )
-          .map((item) => `必检 Suite ${item.suiteId} 未通过`) ?? []),
+        ...(qualityGate.data.requiredSuiteIds
+          .filter((suiteId) => {
+            const run = candidateEvaluationRuns.data?.find(
+              (item) => item.suiteId === suiteId,
+            );
+            return !run || run.status !== 'completed' || run.failedCases > 0;
+          })
+          .map((suiteId) => `必检 Suite ${suiteId} 未通过`)),
       ]
     : [];
   const selectedVersionObservability = useQuery({
@@ -497,7 +525,7 @@ function WorkflowEditorContent({
           releaseVersion: release.version,
           reason: publishOverrideReason.trim(),
           gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
-          evaluationSnapshot: latestEvaluation.data ?? {},
+          evaluationSnapshot: candidateEvaluationRuns.data ?? [],
         }).catch((error) =>
           toast.error('发布已完成，但质量门审计记录失败', {
             toasterId: 'global',
@@ -542,18 +570,7 @@ function WorkflowEditorContent({
           evaluationsOpen && activeWorkflow ? (
             <WorkflowEvaluations
               workflowId={activeWorkflow.id}
-              workflowSnapshot={{
-                targetName: workflowSettings.name,
-                targetSnapshot: workflowDocument,
-                dsl: toWorkflowDsl(
-                  activeWorkflow.id,
-                  nodes,
-                  edges,
-                  workflowSettings,
-                ),
-                releaseId: activeWorkflow.releaseId,
-                releaseVersion: activeWorkflow.version,
-              }}
+              workflowSnapshot={evaluationWorkflowSnapshot!}
               onViewWorkflowRun={(runId) => void openHistoricalRun(runId)}
             />
           ) : historyOpen && activeWorkflow ? (
@@ -798,12 +815,12 @@ function WorkflowEditorContent({
 
             <div className='px-5 py-5 sm:px-6'>
               <div
-                className={`mb-4 rounded-lg border p-3 text-sm ${latestEvaluation.data && latestEvaluation.data.failedCases === 0 && latestEvaluation.data.status === 'completed' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300'}`}
+                className={`mb-4 rounded-lg border p-3 text-sm ${latestCandidateEvaluation && latestCandidateEvaluation.failedCases === 0 && latestCandidateEvaluation.status === 'completed' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300'}`}
               >
                 {gateReasons.length
                   ? `质量门未通过：${gateReasons.join('、')}。可确认旁路后发布。`
-                  : latestEvaluation.data
-                    ? `质量门通过：最近评测 ${latestEvaluation.data.passedCases}/${latestEvaluation.data.totalCases} 通过。`
+                  : hasQualityGateRules && latestCandidateEvaluation
+                    ? `质量门通过：当前候选版本评测 ${latestCandidateEvaluation.passedCases}/${latestCandidateEvaluation.totalCases} 通过。`
                     : '未配置质量门。'}
               </div>
               {gateReasons.length ? (

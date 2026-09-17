@@ -91,6 +91,7 @@ import {
   updateEvaluationQualityGate,
   type EvaluationCase,
   type EvaluationCaseResult,
+  type EvaluationRunDetail,
   type EvaluationSuite,
   type EvaluationWorkflowSnapshot,
   type EvaluationVersionSummary,
@@ -114,6 +115,24 @@ type VisualAssertion = {
   path: string;
   operator: AssertionOperator;
   expected: string;
+};
+
+type ImportConflictStrategy = 'create' | 'overwrite' | 'skip';
+type ImportedCase = {
+  index: number;
+  name: string;
+  description: string;
+  enabled: boolean;
+  input: unknown;
+  expectation: unknown;
+  fixture: unknown;
+  errors: string[];
+};
+type TestImportPreview = {
+  suiteName: string;
+  suiteDescription: string;
+  cases: ImportedCase[];
+  errors: string[];
 };
 type ToolCallDraft = {
   id: string;
@@ -226,6 +245,111 @@ function jsonObject(value: string, label: string) {
     throw new Error(`${label} 必须是 JSON 对象`);
   }
   return parsed;
+}
+
+function objectValue(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function testImportPreview(value: unknown): TestImportPreview {
+  const source = objectValue(value);
+  const rawCases = source?.eval_cases;
+  if (!Array.isArray(rawCases)) {
+    return {
+      suiteName: '导入评测集',
+      suiteDescription: '',
+      cases: [],
+      errors: ['未找到 eval_cases 数组。'],
+    };
+  }
+  return {
+    suiteName:
+      typeof source?.name === 'string' && source.name.trim()
+        ? source.name.trim()
+        : '导入评测集',
+    suiteDescription:
+      typeof source?.description === 'string' ? source.description : '',
+    cases: rawCases.map((rawCase, index) => {
+      const item = objectValue(rawCase);
+      const extension = objectValue(item?.workrun);
+      const turn = Array.isArray(item?.conversation)
+        ? objectValue(item.conversation[0])
+        : undefined;
+      const response = objectValue(turn?.final_response);
+      const text = Array.isArray(response?.parts)
+        ? objectValue(response.parts.find((part) => objectValue(part)?.text))
+            ?.text
+        : undefined;
+      const tools = objectValue(turn?.intermediate_data)?.tool_uses;
+      const sessionInput = objectValue(item?.session_input);
+      const hasSessionState = sessionInput?.state !== undefined;
+      const workrunExpectation = extension?.expectation;
+      const workrunFixture = extension?.fixture;
+      const workrunAssertions = objectValue(workrunExpectation)?.assertions;
+      const adkAssertions = [
+        ...(typeof text === 'string' && text.length > 0
+          ? [
+              {
+                kind: 'text',
+                id: crypto.randomUUID(),
+                algorithm: 'contains',
+                expected: text,
+                threshold: 1,
+              },
+            ]
+          : []),
+        ...(Array.isArray(tools) && tools.length > 0
+          ? [
+              {
+                kind: 'tool_trajectory',
+                id: crypto.randomUUID(),
+                tools,
+                config: { strictOrder: true, strictArgs: false },
+              },
+            ]
+          : []),
+      ];
+      const name =
+        typeof extension?.name === 'string' && extension.name.trim()
+          ? extension.name.trim()
+          : typeof item?.eval_id === 'string' && item.eval_id.trim()
+            ? item.eval_id.trim()
+            : `导入用例 ${index + 1}`;
+      const input = objectValue(sessionInput?.state) ?? {};
+      const errors = [
+        ...(!item ? ['用例必须是对象。'] : []),
+        ...(hasSessionState && !objectValue(sessionInput?.state)
+          ? ['session_input.state 必须是 JSON 对象。']
+          : []),
+        ...(workrunExpectation !== undefined &&
+        (!objectValue(workrunExpectation) ||
+          !Array.isArray(workrunAssertions) ||
+          !workrunAssertions.length)
+          ? ['workrun.expectation.assertions 必须是非空数组。']
+          : []),
+        ...(workrunFixture !== undefined && !objectValue(workrunFixture)
+          ? ['workrun.fixture 必须是 JSON 对象。']
+          : []),
+        ...(!extension?.expectation && !adkAssertions.length
+          ? ['缺少 Workrun 断言，以及可转换的最终响应或工具轨迹。']
+          : []),
+      ];
+      return {
+        index,
+        name,
+        description:
+          typeof item?.description === 'string' ? item.description : '',
+        enabled: extension?.enabled !== false,
+        input,
+        expectation: workrunExpectation ?? { assertions: adkAssertions },
+        fixture: workrunFixture ?? { toolFixtures: [] },
+        errors,
+      };
+    }),
+    errors: rawCases.length ? [] : ['eval_cases 不能为空。'],
+  };
 }
 
 function visualAssertions(value: unknown): VisualAssertion[] {
@@ -530,6 +654,12 @@ export function WorkflowEvaluations({
   const [selectedResult, setSelectedResult] = useState<EvaluationCaseResult>();
   const [suiteDialogOpen, setSuiteDialogOpen] = useState(false);
   const [qualityGateOpen, setQualityGateOpen] = useState(false);
+  const [testImport, setTestImport] = useState<TestImportPreview>();
+  const [suiteImportStrategy, setSuiteImportStrategy] =
+    useState<ImportConflictStrategy>('create');
+  const [caseImportStrategy, setCaseImportStrategy] =
+    useState<ImportConflictStrategy>('create');
+  const [importing, setImporting] = useState(false);
   const [qualityGate, setQualityGate] = useState<EvaluationQualityGate>({
     requireEvaluation: false,
     requiredSuiteIds: [],
@@ -1001,83 +1131,115 @@ export function WorkflowEvaluations({
   };
 
   const importCases = async () => {
-    if (!selectedSuite) return;
     try {
       const path = await open({
         multiple: false,
         filters: [{ name: 'ADK test file', extensions: ['test.json', 'json'] }],
       });
       if (!path) return;
-      const source = JSON.parse(await readTextFile(path)) as {
-        eval_cases?: unknown[];
-      };
-      if (!Array.isArray(source.eval_cases))
-        throw new Error('未找到 eval_cases');
-      for (const [index, sourceCase] of source.eval_cases.entries()) {
-        const item = sourceCase as Record<string, unknown>;
-        const extension = item.workrun as Record<string, unknown> | undefined;
-        const turn = Array.isArray(item.conversation)
-          ? (item.conversation[0] as Record<string, unknown> | undefined)
-          : undefined;
-        const response = turn?.final_response as
-          | Record<string, unknown>
-          | undefined;
-        const text = (
-          response?.parts as Array<Record<string, unknown>> | undefined
-        )?.find((part) => typeof part.text === 'string')?.text;
-        const tools = (
-          turn?.intermediate_data as Record<string, unknown> | undefined
-        )?.tool_uses;
-        const adkAssertions = [
-          ...(typeof text === 'string' && text.length > 0
-            ? [
-                {
-                  kind: 'text',
-                  id: crypto.randomUUID(),
-                  algorithm: 'contains',
-                  expected: text,
-                  threshold: 1,
-                },
-              ]
-            : []),
-          ...(Array.isArray(tools) && tools.length > 0
-            ? [
-                {
-                  kind: 'tool_trajectory',
-                  id: crypto.randomUUID(),
-                  tools,
-                  config: { strictOrder: true, strictArgs: false },
-                },
-              ]
-            : []),
-        ];
-        if (!extension?.expectation && !adkAssertions.length)
-          throw new Error(`用例 ${index + 1} 缺少最终响应或工具轨迹`);
-        await createEvaluationCase({
-          id: crypto.randomUUID(),
-          suiteId: selectedSuite.id,
-          name: String(
-            extension?.name ?? item.eval_id ?? `导入用例 ${index + 1}`,
-          ),
-          description: String(item.description ?? ''),
-          position: (cases.data?.length ?? 0) + index,
-          enabled: extension?.enabled !== false,
-          input:
-            (item.session_input as Record<string, unknown> | undefined)
-              ?.state ?? {},
-          // Standard ADK files do not know Workrun's assertion envelope.
-          // Convert their response and tool uses into equivalent assertions.
-          expectation: extension?.expectation ?? { assertions: adkAssertions },
-          fixture: extension?.fixture ?? { toolFixtures: [] },
-        });
-      }
-      await refreshCases();
-      toast.success('已导入评测用例', { toasterId: 'global' });
+      const preview = testImportPreview(JSON.parse(await readTextFile(path)));
+      setSuiteImportStrategy('create');
+      setCaseImportStrategy('create');
+      setTestImport(preview);
     } catch (error) {
       toast.error('无法导入 .test.json', {
         toasterId: 'global',
         description: String(error),
       });
+    }
+  };
+
+  const confirmTestImport = async () => {
+    if (
+      !testImport ||
+      testImport.errors.length ||
+      testImport.cases.some((item) => item.errors.length)
+    )
+      return;
+    setImporting(true);
+    try {
+      const matchingSuite = suites.data?.find(
+        (item) => item.name === testImport.suiteName,
+      );
+      if (matchingSuite && suiteImportStrategy === 'skip') {
+        toast.message('已跳过同名评测集', { toasterId: 'global' });
+        setTestImport(undefined);
+        return;
+      }
+      const targetSuite =
+        matchingSuite && suiteImportStrategy === 'overwrite'
+          ? await updateEvaluationSuite({
+              id: matchingSuite.id,
+              name: testImport.suiteName,
+              description: testImport.suiteDescription,
+            })
+          : await createEvaluationSuite({
+              id: crypto.randomUUID(),
+              workflowId,
+              name: testImport.suiteName,
+              description: testImport.suiteDescription,
+            });
+      const targetCases = await listEvaluationCases(targetSuite.id);
+      let position = targetCases.length;
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+      for (const item of testImport.cases) {
+        const matchingCase = targetCases.find(
+          (caseItem) => caseItem.name === item.name,
+        );
+        if (matchingCase && caseImportStrategy === 'skip') {
+          skipped += 1;
+          continue;
+        }
+        if (matchingCase && caseImportStrategy === 'overwrite') {
+          await updateEvaluationCase({
+            id: matchingCase.id,
+            name: item.name,
+            description: item.description,
+            enabled: item.enabled,
+            targetAgentId: matchingCase.targetAgentId ?? undefined,
+            input: item.input,
+            expectation: item.expectation,
+            fixture: item.fixture,
+          });
+          updated += 1;
+          continue;
+        }
+        await createEvaluationCase({
+          id: crypto.randomUUID(),
+          suiteId: targetSuite.id,
+          name: item.name,
+          description: item.description,
+          position: position++,
+          enabled: item.enabled,
+          input: item.input,
+          expectation: item.expectation,
+          fixture: item.fixture,
+        });
+        created += 1;
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-cases', targetSuite.id],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-suites', workflowId],
+        }),
+      ]);
+      selectSuite(targetSuite.id);
+      setTestImport(undefined);
+      toast.success(
+        `已导入 ${created} 个用例${updated ? `，覆盖 ${updated} 个` : ''}${skipped ? `，跳过 ${skipped} 个` : ''}`,
+        { toasterId: 'global' },
+      );
+    } catch (error) {
+      toast.error('无法导入 .test.json', {
+        toasterId: 'global',
+        description: String(error),
+      });
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -1471,6 +1633,10 @@ export function WorkflowEvaluations({
                         ；完成当前用例后会自动继续下一条。
                       </p>
                     ) : null}
+                    <EvaluationTrends
+                      runs={runHistory.data ?? []}
+                      versions={versionSummary.data ?? []}
+                    />
                     <div className='mt-5 border-t pt-4'>
                       <div className='mb-3 flex items-center justify-between'>
                         <div>
@@ -1849,7 +2015,10 @@ export function WorkflowEvaluations({
                 </Field>
                 <Field>
                   <FieldLabel htmlFor='evaluation-suite-description'>
-                    说明 <span className='text-muted-foreground font-normal'>（可选）</span>
+                    说明{' '}
+                    <span className='text-muted-foreground font-normal'>
+                      （可选）
+                    </span>
                   </FieldLabel>
                   <Textarea
                     id='evaluation-suite-description'
@@ -2736,6 +2905,134 @@ export function WorkflowEvaluations({
       </Dialog>
 
       <Dialog
+        open={Boolean(testImport)}
+        onOpenChange={(open) => !open && !importing && setTestImport(undefined)}
+      >
+        <DialogContent className='max-w-2xl! gap-0 overflow-hidden p-0'>
+          <DialogHeader className='border-b bg-linear-to-br from-sky-500/10 to-violet-500/10 px-6 py-5'>
+            <DialogTitle>导入评测预览</DialogTitle>
+            <DialogDescription>
+              请确认格式与冲突处理方式；确认后才会写入评测集。
+            </DialogDescription>
+          </DialogHeader>
+          {testImport ? (
+            <div className='max-h-[60vh] space-y-5 overflow-y-auto px-6 py-5'>
+              <div className='rounded-lg border border-sky-500/20 bg-sky-500/5 p-3'>
+                <div className='flex flex-wrap items-center justify-between gap-2'>
+                  <span className='font-medium'>{testImport.suiteName}</span>
+                  <Badge variant='outline'>
+                    {testImport.cases.length} 个 Case
+                  </Badge>
+                </div>
+                {testImport.suiteDescription ? (
+                  <p className='text-muted-foreground mt-1 text-sm'>
+                    {testImport.suiteDescription}
+                  </p>
+                ) : null}
+              </div>
+              {testImport.errors.length ? (
+                <div className='border-destructive/30 bg-destructive/5 text-destructive rounded-lg border p-3 text-sm'>
+                  {testImport.errors.map((error) => (
+                    <p key={error}>• {error}</p>
+                  ))}
+                </div>
+              ) : null}
+              {suites.data?.some(
+                (item) => item.name === testImport.suiteName,
+              ) ? (
+                <Field>
+                  <FieldLabel>同名评测集</FieldLabel>
+                  <Select
+                    value={suiteImportStrategy}
+                    onValueChange={(value) =>
+                      setSuiteImportStrategy(
+                        (value ?? 'create') as ImportConflictStrategy,
+                      )
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='create'>新建独立评测集</SelectItem>
+                      <SelectItem value='overwrite'>
+                        覆盖评测集说明并导入 Case
+                      </SelectItem>
+                      <SelectItem value='skip'>跳过整个导入</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              ) : null}
+              <Field>
+                <FieldLabel>同名 Case</FieldLabel>
+                <Select
+                  value={caseImportStrategy}
+                  onValueChange={(value) =>
+                    setCaseImportStrategy(
+                      (value ?? 'create') as ImportConflictStrategy,
+                    )
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='create'>新建并保留现有 Case</SelectItem>
+                    <SelectItem value='overwrite'>
+                      覆盖现有 Case 配置
+                    </SelectItem>
+                    <SelectItem value='skip'>跳过同名 Case</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <div className='space-y-2'>
+                <p className='text-sm font-medium'>Case 校验</p>
+                {testImport.cases.map((item) => (
+                  <div
+                    key={item.index}
+                    className={`rounded-lg border px-3 py-2 text-sm ${item.errors.length ? 'border-destructive/30 bg-destructive/5' : 'bg-muted/30'}`}
+                  >
+                    <div className='flex items-center justify-between gap-3'>
+                      <span className='truncate font-medium'>{item.name}</span>
+                      <Badge variant='outline'>
+                        {item.errors.length ? '无效' : '有效'}
+                      </Badge>
+                    </div>
+                    {item.errors.map((error) => (
+                      <p key={error} className='text-destructive mt-1 text-xs'>
+                        {error}
+                      </p>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter className='border-t px-6 py-4'>
+            <Button
+              variant='outline'
+              disabled={importing}
+              onClick={() => setTestImport(undefined)}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={
+                importing ||
+                !testImport ||
+                testImport.errors.length > 0 ||
+                testImport.cases.some((item) => item.errors.length > 0)
+              }
+              onClick={() => void confirmTestImport()}
+            >
+              {importing ? <Spinner data-icon='inline-start' /> : null}
+              确认导入
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={Boolean(selectedResult)}
         onOpenChange={(open) => !open && setSelectedResult(undefined)}
       >
@@ -3062,6 +3359,125 @@ function versionDiffLabel(diff: EvaluationVersionCaseDiff) {
       persistent_failure: '持续失败',
     } as const
   )[diff.kind];
+}
+
+function EvaluationTrends({
+  runs,
+  versions,
+}: {
+  runs: EvaluationRunDetail[];
+  versions: EvaluationVersionSummary[];
+}) {
+  const completed = runs.filter((run) => run.status === 'completed');
+  if (!completed.length) return null;
+  const average = (values: number[]) =>
+    values.length
+      ? values.reduce((sum, value) => sum + value, 0) / values.length
+      : 0;
+  const passRates = completed.map((run) =>
+    run.totalCases ? (run.passedCases / run.totalCases) * 100 : 0,
+  );
+  const averageCost = average(
+    completed.map((run) => run.estimatedCostMicrousd ?? 0),
+  );
+  const averageDuration = average(completed.map((run) => run.durationMs ?? 0));
+  const failedRuns = completed.filter((run) => run.failedCases > 0).length;
+
+  return (
+    <div className='mt-5 border-t pt-4'>
+      <div className='mb-3 flex items-center justify-between'>
+        <div>
+          <div className='text-muted-foreground text-[10px] font-semibold tracking-[0.16em] uppercase'>
+            质量趋势
+          </div>
+          <p className='text-muted-foreground mt-0.5 text-xs'>
+            最近 {completed.length} 次已完成运行
+          </p>
+        </div>
+        <Badge variant='outline' className='text-[10px]'>
+          {failedRuns ? `${failedRuns} 次失败` : '稳定'}
+        </Badge>
+      </div>
+      <div className='grid grid-cols-3 gap-2'>
+        <TrendMetric
+          label='平均通过率'
+          value={`${Math.round(average(passRates))}%`}
+        />
+        <TrendMetric label='平均成本' value={formatCost(averageCost)} />
+        <TrendMetric label='平均耗时' value={formatDuration(averageDuration)} />
+      </div>
+      <div className='bg-background/60 mt-3 rounded-lg border p-3'>
+        <div className='text-muted-foreground mb-2 text-[10px] font-medium'>
+          通过率走势
+        </div>
+        <div
+          className='flex h-16 items-end gap-1'
+          aria-label='近期运行通过率走势'
+        >
+          {completed
+            .slice(0, 16)
+            .reverse()
+            .map((run) => {
+              const rate = run.totalCases
+                ? (run.passedCases / run.totalCases) * 100
+                : 0;
+              return (
+                <div
+                  key={run.id}
+                  title={`${new Date(run.startedAt).toLocaleString()}：${Math.round(rate)}%`}
+                  className='bg-muted flex h-full min-w-1 flex-1 items-end overflow-hidden rounded-sm'
+                >
+                  <div
+                    className={
+                      rate === 100
+                        ? 'w-full bg-emerald-500'
+                        : rate >= 80
+                          ? 'w-full bg-amber-500'
+                          : 'w-full bg-rose-500'
+                    }
+                    style={{ height: `${Math.max(rate, 4)}%` }}
+                  />
+                </div>
+              );
+            })}
+        </div>
+        <div className='text-muted-foreground mt-1 flex justify-between text-[10px]'>
+          <span>较早</span>
+          <span>最新</span>
+        </div>
+      </div>
+      {versions.length > 1 ? (
+        <div className='mt-3 space-y-1.5'>
+          <div className='text-muted-foreground text-[10px] font-medium'>
+            版本表现
+          </div>
+          {versions.slice(0, 4).map((version) => (
+            <div
+              key={versionKey(version)}
+              className='flex items-center justify-between gap-2 text-xs'
+            >
+              <span className='truncate font-medium'>
+                {version.releaseVersion}
+              </span>
+              <span className='text-muted-foreground shrink-0'>
+                {versionPassRate(version)}% ·{' '}
+                {formatCost(version.estimatedCostMicrousd)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TrendMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className='bg-muted/40 rounded-md px-2 py-2 text-center'>
+      <div className='text-muted-foreground text-[10px]'>{label}</div>
+      <div className='mt-0.5 text-xs font-semibold'>{value}</div>
+    </div>
+  );
 }
 
 function adkTestFile(suite: EvaluationSuite, cases: EvaluationCase[]) {

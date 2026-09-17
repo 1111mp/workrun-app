@@ -11,6 +11,7 @@ use adk_eval::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +25,12 @@ use crate::{
 
 fn empty_json_object() -> Value {
     json!({})
+}
+
+fn workflow_snapshot_fingerprint(snapshot: &Value) -> String {
+    // A draft has no release version until publication. Hashing the immutable
+    // snapshot lets the quality gate distinguish it from an earlier draft.
+    format!("{:x}", Sha256::digest(snapshot.to_string().as_bytes()))
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -571,13 +578,15 @@ impl EvaluationStore {
             "name": suite.try_get::<String, _>("name")?,
             "description": suite.try_get::<String, _>("description")?,
         });
+        let workflow_fingerprint = workflow_snapshot_fingerprint(&request.workflow_snapshot);
         sqlx::query(
-            "INSERT INTO evaluation_runs (id, suite_id, workflow_id, status, workflow_snapshot_json, suite_snapshot_json, execution_profile_json, started_at, total_cases, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO evaluation_runs (id, suite_id, workflow_id, status, workflow_snapshot_json, workflow_fingerprint, suite_snapshot_json, execution_profile_json, started_at, total_cases, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&request.id)
         .bind(&request.suite_id)
         .bind(&request.workflow_id)
         .bind(request.workflow_snapshot.to_string())
+        .bind(workflow_fingerprint)
         .bind(suite_snapshot.to_string())
         .bind(json!({ "mode": "evaluation", "fixturePolicy": "exact_match_only" }).to_string())
         .bind(&now)
@@ -823,6 +832,37 @@ impl EvaluationStore {
             summary: EvaluationRunSummary { id: row.try_get("id")?, suite_id: row.try_get("suite_id")?, workflow_id: row.try_get("workflow_id")?, status: row.try_get("status")?, total_cases: row.try_get("total_cases")?, started_at: row.try_get("started_at")? },
             ended_at: row.try_get("ended_at")?, duration_ms: row.try_get("duration_ms")?, passed_cases: row.try_get("passed_cases")?, failed_cases: row.try_get("failed_cases")?, total_tokens: row.try_get("total_tokens")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?, error: row.try_get("error")?,
         })).transpose()
+    }
+
+    /// Returns the newest run for each Suite that evaluated this exact draft.
+    /// Keeping one run per Suite makes required-suite quality gates independent
+    /// of which Suite happened to finish most recently.
+    pub async fn latest_runs_for_workflow_snapshot(
+        workflow_id: &str,
+        workflow_snapshot: &Value,
+    ) -> Result<Vec<EvaluationRunDetail>> {
+        if workflow_id.trim().is_empty() {
+            bail!("workflow id is required");
+        }
+        let pool = DBManager::global().pool()?;
+        let rows = sqlx::query("SELECT id, suite_id, workflow_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE workflow_id = ? AND workflow_fingerprint = ? ORDER BY started_at DESC, id DESC")
+            .bind(workflow_id)
+            .bind(workflow_snapshot_fingerprint(workflow_snapshot))
+            .fetch_all(&pool)
+            .await?;
+        let mut seen_suites = HashSet::new();
+        let mut runs = Vec::new();
+        for row in rows {
+            let suite_id: String = row.try_get("suite_id")?;
+            if !seen_suites.insert(suite_id.clone()) {
+                continue;
+            }
+            runs.push(EvaluationRunDetail {
+                summary: EvaluationRunSummary { id: row.try_get("id")?, suite_id: row.try_get("suite_id")?, workflow_id: row.try_get("workflow_id")?, status: row.try_get("status")?, total_cases: row.try_get("total_cases")?, started_at: row.try_get("started_at")? },
+                ended_at: row.try_get("ended_at")?, duration_ms: row.try_get("duration_ms")?, passed_cases: row.try_get("passed_cases")?, failed_cases: row.try_get("failed_cases")?, total_tokens: row.try_get("total_tokens")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?, error: row.try_get("error")?,
+            });
+        }
+        Ok(runs)
     }
 }
 
@@ -1443,5 +1483,20 @@ mod tests {
         assert!(!score.passed);
         assert_eq!(score.criteria[0].criterion, "jsonPath:decision-is-approved");
         assert_eq!(score.criteria[0].actual, json!("不通过"));
+    }
+
+    #[test]
+    fn fingerprints_distinguish_workflow_drafts() {
+        let baseline = json!({ "dsl": { "nodes": [{ "id": "one" }] } });
+        let changed = json!({ "dsl": { "nodes": [{ "id": "two" }] } });
+
+        assert_eq!(
+            workflow_snapshot_fingerprint(&baseline),
+            workflow_snapshot_fingerprint(&baseline),
+        );
+        assert_ne!(
+            workflow_snapshot_fingerprint(&baseline),
+            workflow_snapshot_fingerprint(&changed),
+        );
     }
 }

@@ -190,6 +190,16 @@ export function latestEvaluationRunForWorkflow(workflowId: string) {
   return invoke<EvaluationRunDetail | null>('evaluation_workflow_latest_run', { workflowId });
 }
 
+export function latestEvaluationRunsForWorkflowSnapshot(
+  workflowId: string,
+  workflowSnapshot: EvaluationWorkflowSnapshot,
+) {
+  return invoke<EvaluationRunDetail[]>('evaluation_workflow_snapshot_runs', {
+    workflowId,
+    workflowSnapshot,
+  });
+}
+
 export function getEvaluationQualityGate(workflowId: string) {
   return invoke<EvaluationQualityGate>('evaluation_quality_gate_get', { workflowId });
 }

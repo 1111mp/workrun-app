@@ -110,6 +110,7 @@ function WorkflowHistory({
                     </span>
                   </div>
                   <div className='mt-1'>{audit.reason}</div>
+                  <QualityGateAuditDetails audit={audit} />
                 </div>
               ))}
             </div>
@@ -221,6 +222,129 @@ function WorkflowHistory({
         )}
       </div>
     </div>
+  );
+}
+
+type AuditRecord = Record<string, unknown>;
+
+function isAuditRecord(value: unknown): value is AuditRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function auditStringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function auditNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
+  const { i18n } = useTranslation();
+  const gate = isAuditRecord(audit.gateSnapshot) ? audit.gateSnapshot : {};
+  const policy = isAuditRecord(gate.policy) ? gate.policy : {};
+  const reasons = auditStringList(gate.reasons);
+  // Audit records are immutable but older versions stored one run instead of
+  // today's array, so normalize both shapes for a continuous history view.
+  const runs = Array.isArray(audit.evaluationSnapshot)
+    ? audit.evaluationSnapshot.filter(isAuditRecord)
+    : isAuditRecord(audit.evaluationSnapshot)
+      ? [audit.evaluationSnapshot]
+      : [];
+  const minPassRate = auditNumber(policy.minPassRate);
+  const maxCost = auditNumber(policy.maxCostMicrousd);
+  const maxDuration = auditNumber(policy.maxDurationMs);
+
+  return (
+    <details className='group bg-muted/30 mt-2 rounded-md border'>
+      <summary className='text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 font-medium'>
+        <span>查看发布依据</span>
+        <span className='text-[11px] group-open:hidden'>展开</span>
+        <span className='hidden text-[11px] group-open:inline'>收起</span>
+      </summary>
+      <div className='space-y-3 border-t px-2.5 py-3'>
+        <div>
+          <p className='text-muted-foreground mb-1 font-medium'>未通过项</p>
+          {reasons.length ? (
+            <ul className='space-y-1 text-amber-700 dark:text-amber-300'>
+              {reasons.map((reason) => (
+                <li key={reason}>• {reason}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className='text-muted-foreground'>未记录具体失败项。</p>
+          )}
+        </div>
+        <div>
+          <p className='text-muted-foreground mb-1 font-medium'>发布时门槛</p>
+          <div className='text-muted-foreground grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4'>
+            <span>
+              需要评测：{policy.requireEvaluation === true ? '是' : '否'}
+            </span>
+            <span>
+              通过率：
+              {minPassRate === undefined
+                ? '未设置'
+                : `${(minPassRate * 100).toFixed(0)}%`}
+            </span>
+            <span>
+              成本：
+              {maxCost === undefined
+                ? '未设置'
+                : formatUsd(maxCost, i18n.language)}
+            </span>
+            <span>
+              耗时：
+              {maxDuration === undefined
+                ? '未设置'
+                : formatDuration(maxDuration)}
+            </span>
+          </div>
+          {auditStringList(policy.requiredSuiteIds).length ? (
+            <p className='text-muted-foreground mt-1'>
+              必检 Suite：{auditStringList(policy.requiredSuiteIds).join('、')}
+            </p>
+          ) : null}
+        </div>
+        <div>
+          <p className='text-muted-foreground mb-1 font-medium'>候选版本评测</p>
+          {runs.length ? (
+            <div className='space-y-1'>
+              {runs.map((run, index) => {
+                const passedCases = auditNumber(run.passedCases) ?? 0;
+                const totalCases = auditNumber(run.totalCases) ?? 0;
+                return (
+                  <div
+                    key={typeof run.id === 'string' ? run.id : index}
+                    className='bg-background/60 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded border px-2 py-1.5'
+                  >
+                    <span className='font-medium'>
+                      {typeof run.suiteId === 'string'
+                        ? `Suite ${run.suiteId}`
+                        : '评测运行'}
+                    </span>
+                    <span className='text-muted-foreground'>
+                      {passedCases}/{totalCases} 通过 ·{' '}
+                      {formatDuration(auditNumber(run.durationMs))} ·{' '}
+                      {formatUsd(
+                        auditNumber(run.estimatedCostMicrousd) ?? 0,
+                        i18n.language,
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className='text-muted-foreground'>未记录候选版本评测快照。</p>
+          )}
+        </div>
+      </div>
+    </details>
   );
 }
 

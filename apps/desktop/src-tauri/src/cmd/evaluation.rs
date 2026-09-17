@@ -108,6 +108,11 @@ pub async fn evaluation_workflow_latest_run(workflow_id: String) -> CmdResult<Op
 }
 
 #[tauri::command]
+pub async fn evaluation_workflow_snapshot_runs(workflow_id: String, workflow_snapshot: serde_json::Value) -> CmdResult<Vec<EvaluationRunDetail>> {
+    EvaluationStore::latest_runs_for_workflow_snapshot(&workflow_id, &workflow_snapshot).await.stringify_err()
+}
+
+#[tauri::command]
 pub async fn evaluation_quality_gate_get(workflow_id: String) -> CmdResult<EvaluationQualityGate> {
     EvaluationStore::get_quality_gate(&workflow_id).await.stringify_err()
 }

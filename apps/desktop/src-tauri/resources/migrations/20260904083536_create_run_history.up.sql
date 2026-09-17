@@ -174,6 +174,9 @@ CREATE TABLE evaluation_runs (
   workflow_id TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
   workflow_snapshot_json TEXT NOT NULL,
+  -- Candidate releases are evaluated before receiving a release version.
+  -- This fingerprint binds the run to that exact immutable draft snapshot.
+  workflow_fingerprint TEXT NOT NULL,
   suite_snapshot_json TEXT NOT NULL,
   execution_profile_json TEXT NOT NULL,
   started_at TEXT NOT NULL,
@@ -194,6 +197,9 @@ CREATE INDEX idx_evaluation_runs_suite_started
 
 CREATE INDEX idx_evaluation_runs_workflow_started
   ON evaluation_runs(workflow_id, started_at DESC, id DESC);
+
+CREATE INDEX idx_evaluation_runs_workflow_fingerprint_started
+  ON evaluation_runs(workflow_id, workflow_fingerprint, started_at DESC, id DESC);
 
 CREATE TABLE evaluation_case_results (
   id TEXT PRIMARY KEY NOT NULL,
