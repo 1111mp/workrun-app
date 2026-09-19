@@ -239,6 +239,10 @@ pub struct StartWorkflowRun {
     /// Present only for an Evaluation Case. Its fixtures are persisted in the
     /// run runtime snapshot and never supplied by a normal editor run.
     pub evaluation_profile: Option<EvaluationExecutionProfile>,
+    /// Links a durable workflow Run back to its Case. Persist this in the Run
+    /// runtime so a very fast completion can recover the link before the
+    /// evaluation coordinator has finished its follow-up database update.
+    pub evaluation_result_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

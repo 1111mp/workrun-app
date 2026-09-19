@@ -86,6 +86,11 @@ pub async fn save_json<T: Serialize + Sync>(path: &PathBuf, data: &T, prefix: Op
     };
 
     let path_str = path.as_os_str().to_string_lossy().to_string();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create the parent directory for \"{path_str}\""))?;
+    }
     tokio::fs::write(path, json_str.as_bytes())
         .await
         .with_context(|| format!("failed to save file \"{path_str}\""))

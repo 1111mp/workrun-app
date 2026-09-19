@@ -296,12 +296,41 @@ impl EvaluationStore {
     /// bookkeeping never changes the Workflow Run's terminal status.
     pub async fn complete_workflow_run(workflow_run_id: &str, completed: bool, error: Option<&str>) -> Result<()> {
         let pool = DBManager::global().pool()?;
-        let result = sqlx::query(
+        let mut result = sqlx::query(
             "SELECT id, evaluation_run_id, case_snapshot_json FROM evaluation_case_results WHERE workflow_run_id = ?",
         )
         .bind(workflow_run_id)
         .fetch_optional(&pool)
         .await?;
+        if result.is_none() {
+            // The supervisor can finish a trivial workflow between creating
+            // its history record and the coordinator's link update. The
+            // runtime copy is durable at creation time, so recover that link
+            // instead of leaving the Case permanently marked as running.
+            let evaluation_result_id = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT json_extract(runtime_json, '$.evaluationResultId') FROM run_records WHERE id = ?",
+            )
+            .bind(workflow_run_id)
+            .fetch_optional(&pool)
+            .await?
+            .flatten();
+            if let Some(evaluation_result_id) = evaluation_result_id {
+                sqlx::query(
+                    "UPDATE evaluation_case_results SET workflow_run_id = ?, updated_at = ? WHERE id = ? AND workflow_run_id IS NULL",
+                )
+                .bind(workflow_run_id)
+                .bind(chrono::Utc::now().to_rfc3339())
+                .bind(evaluation_result_id)
+                .execute(&pool)
+                .await?;
+                result = sqlx::query(
+                    "SELECT id, evaluation_run_id, case_snapshot_json FROM evaluation_case_results WHERE workflow_run_id = ?",
+                )
+                .bind(workflow_run_id)
+                .fetch_optional(&pool)
+                .await?;
+            }
+        }
         let Some(result) = result else {
             return Ok(());
         };
@@ -700,6 +729,7 @@ impl EvaluationStore {
                 claimed.evaluation_run_id, claimed.evaluation_case_id
             ),
             evaluation_profile: Some(profile),
+            evaluation_result_id: Some(claimed.result_id.clone()),
         })
         .await?;
         let pool = DBManager::global().pool()?;

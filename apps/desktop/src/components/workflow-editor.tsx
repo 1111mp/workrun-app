@@ -514,25 +514,22 @@ function WorkflowEditorContent({
         await updateWorkflow(activeWorkflow.id, workflowDocument);
         setSavedDocument(workflowDocumentSnapshot);
       }
+      if (gateReasons.length && qualityGate.data) {
+        // A release must never exist without its required bypass audit. Write
+        // and await the immutable evidence before asking the server to publish.
+        await recordEvaluationQualityGateOverride({
+          workflowId: activeWorkflow.id,
+          releaseVersion: version.trim(),
+          reason: publishOverrideReason.trim(),
+          gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
+          evaluationSnapshot: candidateEvaluationRuns.data ?? [],
+        });
+      }
       const release = await publishWorkflow(
         activeWorkflow.id,
         version.trim(),
         releaseNote.trim(),
       );
-      if (gateReasons.length && qualityGate.data) {
-        void recordEvaluationQualityGateOverride({
-          workflowId: activeWorkflow.id,
-          releaseVersion: release.version,
-          reason: publishOverrideReason.trim(),
-          gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
-          evaluationSnapshot: candidateEvaluationRuns.data ?? [],
-        }).catch((error) =>
-          toast.error('发布已完成，但质量门审计记录失败', {
-            toasterId: 'global',
-            description: String(error),
-          }),
-        );
-      }
       setPublishOpen(false);
       setReleaseNote('');
       void queryClient.invalidateQueries({ queryKey: ['workflows'] });
