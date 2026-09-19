@@ -12,6 +12,7 @@
     "format": "turbo format",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
+    "app:test": "turbo test --filter workrun",
     "server:test": "turbo test --filter workrun-server",
     "prepare": "husky"
   },

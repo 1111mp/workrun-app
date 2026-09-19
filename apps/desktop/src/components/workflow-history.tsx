@@ -95,7 +95,7 @@ function WorkflowHistory({
         {qualityGateAudits.length ? (
           <div className='rounded-xl border border-amber-500/25 bg-amber-500/5 p-4'>
             <div className='mb-2 text-xs font-semibold tracking-wider uppercase'>
-              质量门旁路审计
+              {t('workflowEditor.history.qualityGate.auditTitle')}
             </div>
             <div className='flex flex-col gap-2'>
               {qualityGateAudits.map((audit) => (
@@ -244,7 +244,7 @@ function auditNumber(value: unknown) {
 }
 
 function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const gate = isAuditRecord(audit.gateSnapshot) ? audit.gateSnapshot : {};
   const policy = isAuditRecord(gate.policy) ? gate.policy : {};
   const reasons = auditStringList(gate.reasons);
@@ -262,13 +262,13 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
   return (
     <details className='group bg-muted/30 mt-2 rounded-md border'>
       <summary className='text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 font-medium'>
-        <span>查看发布依据</span>
-        <span className='text-[11px] group-open:hidden'>展开</span>
-        <span className='hidden text-[11px] group-open:inline'>收起</span>
+        <span>{t('workflowEditor.history.qualityGate.viewEvidence')}</span>
+        <span className='text-[11px] group-open:hidden'>{t('workflowEditor.history.qualityGate.expand')}</span>
+        <span className='hidden text-[11px] group-open:inline'>{t('workflowEditor.history.qualityGate.collapse')}</span>
       </summary>
       <div className='space-y-3 border-t px-2.5 py-3'>
         <div>
-          <p className='text-muted-foreground mb-1 font-medium'>未通过项</p>
+          <p className='text-muted-foreground mb-1 font-medium'>{t('workflowEditor.history.qualityGate.failedReasons')}</p>
           {reasons.length ? (
             <ul className='space-y-1 text-amber-700 dark:text-amber-300'>
               {reasons.map((reason) => (
@@ -276,42 +276,42 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
               ))}
             </ul>
           ) : (
-            <p className='text-muted-foreground'>未记录具体失败项。</p>
+            <p className='text-muted-foreground'>{t('workflowEditor.history.qualityGate.noFailedReasons')}</p>
           )}
         </div>
         <div>
-          <p className='text-muted-foreground mb-1 font-medium'>发布时门槛</p>
+          <p className='text-muted-foreground mb-1 font-medium'>{t('workflowEditor.history.qualityGate.thresholds')}</p>
           <div className='text-muted-foreground grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4'>
             <span>
-              需要评测：{policy.requireEvaluation === true ? '是' : '否'}
+              {t('workflowEditor.history.qualityGate.requireEvaluation')}: {policy.requireEvaluation === true ? t('workflowEditor.history.qualityGate.yes') : t('workflowEditor.history.qualityGate.no')}
             </span>
             <span>
-              通过率：
+              {t('workflowEditor.history.qualityGate.passRate')}:
               {minPassRate === undefined
-                ? '未设置'
+                ? t('workflowEditor.history.qualityGate.notSet')
                 : `${(minPassRate * 100).toFixed(0)}%`}
             </span>
             <span>
-              成本：
+              {t('workflowEditor.history.qualityGate.cost')}:
               {maxCost === undefined
-                ? '未设置'
+                ? t('workflowEditor.history.qualityGate.notSet')
                 : formatUsd(maxCost, i18n.language)}
             </span>
             <span>
-              耗时：
+              {t('workflowEditor.history.qualityGate.duration')}:
               {maxDuration === undefined
-                ? '未设置'
+                ? t('workflowEditor.history.qualityGate.notSet')
                 : formatDuration(maxDuration)}
             </span>
           </div>
           {auditStringList(policy.requiredSuiteIds).length ? (
             <p className='text-muted-foreground mt-1'>
-              必检 Suite：{auditStringList(policy.requiredSuiteIds).join('、')}
+              {t('workflowEditor.history.qualityGate.requiredSuites')}: {auditStringList(policy.requiredSuiteIds).join('、')}
             </p>
           ) : null}
         </div>
         <div>
-          <p className='text-muted-foreground mb-1 font-medium'>候选版本评测</p>
+          <p className='text-muted-foreground mb-1 font-medium'>{t('workflowEditor.history.qualityGate.candidateEvaluation')}</p>
           {runs.length ? (
             <div className='space-y-1'>
               {runs.map((run, index) => {
@@ -324,11 +324,11 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
                   >
                     <span className='font-medium'>
                       {typeof run.suiteId === 'string'
-                        ? `Suite ${run.suiteId}`
-                        : '评测运行'}
+                        ? t('workflowEditor.history.qualityGate.suite', { suiteId: run.suiteId })
+                        : t('workflowEditor.history.qualityGate.evaluationRun')}
                     </span>
                     <span className='text-muted-foreground'>
-                      {passedCases}/{totalCases} 通过 ·{' '}
+                      {t('workflowEditor.history.qualityGate.passed', { passed: passedCases, total: totalCases })} ·{' '}
                       {formatDuration(auditNumber(run.durationMs))} ·{' '}
                       {formatUsd(
                         auditNumber(run.estimatedCostMicrousd) ?? 0,
@@ -340,7 +340,7 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
               })}
             </div>
           ) : (
-            <p className='text-muted-foreground'>未记录候选版本评测快照。</p>
+            <p className='text-muted-foreground'>{t('workflowEditor.history.qualityGate.noCandidateSnapshot')}</p>
           )}
         </div>
       </div>

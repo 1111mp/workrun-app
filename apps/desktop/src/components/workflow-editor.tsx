@@ -59,12 +59,12 @@ import { getModelCatalog } from '@/services/cmd';
 import {
   getEvaluationQualityGate,
   latestEvaluationRunsForWorkflowSnapshot,
-  recordEvaluationQualityGateOverride,
   listEvaluationQualityGateAudits,
+  recordEvaluationQualityGateOverride,
 } from '@/services/evaluation';
 import {
-  inspectRunRecord,
   getWorkflowObservability,
+  inspectRunRecord,
   listRunHistoryPage,
   type RunHistoryCursor,
   type RunRecord,
@@ -198,12 +198,7 @@ function WorkflowEditorContent({
     ? {
         targetName: workflowSettings.name,
         targetSnapshot: workflowDocument,
-        dsl: toWorkflowDsl(
-          activeWorkflow.id,
-          nodes,
-          edges,
-          workflowSettings,
-        ),
+        dsl: toWorkflowDsl(activeWorkflow.id, nodes, edges, workflowSettings),
         releaseId: activeWorkflow.releaseId,
         releaseVersion: activeWorkflow.version,
       }
@@ -266,25 +261,29 @@ function WorkflowEditorContent({
     queryFn: () => listEvaluationQualityGateAudits(activeWorkflow!.id),
     enabled: historyOpen && Boolean(activeWorkflow),
   });
+
+  const { t } = useTranslation();
+
   const latestCandidateEvaluation = candidateEvaluationRuns.data?.[0];
   const hasQualityGateRules = Boolean(
     qualityGate.data?.requireEvaluation ||
-      (qualityGate.data?.minPassRate !== null &&
-        qualityGate.data?.minPassRate !== undefined) ||
-      (qualityGate.data?.maxCostMicrousd !== null &&
-        qualityGate.data?.maxCostMicrousd !== undefined) ||
-      (qualityGate.data?.maxDurationMs !== null &&
-        qualityGate.data?.maxDurationMs !== undefined) ||
-      qualityGate.data?.requiredSuiteIds.length,
+    (qualityGate.data?.minPassRate !== null &&
+      qualityGate.data?.minPassRate !== undefined) ||
+    (qualityGate.data?.maxCostMicrousd !== null &&
+      qualityGate.data?.maxCostMicrousd !== undefined) ||
+    (qualityGate.data?.maxDurationMs !== null &&
+      qualityGate.data?.maxDurationMs !== undefined) ||
+    qualityGate.data?.requiredSuiteIds.length,
   );
+
   const gateReasons = qualityGate.data
     ? [
         ...(hasQualityGateRules && !latestCandidateEvaluation
-          ? ['当前候选版本尚未评测']
+          ? [t('workflowEditor.evaluations.gate.noCandidateRun')]
           : []),
         ...(latestCandidateEvaluation &&
         latestCandidateEvaluation.status !== 'completed'
-          ? ['当前候选版本评测未完成']
+          ? [t('workflowEditor.evaluations.gate.candidateIncomplete')]
           : []),
         ...(qualityGate.data.minPassRate !== null &&
         qualityGate.data.minPassRate !== undefined &&
@@ -293,30 +292,32 @@ function WorkflowEditorContent({
         latestCandidateEvaluation.passedCases /
           latestCandidateEvaluation.totalCases <
           qualityGate.data.minPassRate
-          ? ['通过率低于门槛']
+          ? [t('workflowEditor.evaluations.gate.passRateBelow')]
           : []),
         ...(qualityGate.data.maxCostMicrousd !== null &&
         qualityGate.data.maxCostMicrousd !== undefined &&
         latestCandidateEvaluation?.status === 'completed' &&
         (latestCandidateEvaluation.estimatedCostMicrousd ?? 0) >
           qualityGate.data.maxCostMicrousd
-          ? ['成本超过门槛']
+          ? [t('workflowEditor.evaluations.gate.costExceeded')]
           : []),
         ...(qualityGate.data.maxDurationMs !== null &&
         qualityGate.data.maxDurationMs !== undefined &&
         latestCandidateEvaluation?.status === 'completed' &&
         (latestCandidateEvaluation.durationMs ?? 0) >
           qualityGate.data.maxDurationMs
-          ? ['耗时超过门槛']
+          ? [t('workflowEditor.evaluations.gate.durationExceeded')]
           : []),
-        ...(qualityGate.data.requiredSuiteIds
+        ...qualityGate.data.requiredSuiteIds
           .filter((suiteId) => {
             const run = candidateEvaluationRuns.data?.find(
               (item) => item.suiteId === suiteId,
             );
             return !run || run.status !== 'completed' || run.failedCases > 0;
           })
-          .map((suiteId) => `必检 Suite ${suiteId} 未通过`)),
+          .map((suiteId) =>
+            t('workflowEditor.evaluations.gate.requiredSuiteFailed', { suiteId }),
+          ),
       ]
     : [];
   const selectedVersionObservability = useQuery({
@@ -337,8 +338,6 @@ function WorkflowEditorContent({
     // Version changes should update the existing card instead of remounting it.
     placeholderData: keepPreviousData,
   });
-
-  const { t } = useTranslation();
 
   const runtime = historicalRun?.runtime as Record<string, unknown> | undefined;
   const restoredRun =
@@ -514,22 +513,25 @@ function WorkflowEditorContent({
         await updateWorkflow(activeWorkflow.id, workflowDocument);
         setSavedDocument(workflowDocumentSnapshot);
       }
-      if (gateReasons.length && qualityGate.data) {
-        // A release must never exist without its required bypass audit. Write
-        // and await the immutable evidence before asking the server to publish.
-        await recordEvaluationQualityGateOverride({
-          workflowId: activeWorkflow.id,
-          releaseVersion: version.trim(),
-          reason: publishOverrideReason.trim(),
-          gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
-          evaluationSnapshot: candidateEvaluationRuns.data ?? [],
-        });
-      }
       const release = await publishWorkflow(
         activeWorkflow.id,
         version.trim(),
         releaseNote.trim(),
       );
+      if (gateReasons.length && qualityGate.data) {
+        void recordEvaluationQualityGateOverride({
+          workflowId: activeWorkflow.id,
+          releaseVersion: release.version,
+          reason: publishOverrideReason.trim(),
+          gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
+          evaluationSnapshot: candidateEvaluationRuns.data ?? [],
+        }).catch((error) =>
+          toast.error(t('workflowEditor.evaluations.gate.auditRecordFailed'), {
+            toasterId: 'global',
+            description: String(error),
+          }),
+        );
+      }
       setPublishOpen(false);
       setReleaseNote('');
       void queryClient.invalidateQueries({ queryKey: ['workflows'] });
@@ -686,7 +688,7 @@ function WorkflowEditorContent({
                   </TabsTrigger>
                   <TabsTrigger value='evaluations' disabled={!activeWorkflow}>
                     <BeakerIcon data-icon='inline-start' />
-                    评测
+                    {t('workflowEditor.evaluations.title')}
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -815,10 +817,15 @@ function WorkflowEditorContent({
                 className={`mb-4 rounded-lg border p-3 text-sm ${latestCandidateEvaluation && latestCandidateEvaluation.failedCases === 0 && latestCandidateEvaluation.status === 'completed' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300'}`}
               >
                 {gateReasons.length
-                  ? `质量门未通过：${gateReasons.join('、')}。可确认旁路后发布。`
+                  ? t('workflowEditor.evaluations.gate.failed', {
+                      reasons: gateReasons.join('、'),
+                    })
                   : hasQualityGateRules && latestCandidateEvaluation
-                    ? `质量门通过：当前候选版本评测 ${latestCandidateEvaluation.passedCases}/${latestCandidateEvaluation.totalCases} 通过。`
-                    : '未配置质量门。'}
+                    ? t('workflowEditor.evaluations.gate.passed', {
+                        passed: latestCandidateEvaluation.passedCases,
+                        total: latestCandidateEvaluation.totalCases,
+                      })
+                    : t('workflowEditor.evaluations.gate.notConfigured')}
               </div>
               {gateReasons.length ? (
                 <Field orientation='horizontal' className='mb-4'>
@@ -830,14 +837,14 @@ function WorkflowEditorContent({
                     }
                   />
                   <FieldLabel htmlFor='publish-quality-override'>
-                    我确认旁路此次质量门
+                    {t('workflowEditor.evaluations.gate.confirmOverride')}
                   </FieldLabel>
                 </Field>
               ) : null}
               {gateReasons.length ? (
                 <Field className='mb-4'>
                   <FieldLabel htmlFor='publish-quality-override-reason'>
-                    旁路原因
+                    {t('workflowEditor.evaluations.gate.overrideReason')}
                   </FieldLabel>
                   <Textarea
                     id='publish-quality-override-reason'
@@ -845,7 +852,7 @@ function WorkflowEditorContent({
                     onChange={(event) =>
                       setPublishOverrideReason(event.target.value)
                     }
-                    placeholder='说明为何本次可以接受质量门未通过。'
+                    placeholder={t('workflowEditor.evaluations.gate.overrideReasonPlaceholder')}
                   />
                 </Field>
               ) : null}

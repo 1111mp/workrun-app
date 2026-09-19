@@ -67,9 +67,12 @@ import {
   XCircleIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import {
+  compareEvaluationVersions,
   createEvaluationCase,
   createEvaluationRun,
   createEvaluationSuite,
@@ -80,23 +83,22 @@ import {
   listEvaluationCaseResults,
   listEvaluationCases,
   listEvaluationRuns,
-  summarizeEvaluationVersions,
-  compareEvaluationVersions,
   listEvaluationSuites,
   reorderEvaluationCases,
   restoreEvaluationCase,
   startNextEvaluationCase,
+  summarizeEvaluationVersions,
   updateEvaluationCase,
-  updateEvaluationSuite,
   updateEvaluationQualityGate,
+  updateEvaluationSuite,
   type EvaluationCase,
   type EvaluationCaseResult,
+  type EvaluationQualityGate,
   type EvaluationRunDetail,
   type EvaluationSuite,
-  type EvaluationWorkflowSnapshot,
-  type EvaluationVersionSummary,
   type EvaluationVersionCaseDiff,
-  type EvaluationQualityGate,
+  type EvaluationVersionSummary,
+  type EvaluationWorkflowSnapshot,
 } from '@/services/evaluation';
 import { listTools, type ToolDefinition } from '@/services/tool';
 
@@ -197,29 +199,25 @@ type RunOutcome = 'passed' | 'failed' | 'running' | 'queued';
 
 const RUN_OUTCOME_STYLE: Record<
   RunOutcome,
-  { label: string; badge: string; rail: string; meter: string }
+  { badge: string; rail: string; meter: string }
 > = {
   passed: {
-    label: '通过',
     badge:
       'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
     rail: 'border-l-emerald-500',
     meter: 'bg-emerald-500',
   },
   failed: {
-    label: '失败',
     badge: 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300',
     rail: 'border-l-rose-500',
     meter: 'bg-rose-500',
   },
   running: {
-    label: '运行中',
     badge: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
     rail: 'border-l-sky-500',
     meter: 'bg-sky-500',
   },
   queued: {
-    label: '等待中',
     badge:
       'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
     rail: 'border-l-amber-500',
@@ -239,10 +237,10 @@ function runOutcome(run: {
   return 'passed';
 }
 
-function jsonObject(value: string, label: string) {
+function jsonObject(value: string, label: string, t: TFunction) {
   const parsed: unknown = JSON.parse(value);
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-    throw new Error(`${label} 必须是 JSON 对象`);
+    throw new Error(t('evaluations.jsonObjectRequired', { label }));
   }
   return parsed;
 }
@@ -253,22 +251,22 @@ function objectValue(value: unknown) {
     : undefined;
 }
 
-function testImportPreview(value: unknown): TestImportPreview {
+function testImportPreview(value: unknown, t: TFunction): TestImportPreview {
   const source = objectValue(value);
   const rawCases = source?.eval_cases;
   if (!Array.isArray(rawCases)) {
     return {
-      suiteName: '导入评测集',
+      suiteName: t('evaluations.importedSuite'),
       suiteDescription: '',
       cases: [],
-      errors: ['未找到 eval_cases 数组。'],
+      errors: [t('evaluations.importErrors.missingCases')],
     };
   }
   return {
     suiteName:
       typeof source?.name === 'string' && source.name.trim()
         ? source.name.trim()
-        : '导入评测集',
+        : t('evaluations.importedSuite'),
     suiteDescription:
       typeof source?.description === 'string' ? source.description : '',
     cases: rawCases.map((rawCase, index) => {
@@ -316,24 +314,24 @@ function testImportPreview(value: unknown): TestImportPreview {
           ? extension.name.trim()
           : typeof item?.eval_id === 'string' && item.eval_id.trim()
             ? item.eval_id.trim()
-            : `导入用例 ${index + 1}`;
+            : t('evaluations.importedCase', { index: index + 1 });
       const input = objectValue(sessionInput?.state) ?? {};
       const errors = [
-        ...(!item ? ['用例必须是对象。'] : []),
+        ...(!item ? [t('evaluations.importErrors.caseObject')] : []),
         ...(hasSessionState && !objectValue(sessionInput?.state)
-          ? ['session_input.state 必须是 JSON 对象。']
+          ? [t('evaluations.importErrors.sessionStateObject')]
           : []),
         ...(workrunExpectation !== undefined &&
         (!objectValue(workrunExpectation) ||
           !Array.isArray(workrunAssertions) ||
           !workrunAssertions.length)
-          ? ['workrun.expectation.assertions 必须是非空数组。']
+          ? [t('evaluations.importErrors.assertionsArray')]
           : []),
         ...(workrunFixture !== undefined && !objectValue(workrunFixture)
-          ? ['workrun.fixture 必须是 JSON 对象。']
+          ? [t('evaluations.importErrors.fixtureObject')]
           : []),
         ...(!extension?.expectation && !adkAssertions.length
-          ? ['缺少 Workrun 断言，以及可转换的最终响应或工具轨迹。']
+          ? [t('evaluations.importErrors.missingAssertion')]
           : []),
       ];
       return {
@@ -348,7 +346,7 @@ function testImportPreview(value: unknown): TestImportPreview {
         errors,
       };
     }),
-    errors: rawCases.length ? [] : ['eval_cases 不能为空。'],
+    errors: rawCases.length ? [] : [t('evaluations.importErrors.emptyCases')],
   };
 }
 
@@ -501,15 +499,19 @@ function safetyAssertions(drafts: SafetyAssertionDraft[]) {
   }));
 }
 
-function trajectoryAssertion(draft: ToolTrajectoryDraft) {
+function trajectoryAssertion(draft: ToolTrajectoryDraft, t: TFunction) {
   const tools = draft.calls.flatMap((call) => {
-    if (!call.name.trim()) throw new Error('工具名称不能为空');
+    if (!call.name.trim()) throw new Error(t('evaluations.toolNameRequired'));
     const tool = {
       name: call.name.trim(),
-      args: jsonObject(call.args, '工具参数'),
+      args: jsonObject(call.args, t('evaluations.toolArguments'), t),
       ...(call.assertResult
         ? {
-            expectedResponse: jsonObject(call.expectedResult, '预期工具返回值'),
+            expectedResponse: jsonObject(
+              call.expectedResult,
+              t('evaluations.expectedFixtureResult'),
+              t,
+            ),
           }
         : {}),
     };
@@ -528,14 +530,15 @@ function trajectoryAssertion(draft: ToolTrajectoryDraft) {
     : undefined;
 }
 
-function fixturesFromDrafts(drafts: ToolFixtureDraft[]) {
+function fixturesFromDrafts(drafts: ToolFixtureDraft[], t: TFunction) {
   return {
     toolFixtures: drafts.map((fixture) => {
-      if (!fixture.tool.trim()) throw new Error('fixture 工具名称不能为空');
+      if (!fixture.tool.trim())
+        throw new Error(t('evaluations.fixtureToolRequired'));
       return {
         tool: fixture.tool.trim(),
-        args: jsonObject(fixture.args, 'fixture 参数'),
-        result: jsonObject(fixture.result, 'fixture 返回值'),
+        args: jsonObject(fixture.args, t('evaluations.fixtureArgs'), t),
+        result: jsonObject(fixture.result, t('evaluations.fixtureResult'), t),
       };
     }),
   };
@@ -546,6 +549,7 @@ function expectationFromVisualAssertions(
   assertions: VisualAssertion[],
   trajectory: ToolTrajectoryDraft,
   safety: SafetyAssertionDraft[],
+  t: TFunction,
 ) {
   const source = value && typeof value === 'object' ? value : {};
   const { assertions: existing, ...base } = source as Record<string, unknown>;
@@ -561,7 +565,7 @@ function expectationFromVisualAssertions(
           ),
       )
     : [];
-  const toolAssertion = trajectoryAssertion(trajectory);
+  const toolAssertion = trajectoryAssertion(trajectory, t);
   return {
     ...base,
     assertions: [
@@ -593,6 +597,7 @@ function serializeVisualAssertions(
   assertions: VisualAssertion[],
   trajectory: ToolTrajectoryDraft,
   safety: SafetyAssertionDraft[],
+  t: TFunction,
 ) {
   const output = assertions.map((assertion) =>
     assertion.subject === 'final_json'
@@ -615,7 +620,7 @@ function serializeVisualAssertions(
   // save still validates the exact same value before it reaches the backend.
   let toolAssertion: ReturnType<typeof trajectoryAssertion>;
   try {
-    toolAssertion = trajectoryAssertion(trajectory);
+    toolAssertion = trajectoryAssertion(trajectory, t);
   } catch {
     toolAssertion = undefined;
   }
@@ -645,6 +650,7 @@ export function WorkflowEvaluations({
   workflowSnapshot: EvaluationWorkflowSnapshot;
   onViewWorkflowRun: (runId: string) => void;
 }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [selectedSuiteId, setSelectedSuiteId] = useState<string>();
   const [activeRunId, setActiveRunId] = useState<string>();
@@ -687,7 +693,7 @@ export function WorkflowEvaluations({
   const [startingRun, setStartingRun] = useState(false);
   const startingNext = useRef(false);
   const assertionsJson = JSON.stringify(
-    serializeVisualAssertions(assertionDrafts, toolTrajectory, safetyDrafts),
+    serializeVisualAssertions(assertionDrafts, toolTrajectory, safetyDrafts, t),
     null,
     2,
   );
@@ -729,9 +735,11 @@ export function WorkflowEvaluations({
         queryKey: ['evaluation-quality-gate', workflowId],
       });
       setQualityGateOpen(false);
-      toast.success('已保存发布质量门', { toasterId: 'global' });
+      toast.success(t('evaluations.feedback.qualityGateSaved'), {
+        toasterId: 'global',
+      });
     } catch (error) {
-      toast.error('无法保存发布质量门', {
+      toast.error(t('evaluations.feedback.qualityGateSaveFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -813,7 +821,7 @@ export function WorkflowEvaluations({
         }),
       )
       .catch((error) => {
-        toast.error('无法开始下一条评测用例', {
+        toast.error(t('evaluations.feedback.nextCaseStartFailed'), {
           toasterId: 'global',
           description: error instanceof Error ? error.message : String(error),
         });
@@ -821,7 +829,7 @@ export function WorkflowEvaluations({
       .finally(() => {
         startingNext.current = false;
       });
-  }, [activeRunId, queryClient, results.data]);
+  }, [activeRunId, queryClient, results.data, t]);
 
   useEffect(() => {
     let disposed = false;
@@ -882,7 +890,7 @@ export function WorkflowEvaluations({
       setSuiteName('');
       setSuiteDescription('');
     } catch (error) {
-      toast.error('无法保存评测集', {
+      toast.error(t('evaluations.feedback.suiteSaveFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -902,7 +910,7 @@ export function WorkflowEvaluations({
       if (selectedSuite?.id === deleteSuite.id) selectSuite(undefined);
       setDeleteSuite(undefined);
     } catch (error) {
-      toast.error('无法删除评测集', {
+      toast.error(t('evaluations.feedback.suiteDeleteFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
@@ -938,6 +946,7 @@ export function WorkflowEvaluations({
         assertionDrafts,
         toolTrajectory,
         safetyDrafts,
+        t,
       );
       if (editingCase) {
         await updateEvaluationCase({
@@ -946,9 +955,9 @@ export function WorkflowEvaluations({
           description: caseDescription.trim(),
           enabled: editingCase.enabled,
           targetAgentId: editingCase.targetAgentId ?? undefined,
-          input: jsonObject(caseInput, '输入'),
+          input: jsonObject(caseInput, t('evaluations.workflowInput'), t),
           expectation,
-          fixture: fixturesFromDrafts(fixtureDrafts),
+          fixture: fixturesFromDrafts(fixtureDrafts, t),
         });
       } else {
         await createEvaluationCase({
@@ -958,9 +967,9 @@ export function WorkflowEvaluations({
           description: caseDescription.trim(),
           position: cases.data?.length ?? 0,
           enabled: true,
-          input: jsonObject(caseInput, '输入'),
+          input: jsonObject(caseInput, t('evaluations.workflowInput'), t),
           expectation,
-          fixture: fixturesFromDrafts(fixtureDrafts),
+          fixture: fixturesFromDrafts(fixtureDrafts, t),
         });
       }
       await Promise.all([
@@ -981,7 +990,7 @@ export function WorkflowEvaluations({
       setFixtureDrafts([]);
       setSafetyDrafts([]);
     } catch (error) {
-      toast.error('无法创建评测用例', {
+      toast.error(t('evaluations.feedback.caseSaveFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
@@ -1009,7 +1018,7 @@ export function WorkflowEvaluations({
         queryKey: ['evaluation-run-history', selectedSuite.id],
       });
     } catch (error) {
-      toast.error('无法开始评测', {
+      toast.error(t('evaluations.feedback.runStartFailed'), {
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
@@ -1037,7 +1046,7 @@ export function WorkflowEvaluations({
       });
       await refreshCases();
     } catch (error) {
-      toast.error('无法更新用例状态', {
+      toast.error(t('evaluations.feedback.caseStatusFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -1061,7 +1070,7 @@ export function WorkflowEvaluations({
       );
       await refreshCases();
     } catch (error) {
-      toast.error('无法调整用例顺序', {
+      toast.error(t('evaluations.feedback.caseReorderFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -1074,13 +1083,13 @@ export function WorkflowEvaluations({
       await createEvaluationCase({
         ...item,
         id: crypto.randomUUID(),
-        name: `${item.name}（副本）`,
+        name: t('evaluations.copyName', { name: item.name }),
         position: cases.data?.length ?? 0,
         targetAgentId: item.targetAgentId ?? undefined,
       });
       await refreshCases();
     } catch (error) {
-      toast.error('无法复制用例', {
+      toast.error(t('evaluations.feedback.caseCopyFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -1094,7 +1103,7 @@ export function WorkflowEvaluations({
       setDeleteCase(undefined);
       await refreshCases();
     } catch (error) {
-      toast.error('无法删除用例', {
+      toast.error(t('evaluations.feedback.caseDeleteFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -1105,7 +1114,7 @@ export function WorkflowEvaluations({
       await restoreEvaluationCase(item.id);
       await refreshCases();
     } catch (error) {
-      toast.error('无法恢复用例', {
+      toast.error(t('evaluations.feedback.caseRestoreFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -1137,12 +1146,15 @@ export function WorkflowEvaluations({
         filters: [{ name: 'ADK test file', extensions: ['test.json', 'json'] }],
       });
       if (!path) return;
-      const preview = testImportPreview(JSON.parse(await readTextFile(path)));
+      const preview = testImportPreview(
+        JSON.parse(await readTextFile(path)),
+        t,
+      );
       setSuiteImportStrategy('create');
       setCaseImportStrategy('create');
       setTestImport(preview);
     } catch (error) {
-      toast.error('无法导入 .test.json', {
+      toast.error(t('evaluations.feedback.importFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -1162,7 +1174,9 @@ export function WorkflowEvaluations({
         (item) => item.name === testImport.suiteName,
       );
       if (matchingSuite && suiteImportStrategy === 'skip') {
-        toast.message('已跳过同名评测集', { toasterId: 'global' });
+        toast.message(t('evaluations.feedback.importSkipped'), {
+          toasterId: 'global',
+        });
         setTestImport(undefined);
         return;
       }
@@ -1230,11 +1244,11 @@ export function WorkflowEvaluations({
       selectSuite(targetSuite.id);
       setTestImport(undefined);
       toast.success(
-        `已导入 ${created} 个用例${updated ? `，覆盖 ${updated} 个` : ''}${skipped ? `，跳过 ${skipped} 个` : ''}`,
+        t('evaluations.feedback.imported', { created, updated, skipped }),
         { toasterId: 'global' },
       );
     } catch (error) {
-      toast.error('无法导入 .test.json', {
+      toast.error(t('evaluations.feedback.importFailed'), {
         toasterId: 'global',
         description: String(error),
       });
@@ -1251,17 +1265,20 @@ export function WorkflowEvaluations({
             <div className='text-muted-foreground mb-2 flex items-center gap-2 text-xs font-medium tracking-[0.16em] uppercase'>
               <BeakerIcon className='size-3.5' /> Evaluation lab
             </div>
-            <h2 className='text-xl font-semibold tracking-tight'>评测集</h2>
+            <h2 className='text-xl font-semibold tracking-tight'>
+              {t('evaluations.title')}
+            </h2>
             <p className='text-muted-foreground mt-1 text-sm'>
-              为当前工作流保存可重复运行的输入、断言和安全 fixture。
+              {t('evaluations.description')}
             </p>
           </div>
           <div className='flex gap-2'>
             <Button variant='outline' size='sm' onClick={openQualityGate}>
-              <Settings2Icon data-icon='inline-start' /> 发布质量门
+              <Settings2Icon data-icon='inline-start' />{' '}
+              {t('evaluations.qualityGate')}
             </Button>
             <Button size='sm' onClick={() => openSuiteEditor()}>
-              <PlusIcon data-icon='inline-start' /> 新建评测集
+              <PlusIcon data-icon='inline-start' /> {t('evaluations.newSuite')}
             </Button>
           </div>
         </div>
@@ -1270,7 +1287,7 @@ export function WorkflowEvaluations({
           <aside className='bg-card rounded-xl border p-2'>
             {suites.isLoading ? (
               <div className='text-muted-foreground flex items-center gap-2 p-3 text-sm'>
-                <Spinner /> 正在读取评测集
+                <Spinner /> {t('evaluations.loadingSuites')}
               </div>
             ) : null}
             <div className='flex flex-col gap-1'>
@@ -1292,7 +1309,7 @@ export function WorkflowEvaluations({
             </div>
             {!suites.isLoading && !suites.data?.length ? (
               <p className='text-muted-foreground px-3 py-5 text-sm'>
-                先创建一个评测集。
+                {t('evaluations.createFirstSuite')}
               </p>
             ) : null}
           </aside>
@@ -1304,9 +1321,9 @@ export function WorkflowEvaluations({
                   <EmptyMedia variant='icon'>
                     <BeakerIcon />
                   </EmptyMedia>
-                  <EmptyTitle>还没有选中的评测集</EmptyTitle>
+                  <EmptyTitle>{t('evaluations.noSuiteSelected')}</EmptyTitle>
                   <EmptyDescription>
-                    创建评测集后，添加能代表关键路径的测试用例。
+                    {t('evaluations.noSuiteSelectedDescription')}
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -1316,15 +1333,16 @@ export function WorkflowEvaluations({
                   <div>
                     <h3 className='font-semibold'>{selectedSuite.name}</h3>
                     <p className='text-muted-foreground mt-1 text-sm'>
-                      {selectedSuite.description || '尚未添加说明'}
+                      {selectedSuite.description ||
+                        t('evaluations.noDescription')}
                     </p>
                   </div>
                   <div className='flex flex-wrap justify-end gap-2'>
                     <Button
                       variant='ghost'
                       size='icon-sm'
-                      title='导入 .test.json'
-                      aria-label='导入 .test.json'
+                      title={t('evaluations.import')}
+                      aria-label={t('evaluations.import')}
                       onClick={() => void importCases()}
                     >
                       <UploadIcon />
@@ -1332,8 +1350,8 @@ export function WorkflowEvaluations({
                     <Button
                       variant='ghost'
                       size='icon-sm'
-                      title='导出 .test.json'
-                      aria-label='导出 .test.json'
+                      title={t('evaluations.export')}
+                      aria-label={t('evaluations.export')}
                       onClick={() => void exportCases()}
                     >
                       <DownloadIcon />
@@ -1341,7 +1359,7 @@ export function WorkflowEvaluations({
                     <Button
                       variant='ghost'
                       size='icon-sm'
-                      aria-label='编辑评测集'
+                      aria-label={t('evaluations.editSuite')}
                       onClick={() => openSuiteEditor(selectedSuite)}
                     >
                       <PencilIcon />
@@ -1349,7 +1367,7 @@ export function WorkflowEvaluations({
                     <Button
                       variant='ghost'
                       size='icon-sm'
-                      aria-label='删除评测集'
+                      aria-label={t('evaluations.deleteSuite')}
                       onClick={() => setDeleteSuite(selectedSuite)}
                     >
                       <Trash2Icon />
@@ -1359,7 +1377,8 @@ export function WorkflowEvaluations({
                       size='sm'
                       onClick={() => openCaseEditor()}
                     >
-                      <PlusIcon data-icon='inline-start' /> 添加用例
+                      <PlusIcon data-icon='inline-start' />{' '}
+                      {t('evaluations.addCase')}
                     </Button>
                     <Button
                       size='sm'
@@ -1371,7 +1390,7 @@ export function WorkflowEvaluations({
                       ) : (
                         <PlayIcon data-icon='inline-start' />
                       )}{' '}
-                      运行评测集
+                      {t('evaluations.runSuite')}
                     </Button>
                   </div>
                 </div>
@@ -1386,12 +1405,14 @@ export function WorkflowEvaluations({
                         size='sm'
                         onClick={() => setShowArchivedCases((value) => !value)}
                       >
-                        {showArchivedCases ? '隐藏归档' : '查看归档'}
+                        {showArchivedCases
+                          ? t('evaluations.hideArchived')
+                          : t('evaluations.showArchived')}
                       </Button>
                     </div>
                     {cases.isLoading ? (
                       <div className='text-muted-foreground flex items-center gap-2 py-6 text-sm'>
-                        <Spinner /> 正在读取用例
+                        <Spinner /> {t('evaluations.loadingCases')}
                       </div>
                     ) : null}
                     {cases.data?.map((item) => (
@@ -1407,15 +1428,16 @@ export function WorkflowEvaluations({
                             {item.name}
                           </div>
                           <div className='text-muted-foreground truncate text-xs'>
-                            {item.description || '输出断言'}
+                            {item.description ||
+                              t('evaluations.outputAssertions')}
                           </div>
                         </div>
                         <Badge variant={item.enabled ? 'secondary' : 'outline'}>
                           {item.archived
-                            ? '已归档'
+                            ? t('evaluations.archived')
                             : item.enabled
-                              ? '已启用'
-                              : '已停用'}
+                              ? t('evaluations.enabled')
+                              : t('evaluations.disabled')}
                         </Badge>
                         {item.archived ? (
                           <Button
@@ -1423,14 +1445,16 @@ export function WorkflowEvaluations({
                             size='sm'
                             onClick={() => void restoreCase(item)}
                           >
-                            恢复
+                            {t('evaluations.restore')}
                           </Button>
                         ) : null}
                         <div className='ml-auto flex flex-wrap items-center justify-end gap-1'>
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={`${item.enabled ? '停用' : '启用'} ${item.name}`}
+                            aria-label={t(item.enabled
+                              ? 'evaluations.disableCase'
+                              : 'evaluations.enableCase', { name: item.name })}
                             onClick={() => void updateCaseEnabled(item)}
                           >
                             <PowerIcon />
@@ -1438,7 +1462,7 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={`上移 ${item.name}`}
+                            aria-label={t('evaluations.moveCaseUp', { name: item.name })}
                             disabled={item.position === 0}
                             onClick={() => void moveCase(item, -1)}
                           >
@@ -1447,7 +1471,7 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={`下移 ${item.name}`}
+                            aria-label={t('evaluations.moveCaseDown', { name: item.name })}
                             disabled={
                               item.position === (cases.data?.length ?? 1) - 1
                             }
@@ -1458,7 +1482,7 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={`复制 ${item.name}`}
+                            aria-label={t('evaluations.copyCase', { name: item.name })}
                             onClick={() => void duplicateCase(item)}
                           >
                             <CopyIcon />
@@ -1466,7 +1490,7 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={`编辑 ${item.name}`}
+                            aria-label={t('evaluations.editCaseAria', { name: item.name })}
                             onClick={() => openCaseEditor(item)}
                           >
                             <PencilIcon />
@@ -1474,7 +1498,7 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={`删除 ${item.name}`}
+                            aria-label={t('evaluations.deleteCaseAria', { name: item.name })}
                             onClick={() => setDeleteCase(item)}
                           >
                             <Trash2Icon />
@@ -1484,7 +1508,7 @@ export function WorkflowEvaluations({
                     ))}
                     {!cases.isLoading && !cases.data?.length ? (
                       <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-7 text-center text-sm'>
-                        尚无用例。先添加一个能验证关键行为的输入和预期输出。
+                        {t('evaluations.noCases')}
                       </p>
                     ) : null}
                   </div>
@@ -1492,9 +1516,11 @@ export function WorkflowEvaluations({
                     <div className='mb-3 flex items-center justify-between'>
                       <div>
                         <span className='text-muted-foreground text-[10px] font-semibold tracking-[0.16em] uppercase'>
-                          当前评测
+                          {t('evaluations.currentEvaluation')}
                         </span>
-                        <p className='mt-0.5 text-sm font-semibold'>运行概览</p>
+                        <p className='mt-0.5 text-sm font-semibold'>
+                          {t('evaluations.runOverview')}
+                        </p>
                       </div>
                       {activeRunId ? (
                         <Badge
@@ -1507,16 +1533,16 @@ export function WorkflowEvaluations({
                           variant='outline'
                         >
                           {runDetail.data
-                            ? RUN_OUTCOME_STYLE[runOutcome(runDetail.data)]
-                                .label
+                            ? t(
+                                `evaluations.outcomes.${runOutcome(runDetail.data)}`,
+                              )
                             : `${completed}/${results.data?.length ?? 0}`}
                         </Badge>
                       ) : null}
                     </div>
                     {!activeRunId ? (
                       <p className='text-muted-foreground text-sm leading-6'>
-                        运行会冻结当前工作流与用例配置，并在 Test Mode
-                        中逐条执行。
+                        {t('evaluations.runDescription')}
                       </p>
                     ) : null}
                     {runDetail.data
@@ -1538,7 +1564,7 @@ export function WorkflowEvaluations({
                                     {rate}%
                                   </span>
                                   <span className='text-muted-foreground ml-1 text-xs'>
-                                    通过率
+                                    {t('evaluations.passRate')}
                                   </span>
                                 </div>
                                 <span className='text-muted-foreground text-xs'>
@@ -1555,7 +1581,7 @@ export function WorkflowEvaluations({
                               <div className='mt-3 grid grid-cols-3 gap-2 text-center'>
                                 <div>
                                   <div className='text-muted-foreground text-[10px] uppercase'>
-                                    耗时
+                                    {t('evaluations.duration')}
                                   </div>
                                   <div className='mt-0.5 text-xs font-medium'>
                                     {formatDuration(runDetail.data.durationMs)}
@@ -1563,7 +1589,7 @@ export function WorkflowEvaluations({
                                 </div>
                                 <div>
                                   <div className='text-muted-foreground text-[10px] uppercase'>
-                                    成本
+                                    {t('evaluations.cost')}
                                   </div>
                                   <div className='mt-0.5 text-xs font-medium'>
                                     {formatCost(
@@ -1597,7 +1623,7 @@ export function WorkflowEvaluations({
                             <span className='min-w-0 flex-1 truncate text-xs font-medium'>
                               {cases.data?.find(
                                 (item) => item.id === result.evaluationCaseId,
-                              )?.name ?? '评测用例'}
+                              )?.name ?? t('evaluations.case')}
                             </span>
                             <Badge
                               className={RESULT_STYLE[result.verdict]}
@@ -1609,7 +1635,9 @@ export function WorkflowEvaluations({
                           {result.score !== null &&
                           result.score !== undefined ? (
                             <div className='text-muted-foreground mt-1 pl-6 text-xs'>
-                              得分 {Math.round(result.score * 100)}%
+                              {t('evaluations.score', {
+                                score: Math.round(result.score * 100),
+                              })}
                             </div>
                           ) : null}
                           {result.failureReason ? (
@@ -1624,13 +1652,12 @@ export function WorkflowEvaluations({
                     results.isFetching &&
                     !results.data?.length ? (
                       <div className='text-muted-foreground mt-3 flex items-center gap-2 text-sm'>
-                        <Spinner /> 正在创建运行记录
+                        <Spinner /> {t('evaluations.creatingRun')}
                       </div>
                     ) : null}
                     {activeRunId && results.data?.length ? (
                       <p className='text-muted-foreground mt-3 text-xs'>
-                        通过 {passed} / {completed}
-                        ；完成当前用例后会自动继续下一条。
+                        {t('evaluations.runProgress', { passed, completed })}
                       </p>
                     ) : null}
                     <EvaluationTrends
@@ -1641,10 +1668,10 @@ export function WorkflowEvaluations({
                       <div className='mb-3 flex items-center justify-between'>
                         <div>
                           <div className='text-muted-foreground text-[10px] font-semibold tracking-[0.16em] uppercase'>
-                            运行历史
+                            {t('evaluations.runHistory')}
                           </div>
                           <p className='text-muted-foreground mt-0.5 text-xs'>
-                            最近 30 次快照
+                            {t('evaluations.lastThirtyRuns')}
                           </p>
                         </div>
                         <Badge variant='outline' className='text-[10px]'>
@@ -1681,7 +1708,10 @@ export function WorkflowEvaluations({
                                     {new Date(run.startedAt).toLocaleString()}
                                   </span>
                                   <span className='text-muted-foreground shrink-0 text-[10px]'>
-                                    {run.passedCases}/{run.totalCases} 通过
+                                    {t('evaluations.passed', {
+                                      passed: run.passedCases,
+                                      total: run.totalCases,
+                                    })}
                                   </span>
                                 </div>
                                 <div className='text-muted-foreground mt-1 flex gap-2 text-[10px]'>
@@ -1693,14 +1723,14 @@ export function WorkflowEvaluations({
                                 </div>
                               </div>
                               <Badge className={style.badge} variant='outline'>
-                                {style.label}
+                                {t(`evaluations.outcomes.${outcome}`)}
                               </Badge>
                             </button>
                           );
                         })}
                         {!runHistory.data?.length ? (
                           <p className='text-muted-foreground text-xs'>
-                            尚无历史运行。
+                            {t('evaluations.noRunHistory')}
                           </p>
                         ) : null}
                       </div>
@@ -1708,7 +1738,7 @@ export function WorkflowEvaluations({
                     {versionSummary.data && versionSummary.data.length > 1 ? (
                       <div className='mt-5 border-t pt-4'>
                         <div className='text-muted-foreground mb-3 text-[10px] font-semibold tracking-[0.16em] uppercase'>
-                          版本比较
+                          {t('evaluations.versionComparison')}
                         </div>
                         <div className='grid gap-2'>
                           <Select
@@ -1719,7 +1749,9 @@ export function WorkflowEvaluations({
                             }
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder='选择基线版本' />
+                              <SelectValue
+                                placeholder={t('evaluations.selectBaseline')}
+                              />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectGroup>
@@ -1742,7 +1774,9 @@ export function WorkflowEvaluations({
                             }
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder='选择候选版本' />
+                              <SelectValue
+                                placeholder={t('evaluations.selectCandidate')}
+                              />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectGroup>
@@ -1768,21 +1802,21 @@ export function WorkflowEvaluations({
                               <span className='text-center'>
                                 {candidate.releaseVersion}
                               </span>
-                              <span>通过率</span>
+                              <span>{t('evaluations.passRate')}</span>
                               <span className='text-center'>
                                 {versionPassRate(baseline)}%
                               </span>
                               <span className='text-center'>
                                 {versionPassRate(candidate)}%
                               </span>
-                              <span>成本</span>
+                              <span>{t('evaluations.cost')}</span>
                               <span className='text-center'>
                                 {formatCost(baseline.estimatedCostMicrousd)}
                               </span>
                               <span className='text-center'>
                                 {formatCost(candidate.estimatedCostMicrousd)}
                               </span>
-                              <span>耗时</span>
+                              <span>{t('evaluations.duration')}</span>
                               <span className='text-center'>
                                 {formatDuration(baseline.totalDurationMs)}
                               </span>
@@ -1801,14 +1835,14 @@ export function WorkflowEvaluations({
                                       {diff.name}
                                     </span>
                                     <Badge variant='outline'>
-                                      {versionDiffLabel(diff)}
+                                      {versionDiffLabel(diff, t)}
                                     </Badge>
                                   </div>
                                 ))}
                               </div>
                             ) : (
                               <p className='text-muted-foreground mt-3 text-xs'>
-                                没有可报告的 Case 差异。
+                                {t('evaluations.noCaseDifferences')}
                               </p>
                             )}
                           </>
@@ -1832,10 +1866,11 @@ export function WorkflowEvaluations({
                 <ShieldCheckIcon className='size-5' />
               </div>
               <div>
-                <DialogTitle className='text-lg'>发布质量门</DialogTitle>
+                <DialogTitle className='text-lg'>
+                  {t('evaluations.qualityGate')}
+                </DialogTitle>
                 <DialogDescription className='mt-1 max-w-xl leading-5'>
-                  为 Workflow
-                  设定发布前必须满足的评测标准；未通过时仍需明确确认旁路。
+                  {t('evaluations.gateDescription')}
                 </DialogDescription>
               </div>
             </div>
@@ -1854,17 +1889,17 @@ export function WorkflowEvaluations({
                   }
                 />
                 <FieldLabel htmlFor='gate-require-evaluation'>
-                  必须至少有一次评测
+                  {t('evaluations.requireEvaluation')}
                 </FieldLabel>
               </Field>
               <FieldSet className='rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 sm:p-5'>
-                <FieldLegend>总体阈值</FieldLegend>
+                <FieldLegend>{t('evaluations.overallThresholds')}</FieldLegend>
                 <FieldDescription>
-                  以下指标基于最近一次评测运行。
+                  {t('evaluations.thresholdDescription')}
                 </FieldDescription>
                 <div className='mt-4 grid gap-4 sm:grid-cols-3'>
                   <Field>
-                    <FieldLabel>最低通过率（%）</FieldLabel>
+                    <FieldLabel>{t('evaluations.minimumPassRate')}</FieldLabel>
                     <Input
                       type='number'
                       min={0}
@@ -1886,7 +1921,7 @@ export function WorkflowEvaluations({
                     />
                   </Field>
                   <Field>
-                    <FieldLabel>最大成本（USD）</FieldLabel>
+                    <FieldLabel>{t('evaluations.maximumCost')}</FieldLabel>
                     <Input
                       type='number'
                       min={0}
@@ -1910,7 +1945,7 @@ export function WorkflowEvaluations({
                     />
                   </Field>
                   <Field>
-                    <FieldLabel>最大耗时（秒）</FieldLabel>
+                    <FieldLabel>{t('evaluations.maximumDuration')}</FieldLabel>
                     <Input
                       type='number'
                       min={0}
@@ -1933,9 +1968,9 @@ export function WorkflowEvaluations({
                 </div>
               </FieldSet>
               <FieldSet className='rounded-xl border p-4 sm:p-5'>
-                <FieldLegend>发布必检评测集</FieldLegend>
+                <FieldLegend>{t('evaluations.requiredSuites')}</FieldLegend>
                 <FieldDescription>
-                  列出的 Suite 最近一次运行必须通过。
+                  {t('evaluations.requiredSuitesDescription')}
                 </FieldDescription>
                 <FieldGroup className='mt-2 gap-2'>
                   {suites.data?.map((suite) => (
@@ -1968,9 +2003,11 @@ export function WorkflowEvaluations({
           </div>
           <DialogFooter className='border-t px-6 py-4'>
             <Button variant='outline' onClick={() => setQualityGateOpen(false)}>
-              取消
+              {t('common.cancel')}
             </Button>
-            <Button onClick={() => void saveQualityGate()}>保存质量门</Button>
+            <Button onClick={() => void saveQualityGate()}>
+              {t('evaluations.saveQualityGate')}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1988,42 +2025,46 @@ export function WorkflowEvaluations({
               </div>
               <div className='min-w-0'>
                 <DialogTitle className='text-lg'>
-                  {editingSuite ? '编辑评测集' : '新建评测集'}
+                  {editingSuite
+                    ? t('evaluations.editSuite')
+                    : t('evaluations.newSuite')}
                 </DialogTitle>
                 <DialogDescription className='mt-1 max-w-md leading-5'>
-                  将一组会共同运行的回归用例放入同一个评测集，方便持续验证工作流的关键路径。
+                  {t('evaluations.suiteDescription')}
                 </DialogDescription>
               </div>
             </div>
           </DialogHeader>
           <div className='px-6 py-6'>
             <FieldSet className='bg-muted/20 rounded-xl border p-4 sm:p-5'>
-              <FieldLegend>评测集详情</FieldLegend>
+              <FieldLegend>{t('evaluations.suiteDetails')}</FieldLegend>
               <FieldDescription>
-                使用清晰的名称区分不同的回归场景；说明可帮助团队理解覆盖范围。
+                {t('evaluations.suiteDetailsDescription')}
               </FieldDescription>
               <FieldGroup className='mt-5 gap-5'>
                 <Field>
-                  <FieldLabel htmlFor='evaluation-suite-name'>名称</FieldLabel>
+                  <FieldLabel htmlFor='evaluation-suite-name'>
+                    {t('common.name')}
+                  </FieldLabel>
                   <Input
                     id='evaluation-suite-name'
                     value={suiteName}
-                    placeholder='例如：客户信息查询回归'
+                    placeholder={t('evaluations.suiteNamePlaceholder')}
                     onChange={(event) => setSuiteName(event.target.value)}
                     autoFocus
                   />
                 </Field>
                 <Field>
                   <FieldLabel htmlFor='evaluation-suite-description'>
-                    说明{' '}
+                    {t('common.description')}{' '}
                     <span className='text-muted-foreground font-normal'>
-                      （可选）
+                      {t('common.optional')}
                     </span>
                   </FieldLabel>
                   <Textarea
                     id='evaluation-suite-description'
                     className='min-h-24 resize-y'
-                    placeholder='例如：覆盖 CRM 查询、权限边界与敏感信息保护。'
+                    placeholder={t('evaluations.suiteDescriptionPlaceholder')}
                     value={suiteDescription}
                     onChange={(event) =>
                       setSuiteDescription(event.target.value)
@@ -2039,14 +2080,16 @@ export function WorkflowEvaluations({
               disabled={saving}
               onClick={() => setSuiteDialogOpen(false)}
             >
-              取消
+              {t('common.cancel')}
             </Button>
             <Button
               disabled={!suiteName.trim() || saving}
               onClick={() => void saveSuite()}
             >
               {saving ? <Spinner /> : null}{' '}
-              {editingSuite ? '保存评测集' : '创建评测集'}
+              {editingSuite
+                ? t('evaluations.saveSuite')
+                : t('evaluations.createSuite')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2058,20 +2101,25 @@ export function WorkflowEvaluations({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogHeading>删除评测集？</AlertDialogHeading>
+            <AlertDialogHeading>
+              {t('evaluations.deleteSuiteTitle')}
+            </AlertDialogHeading>
             <AlertDialogBody>
-              将删除“{deleteSuite?.name}”中的 Case、评测运行及评测结果；关联的
-              Workflow Run 历史会保留。
+              {t('evaluations.deleteSuiteDescription', {
+                name: deleteSuite?.name,
+              })}
             </AlertDialogBody>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={saving}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={saving}>
+              {t('common.cancel')}
+            </AlertDialogCancel>
             <AlertDialogAction
               variant='destructive'
               disabled={saving}
               onClick={() => void removeSuite()}
             >
-              {saving ? <Spinner /> : null} 删除评测集
+              {saving ? <Spinner /> : null} {t('evaluations.deleteSuite')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -2083,16 +2131,19 @@ export function WorkflowEvaluations({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogHeading>删除评测用例？</AlertDialogHeading>
+            <AlertDialogHeading>
+              {t('evaluations.deleteCaseTitle')}
+            </AlertDialogHeading>
             <AlertDialogBody>
-              将删除“{deleteCase?.name}
-              ”。该用例会从评测集移除，但不会影响已有运行的冻结证据。
+              {t('evaluations.deleteCaseDescription', {
+                name: deleteCase?.name,
+              })}
             </AlertDialogBody>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction onClick={() => void confirmDeleteCase()}>
-              删除用例
+              {t('evaluations.deleteCase')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -2111,10 +2162,12 @@ export function WorkflowEvaluations({
               </div>
               <div className='min-w-0'>
                 <DialogTitle className='text-lg'>
-                  {editingCase ? '编辑评测用例' : '添加评测用例'}
+                  {editingCase
+                    ? t('evaluations.editCase')
+                    : t('evaluations.addCase')}
                 </DialogTitle>
                 <DialogDescription className='mt-1 max-w-xl leading-5'>
-                  为工作流定义可重复运行的输入、预期输出和工具模拟结果。
+                  {t('evaluations.caseDescription')}
                 </DialogDescription>
               </div>
             </div>
@@ -2122,13 +2175,15 @@ export function WorkflowEvaluations({
           <div className='max-h-[min(68vh,620px)] overflow-y-auto px-6 py-6'>
             <FieldGroup className='gap-7'>
               <FieldSet>
-                <FieldLegend>用例详情</FieldLegend>
+                <FieldLegend>{t('evaluations.caseDetails')}</FieldLegend>
                 <FieldDescription>
-                  为这条回归用例添加清晰的名称和说明。
+                  {t('evaluations.caseDetailsDescription')}
                 </FieldDescription>
                 <FieldGroup className='gap-5'>
                   <Field>
-                    <FieldLabel htmlFor='evaluation-case-name'>名称</FieldLabel>
+                    <FieldLabel htmlFor='evaluation-case-name'>
+                      {t('common.name')}
+                    </FieldLabel>
                     <Input
                       id='evaluation-case-name'
                       value={caseName}
@@ -2137,7 +2192,7 @@ export function WorkflowEvaluations({
                   </Field>
                   <Field>
                     <FieldLabel htmlFor='evaluation-case-description'>
-                      说明
+                      {t('common.description')}
                     </FieldLabel>
                     <Textarea
                       id='evaluation-case-description'
@@ -2152,14 +2207,14 @@ export function WorkflowEvaluations({
               </FieldSet>
 
               <FieldSet className='bg-muted/20 rounded-xl border p-4 sm:p-5'>
-                <FieldLegend>工作流输入</FieldLegend>
+                <FieldLegend>{t('evaluations.workflowInput')}</FieldLegend>
                 <FieldDescription>
-                  输入会作为本次评测的初始工作流 State。
+                  {t('evaluations.workflowInputDescription')}
                 </FieldDescription>
                 <FieldGroup className='gap-5'>
                   <Field>
                     <FieldLabel htmlFor='evaluation-case-input'>
-                      输入 JSON
+                      {t('evaluations.inputJson')}
                     </FieldLabel>
                     <Textarea
                       id='evaluation-case-input'
@@ -2174,9 +2229,9 @@ export function WorkflowEvaluations({
               <FieldSet className='rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 sm:p-5'>
                 <div className='flex items-start justify-between gap-3'>
                   <div>
-                    <FieldLegend>验证规则</FieldLegend>
+                    <FieldLegend>{t('evaluations.assertionRules')}</FieldLegend>
                     <FieldDescription>
-                      每条规则独立判定；全部通过后用例才通过。
+                      {t('evaluations.assertionRulesDescription')}
                     </FieldDescription>
                   </div>
                   <Button
@@ -2196,7 +2251,7 @@ export function WorkflowEvaluations({
                       ])
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> 添加规则
+                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addRule')}
                   </Button>
                 </div>
                 <FieldGroup className='mt-4 gap-3'>
@@ -2207,13 +2262,15 @@ export function WorkflowEvaluations({
                     >
                       <div className='mb-3 flex items-center justify-between'>
                         <span className='text-sm font-medium'>
-                          规则 {index + 1}
+                          {t('evaluations.rule', { index: index + 1 })}
                         </span>
                         <Button
                           type='button'
                           variant='ghost'
                           size='icon-sm'
-                          aria-label={`删除规则 ${index + 1}`}
+                          aria-label={t('evaluations.deleteRule', {
+                            index: index + 1,
+                          })}
                           onClick={() =>
                             setAssertionDrafts((current) =>
                               current.filter(
@@ -2227,12 +2284,12 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>验证对象</FieldLabel>
+                          <FieldLabel>{t('evaluations.assertionTarget')}</FieldLabel>
                           <Select
                             value={assertion.subject}
                             items={[
-                              { value: 'final_json', label: '最终输出字段' },
-                              { value: 'final_text', label: '最终输出文本' },
+                              { value: 'final_json', label: t('evaluations.finalOutputField') },
+                              { value: 'final_text', label: t('evaluations.finalOutputText') },
                             ]}
                             onValueChange={(value) =>
                               setAssertionDrafts((current) =>
@@ -2255,10 +2312,10 @@ export function WorkflowEvaluations({
                             <SelectContent>
                               <SelectGroup>
                                 <SelectItem value='final_json'>
-                                  最终输出字段
+                                  {t('evaluations.finalOutputField')}
                                 </SelectItem>
                                 <SelectItem value='final_text'>
-                                  最终输出文本
+                                  {t('evaluations.finalOutputText')}
                                 </SelectItem>
                               </SelectGroup>
                             </SelectContent>
@@ -2266,7 +2323,7 @@ export function WorkflowEvaluations({
                         </Field>
                         {assertion.subject === 'final_json' ? (
                           <Field>
-                            <FieldLabel>字段路径</FieldLabel>
+                            <FieldLabel>{t('evaluations.fieldPath')}</FieldLabel>
                             <Input
                               value={assertion.path}
                               placeholder='$.decision'
@@ -2283,24 +2340,24 @@ export function WorkflowEvaluations({
                           </Field>
                         ) : null}
                         <Field>
-                          <FieldLabel>判断方式</FieldLabel>
+                          <FieldLabel>{t('evaluations.operator')}</FieldLabel>
                           <Select
                             value={assertion.operator}
                             items={
                               assertion.subject === 'final_json'
                                 ? [
-                                    { value: 'equals', label: '等于' },
-                                    { value: 'not_equals', label: '不等于' },
-                                    { value: 'contains', label: '包含' },
-                                    { value: 'not_contains', label: '不包含' },
-                                    { value: 'exists', label: '字段存在' },
+                                    { value: 'equals', label: t('evaluations.equals') },
+                                    { value: 'not_equals', label: t('evaluations.notEquals') },
+                                    { value: 'contains', label: t('evaluations.contains') },
+                                    { value: 'not_contains', label: t('evaluations.notContains') },
+                                    { value: 'exists', label: t('evaluations.fieldExists') },
                                   ]
                                 : [
-                                    { value: 'exact', label: '精确匹配' },
-                                    { value: 'contains', label: '包含文本' },
+                                    { value: 'exact', label: t('evaluations.exactMatch') },
+                                    { value: 'contains', label: t('evaluations.containsText') },
                                     {
                                       value: 'levenshtein',
-                                      label: '文本相似度',
+                                      label: t('evaluations.textSimilarity'),
                                     },
                                   ]
                             }
@@ -2324,30 +2381,30 @@ export function WorkflowEvaluations({
                               <SelectGroup>
                                 {assertion.subject === 'final_json' ? (
                                   <>
-                                    <SelectItem value='equals'>等于</SelectItem>
+                                    <SelectItem value='equals'>{t('evaluations.equals')}</SelectItem>
                                     <SelectItem value='not_equals'>
-                                      不等于
+                                      {t('evaluations.notEquals')}
                                     </SelectItem>
                                     <SelectItem value='contains'>
-                                      包含
+                                      {t('evaluations.contains')}
                                     </SelectItem>
                                     <SelectItem value='not_contains'>
-                                      不包含
+                                      {t('evaluations.notContains')}
                                     </SelectItem>
                                     <SelectItem value='exists'>
-                                      字段存在
+                                      {t('evaluations.fieldExists')}
                                     </SelectItem>
                                   </>
                                 ) : (
                                   <>
                                     <SelectItem value='exact'>
-                                      精确匹配
+                                      {t('evaluations.exactMatch')}
                                     </SelectItem>
                                     <SelectItem value='contains'>
-                                      包含文本
+                                      {t('evaluations.containsText')}
                                     </SelectItem>
                                     <SelectItem value='levenshtein'>
-                                      文本相似度
+                                      {t('evaluations.textSimilarity')}
                                     </SelectItem>
                                   </>
                                 )}
@@ -2357,13 +2414,13 @@ export function WorkflowEvaluations({
                         </Field>
                         {assertion.operator !== 'exists' ? (
                           <Field>
-                            <FieldLabel>预期值</FieldLabel>
+                            <FieldLabel>{t('evaluations.expectedValue')}</FieldLabel>
                             <Input
                               value={assertion.expected}
                               placeholder={
                                 assertion.subject === 'final_json'
-                                  ? '通过'
-                                  : '预期文本'
+                                  ? t('evaluations.expectedJsonValue')
+                                  : t('evaluations.expectedText')
                               }
                               onChange={(event) =>
                                 setAssertionDrafts((current) =>
@@ -2385,7 +2442,7 @@ export function WorkflowEvaluations({
                   ))}
                   {!assertionDrafts.length ? (
                     <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-5 text-center text-sm'>
-                      添加一条规则来定义这个 Case 如何通过。
+                      {t('evaluations.noAssertionRules')}
                     </p>
                   ) : null}
                 </FieldGroup>
@@ -2394,9 +2451,9 @@ export function WorkflowEvaluations({
               <FieldSet className='rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 sm:p-5'>
                 <div className='flex items-start justify-between gap-3'>
                   <div>
-                    <FieldLegend>安全断言</FieldLegend>
+                    <FieldLegend>{t('evaluations.safetyAssertions')}</FieldLegend>
                     <FieldDescription>
-                      检查最终输出、工具参数或工具结果中不含敏感字段与指定文本。
+                      {t('evaluations.safetyAssertionsDescription')}
                     </FieldDescription>
                   </div>
                   <Button
@@ -2415,7 +2472,7 @@ export function WorkflowEvaluations({
                       ])
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> 添加安全规则
+                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addSafetyRule')}
                   </Button>
                 </div>
                 <FieldGroup className='mt-4 gap-3'>
@@ -2426,13 +2483,15 @@ export function WorkflowEvaluations({
                     >
                       <div className='mb-3 flex items-center justify-between'>
                         <span className='text-sm font-medium'>
-                          安全规则 {index + 1}
+                          {t('evaluations.safetyRule', { index: index + 1 })}
                         </span>
                         <Button
                           type='button'
                           variant='ghost'
                           size='icon-sm'
-                          aria-label={`删除安全规则 ${index + 1}`}
+                          aria-label={t('evaluations.deleteSafetyRule', {
+                            index: index + 1,
+                          })}
                           onClick={() =>
                             setSafetyDrafts((current) =>
                               current.filter((item) => item.id !== rule.id),
@@ -2444,13 +2503,13 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>检查目标</FieldLabel>
+                          <FieldLabel>{t('evaluations.checkTarget')}</FieldLabel>
                           <Select
                             value={rule.target}
                             items={[
-                              { value: 'final_output', label: '最终输出' },
-                              { value: 'tool_arguments', label: '工具参数' },
-                              { value: 'tool_results', label: '工具结果' },
+                              { value: 'final_output', label: t('evaluations.finalOutput') },
+                              { value: 'tool_arguments', label: t('evaluations.toolArguments') },
+                              { value: 'tool_results', label: t('evaluations.toolResults') },
                             ]}
                             onValueChange={(value) =>
                               setSafetyDrafts((current) =>
@@ -2468,20 +2527,20 @@ export function WorkflowEvaluations({
                             <SelectContent>
                               <SelectGroup>
                                 <SelectItem value='final_output'>
-                                  最终输出
+                                  {t('evaluations.finalOutput')}
                                 </SelectItem>
                                 <SelectItem value='tool_arguments'>
-                                  工具参数
+                                  {t('evaluations.toolArguments')}
                                 </SelectItem>
                                 <SelectItem value='tool_results'>
-                                  工具结果
+                                  {t('evaluations.toolResults')}
                                 </SelectItem>
                               </SelectGroup>
                             </SelectContent>
                           </Select>
                         </Field>
                         <Field>
-                          <FieldLabel>禁止字段路径（每行一条）</FieldLabel>
+                          <FieldLabel>{t('evaluations.forbiddenFieldPaths')}</FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             placeholder='$.customer.email'
@@ -2501,7 +2560,7 @@ export function WorkflowEvaluations({
                           />
                         </Field>
                         <Field className='sm:col-span-2'>
-                          <FieldLabel>禁止文本（每行一条）</FieldLabel>
+                          <FieldLabel>{t('evaluations.forbiddenText')}</FieldLabel>
                           <Textarea
                             className='min-h-20'
                             placeholder='secret-token'
@@ -2529,10 +2588,9 @@ export function WorkflowEvaluations({
               <FieldSet className='rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 sm:p-5'>
                 <div className='flex items-start justify-between gap-3'>
                   <div>
-                    <FieldLegend>工具轨迹断言</FieldLegend>
+                    <FieldLegend>{t('evaluations.toolTrajectory')}</FieldLegend>
                     <FieldDescription>
-                      要求 Agent 调用指定工具；可校验参数、顺序和 fixture
-                      返回值，防止未经工具调用直接给出结论。
+                      {t('evaluations.toolTrajectoryDescription')}
                     </FieldDescription>
                   </div>
                   <Button
@@ -2546,7 +2604,7 @@ export function WorkflowEvaluations({
                       }))
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> 添加调用
+                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addCall')}
                   </Button>
                 </div>
                 <FieldGroup className='mt-4 gap-3'>
@@ -2563,7 +2621,7 @@ export function WorkflowEvaluations({
                         }
                       />
                       <Label htmlFor='evaluation-tool-strict-order'>
-                        严格调用顺序
+                        {t('evaluations.strictOrder')}
                       </Label>
                     </Field>
                     <Field orientation='horizontal'>
@@ -2578,7 +2636,7 @@ export function WorkflowEvaluations({
                         }
                       />
                       <Label htmlFor='evaluation-tool-strict-args'>
-                        参数完全匹配
+                        {t('evaluations.strictArgs')}
                       </Label>
                     </Field>
                   </div>
@@ -2589,13 +2647,15 @@ export function WorkflowEvaluations({
                     >
                       <div className='mb-3 flex items-center justify-between'>
                         <span className='text-sm font-medium'>
-                          预期调用 {index + 1}
+                          {t('evaluations.expectedCall', { index: index + 1 })}
                         </span>
                         <Button
                           type='button'
                           variant='ghost'
                           size='icon-sm'
-                          aria-label={`删除预期调用 ${index + 1}`}
+                          aria-label={t('evaluations.deleteExpectedCall', {
+                            index: index + 1,
+                          })}
                           onClick={() =>
                             setToolTrajectory((current) => ({
                               ...current,
@@ -2610,7 +2670,7 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>工具</FieldLabel>
+                          <FieldLabel>{t('evaluations.tool')}</FieldLabel>
                           <Select
                             value={call.name}
                             onValueChange={(value) =>
@@ -2625,7 +2685,7 @@ export function WorkflowEvaluations({
                             }
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder='选择当前 Workflow 的工具'>
+                              <SelectValue placeholder={t('evaluations.selectWorkflowTool')}>
                                 {call.name
                                   ? selectedToolLabel(
                                       call.name,
@@ -2646,7 +2706,7 @@ export function WorkflowEvaluations({
                           </Select>
                         </Field>
                         <Field>
-                          <FieldLabel>调用次数</FieldLabel>
+                          <FieldLabel>{t('evaluations.callCount')}</FieldLabel>
                           <Input
                             type='number'
                             min={1}
@@ -2670,7 +2730,7 @@ export function WorkflowEvaluations({
                           />
                         </Field>
                         <Field className='sm:col-span-2'>
-                          <FieldLabel>预期参数 JSON</FieldLabel>
+                          <FieldLabel>{t('evaluations.expectedArgs')}</FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             value={call.args}
@@ -2708,12 +2768,12 @@ export function WorkflowEvaluations({
                             }
                           />
                           <Label htmlFor={`evaluation-tool-result-${call.id}`}>
-                            断言工具返回值
+                            {t('evaluations.assertToolResult')}
                           </Label>
                         </Field>
                         {call.assertResult ? (
                           <Field className='sm:col-span-2'>
-                            <FieldLabel>预期 fixture 返回值 JSON</FieldLabel>
+                            <FieldLabel>{t('evaluations.expectedFixtureResult')}</FieldLabel>
                             <Textarea
                               className='min-h-20 font-mono text-xs leading-5'
                               value={call.expectedResult}
@@ -2738,26 +2798,26 @@ export function WorkflowEvaluations({
                   ))}
                   {!toolTrajectory.calls.length ? (
                     <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-5 text-center text-sm'>
-                      添加预期调用以验证 Agent 的工具使用轨迹。
+                      {t('evaluations.noExpectedCalls')}
                     </p>
                   ) : null}
                 </FieldGroup>
               </FieldSet>
 
               <FieldSet className='rounded-xl border border-dashed p-4 sm:p-5'>
-                <FieldLegend>高级断言 JSON 预览</FieldLegend>
+                <FieldLegend>{t('evaluations.advancedAssertions')}</FieldLegend>
                 <FieldDescription>
-                  此 JSON 由上方规则实时生成，用于导出、审查和排查。
+                  {t('evaluations.advancedAssertionsDescription')}
                 </FieldDescription>
                 <Field>
                   <FieldLabel htmlFor='evaluation-case-assertions'>
-                    assertions JSON
+                    {t('evaluations.assertionsJson')}
                   </FieldLabel>
                   <Textarea
                     id='evaluation-case-assertions'
                     className='min-h-36 font-mono text-xs leading-5'
                     placeholder={
-                      '[\n  {\n    "kind": "json_path",\n    "id": "decision-is-approved",\n    "path": "$.decision",\n    "operator": "equals",\n    "expected": "通过"\n  }\n]'
+                      '[\n  {\n    "kind": "json_path",\n    "id": "decision-is-approved",\n    "path": "$.decision",\n    "operator": "equals",\n    "expected": "approved"\n  }\n]'
                     }
                     value={assertionsJson}
                     readOnly
@@ -2766,23 +2826,24 @@ export function WorkflowEvaluations({
               </FieldSet>
 
               <FieldSet>
-                <FieldLegend>工具模拟</FieldLegend>
+                <FieldLegend>{t('evaluations.toolFixtures')}</FieldLegend>
                 <FieldDescription>
-                  fixture 只允许声明 mock 结果；未 mock 的外部工具会被 Test Mode
-                  阻止。
+                  {t('evaluations.toolFixturesDescription')}
                 </FieldDescription>
                 <FieldGroup className='mt-4 gap-3'>
                   {fixtureDrafts.map((fixture, index) => (
                     <div key={fixture.id} className='rounded-lg border p-3'>
                       <div className='mb-3 flex items-center justify-between'>
                         <span className='text-sm font-medium'>
-                          Fixture {index + 1}
+                          {t('evaluations.fixture', { index: index + 1 })}
                         </span>
                         <Button
                           type='button'
                           variant='ghost'
                           size='icon-sm'
-                          aria-label={`删除 fixture ${index + 1}`}
+                          aria-label={t('evaluations.deleteFixture', {
+                            index: index + 1,
+                          })}
                           onClick={() =>
                             setFixtureDrafts((current) =>
                               current.filter((item) => item.id !== fixture.id),
@@ -2794,7 +2855,7 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>工具</FieldLabel>
+                          <FieldLabel>{t('evaluations.tool')}</FieldLabel>
                           <Select
                             value={fixture.tool}
                             onValueChange={(value) =>
@@ -2808,7 +2869,7 @@ export function WorkflowEvaluations({
                             }
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder='选择当前 Workflow 的工具'>
+                              <SelectValue placeholder={t('evaluations.selectWorkflowTool')}>
                                 {fixture.tool
                                   ? selectedToolLabel(
                                       fixture.tool,
@@ -2829,7 +2890,7 @@ export function WorkflowEvaluations({
                           </Select>
                         </Field>
                         <Field>
-                          <FieldLabel>匹配参数 JSON</FieldLabel>
+                          <FieldLabel>{t('evaluations.matchingArgsJson')}</FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             value={fixture.args}
@@ -2845,7 +2906,7 @@ export function WorkflowEvaluations({
                           />
                         </Field>
                         <Field className='sm:col-span-2'>
-                          <FieldLabel>返回值 JSON</FieldLabel>
+                          <FieldLabel>{t('evaluations.fixtureResultJson')}</FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             value={fixture.result}
@@ -2879,7 +2940,7 @@ export function WorkflowEvaluations({
                       ])
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> 添加 fixture
+                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addFixture')}
                   </Button>
                 </FieldGroup>
               </FieldSet>
@@ -2887,7 +2948,7 @@ export function WorkflowEvaluations({
           </div>
           <DialogFooter>
             <Button variant='outline' onClick={() => setCaseDialogOpen(false)}>
-              取消
+              {t('common.cancel')}
             </Button>
             <Button
               disabled={
@@ -2898,7 +2959,7 @@ export function WorkflowEvaluations({
               onClick={() => void saveCase()}
             >
               {saving ? <Spinner /> : null}{' '}
-              {editingCase ? '保存修改' : '保存用例'}
+              {editingCase ? t('evaluations.saveChanges') : t('evaluations.saveCase')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2910,9 +2971,9 @@ export function WorkflowEvaluations({
       >
         <DialogContent className='max-w-2xl! gap-0 overflow-hidden p-0'>
           <DialogHeader className='border-b bg-linear-to-br from-sky-500/10 to-violet-500/10 px-6 py-5'>
-            <DialogTitle>导入评测预览</DialogTitle>
+            <DialogTitle>{t('evaluations.importPreview')}</DialogTitle>
             <DialogDescription>
-              请确认格式与冲突处理方式；确认后才会写入评测集。
+              {t('evaluations.importPreviewDescription')}
             </DialogDescription>
           </DialogHeader>
           {testImport ? (
@@ -2921,7 +2982,7 @@ export function WorkflowEvaluations({
                 <div className='flex flex-wrap items-center justify-between gap-2'>
                   <span className='font-medium'>{testImport.suiteName}</span>
                   <Badge variant='outline'>
-                    {testImport.cases.length} 个 Case
+                    {t('evaluations.caseCount', { count: testImport.cases.length })}
                   </Badge>
                 </div>
                 {testImport.suiteDescription ? (
@@ -2941,7 +3002,7 @@ export function WorkflowEvaluations({
                 (item) => item.name === testImport.suiteName,
               ) ? (
                 <Field>
-                  <FieldLabel>同名评测集</FieldLabel>
+                  <FieldLabel>{t('evaluations.sameNameSuite')}</FieldLabel>
                   <Select
                     value={suiteImportStrategy}
                     onValueChange={(value) =>
@@ -2954,17 +3015,17 @@ export function WorkflowEvaluations({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value='create'>新建独立评测集</SelectItem>
+                      <SelectItem value='create'>{t('evaluations.importSuiteCreate')}</SelectItem>
                       <SelectItem value='overwrite'>
-                        覆盖评测集说明并导入 Case
+                        {t('evaluations.importSuiteOverwrite')}
                       </SelectItem>
-                      <SelectItem value='skip'>跳过整个导入</SelectItem>
+                      <SelectItem value='skip'>{t('evaluations.importSkip')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </Field>
               ) : null}
               <Field>
-                <FieldLabel>同名 Case</FieldLabel>
+                <FieldLabel>{t('evaluations.sameNameCase')}</FieldLabel>
                 <Select
                   value={caseImportStrategy}
                   onValueChange={(value) =>
@@ -2977,16 +3038,16 @@ export function WorkflowEvaluations({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='create'>新建并保留现有 Case</SelectItem>
+                    <SelectItem value='create'>{t('evaluations.importCaseCreate')}</SelectItem>
                     <SelectItem value='overwrite'>
-                      覆盖现有 Case 配置
+                      {t('evaluations.importCaseOverwrite')}
                     </SelectItem>
-                    <SelectItem value='skip'>跳过同名 Case</SelectItem>
+                    <SelectItem value='skip'>{t('evaluations.importCaseSkip')}</SelectItem>
                   </SelectContent>
                 </Select>
               </Field>
               <div className='space-y-2'>
-                <p className='text-sm font-medium'>Case 校验</p>
+                <p className='text-sm font-medium'>{t('evaluations.caseValidation')}</p>
                 {testImport.cases.map((item) => (
                   <div
                     key={item.index}
@@ -2995,7 +3056,9 @@ export function WorkflowEvaluations({
                     <div className='flex items-center justify-between gap-3'>
                       <span className='truncate font-medium'>{item.name}</span>
                       <Badge variant='outline'>
-                        {item.errors.length ? '无效' : '有效'}
+                        {item.errors.length
+                          ? t('evaluations.invalid')
+                          : t('evaluations.valid')}
                       </Badge>
                     </div>
                     {item.errors.map((error) => (
@@ -3014,7 +3077,7 @@ export function WorkflowEvaluations({
               disabled={importing}
               onClick={() => setTestImport(undefined)}
             >
-              取消
+              {t('common.cancel')}
             </Button>
             <Button
               disabled={
@@ -3026,7 +3089,7 @@ export function WorkflowEvaluations({
               onClick={() => void confirmTestImport()}
             >
               {importing ? <Spinner data-icon='inline-start' /> : null}
-              确认导入
+              {t('evaluations.confirmImport')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3047,10 +3110,10 @@ export function WorkflowEvaluations({
                 <DialogTitle className='text-lg'>
                   {cases.data?.find(
                     (item) => item.id === selectedResult?.evaluationCaseId,
-                  )?.name ?? '评测结果'}
+                  )?.name ?? t('evaluations.evaluationResult')}
                 </DialogTitle>
                 <DialogDescription className='mt-1 max-w-xl leading-5'>
-                  此结果来自冻结的 Case 与 Workflow 快照。
+                  {t('evaluations.resultSnapshotDescription')}
                 </DialogDescription>
               </div>
             </div>
@@ -3061,12 +3124,12 @@ export function WorkflowEvaluations({
                 <div className='rounded-xl border border-violet-500/20 bg-violet-500/5 p-4'>
                   <div className='mb-3 flex items-center gap-2'>
                     <ResultIcon verdict={selectedResult.verdict} />
-                    <span className='text-sm font-medium'>本次评测摘要</span>
+                    <span className='text-sm font-medium'>{t('evaluations.resultSummary')}</span>
                   </div>
                   <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
-                    <ResultMetric label='结果' value={selectedResult.verdict} />
+                    <ResultMetric label={t('evaluations.result')} value={selectedResult.verdict} />
                     <ResultMetric
-                      label='得分'
+                      label={t('evaluations.score')}
                       value={
                         selectedResult.score !== null &&
                         selectedResult.score !== undefined
@@ -3075,11 +3138,11 @@ export function WorkflowEvaluations({
                       }
                     />
                     <ResultMetric
-                      label='耗时'
+                      label={t('evaluations.duration')}
                       value={formatDuration(selectedResult.durationMs)}
                     />
                     <ResultMetric
-                      label='成本'
+                      label={t('evaluations.cost')}
                       value={formatCost(selectedResult.estimatedCostMicrousd)}
                     />
                   </div>
@@ -3090,16 +3153,16 @@ export function WorkflowEvaluations({
                   </div>
                 ) : null}
                 <FieldSet className='rounded-xl border p-4 sm:p-5'>
-                  <FieldLegend>实际输出</FieldLegend>
+                  <FieldLegend>{t('evaluations.actualOutput')}</FieldLegend>
                   <FieldDescription>
-                    冻结运行中 Agent 最终产生的输出。
+                    {t('evaluations.actualOutputDescription')}
                   </FieldDescription>
                   <ResultValue value={selectedResult.actualOutput} />
                 </FieldSet>
                 <FieldSet className='rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 sm:p-5'>
-                  <FieldLegend>断言判定</FieldLegend>
+                  <FieldLegend>{t('evaluations.assertionVerdict')}</FieldLegend>
                   <FieldDescription>
-                    每条规则独立评分；所有规则通过，Case 才会通过。
+                    {t('evaluations.assertionVerdictDescription')}
                   </FieldDescription>
                   <ResultCriteria
                     value={selectedResult.criteriaResults}
@@ -3111,9 +3174,9 @@ export function WorkflowEvaluations({
                   />
                 </FieldSet>
                 <FieldSet className='rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 sm:p-5'>
-                  <FieldLegend>工具轨迹</FieldLegend>
+                  <FieldLegend>{t('evaluations.toolTrajectory')}</FieldLegend>
                   <FieldDescription>
-                    工具轨迹断言与实际调用证据（已脱敏）。
+                    {t('evaluations.traceDescription')}
                   </FieldDescription>
                   <ResultTrace
                     value={selectedResult.normalizedTrace}
@@ -3125,15 +3188,15 @@ export function WorkflowEvaluations({
                 {/* Keep raw evidence available for debugging without making it the primary reading path. */}
                 <details className='rounded-lg border px-3 py-2 text-xs'>
                   <summary className='cursor-pointer font-medium'>
-                    查看原始评测证据
+                    {t('evaluations.viewRawEvidence')}
                   </summary>
                   <div className='mt-3 flex flex-col gap-3'>
                     <ResultJson
-                      title='评分明细 JSON'
+                      title={t('evaluations.criteriaJson')}
                       value={selectedResult.criteriaResults}
                     />
                     <ResultJson
-                      title='工具轨迹 JSON'
+                      title={t('evaluations.traceJson')}
                       value={selectedResult.normalizedTrace}
                     />
                   </div>
@@ -3146,7 +3209,7 @@ export function WorkflowEvaluations({
               variant='outline'
               onClick={() => setSelectedResult(undefined)}
             >
-              关闭
+              {t('common.close')}
             </Button>
             {selectedResult?.workflowRunId ? (
               <Button
@@ -3155,7 +3218,7 @@ export function WorkflowEvaluations({
                   setSelectedResult(undefined);
                 }}
               >
-                查看运行输出
+                {t('evaluations.viewRunOutput')}
               </Button>
             ) : null}
           </DialogFooter>
@@ -3203,6 +3266,7 @@ function ResultCriteria({
   value: unknown;
   expectation?: unknown;
 }) {
+  const { t } = useTranslation();
   const criteria = Array.isArray(value)
     ? (value as Array<Record<string, unknown>>)
     : [];
@@ -3219,25 +3283,25 @@ function ResultCriteria({
               <span
                 className={passed ? 'text-emerald-600' : 'text-destructive'}
               >
-                {passed ? '通过' : '失败'}
+                {passed ? t('evaluations.passed') : t('evaluations.failed')}
               </span>
               <span className='min-w-0 flex-1 truncate text-sm font-medium'>
-                {criterionLabel(item, expectation)}
+                {criterionLabel(item, expectation, t)}
               </span>
               <span className='text-muted-foreground text-xs'>
                 {Math.round(Number(item.score ?? 0) * 100)}%
               </span>
             </div>
             <div className='text-muted-foreground mt-2 grid gap-1 text-xs'>
-              <span>预期：{renderEvidence(item.expected)}</span>
-              <span>实际：{renderEvidence(item.actual)}</span>
+              <span>{t('evaluations.expected')}: {renderEvidence(item.expected)}</span>
+              <span>{t('evaluations.actual')}: {renderEvidence(item.actual)}</span>
             </div>
           </div>
         );
       })}
       {!criteria.length ? (
         <p className='text-muted-foreground text-sm'>
-          此运行没有可用的断言评分明细。
+          {t('evaluations.noCriteriaResults')}
         </p>
       ) : null}
     </div>
@@ -3251,6 +3315,7 @@ function ResultTrace({
   value: unknown;
   configured: boolean;
 }) {
+  const { t } = useTranslation();
   const trace = value as { toolUses?: unknown[] } | undefined;
   const tools = Array.isArray(trace?.toolUses) ? trace.toolUses : [];
   return (
@@ -3269,8 +3334,8 @@ function ResultTrace({
       ) : (
         <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm'>
           {configured
-            ? '已配置工具轨迹断言，但本次运行没有工具调用。'
-            : '未配置工具轨迹断言。'}
+            ? t('evaluations.noToolCallsConfigured')
+            : t('evaluations.noToolTrajectoryConfigured')}
         </p>
       )}
     </div>
@@ -3298,6 +3363,7 @@ function renderEvidence(value: unknown) {
 function criterionLabel(
   criterion: Record<string, unknown>,
   expectation?: unknown,
+  t?: (key: string, options?: Record<string, unknown>) => string,
 ) {
   const id = String(criterion.criterion ?? '');
   if (id.startsWith('jsonPath:')) {
@@ -3314,15 +3380,15 @@ function criterionLabel(
           ?.path
       : undefined;
     return typeof path === 'string'
-      ? `输出字段 ${path}`
+      ? t?.('evaluations.outputField', { path }) ?? `Output field ${path}`
       : typeof legacyPath === 'string'
-        ? `输出字段 ${legacyPath}`
-        : '输出字段断言';
+        ? t?.('evaluations.outputField', { path: legacyPath }) ?? `Output field ${legacyPath}`
+        : t?.('evaluations.outputFieldAssertion') ?? 'Output field assertion';
   }
-  if (id.startsWith('text:')) return '最终输出文本';
-  if (id.startsWith('toolTrajectory:')) return '工具轨迹';
-  if (id.startsWith('safety:')) return '安全断言';
-  return '断言';
+  if (id.startsWith('text:')) return t?.('evaluations.finalOutputText') ?? 'Final output text';
+  if (id.startsWith('toolTrajectory:')) return t?.('evaluations.toolTrajectory') ?? 'Tool trajectory';
+  if (id.startsWith('safety:')) return t?.('evaluations.safetyAssertions') ?? 'Safety assertion';
+  return t?.('evaluations.assertion') ?? 'Assertion';
 }
 
 function formatNumber(value?: number | null) {
@@ -3349,16 +3415,11 @@ function versionPassRate(version: EvaluationVersionSummary) {
     : 0;
 }
 
-function versionDiffLabel(diff: EvaluationVersionCaseDiff) {
-  return (
-    {
-      added: '新增 Case',
-      removed: '仅基线存在',
-      regressed: '新增失败',
-      fixed: '已修复',
-      persistent_failure: '持续失败',
-    } as const
-  )[diff.kind];
+function versionDiffLabel(
+  diff: EvaluationVersionCaseDiff,
+  t: (key: string) => string,
+) {
+  return t(`evaluations.versionDiff.${diff.kind}`);
 }
 
 function EvaluationTrends({
@@ -3368,6 +3429,7 @@ function EvaluationTrends({
   runs: EvaluationRunDetail[];
   versions: EvaluationVersionSummary[];
 }) {
+  const { t } = useTranslation();
   const completed = runs.filter((run) => run.status === 'completed');
   if (!completed.length) return null;
   const average = (values: number[]) =>
@@ -3388,31 +3450,33 @@ function EvaluationTrends({
       <div className='mb-3 flex items-center justify-between'>
         <div>
           <div className='text-muted-foreground text-[10px] font-semibold tracking-[0.16em] uppercase'>
-            质量趋势
+            {t('evaluations.qualityTrends')}
           </div>
           <p className='text-muted-foreground mt-0.5 text-xs'>
-            最近 {completed.length} 次已完成运行
+            {t('evaluations.completedRuns', { count: completed.length })}
           </p>
         </div>
         <Badge variant='outline' className='text-[10px]'>
-          {failedRuns ? `${failedRuns} 次失败` : '稳定'}
+          {failedRuns
+            ? t('evaluations.failedRuns', { count: failedRuns })
+            : t('evaluations.stable')}
         </Badge>
       </div>
       <div className='grid grid-cols-3 gap-2'>
         <TrendMetric
-          label='平均通过率'
+          label={t('evaluations.averagePassRate')}
           value={`${Math.round(average(passRates))}%`}
         />
-        <TrendMetric label='平均成本' value={formatCost(averageCost)} />
-        <TrendMetric label='平均耗时' value={formatDuration(averageDuration)} />
+        <TrendMetric label={t('evaluations.averageCost')} value={formatCost(averageCost)} />
+        <TrendMetric label={t('evaluations.averageDuration')} value={formatDuration(averageDuration)} />
       </div>
       <div className='bg-background/60 mt-3 rounded-lg border p-3'>
         <div className='text-muted-foreground mb-2 text-[10px] font-medium'>
-          通过率走势
+          {t('evaluations.passRateTrend')}
         </div>
         <div
           className='flex h-16 items-end gap-1'
-          aria-label='近期运行通过率走势'
+          aria-label={t('evaluations.passRateTrendAria')}
         >
           {completed
             .slice(0, 16)
@@ -3442,14 +3506,14 @@ function EvaluationTrends({
             })}
         </div>
         <div className='text-muted-foreground mt-1 flex justify-between text-[10px]'>
-          <span>较早</span>
-          <span>最新</span>
+          <span>{t('evaluations.earlier')}</span>
+          <span>{t('evaluations.latest')}</span>
         </div>
       </div>
       {versions.length > 1 ? (
         <div className='mt-3 space-y-1.5'>
           <div className='text-muted-foreground text-[10px] font-medium'>
-            版本表现
+            {t('evaluations.versionPerformance')}
           </div>
           {versions.slice(0, 4).map((version) => (
             <div
