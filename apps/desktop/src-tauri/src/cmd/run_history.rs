@@ -2,7 +2,7 @@ use crate::{
     cmd::{CmdResult, StringifyErr},
     module::run_history::{
         AppendRunEvents, CreatePendingAction, CreateRunRecord, FinalizeRunRecord, PendingAction, RunHistoryPage,
-        RunHistoryQuery, RunHistoryStore, RunRecord, RunRecordSummary,
+        RunHistoryQuery, RunHistoryStore, RunObservability, RunObservabilityQuery, RunRecord, RunRecordSummary,
     },
 };
 
@@ -39,6 +39,11 @@ pub async fn run_history_inspect(id: String) -> CmdResult<RunRecord> {
 #[tauri::command]
 pub async fn run_history_list_active() -> CmdResult<Vec<RunRecordSummary>> {
     RunHistoryStore::list_active().await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn run_history_observability(query: RunObservabilityQuery) -> CmdResult<RunObservability> {
+    RunHistoryStore::observability(query).await.stringify_err()
 }
 
 #[tauri::command]

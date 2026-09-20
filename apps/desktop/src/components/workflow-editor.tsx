@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useQueryClient,
@@ -13,6 +14,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
   Button,
+  Checkbox,
   Field,
   FieldGroup,
   FieldLabel,
@@ -34,6 +36,7 @@ import {
 } from '@workspace/ui/components';
 import {
   ArrowLeftIcon,
+  BeakerIcon,
   HistoryIcon,
   SaveIcon,
   Settings2Icon,
@@ -46,6 +49,7 @@ import { toast } from 'sonner';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
+import { WorkflowEvaluations } from '@/components/workflow-evaluations';
 import { WorkflowHistory } from '@/components/workflow-history';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
@@ -53,6 +57,13 @@ import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
 import {
+  getEvaluationQualityGate,
+  latestEvaluationRunsForWorkflowSnapshot,
+  listEvaluationQualityGateAudits,
+  recordEvaluationQualityGateOverride,
+} from '@/services/evaluation';
+import {
+  getWorkflowObservability,
   inspectRunRecord,
   listRunHistoryPage,
   type RunHistoryCursor,
@@ -63,6 +74,7 @@ import {
   createWorkflowDocument,
   publishWorkflow,
   toWorkflowDocument,
+  toWorkflowDsl,
   updateWorkflow,
   type StoredWorkflow,
   type WorkflowDocument,
@@ -86,6 +98,8 @@ type WorkflowEditorProps = {
   autoStartRun?: boolean;
   historicalRun?: RunRecord;
 };
+
+type ObservabilityPeriod = '7d' | '30d' | 'all';
 
 function WorkflowEditor({
   workflow,
@@ -123,12 +137,24 @@ function WorkflowEditorContent({
 }: WorkflowEditorProps) {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [publishOverride, setPublishOverride] = useState(false);
+  const [publishOverrideReason, setPublishOverrideReason] = useState('');
   const [version, setVersion] = useState('1.0.0');
   const [releaseNote, setReleaseNote] = useState('');
   const [isPublishing, setIsPublishing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [evaluationsOpen, setEvaluationsOpen] = useState(false);
+  const [observabilityPeriod, setObservabilityPeriod] =
+    useState<ObservabilityPeriod>('30d');
+  const [observabilityStartedAfter, setObservabilityStartedAfter] = useState(
+    () => periodStart('30d'),
+  );
+  const [observabilityVersion, setObservabilityVersion] = useState('all');
   const [viewingHistoricalRunId, setViewingHistoricalRunId] = useState<
     string | undefined
+  >();
+  const [viewingHistoricalRun, setViewingHistoricalRun] = useState<
+    RunRecord | undefined
   >();
   const [createdWorkflow, setCreatedWorkflow] = useState<
     StoredWorkflow | undefined
@@ -168,6 +194,15 @@ function WorkflowEditorContent({
   const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
   const isDirty = workflowDocumentSnapshot !== savedDocument;
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const evaluationWorkflowSnapshot = activeWorkflow
+    ? {
+        targetName: workflowSettings.name,
+        targetSnapshot: workflowDocument,
+        dsl: toWorkflowDsl(activeWorkflow.id, nodes, edges, workflowSettings),
+        releaseId: activeWorkflow.releaseId,
+        releaseVersion: activeWorkflow.version,
+      }
+    : undefined;
 
   const { data: modelCatalog } = useQuery({
     queryKey: ['modelCatalog'],
@@ -186,8 +221,123 @@ function WorkflowEditorContent({
     getNextPageParam: (page) => page.nextCursor,
     enabled: historyOpen && Boolean(activeWorkflow),
   });
+  const workflowObservability = useQuery({
+    queryKey: [
+      'run-observability',
+      activeWorkflow?.id,
+      observabilityStartedAfter,
+    ],
+    queryFn: () =>
+      getWorkflowObservability({
+        workflowId: activeWorkflow!.id,
+        startedAfter: observabilityStartedAfter,
+      }),
+    enabled: historyOpen && Boolean(activeWorkflow),
+    // Keep the current metrics visible while a changed time range is fetched.
+    placeholderData: keepPreviousData,
+  });
+  const candidateEvaluationRuns = useQuery({
+    queryKey: [
+      'evaluation-workflow-snapshot-runs',
+      activeWorkflow?.id,
+      workflowDocumentSnapshot,
+      activeWorkflow?.releaseId,
+      activeWorkflow?.version,
+    ],
+    queryFn: () =>
+      latestEvaluationRunsForWorkflowSnapshot(
+        activeWorkflow!.id,
+        evaluationWorkflowSnapshot!,
+      ),
+    enabled: Boolean(activeWorkflow && evaluationWorkflowSnapshot),
+  });
+  const qualityGate = useQuery({
+    queryKey: ['evaluation-quality-gate', activeWorkflow?.id],
+    queryFn: () => getEvaluationQualityGate(activeWorkflow!.id),
+    enabled: Boolean(activeWorkflow),
+  });
+  const qualityGateAudits = useQuery({
+    queryKey: ['evaluation-quality-gate-audits', activeWorkflow?.id],
+    queryFn: () => listEvaluationQualityGateAudits(activeWorkflow!.id),
+    enabled: historyOpen && Boolean(activeWorkflow),
+  });
 
   const { t } = useTranslation();
+
+  const latestCandidateEvaluation = candidateEvaluationRuns.data?.[0];
+  const hasQualityGateRules = Boolean(
+    qualityGate.data?.requireEvaluation ||
+    (qualityGate.data?.minPassRate !== null &&
+      qualityGate.data?.minPassRate !== undefined) ||
+    (qualityGate.data?.maxCostMicrousd !== null &&
+      qualityGate.data?.maxCostMicrousd !== undefined) ||
+    (qualityGate.data?.maxDurationMs !== null &&
+      qualityGate.data?.maxDurationMs !== undefined) ||
+    qualityGate.data?.requiredSuiteIds.length,
+  );
+
+  const gateReasons = qualityGate.data
+    ? [
+        ...(hasQualityGateRules && !latestCandidateEvaluation
+          ? [t('workflowEditor.evaluations.gate.noCandidateRun')]
+          : []),
+        ...(latestCandidateEvaluation &&
+        latestCandidateEvaluation.status !== 'completed'
+          ? [t('workflowEditor.evaluations.gate.candidateIncomplete')]
+          : []),
+        ...(qualityGate.data.minPassRate !== null &&
+        qualityGate.data.minPassRate !== undefined &&
+        latestCandidateEvaluation?.status === 'completed' &&
+        latestCandidateEvaluation.totalCases > 0 &&
+        latestCandidateEvaluation.passedCases /
+          latestCandidateEvaluation.totalCases <
+          qualityGate.data.minPassRate
+          ? [t('workflowEditor.evaluations.gate.passRateBelow')]
+          : []),
+        ...(qualityGate.data.maxCostMicrousd !== null &&
+        qualityGate.data.maxCostMicrousd !== undefined &&
+        latestCandidateEvaluation?.status === 'completed' &&
+        (latestCandidateEvaluation.estimatedCostMicrousd ?? 0) >
+          qualityGate.data.maxCostMicrousd
+          ? [t('workflowEditor.evaluations.gate.costExceeded')]
+          : []),
+        ...(qualityGate.data.maxDurationMs !== null &&
+        qualityGate.data.maxDurationMs !== undefined &&
+        latestCandidateEvaluation?.status === 'completed' &&
+        (latestCandidateEvaluation.durationMs ?? 0) >
+          qualityGate.data.maxDurationMs
+          ? [t('workflowEditor.evaluations.gate.durationExceeded')]
+          : []),
+        ...qualityGate.data.requiredSuiteIds
+          .filter((suiteId) => {
+            const run = candidateEvaluationRuns.data?.find(
+              (item) => item.suiteId === suiteId,
+            );
+            return !run || run.status !== 'completed' || run.failedCases > 0;
+          })
+          .map((suiteId) =>
+            t('workflowEditor.evaluations.gate.requiredSuiteFailed', { suiteId }),
+          ),
+      ]
+    : [];
+  const selectedVersionObservability = useQuery({
+    queryKey: [
+      'run-observability',
+      activeWorkflow?.id,
+      observabilityStartedAfter,
+      observabilityVersion,
+    ],
+    queryFn: () =>
+      getWorkflowObservability({
+        workflowId: activeWorkflow!.id,
+        startedAfter: observabilityStartedAfter,
+        releaseVersion: observabilityVersion,
+      }),
+    enabled:
+      historyOpen && Boolean(activeWorkflow) && observabilityVersion !== 'all',
+    // Version changes should update the existing card instead of remounting it.
+    placeholderData: keepPreviousData,
+  });
 
   const runtime = historicalRun?.runtime as Record<string, unknown> | undefined;
   const restoredRun =
@@ -222,6 +372,18 @@ function WorkflowEditorContent({
     activeWorkflow?.version,
     isTeamMode() && !activeWorkflow ? createWorkflowForTeamRun : undefined,
   );
+  const liveRunRecord = useQuery({
+    queryKey: [
+      'run-history-inspect',
+      workflowRun.runId,
+      workflowRun.telemetryRevision,
+    ],
+    queryFn: () => inspectRunRecord(workflowRun.runId!),
+    // Historical output is an immutable snapshot. Only the editor's own run
+    // needs to refetch when the native runtime reports new model usage.
+    enabled:
+      Boolean(workflowRun.runId) && !historicalRun && !viewingHistoricalRunId,
+  });
 
   const restoreHistoricalRun = useWorkflowRunStore(
     useShallow((state) => ({
@@ -271,6 +433,7 @@ function WorkflowEditorContent({
       restoreHistoricalRun.setShowRunOutput(true);
       restoreHistoricalRun.setRunPanelOpen(true);
       setViewingHistoricalRunId(id);
+      setViewingHistoricalRun(record);
     } catch (error) {
       toast.error(t('workflowEditor.history.loadOutputFailed'), {
         toasterId: 'global',
@@ -355,6 +518,20 @@ function WorkflowEditorContent({
         version.trim(),
         releaseNote.trim(),
       );
+      if (gateReasons.length && qualityGate.data) {
+        void recordEvaluationQualityGateOverride({
+          workflowId: activeWorkflow.id,
+          releaseVersion: release.version,
+          reason: publishOverrideReason.trim(),
+          gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
+          evaluationSnapshot: candidateEvaluationRuns.data ?? [],
+        }).catch((error) =>
+          toast.error(t('workflowEditor.evaluations.gate.auditRecordFailed'), {
+            toasterId: 'global',
+            description: String(error),
+          }),
+        );
+      }
       setPublishOpen(false);
       setReleaseNote('');
       void queryClient.invalidateQueries({ queryKey: ['workflows'] });
@@ -389,7 +566,13 @@ function WorkflowEditorContent({
         // safe to run. All editing controls remain governed by readOnly.
         canRun={!readOnly || allowRun}
         canvasContent={
-          historyOpen && activeWorkflow ? (
+          evaluationsOpen && activeWorkflow ? (
+            <WorkflowEvaluations
+              workflowId={activeWorkflow.id}
+              workflowSnapshot={evaluationWorkflowSnapshot!}
+              onViewWorkflowRun={(runId) => void openHistoricalRun(runId)}
+            />
+          ) : historyOpen && activeWorkflow ? (
             <WorkflowHistory
               runs={
                 workflowHistory.data?.pages.flatMap((page) => page.items) ?? []
@@ -397,6 +580,24 @@ function WorkflowEditorContent({
               isLoading={workflowHistory.isLoading}
               hasMore={workflowHistory.hasNextPage}
               isLoadingMore={workflowHistory.isFetchingNextPage}
+              observability={workflowObservability.data}
+              qualityGateAudits={qualityGateAudits.data ?? []}
+              scopedObservability={selectedVersionObservability.data}
+              isObservabilityLoading={
+                observabilityVersion === 'all'
+                  ? workflowObservability.isLoading
+                  : selectedVersionObservability.isLoading
+              }
+              period={observabilityPeriod}
+              onPeriodChange={(period) => {
+                // Freeze the range boundary on selection. Regenerating it during
+                // render changes React Query's key and causes repeated refetches.
+                setObservabilityPeriod(period);
+                setObservabilityStartedAfter(periodStart(period));
+                setObservabilityVersion('all');
+              }}
+              selectedVersion={observabilityVersion}
+              onSelectedVersionChange={setObservabilityVersion}
               onLoadMore={() => void workflowHistory.fetchNextPage()}
               onView={(id) => void openHistoricalRun(id)}
             />
@@ -465,8 +666,17 @@ function WorkflowEditorContent({
                 </Field>
               </FieldGroup>
               <Tabs
-                value={historyOpen ? 'history' : 'canvas'}
-                onValueChange={(value) => setHistoryOpen(value === 'history')}
+                value={
+                  evaluationsOpen
+                    ? 'evaluations'
+                    : historyOpen
+                      ? 'history'
+                      : 'canvas'
+                }
+                onValueChange={(value) => {
+                  setHistoryOpen(value === 'history');
+                  setEvaluationsOpen(value === 'evaluations');
+                }}
               >
                 <TabsList aria-label={t('workflowEditor.view')}>
                   <TabsTrigger value='canvas'>
@@ -475,6 +685,10 @@ function WorkflowEditorContent({
                   <TabsTrigger value='history' disabled={!activeWorkflow}>
                     <HistoryIcon data-icon='inline-start' />
                     {t('workflowEditor.history.title')}
+                  </TabsTrigger>
+                  <TabsTrigger value='evaluations' disabled={!activeWorkflow}>
+                    <BeakerIcon data-icon='inline-start' />
+                    {t('workflowEditor.evaluations.title')}
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -508,6 +722,8 @@ function WorkflowEditorContent({
                   size='sm'
                   onClick={() => {
                     setReleaseNote(t('workflowEditor.releaseNoteDefault'));
+                    setPublishOverride(false);
+                    setPublishOverrideReason('');
                     setPublishOpen(true);
                   }}
                 >
@@ -557,6 +773,11 @@ function WorkflowEditorContent({
             onResume={workflowRun.resumeWorkflowRun}
             onRetryFailed={workflowRun.retryFailedWorkflowRun}
             readOnly={Boolean(historicalRun || viewingHistoricalRunId)}
+            spans={
+              historicalRun?.spans ??
+              viewingHistoricalRun?.spans ??
+              liveRunRecord.data?.spans
+            }
             onHistoricalClose={() => {
               if (historicalRun) {
                 // This store outlives the history page. Reset it before returning
@@ -566,6 +787,7 @@ function WorkflowEditorContent({
                 void navigate(-1);
               } else {
                 setViewingHistoricalRunId(undefined);
+                setViewingHistoricalRun(undefined);
                 restoreHistoricalRun.setRunPanelOpen(false);
               }
             }}
@@ -591,6 +813,49 @@ function WorkflowEditorContent({
             </div>
 
             <div className='px-5 py-5 sm:px-6'>
+              <div
+                className={`mb-4 rounded-lg border p-3 text-sm ${latestCandidateEvaluation && latestCandidateEvaluation.failedCases === 0 && latestCandidateEvaluation.status === 'completed' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300' : 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300'}`}
+              >
+                {gateReasons.length
+                  ? t('workflowEditor.evaluations.gate.failed', {
+                      reasons: gateReasons.join('、'),
+                    })
+                  : hasQualityGateRules && latestCandidateEvaluation
+                    ? t('workflowEditor.evaluations.gate.passed', {
+                        passed: latestCandidateEvaluation.passedCases,
+                        total: latestCandidateEvaluation.totalCases,
+                      })
+                    : t('workflowEditor.evaluations.gate.notConfigured')}
+              </div>
+              {gateReasons.length ? (
+                <Field orientation='horizontal' className='mb-4'>
+                  <Checkbox
+                    id='publish-quality-override'
+                    checked={publishOverride}
+                    onCheckedChange={(checked) =>
+                      setPublishOverride(checked === true)
+                    }
+                  />
+                  <FieldLabel htmlFor='publish-quality-override'>
+                    {t('workflowEditor.evaluations.gate.confirmOverride')}
+                  </FieldLabel>
+                </Field>
+              ) : null}
+              {gateReasons.length ? (
+                <Field className='mb-4'>
+                  <FieldLabel htmlFor='publish-quality-override-reason'>
+                    {t('workflowEditor.evaluations.gate.overrideReason')}
+                  </FieldLabel>
+                  <Textarea
+                    id='publish-quality-override-reason'
+                    value={publishOverrideReason}
+                    onChange={(event) =>
+                      setPublishOverrideReason(event.target.value)
+                    }
+                    placeholder={t('workflowEditor.evaluations.gate.overrideReasonPlaceholder')}
+                  />
+                </Field>
+              ) : null}
               <FieldGroup className='gap-4'>
                 <Field>
                   <FieldLabel htmlFor='workflow-release-version'>
@@ -626,7 +891,11 @@ function WorkflowEditorContent({
               </AlertDialogCancel>
               <Button
                 disabled={
-                  isPublishing || !version.trim() || !releaseNote.trim()
+                  isPublishing ||
+                  !version.trim() ||
+                  !releaseNote.trim() ||
+                  (gateReasons.length > 0 && !publishOverride) ||
+                  (gateReasons.length > 0 && !publishOverrideReason.trim())
                 }
                 onClick={() => void publishCurrentWorkflow()}
               >
@@ -639,6 +908,12 @@ function WorkflowEditorContent({
       </WorkflowCanvas>
     </SidebarProvider>
   );
+}
+
+function periodStart(period: ObservabilityPeriod) {
+  if (period === 'all') return undefined;
+  const days = period === '7d' ? 7 : 30;
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1_000).toISOString();
 }
 
 function isExecutableNode(type: string | undefined) {

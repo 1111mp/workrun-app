@@ -54,6 +54,16 @@ mod tests {
 
         assert_eq!(failed_node.as_deref(), Some("send-report"));
     }
+
+    #[test]
+    fn extracts_a_custom_workflow_event_type() {
+        let event = json!({
+            "type": "custom",
+            "event_type": "agent.model_call",
+        });
+
+        assert_eq!(workflow_event_type(&event), Some("agent.model_call"));
+    }
 }
 
 pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<bool> {
@@ -97,6 +107,11 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
             },
         )
         .await?;
+        if let Err(error) = project_telemetry_span(&run_id, &event).await {
+            // Telemetry is a derived projection. A damaged projection must not
+            // turn an otherwise durable workflow event into a failed run.
+            log::warn!("failed to project workflow telemetry for run {run_id}: {error:#}");
+        }
         emit_on_main_thread(
             "run-event",
             RunEventEnvelope {
@@ -108,6 +123,223 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
         sequence += 1;
     }
     Ok(has_pending_action)
+}
+
+async fn project_telemetry_span(run_id: &str, event: &Value) -> Result<()> {
+    let Some(event_type) = workflow_event_type(event) else {
+        return Ok(());
+    };
+    let Some(node_id) = event.get("node").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if matches!(event_type, "agent.tool_call" | "agent.tool_result" | "agent.tool_error") {
+        return project_tool_span(run_id, node_id, event_type, event.get("data")).await;
+    }
+    if event_type == "agent.model_call" {
+        return project_model_span(run_id, node_id, event.get("data")).await;
+    }
+    let step = event.get("step").and_then(Value::as_i64).unwrap_or_default();
+    let span_id = format!("{run_id}:workflow-node:{node_id}:{step}");
+    let attributes = json!({ "step": step });
+    match event_type {
+        "node_start" => {
+            RunHistoryStore::create_span(CreateRunSpan {
+                id: span_id,
+                run_id: run_id.to_string(),
+                parent_span_id: None,
+                kind: TelemetrySpanKind::WorkflowNode,
+                status: TelemetrySpanStatus::Running,
+                node_id: Some(node_id.to_string()),
+                node_name: None,
+                provider: None,
+                model: None,
+                tool_name: None,
+                started_at: chrono::Utc::now().to_rfc3339(),
+                attributes,
+            })
+            .await
+        },
+        "node_end" => {
+            let duration_ms = event.get("duration_ms").and_then(Value::as_i64).unwrap_or_default();
+            RunHistoryStore::finish_span(
+                &span_id,
+                FinishRunSpan {
+                    status: TelemetrySpanStatus::Completed,
+                    ended_at: chrono::Utc::now().to_rfc3339(),
+                    duration_ms: Some(duration_ms),
+                    input_tokens: None,
+                    output_tokens: None,
+                    total_tokens: None,
+                    total_tokens_estimated: false,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    audio_input_tokens: None,
+                    audio_output_tokens: None,
+                    estimated_cost_microusd: None,
+                    is_byok: None,
+                    error_code: None,
+                    error_message: None,
+                    attributes,
+                },
+            )
+            .await
+        },
+        _ => Ok(()),
+    }
+}
+
+fn workflow_event_type(event: &Value) -> Option<&str> {
+    let event_type = event.get("type").and_then(Value::as_str)?;
+    if event_type == "custom" {
+        // StreamEvent::custom keeps its domain event name separate from the
+        // transport type. Project that name so model and tool spans are not
+        // silently skipped as generic custom events.
+        event.get("event_type").and_then(Value::as_str)
+    } else {
+        Some(event_type)
+    }
+}
+
+async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -> Result<()> {
+    let Some(data) = data.and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let Some(call_id) = data
+        .get("modelCallId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(model) = data
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())
+    else {
+        return Ok(());
+    };
+    let started_at = data
+        .get("startedAt")
+        .and_then(Value::as_str)
+        .filter(|timestamp| !timestamp.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let ended_at = data
+        .get("endedAt")
+        .and_then(Value::as_str)
+        .filter(|timestamp| !timestamp.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| started_at.clone());
+    let span_id = format!("{run_id}:model:{call_id}");
+    let attributes = json!({ "modelCallId": call_id });
+    RunHistoryStore::create_span(CreateRunSpan {
+        id: span_id.clone(),
+        run_id: run_id.to_string(),
+        parent_span_id: None,
+        kind: TelemetrySpanKind::ModelCall,
+        status: TelemetrySpanStatus::Running,
+        node_id: Some(node_id.to_string()),
+        node_name: None,
+        provider: None,
+        model: Some(model.to_string()),
+        tool_name: None,
+        started_at,
+        attributes: attributes.clone(),
+    })
+    .await?;
+    RunHistoryStore::finish_span(
+        &span_id,
+        FinishRunSpan {
+            status: TelemetrySpanStatus::Completed,
+            ended_at,
+            duration_ms: data.get("durationMs").and_then(Value::as_i64),
+            input_tokens: data.get("inputTokens").and_then(Value::as_i64),
+            output_tokens: data.get("outputTokens").and_then(Value::as_i64),
+            total_tokens: data.get("totalTokens").and_then(Value::as_i64),
+            total_tokens_estimated: data
+                .get("totalTokensEstimated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            cache_read_tokens: data.get("cacheReadTokens").and_then(Value::as_i64),
+            cache_write_tokens: data.get("cacheWriteTokens").and_then(Value::as_i64),
+            reasoning_tokens: data.get("reasoningTokens").and_then(Value::as_i64),
+            audio_input_tokens: data.get("audioInputTokens").and_then(Value::as_i64),
+            audio_output_tokens: data.get("audioOutputTokens").and_then(Value::as_i64),
+            estimated_cost_microusd: data.get("estimatedCostMicrousd").and_then(Value::as_i64),
+            is_byok: data.get("isByok").and_then(Value::as_bool),
+            error_code: None,
+            error_message: None,
+            attributes,
+        },
+    )
+    .await
+}
+
+async fn project_tool_span(run_id: &str, node_id: &str, event_type: &str, data: Option<&Value>) -> Result<()> {
+    let Some(data) = data.and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let Some(call_id) = data.get("callId").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    let Some(tool_name) = data.get("tool").and_then(Value::as_str).filter(|name| !name.is_empty()) else {
+        return Ok(());
+    };
+    let span_id = format!("{run_id}:tool:{call_id}");
+    // Inputs and outputs remain in the redacted event journal. The span stores
+    // only identity fields needed for duration and reliability aggregation.
+    let attributes = json!({ "callId": call_id });
+    match event_type {
+        "agent.tool_call" => {
+            RunHistoryStore::create_span(CreateRunSpan {
+                id: span_id,
+                run_id: run_id.to_string(),
+                parent_span_id: None,
+                kind: TelemetrySpanKind::ToolCall,
+                status: TelemetrySpanStatus::Running,
+                node_id: Some(node_id.to_string()),
+                node_name: data.get("name").and_then(Value::as_str).map(str::to_string),
+                provider: None,
+                model: None,
+                tool_name: Some(tool_name.to_string()),
+                started_at: chrono::Utc::now().to_rfc3339(),
+                attributes,
+            })
+            .await
+        },
+        "agent.tool_result" | "agent.tool_error" => {
+            let duration_ms = data.get("durationMs").and_then(Value::as_i64).unwrap_or_default();
+            RunHistoryStore::finish_span(
+                &span_id,
+                FinishRunSpan {
+                    status: if event_type == "agent.tool_result" {
+                        TelemetrySpanStatus::Completed
+                    } else {
+                        TelemetrySpanStatus::Failed
+                    },
+                    ended_at: chrono::Utc::now().to_rfc3339(),
+                    duration_ms: Some(duration_ms),
+                    input_tokens: None,
+                    output_tokens: None,
+                    total_tokens: None,
+                    total_tokens_estimated: false,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                    audio_input_tokens: None,
+                    audio_output_tokens: None,
+                    estimated_cost_microusd: None,
+                    is_byok: None,
+                    error_code: data.get("errorCode").and_then(Value::as_str).map(str::to_string),
+                    error_message: None,
+                    attributes,
+                },
+            )
+            .await
+        },
+        _ => Ok(()),
+    }
 }
 
 pub(super) async fn execute_app(run_id: &str, target_id: &str, handle: Arc<AppRunHandle>) -> Result<()> {
@@ -165,7 +397,16 @@ pub(super) async fn complete_app_cancellation(run_id: &str) -> Result<()> {
 }
 
 pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> Result<()> {
-    RunHistoryStore::finish_execution(run_id, status, error).await?;
+    RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
+    if let Err(error) = crate::module::evaluation::EvaluationStore::complete_workflow_run(
+        run_id,
+        matches!(status, RunStatus::Completed),
+        error.as_deref(),
+    )
+    .await
+    {
+        log::warn!("failed to complete evaluation result for run {run_id}: {error:#}");
+    }
     // Output events precede the durable status update. Publish a separate
     // notification afterwards so shell-level active-run queries cannot retain
     // the stale "running" result from that earlier event.

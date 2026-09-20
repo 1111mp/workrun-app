@@ -6,10 +6,10 @@ use crate::{
     module::{
         python_runtime::PythonOutputChunk,
         run_history::{
-            AppendRunEvents, CreatePendingAction, CreateRunRecord, NewRunEvent, RunHistoryStore, RunRecordSummary,
-            RunStatus, RunTargetType,
+            AppendRunEvents, CreatePendingAction, CreateRunRecord, CreateRunSpan, FinishRunSpan, NewRunEvent,
+            RunHistoryStore, RunRecordSummary, RunStatus, RunTargetType, TelemetrySpanKind, TelemetrySpanStatus,
         },
-        workflow::{self as workflow_module, ToolConfirmationDecisionRequest, WorkflowDsl},
+        workflow::{self as workflow_module, EvaluationExecutionProfile, ToolConfirmationDecisionRequest, WorkflowDsl},
     },
     process::AsyncHandler,
     singleton,
@@ -236,6 +236,13 @@ pub struct StartWorkflowRun {
     pub dsl: Value,
     pub initial_state: Value,
     pub thread_id: String,
+    /// Present only for an Evaluation Case. Its fixtures are persisted in the
+    /// run runtime snapshot and never supplied by a normal editor run.
+    pub evaluation_profile: Option<EvaluationExecutionProfile>,
+    /// Links a durable workflow Run back to its Case. Persist this in the Run
+    /// runtime so a very fast completion can recover the link before the
+    /// evaluation coordinator has finished its follow-up database update.
+    pub evaluation_result_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

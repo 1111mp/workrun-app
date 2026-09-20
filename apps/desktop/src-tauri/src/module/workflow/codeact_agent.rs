@@ -64,13 +64,14 @@ pub(super) async fn add_codeact_agent_node(
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("codeact_agent node `{id}` references unknown model `{profile_id}`"))?;
     let label = format!("{}/{}", model.id, model.model);
+    let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
     let tool_calls = Arc::new(AtomicU32::new(0));
     let tool_trace = Arc::new(Mutex::new(Vec::new()));
     let mut agent = CodeActAgent::builder()
         .name(id.clone())
         .description(description)
         .instruction(instruction)
-        .model(create_model(&model, config)?)
+        .model(model)
         .input_guardrails(input_guardrails())
         .output_guardrails(output_guardrails())
         .runtime(build_runtime(node)?)

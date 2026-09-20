@@ -7,7 +7,7 @@ mod process;
 mod utils;
 
 use crate::{
-    core::handle,
+    core::{handle, telemetry},
     process::AsyncHandler,
     utils::{resolve, window_manager::WindowManager},
 };
@@ -22,6 +22,12 @@ pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = utils::dirs::init_portable_flag();
+
+    // ADK's OTLP initializer owns tracing's process-wide subscriber. Tauri may
+    // install one while building the application, so this must happen first.
+    tauri::async_runtime::block_on(async {
+        let _ = telemetry::init();
+    });
 
     #[cfg(target_os = "linux")]
     utils::linux::workarounds::apply_nvidia_dmabuf_renderer_workaround();
@@ -86,6 +92,31 @@ pub fn run() {
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,
             cmd::model::model_catalog_list,
+            // evaluations
+            cmd::evaluation::evaluation_suite_create,
+            cmd::evaluation::evaluation_suite_list,
+            cmd::evaluation::evaluation_suite_update,
+            cmd::evaluation::evaluation_suite_delete,
+            cmd::evaluation::evaluation_case_create,
+            cmd::evaluation::evaluation_case_list,
+            cmd::evaluation::evaluation_case_update,
+            cmd::evaluation::evaluation_case_delete,
+            cmd::evaluation::evaluation_case_restore,
+            cmd::evaluation::evaluation_case_reorder,
+            cmd::evaluation::evaluation_run_create,
+            cmd::evaluation::evaluation_run_claim_next_case,
+            cmd::evaluation::evaluation_run_start_next_case,
+            cmd::evaluation::evaluation_run_case_results,
+            cmd::evaluation::evaluation_run_inspect,
+            cmd::evaluation::evaluation_run_list,
+            cmd::evaluation::evaluation_version_summary,
+            cmd::evaluation::evaluation_version_compare,
+            cmd::evaluation::evaluation_workflow_latest_run,
+            cmd::evaluation::evaluation_workflow_snapshot_runs,
+            cmd::evaluation::evaluation_quality_gate_get,
+            cmd::evaluation::evaluation_quality_gate_update,
+            cmd::evaluation::evaluation_quality_gate_record_override,
+            cmd::evaluation::evaluation_quality_gate_audit_list,
             // mcp server
             cmd::mcp_server::get_mcp_servers,
             cmd::mcp_server::create_mcp_server,
@@ -131,6 +162,7 @@ pub fn run() {
             cmd::run_history::run_history_list,
             cmd::run_history::run_history_inspect,
             cmd::run_history::run_history_list_active,
+            cmd::run_history::run_history_observability,
             cmd::run_history::run_history_create_pending_action,
             cmd::run_history::run_history_list_pending_actions,
             cmd::run_history::run_history_claim_next_pending_action,

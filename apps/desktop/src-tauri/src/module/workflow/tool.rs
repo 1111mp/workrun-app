@@ -122,6 +122,7 @@ pub(super) struct ManagedTool {
     state_bindings: Vec<ToolStateBinding>,
     max_tool_calls: u32,
     timeout_seconds: u64,
+    execution_profile: WorkflowExecutionProfile,
 }
 
 impl ManagedTool {
@@ -137,6 +138,35 @@ impl ManagedTool {
         max_tool_calls: u32,
         timeout_seconds: u64,
     ) -> Self {
+        Self::new_with_profile(
+            definition,
+            executor,
+            agent_node_id,
+            on_event,
+            tool_calls,
+            tool_trace,
+            state,
+            state_bindings,
+            max_tool_calls,
+            timeout_seconds,
+            WorkflowExecutionProfile::Production,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_with_profile(
+        definition: ToolDefinition,
+        executor: ManagedToolExecutor,
+        agent_node_id: String,
+        on_event: Option<Channel<StreamEvent>>,
+        tool_calls: Arc<AtomicU32>,
+        tool_trace: Arc<Mutex<Vec<Value>>>,
+        state: SharedWorkflowState,
+        state_bindings: Vec<ToolStateBinding>,
+        max_tool_calls: u32,
+        timeout_seconds: u64,
+        execution_profile: WorkflowExecutionProfile,
+    ) -> Self {
         Self {
             definition,
             executor,
@@ -148,6 +178,7 @@ impl ManagedTool {
             state_bindings,
             max_tool_calls,
             timeout_seconds,
+            execution_profile,
         }
     }
 }
@@ -181,6 +212,10 @@ impl Tool for ManagedTool {
         ensure_tool_args_safe(&args)?;
 
         validate_tool_value(&self.definition.input_schema, &args, "input")?;
+        // A model may invoke the same tool repeatedly within one Agent turn.
+        // Preserve a call-local ID so history can pair each request and result.
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let started_at = std::time::Instant::now();
 
         if let Some(on_event) = &self.on_event {
             send_guarded_event(
@@ -189,6 +224,7 @@ impl Tool for ManagedTool {
                     &self.agent_node_id,
                     "agent.tool_call",
                     json!({
+                        "callId": call_id,
                         "tool": self.name(),
                         "name": self.definition.display_name,
                         "input": args,
@@ -196,53 +232,92 @@ impl Tool for ManagedTool {
                 ),
             );
         }
-        let execution_args = resolve_execution_args(
-            &self.state,
-            &self.agent_node_id,
-            &args,
-            &self.state_bindings,
-            &self.definition.input_schema,
-        )?;
-        let timeout = std::time::Duration::from_secs(self.timeout_seconds);
-        let result = match &self.executor {
-            ManagedToolExecutor::Process => {
-                let run = tokio::time::timeout(
-                    timeout,
-                    crate::feat::run_process_node_for_tool(
-                        &self.definition.id,
-                        &execution_args,
-                        // Buffer process output so secrets split across chunks
-                        // cannot pass through the event channel undetected.
-                        Arc::new(|_| {}),
-                    ),
-                )
-                .await
-                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?
-                .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
-                if let Some(on_event) = &self.on_event {
-                    for (stream, data) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
-                        if !data.is_empty() {
-                            // Tool App stdout/stderr is an explicit local debugging
-                            // surface. Preserve it verbatim for the workflow Output UI;
-                            // the workflow author is responsible for what the tool prints.
-                            let _ = on_event.send(StreamEvent::custom(
-                                &self.agent_node_id,
-                                "agent.tool_output",
-                                json!({ "tool": self.name(), "stream": stream, "data": data }),
-                            ));
+        let execution = async {
+            // Fixtures model the tool boundary, not the model-visible request.
+            // Resolve authorized bindings first, but keep `args` for events and
+            // traces so plaintext credentials never become evaluation evidence.
+            let execution_args = resolve_execution_args(
+                &self.state,
+                &self.agent_node_id,
+                &args,
+                &self.state_bindings,
+                &self.definition.input_schema,
+            )?;
+            if let Some(result) = evaluation_fixture_result(
+                &self.execution_profile,
+                self.name(),
+                &execution_args,
+            )? {
+                validate_tool_value(&self.definition.output_schema, &result, "fixture output")?;
+                return Ok::<_, adk_rust::AdkError>(result);
+            }
+            let timeout = std::time::Duration::from_secs(self.timeout_seconds);
+            let result = match &self.executor {
+                ManagedToolExecutor::Process => {
+                    let run = tokio::time::timeout(
+                        timeout,
+                        crate::feat::run_process_node_for_tool(
+                            &self.definition.id,
+                            &execution_args,
+                            // Buffer process output so secrets split across chunks
+                            // cannot pass through the event channel undetected.
+                            Arc::new(|_| {}),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?
+                    .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+                    if let Some(on_event) = &self.on_event {
+                        for (stream, data) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
+                            if !data.is_empty() {
+                                // Tool App stdout/stderr is an explicit local debugging
+                                // surface. Preserve it verbatim for the workflow Output UI;
+                                // the workflow author is responsible for what the tool prints.
+                                let _ = on_event.send(StreamEvent::custom(
+                                    &self.agent_node_id,
+                                    "agent.tool_output",
+                                    json!({ "tool": self.name(), "stream": stream, "data": data }),
+                                ));
+                            }
                         }
                     }
+                    run.result
+                },
+                ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, execution_args))
+                    .await
+                    .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
+            };
+            validate_tool_value(&self.definition.output_schema, &result, "output")?;
+            Ok::<_, adk_rust::AdkError>(result)
+        }
+        .await;
+        let result = match execution {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(on_event) = &self.on_event {
+                    // Record failure without duplicating the possibly sensitive tool error.
+                    send_guarded_event(
+                        on_event,
+                        StreamEvent::custom(
+                            &self.agent_node_id,
+                            "agent.tool_error",
+                            json!({
+                                "callId": call_id,
+                                "durationMs": started_at.elapsed().as_millis() as u64,
+                                "tool": self.name(),
+                                "name": self.definition.display_name,
+                                "errorCode": tool_error_code(&error),
+                            }),
+                        ),
+                    );
                 }
-                run.result
+                return Err(error);
             },
-            ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, execution_args))
-                .await
-                .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
         };
 
-        validate_tool_value(&self.definition.output_schema, &result, "output")?;
-
         let trace = redact_json(&json!({
+            "callId": call_id,
+            "durationMs": started_at.elapsed().as_millis() as u64,
             "tool": self.name(),
             "name": self.definition.display_name,
             "input": args,
@@ -263,6 +338,44 @@ impl Tool for ManagedTool {
         // the Agent and therefore crosses the visible-state boundary again.
         Ok(redact_json(&result))
     }
+}
+
+/// Converts internal failures to stable diagnostics without putting tool
+/// arguments, fixture values, or provider error text in the event journal.
+fn tool_error_code(error: &adk_rust::AdkError) -> &'static str {
+    let message = error.to_string();
+    if message.contains("Test Mode blocked unmocked tool") {
+        "fixture_not_matched"
+    } else if message.contains("Tool State Binding source") {
+        "state_binding_unavailable"
+    } else if message.contains("fixture output") {
+        "fixture_output_invalid"
+    } else if message.contains("still redacted") {
+        "tool_argument_unresolved"
+    } else if message.contains("input does not match its schema") {
+        "tool_input_invalid"
+    } else {
+        "tool_execution_failed"
+    }
+}
+
+/// Evaluation must fail closed: a fixture mismatch can never fall through to
+/// the Process or MCP executor that would perform a real external operation.
+fn evaluation_fixture_result(
+    profile: &WorkflowExecutionProfile,
+    tool: &str,
+    args: &Value,
+) -> adk_rust::Result<Option<Value>> {
+    let WorkflowExecutionProfile::Evaluation(profile) = profile else {
+        return Ok(None);
+    };
+    profile
+        .tool_fixtures
+        .iter()
+        .find(|fixture| fixture.tool == tool && fixture.args == *args)
+        .map(|fixture| fixture.result.clone())
+        .ok_or_else(|| adk_rust::AdkError::tool(format!("Test Mode blocked unmocked tool `{tool}`")))
+        .map(Some)
 }
 
 fn resolve_execution_args(
@@ -439,16 +552,27 @@ mod tests {
                 .unwrap();
         }
 
-        assert_eq!(
-            resolve_execution_args(
+        let execution_args = resolve_execution_args(
                 &state,
                 "agent",
                 &json!({"recipient": "[EMAIL REDACTED]"}),
                 &[],
                 &json!({"type": "object", "properties": {"recipient": {"type": "string"}}, "required": ["recipient"]}),
             )
-            .unwrap(),
-            json!({"recipient": "alice@example.com"})
+            .unwrap();
+        assert_eq!(execution_args, json!({"recipient": "alice@example.com"}));
+        let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
+            tool_fixtures: vec![EvaluationToolFixture {
+                tool: "lookup_customer".to_string(),
+                args: json!({"recipient": "alice@example.com"}),
+                result: json!({"found": true}),
+            }],
+        });
+        // A fixture must use the resolved execution value, never the visible
+        // redaction marker the model used to construct its request.
+        assert_eq!(
+            evaluation_fixture_result(&profile, "lookup_customer", &execution_args).unwrap(),
+            Some(json!({"found": true}))
         );
     }
 
@@ -485,5 +609,34 @@ mod tests {
             .to_string()
             .contains("recipient")
         );
+    }
+
+    #[test]
+    fn evaluation_profile_returns_only_an_exact_fixture_match() {
+        let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
+            tool_fixtures: vec![EvaluationToolFixture {
+                tool: "cancel_order".to_string(),
+                args: json!({ "orderId": "42" }),
+                result: json!({ "cancelled": true }),
+            }],
+        });
+
+        assert_eq!(
+            evaluation_fixture_result(&profile, "cancel_order", &json!({ "orderId": "42" })).unwrap(),
+            Some(json!({ "cancelled": true }))
+        );
+        assert!(
+            evaluation_fixture_result(&profile, "cancel_order", &json!({ "orderId": "43" }))
+                .unwrap_err()
+                .to_string()
+                .contains("blocked unmocked tool")
+        );
+    }
+
+    #[test]
+    fn classifies_fixture_misses_without_exposing_arguments() {
+        let error = adk_rust::AdkError::tool("Test Mode blocked unmocked tool `lookup_customer`");
+
+        assert_eq!(tool_error_code(&error), "fixture_not_matched");
     }
 }

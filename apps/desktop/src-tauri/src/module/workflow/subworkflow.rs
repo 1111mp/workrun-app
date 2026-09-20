@@ -9,6 +9,7 @@ pub(super) fn add_subworkflow_node(
     state: SharedWorkflowState,
     state_config: WorkflowNodeStateConfig,
     workflow_path: Vec<String>,
+    execution_profile: WorkflowExecutionProfile,
 ) -> Result<StateGraph> {
     let workflow_id = string_data(node, "workflowId")
         .filter(|id| !id.trim().is_empty())
@@ -22,6 +23,7 @@ pub(super) fn add_subworkflow_node(
         global_keys: state_config.global_keys,
         sensitive_fields: state_config.sensitive_fields,
         workflow_path,
+        execution_profile,
     }))
 }
 
@@ -34,6 +36,7 @@ struct SubworkflowNode {
     global_keys: BTreeSet<String>,
     sensitive_fields: BTreeSet<String>,
     workflow_path: Vec<String>,
+    execution_profile: WorkflowExecutionProfile,
 }
 
 #[async_trait::async_trait]
@@ -84,9 +87,15 @@ impl Node for SubworkflowNode {
             .collect::<HashMap<_, _>>();
         let mut child_path = self.workflow_path.clone();
         child_path.push(dsl.id.clone());
-        let child = compile_with_path(dsl, &self.config, self.on_event.clone(), child_path)
-            .await
-            .map_err(|error| graph_node_error(&self.id, error))?;
+        let child = compile_with_path(
+            dsl,
+            &self.config,
+            self.on_event.clone(),
+            child_path,
+            self.execution_profile.clone(),
+        )
+        .await
+        .map_err(|error| graph_node_error(&self.id, error))?;
         let result = child
             .run_stream(input, &thread_id, resume, None, |_| {})
             .await

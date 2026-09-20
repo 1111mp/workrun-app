@@ -213,6 +213,7 @@ function RunWorkspace() {
             isRunning={workflowRun.run.status === 'running'}
             run={workflowRun.run}
             workflowNodes={workflowRun.nodes}
+            spans={activeRecord.spans}
             onClose={() => setOpen(false)}
             onRunAgain={requestFailedWorkflowRetry}
           />

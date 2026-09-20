@@ -12,28 +12,29 @@
     "format": "turbo format",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
+    "app:test": "turbo test --filter workrun",
     "server:test": "turbo test --filter workrun-server",
     "prepare": "husky"
   },
   "dependencies": {
     "lodash-es": "^4.18.1",
-    "lucide-react": "^1.37.0"
+    "lucide-react": "^1.47.0"
   },
   "devDependencies": {
     "@types/lodash-es": "^4.17.12",
-    "@types/node": "^26.4.0",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "cross-env": "^10.1.0",
     "husky": "^9.1.7",
-    "oxfmt": "^0.65.0",
-    "oxlint": "^1.80.0",
-    "oxlint-tsgolint": "^7.0.2001",
-    "turbo": "^2.10.12",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.83.0",
+    "oxlint-tsgolint": "^7.0.2002",
+    "turbo": "^2.11.2",
     "typescript": "~7.0.2"
   },
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "pnpm@11.24.0"
+  "packageManager": "pnpm@12.5.1"
 }
