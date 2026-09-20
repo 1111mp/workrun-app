@@ -306,6 +306,7 @@ impl Tool for ManagedTool {
                                 "durationMs": started_at.elapsed().as_millis() as u64,
                                 "tool": self.name(),
                                 "name": self.definition.display_name,
+                                "errorCode": tool_error_code(&error),
                             }),
                         ),
                     );
@@ -336,6 +337,25 @@ impl Tool for ManagedTool {
         // Tool implementations may use raw values, but their result returns to
         // the Agent and therefore crosses the visible-state boundary again.
         Ok(redact_json(&result))
+    }
+}
+
+/// Converts internal failures to stable diagnostics without putting tool
+/// arguments, fixture values, or provider error text in the event journal.
+fn tool_error_code(error: &adk_rust::AdkError) -> &'static str {
+    let message = error.to_string();
+    if message.contains("Test Mode blocked unmocked tool") {
+        "fixture_not_matched"
+    } else if message.contains("Tool State Binding source") {
+        "state_binding_unavailable"
+    } else if message.contains("fixture output") {
+        "fixture_output_invalid"
+    } else if message.contains("still redacted") {
+        "tool_argument_unresolved"
+    } else if message.contains("input does not match its schema") {
+        "tool_input_invalid"
+    } else {
+        "tool_execution_failed"
     }
 }
 
@@ -611,5 +631,12 @@ mod tests {
                 .to_string()
                 .contains("blocked unmocked tool")
         );
+    }
+
+    #[test]
+    fn classifies_fixture_misses_without_exposing_arguments() {
+        let error = adk_rust::AdkError::tool("Test Mode blocked unmocked tool `lookup_customer`");
+
+        assert_eq!(tool_error_code(&error), "fixture_not_matched");
     }
 }

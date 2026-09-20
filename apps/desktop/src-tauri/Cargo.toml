@@ -26,19 +26,19 @@ adk-rust = { workspace = true, features = ["codeact-monty", "deepseek", "full", 
 adk-telemetry = { version = "2.2.0", features = ["otlp"] }
 aes-gcm = "0.11.1"
 anyhow = { workspace = true }
-base64 = "0.23.1"
 async-stream = "0.3.6"
 async-trait = "0.1.92"
+base64 = "0.23.1"
 bitflags = { workspace = true }
 chrono = { workspace = true }
 console-subscriber = { version = "0.5.0", optional = true }
 dark-light = { git = "https://github.com/rust-dark-light/dark-light" }
 dunce = "1.0.5"
-flexi_logger = { workspace = true }
 flate2 = { workspace = true }
-ignore = { workspace = true }
+flexi_logger = { workspace = true }
 futures = "0.3.34"
 getrandom = "0.4.3"
+ignore = { workspace = true }
 jsonschema = "0.53.0"
 log = { workspace = true }
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
@@ -54,6 +54,7 @@ serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true, features = ["chrono", "json", "migrate", "runtime-tokio", "sqlite"] }
 sys-locale = "0.3.2"
+tar = { workspace = true }
 tauri = { workspace = true, features = [
   "devtools",
   "image-ico",
@@ -64,24 +65,23 @@ tauri = { workspace = true, features = [
 ] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-deep-link = "2.4.10"
-tauri-plugin-devtools = "2.1.0"
+tauri-plugin-devtools = "2.2.1"
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-fs = "2.5.2"
-tauri-plugin-http = "2.6.0"
+tauri-plugin-http = "2.7.0"
 tauri-plugin-notification = "2.4.0"
 tauri-plugin-opener = "2.5.5"
 tauri-plugin-os = "2.3.2"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-shell = "2.3.6"
-tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
-tauri-plugin-updater = "2.11.0"
+tauri-plugin-single-instance = { version = "2.4.5", features = ["deep-link"] }
+tauri-plugin-updater = "2.12.0"
 tauri-plugin-window-state = "2.4.1"
 thiserror = { workspace = true }
-tar = { workspace = true }
-toml = { workspace = true }
-toml_edit = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7.19", features = ["rt"] }
+toml = { workspace = true }
+toml_edit = { workspace = true }
 tracing = "0.1.44"
 url = "2.5.8"
 uuid = { workspace = true, features = ["v4"] }

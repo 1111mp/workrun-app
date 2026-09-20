@@ -331,7 +331,7 @@ async fn project_tool_span(run_id: &str, node_id: &str, event_type: &str, data: 
                     audio_output_tokens: None,
                     estimated_cost_microusd: None,
                     is_byok: None,
-                    error_code: None,
+                    error_code: data.get("errorCode").and_then(Value::as_str).map(str::to_string),
                     error_message: None,
                     attributes,
                 },

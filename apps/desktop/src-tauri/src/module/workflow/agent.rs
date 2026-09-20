@@ -46,7 +46,10 @@ pub(super) async fn add_local_agent_node(
     let skills = crate::module::skill::SkillRegistry::resolve(&personal_skill_names(node)?)?;
     let tool_ids = crate::module::skill::allowed_tool_ids(&skills, tool_ids)?;
     let mut state_bindings = tool_state_bindings(node, &tool_ids)?;
-    let max_tool_calls = integer_data(node, "maxToolCalls", 8, 1, 50)?;
+    let max_tool_calls = effective_max_tool_calls(
+        integer_data(node, "maxToolCalls", 8, 1, 50)?,
+        &execution_profile,
+    );
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
     let tools = ToolRegistry::resolve(&tool_ids).await?;
     validate_tool_state_binding_schemas(node, &tools, &state_bindings)?;
@@ -134,6 +137,16 @@ pub(super) async fn add_local_agent_node(
         state_config.global_keys,
         state_config.sensitive_fields,
     )))
+}
+
+fn effective_max_tool_calls(configured_limit: u32, execution_profile: &WorkflowExecutionProfile) -> u32 {
+    if matches!(execution_profile, WorkflowExecutionProfile::Evaluation(_)) {
+        // A fixture is an exact, deterministic tool boundary. Retrying a miss
+        // cannot make it match and only causes additional model calls.
+        1
+    } else {
+        configured_limit
+    }
 }
 
 pub(super) fn agent_output_schema(node: &WorkflowNode) -> Result<Option<Value>> {
@@ -744,6 +757,16 @@ fn model_call_telemetry(
 mod usage_snapshot_tests {
     use super::*;
     use futures::{StreamExt, stream};
+
+    #[test]
+    fn evaluation_limits_fixture_tools_to_one_call() {
+        let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
+            tool_fixtures: Vec::new(),
+        });
+
+        assert_eq!(effective_max_tool_calls(8, &profile), 1);
+        assert_eq!(effective_max_tool_calls(8, &WorkflowExecutionProfile::Production), 8);
+    }
 
     struct FinalToolCallResponseLlm;
 
