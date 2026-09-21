@@ -15,6 +15,11 @@
     "checkForUpdates": "Check for updates",
     "checkingForUpdates": "Checking for updates…"
   },
+  "jsonEditor": {
+    "createObject": "Create JSON object",
+    "createArray": "Create JSON array",
+    "invalidSource": "This JSON is invalid. Fix it in the code editor to continue."
+  },
   "workflows": {
     "title": "Workflows",
     "localCount": "{{count}} local",

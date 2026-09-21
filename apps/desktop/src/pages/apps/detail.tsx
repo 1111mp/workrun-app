@@ -72,6 +72,7 @@ import {
   restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
 import { AppPublishForm } from '@/components/forms';
+import { JsonEditorField } from '@/components/json-editor';
 import { isTeamMode } from '@/lib/constant';
 import {
   createTeamProcessNodeDraft,
@@ -228,10 +229,12 @@ function ContractEditor({
       <Field data-invalid>
         <FieldLabel>{label}</FieldLabel>
         <FieldError>{t('apps.detail.fixJson')}</FieldError>
-        <Textarea
-          className='min-h-44 font-mono text-xs'
+        <JsonEditorField
+          className='min-h-44'
+          onChange={onChange}
+          rootName={label}
+          rootType='object'
           value={value}
-          onChange={(event) => onChange(event.target.value)}
         />
       </Field>
     );
@@ -279,7 +282,9 @@ function ContractEditor({
       <FieldGroup className='gap-4'>
         {fields.map((field, index) => (
           <FieldSet
-            key={`${field.key}-${index}`}
+            // A field name is editable. Using it in the key remounts this
+            // subtree on every keystroke, which steals focus from the input.
+            key={index}
             className='bg-muted/20 gap-4 rounded-xl border p-4'
           >
             <div className='flex items-center justify-between gap-3'>
@@ -466,10 +471,12 @@ function ContractEditor({
           {t('apps.detail.advancedJsonSchema')}
         </CollapsibleTrigger>
         <CollapsibleContent className='border-t p-3'>
-          <Textarea
-            className='min-h-44 font-mono text-xs'
+          <JsonEditorField
+            className='min-h-44'
+            onChange={onChange}
+            rootName={label}
+            rootType='object'
             value={value}
-            onChange={(event) => onChange(event.target.value)}
           />
         </CollapsibleContent>
       </Collapsible>
@@ -754,7 +761,9 @@ function ProcessNodeDetailEditor({
             {canPublish ? (
               <Button
                 variant='outline'
-                disabled={!canPublishVersion || save.isPending || publish.isPending}
+                disabled={
+                  !canPublishVersion || save.isPending || publish.isPending
+                }
                 title={
                   canPublishVersion
                     ? undefined

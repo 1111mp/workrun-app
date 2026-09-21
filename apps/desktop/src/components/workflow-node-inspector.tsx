@@ -42,6 +42,7 @@ import { PlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { JsonEditorField } from '@/components/json-editor';
 import { isTeamMode } from '@/lib/constant';
 import {
   getProcessNodes,
@@ -805,19 +806,21 @@ function WorkflowNodeInspector({
                   placeholder={t('workflowEditor.inspector.outputKey')}
                 />
               )}
-              <TextareaField
-                id='agent-output-schema'
-                label={t('workflowEditor.inspector.outputSchema')}
-                description={t(
-                  'workflowEditor.inspector.outputSchemaDescription',
-                )}
-                value={getText(data, 'outputSchema')}
-                onChange={(outputSchema) => updateData({ outputSchema })}
-                placeholder={
-                  '{\n  "type": "object",\n  "properties": {\n    "summary": { "type": "string" }\n  },\n  "required": ["summary"]\n}'
-                }
-                className='min-h-44 font-mono text-xs'
-              />
+              <Field>
+                <Label htmlFor='agent-output-schema'>
+                  {t('workflowEditor.inspector.outputSchema')}
+                </Label>
+                <FieldDescription>
+                  {t('workflowEditor.inspector.outputSchemaDescription')}
+                </FieldDescription>
+                <JsonEditorField
+                  className='min-h-44'
+                  onChange={(outputSchema) => updateData({ outputSchema })}
+                  rootName={t('workflowEditor.inspector.outputSchema')}
+                  rootType='object'
+                  value={getText(data, 'outputSchema')}
+                />
+              </Field>
             </InspectorSection>
             {!isCodeActAgent && (
               <InspectorSection

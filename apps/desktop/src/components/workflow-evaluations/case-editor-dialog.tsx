@@ -34,6 +34,7 @@ import {
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { JsonEditorField, JsonViewerField } from '@/components/json-editor';
 import type { EvaluationCase } from '@/services/evaluation';
 import type { ToolDefinition } from '@/services/tool';
 
@@ -206,11 +207,12 @@ export function CaseEditorDialog({
                   <FieldLabel htmlFor='evaluation-case-input'>
                     {t('evaluations.inputJson')}
                   </FieldLabel>
-                  <Textarea
-                    id='evaluation-case-input'
-                    className='min-h-24 font-mono text-xs leading-5'
+                  <JsonEditorField
+                    className='min-h-24'
+                    onChange={setCaseInput}
+                    rootName={t('evaluations.inputJson')}
+                    rootType='object'
                     value={caseInput}
-                    onChange={(event) => setCaseInput(event.target.value)}
                   />
                 </Field>
               </FieldGroup>
@@ -1841,16 +1843,16 @@ export function CaseEditorDialog({
                       </Field>
                       <Field className='sm:col-span-2'>
                         <FieldLabel>{t('evaluations.expectedArgs')}</FieldLabel>
-                        <Textarea
-                          className='min-h-20 font-mono text-xs leading-5'
+                        <JsonEditorField
+                          className='min-h-20'
+                          rootName={t('evaluations.expectedArgs')}
+                          rootType='object'
                           value={call.args}
-                          onChange={(event) =>
+                          onChange={(args) =>
                             setToolTrajectory((current) => ({
                               ...current,
                               calls: current.calls.map((item) =>
-                                item.id === call.id
-                                  ? { ...item, args: event.target.value }
-                                  : item,
+                                item.id === call.id ? { ...item, args } : item,
                               ),
                             }))
                           }
@@ -1883,17 +1885,19 @@ export function CaseEditorDialog({
                           <FieldLabel>
                             {t('evaluations.expectedFixtureResult')}
                           </FieldLabel>
-                          <Textarea
-                            className='min-h-20 font-mono text-xs leading-5'
+                          <JsonEditorField
+                            className='min-h-20'
+                            rootName={t('evaluations.expectedFixtureResult')}
+                            rootType='object'
                             value={call.expectedResult}
-                            onChange={(event) =>
+                            onChange={(expectedResult) =>
                               setToolTrajectory((current) => ({
                                 ...current,
                                 calls: current.calls.map((item) =>
                                   item.id === call.id
                                     ? {
                                         ...item,
-                                        expectedResult: event.target.value,
+                                        expectedResult,
                                       }
                                     : item,
                                 ),
@@ -1922,14 +1926,10 @@ export function CaseEditorDialog({
                 <FieldLabel htmlFor='evaluation-case-assertions'>
                   {t('evaluations.assertionsJson')}
                 </FieldLabel>
-                <Textarea
-                  id='evaluation-case-assertions'
-                  className='min-h-36 font-mono text-xs leading-5'
-                  placeholder={
-                    '[\n  {\n    "kind": "json_path",\n    "id": "decision-is-approved",\n    "path": "$.decision",\n    "operator": "equals",\n    "expected": "approved"\n  }\n]'
-                  }
+                <JsonViewerField
+                  className='min-h-36'
+                  rootName={t('evaluations.assertionsJson')}
                   value={assertionsJson}
-                  readOnly
                 />
               </Field>
             </FieldSet>
@@ -2054,14 +2054,16 @@ export function CaseEditorDialog({
                         <FieldLabel>
                           {t('evaluations.matchingArgsJson')}
                         </FieldLabel>
-                        <Textarea
-                          className='min-h-20 font-mono text-xs leading-5'
+                        <JsonEditorField
+                          className='min-h-20'
+                          rootName={t('evaluations.matchingArgsJson')}
+                          rootType='object'
                           value={fixture.args}
-                          onChange={(event) =>
+                          onChange={(args) =>
                             setFixtureDrafts((current) =>
                               current.map((item) =>
                                 item.id === fixture.id
-                                  ? { ...item, args: event.target.value }
+                                  ? { ...item, args }
                                   : item,
                               ),
                             )
@@ -2072,14 +2074,16 @@ export function CaseEditorDialog({
                         <FieldLabel>
                           {t('evaluations.fixtureResultJson')}
                         </FieldLabel>
-                        <Textarea
-                          className='min-h-20 font-mono text-xs leading-5'
+                        <JsonEditorField
+                          className='min-h-20'
+                          rootName={t('evaluations.fixtureResultJson')}
+                          rootType='object'
                           value={fixture.result}
-                          onChange={(event) =>
+                          onChange={(result) =>
                             setFixtureDrafts((current) =>
                               current.map((item) =>
                                 item.id === fixture.id
-                                  ? { ...item, result: event.target.value }
+                                  ? { ...item, result }
                                   : item,
                               ),
                             )

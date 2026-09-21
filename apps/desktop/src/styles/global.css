@@ -1,6 +1,23 @@
 @import '@xyflow/react/dist/style.css' layer(base);
 @import '@workspace/ui/globals.css';
 
+/* json-edit-react's custom editor is a non-stretching flex item. */
+.workrun-json-editor .jer-collection-text-edit-custom {
+  align-self: stretch;
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.workrun-json-editor .jer-collection-text-edit-custom > *,
+.workrun-json-editor .cm-editor,
+.workrun-json-editor .cm-scroller,
+.workrun-json-editor .cm-content {
+  align-self: stretch;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
 @layer base {
   ::view-transition-old(page-content) {
     animation: none;
@@ -22,7 +39,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-
     ::view-transition-old(page-content),
     ::view-transition-new(page-content) {
       animation: none;

@@ -50,6 +50,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
+import { JsonEditorField } from '@/components/json-editor';
 import {
   createSkill,
   deleteSkill,
@@ -583,12 +584,11 @@ function SkillEditor({
             <FieldSet>
               <FieldLegend>{t('settings.skills.metadata')}</FieldLegend>
               <Field data-invalid={!metadataIsValid || undefined}>
-                <Textarea
-                  aria-invalid={!metadataIsValid}
-                  className='min-h-28 font-mono text-xs leading-5'
-                  id='skill-metadata'
-                  onChange={(event) => update({ metadata: event.target.value })}
-                  placeholder={'{\n  "owner": "platform"\n}'}
+                <JsonEditorField
+                  className='min-h-28'
+                  onChange={(metadata) => update({ metadata })}
+                  rootName='metadata'
+                  rootType='object'
                   value={draft.metadata}
                 />
                 <FieldDescription>

@@ -15,6 +15,11 @@
     "checkForUpdates": "检查更新",
     "checkingForUpdates": "正在检查更新…"
   },
+  "jsonEditor": {
+    "createObject": "创建 JSON 对象",
+    "createArray": "创建 JSON 数组",
+    "invalidSource": "此 JSON 无效，请在代码编辑器中修复后继续。"
+  },
   "workflows": {
     "title": "工作流",
     "localCount": "本地 {{count}} 个",
