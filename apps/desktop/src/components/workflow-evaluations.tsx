@@ -19,6 +19,7 @@ import {
   Button,
   Checkbox,
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -46,6 +47,7 @@ import {
   Spinner,
   Textarea,
 } from '@workspace/ui/components';
+import type { TFunction } from 'i18next';
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -66,12 +68,12 @@ import {
   UploadIcon,
   XCircleIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import type { TFunction } from 'i18next';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import {
+  compareEvaluationVersionCaseCriteria,
   compareEvaluationVersions,
   createEvaluationCase,
   createEvaluationRun,
@@ -97,6 +99,8 @@ import {
   type EvaluationRunDetail,
   type EvaluationSuite,
   type EvaluationVersionCaseDiff,
+  type EvaluationVersionCaseCriterionComparison,
+  type EvaluationVersionCriterionDiff,
   type EvaluationVersionSummary,
   type EvaluationWorkflowSnapshot,
 } from '@/services/evaluation';
@@ -149,8 +153,40 @@ type ToolTrajectoryDraft = {
   strictArgs: boolean;
   calls: ToolCallDraft[];
 };
+type NodeTrajectoryDraft = {
+  mustExecute: string[];
+  mustNotExecute: string[];
+  orderedNodes: string[];
+  requireCompleted: boolean;
+};
+type RouteAssertionDraft = {
+  id: string;
+  nodeId: string;
+  expectedRoute: string;
+};
+type NodeOutputAssertionDraft = {
+  id: string;
+  nodeId: string;
+  path: string;
+  operator: Exclude<AssertionOperator, MatchAlgorithm>;
+  expected: string;
+};
+type NodeTextAssertionDraft = {
+  id: string;
+  nodeId: string;
+  algorithm: MatchAlgorithm;
+  expected: string;
+};
+type NodeToolAssertionDraft = { id: string; nodeId: string; toolName: string; count: number };
+type WorkflowRouteOption = {
+  nodeId: string;
+  nodeLabel: string;
+  route: string;
+  label: string;
+};
 type ToolFixtureDraft = {
   id: string;
+  nodeId: string;
   tool: string;
   args: string;
   result: string;
@@ -185,6 +221,158 @@ function toolLabel(tool: ToolDefinition) {
 function selectedToolLabel(name: string, tools: ToolDefinition[]) {
   const tool = tools.find((candidate) => candidate.name === name);
   return tool ? toolLabel(tool) : name;
+}
+
+function workflowEvaluationNodes(snapshot: EvaluationWorkflowSnapshot, t: TFunction) {
+  const dsl = snapshot.dsl as {
+    nodes?: Array<{
+      id?: unknown;
+      type?: unknown;
+      data?: {
+        name?: unknown;
+        title?: unknown;
+        workflowName?: unknown;
+        label?: unknown;
+      };
+    }>;
+  };
+  return (dsl.nodes ?? []).flatMap((node) => {
+    if (
+      typeof node.id !== 'string' ||
+      !node.id ||
+      ['start', 'end', 'group'].includes(String(node.type))
+    )
+      return [];
+    // Each node type stores its canvas name under a different key. Keep IDs
+    // out of selectors whenever that human-facing name is available.
+    const label =
+      [
+        node.data?.workflowName,
+        node.data?.name,
+        node.data?.title,
+        node.data?.label,
+      ]
+        .find(
+          (value): value is string =>
+            typeof value === 'string' && Boolean(value.trim()),
+        )
+      ?.trim() ??
+      t(`workflowEditor.inspector.nodes.${String(node.type ?? 'unknown')}`, {
+        defaultValue: t('workflowEditor.inspector.untitledNode'),
+      });
+    return [{ id: node.id, label }];
+  });
+}
+
+function workflowRoutes(
+  snapshot: EvaluationWorkflowSnapshot,
+): WorkflowRouteOption[] {
+  const dsl = snapshot.dsl as {
+    nodes?: Array<{
+      id?: unknown;
+      type?: unknown;
+      data?: {
+        label?: unknown;
+        conditions?: Record<string, { label?: unknown }>;
+        cases?: Array<{ id?: unknown; label?: unknown }>;
+        defaultCase?: { label?: unknown };
+      };
+    }>;
+  };
+  return (dsl.nodes ?? []).flatMap<WorkflowRouteOption>((node) => {
+    if (
+      typeof node.id !== 'string' ||
+      !['if_else', 'switch'].includes(String(node.type))
+    )
+      return [];
+    const nodeId = node.id;
+    const nodeLabel =
+      typeof node.data?.label === 'string' && node.data.label.trim()
+        ? node.data.label.trim()
+        : nodeId;
+    if (node.type === 'if_else') {
+      return ['true', 'false'].map((route) => ({
+        nodeId,
+        nodeLabel,
+        route,
+        label:
+          typeof node.data?.conditions?.[route]?.label === 'string'
+            ? node.data.conditions[route].label
+            : route,
+      }));
+    }
+    return [
+      ...(node.data?.cases ?? []).flatMap((item) =>
+        typeof item.id === 'string'
+          ? [
+              {
+                nodeId,
+                nodeLabel,
+                route: `case:${item.id}`,
+                label: typeof item.label === 'string' ? item.label : item.id,
+              },
+            ]
+          : [],
+      ),
+      {
+        nodeId,
+        nodeLabel,
+        route: 'default',
+        label:
+          typeof node.data?.defaultCase?.label === 'string'
+            ? node.data.defaultCase.label
+            : 'default',
+      },
+    ];
+  });
+}
+
+function workflowAgentNodes(snapshot: EvaluationWorkflowSnapshot) {
+  const dsl = snapshot.dsl as {
+    nodes?: Array<{ id?: unknown; type?: unknown; data?: { name?: unknown; label?: unknown } }>;
+  };
+  return (dsl.nodes ?? []).flatMap((node) => {
+    if (typeof node.id !== 'string' || !['agent', 'codeact_agent', 'remote_agent'].includes(String(node.type))) return [];
+    const label = [node.data?.name, node.data?.label].find((value): value is string => typeof value === 'string' && Boolean(value.trim()))?.trim() ?? node.id;
+    return [{ id: node.id, label }];
+  });
+}
+
+function evaluationCoverage(
+  cases: EvaluationCase[],
+  nodes: Array<{ id: string; label: string }>,
+  routes: WorkflowRouteOption[],
+) {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const routeKeys = new Set(routes.map((route) => `${route.nodeId}:${route.route}`));
+  const coveredNodes = new Set<string>();
+  const coveredRoutes = new Set<string>();
+  const stale = new Set<string>();
+  for (const item of cases.filter((item) => item.enabled && !item.archived)) {
+    const assertions = (item.expectation as { assertions?: unknown } | undefined)?.assertions;
+    if (!Array.isArray(assertions)) continue;
+    for (const assertion of assertions) {
+      if (!assertion || typeof assertion !== 'object') continue;
+      const value = assertion as Record<string, unknown>;
+      const nodeId = value.nodeId;
+      if (typeof nodeId === 'string') {
+        if (nodeIds.has(nodeId)) coveredNodes.add(nodeId);
+        else stale.add(nodeId);
+      }
+      if (value.kind === 'node_trajectory') {
+        for (const key of ['mustExecute', 'mustNotExecute', 'orderedNodes']) {
+          const ids = value[key];
+          if (Array.isArray(ids)) ids.forEach((id) => typeof id === 'string' && (nodeIds.has(id) ? coveredNodes.add(id) : stale.add(id)));
+        }
+      }
+      if (value.kind === 'route' && typeof nodeId === 'string' && typeof value.expectedRoute === 'string') {
+        const key = `${nodeId}:${value.expectedRoute}`;
+        if (routeKeys.has(key)) coveredRoutes.add(key);
+        else stale.add(`${nodeId}:${value.expectedRoute}`);
+      }
+    }
+  }
+  return { coveredNodes, coveredRoutes, missingNodes: nodes.filter((node) => !coveredNodes.has(node.id)), missingRoutes: routes.filter((route) => !coveredRoutes.has(`${route.nodeId}:${route.route}`)), stale: [...stale] };
 }
 const RESULT_STYLE: Record<EvaluationCaseResult['verdict'], string> = {
   pending: 'border-muted-foreground/30 bg-muted text-muted-foreground',
@@ -434,6 +622,101 @@ function toolTrajectoryDraft(value: unknown): ToolTrajectoryDraft {
   };
 }
 
+function nodeTrajectoryDraft(value: unknown): NodeTrajectoryDraft {
+  const assertions = (value as { assertions?: unknown } | undefined)
+    ?.assertions;
+  const trajectory = Array.isArray(assertions)
+    ? assertions.find(
+        (assertion) =>
+          assertion &&
+          typeof assertion === 'object' &&
+          (assertion as Record<string, unknown>).kind === 'node_trajectory',
+      )
+    : undefined;
+  const record = trajectory as Record<string, unknown> | undefined;
+  const nodeIds = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter((node): node is string => typeof node === 'string')
+      : [];
+  return {
+    mustExecute: nodeIds(record?.mustExecute ?? record?.must_execute),
+    mustNotExecute: nodeIds(record?.mustNotExecute ?? record?.must_not_execute),
+    orderedNodes: nodeIds(record?.orderedNodes ?? record?.ordered_nodes),
+    requireCompleted:
+      (record?.requireCompleted ?? record?.require_completed) !== false,
+  };
+}
+
+function routeAssertionDrafts(value: unknown): RouteAssertionDraft[] {
+  const assertions = (value as { assertions?: unknown } | undefined)
+    ?.assertions;
+  return Array.isArray(assertions)
+    ? assertions.flatMap((assertion) => {
+        if (!assertion || typeof assertion !== 'object') return [];
+        const item = assertion as Record<string, unknown>;
+        return item.kind === 'route' &&
+          typeof item.nodeId === 'string' &&
+          typeof item.expectedRoute === 'string'
+          ? [
+              {
+                id: typeof item.id === 'string' ? item.id : crypto.randomUUID(),
+                nodeId: item.nodeId,
+                expectedRoute: item.expectedRoute,
+              },
+            ]
+          : [];
+      })
+    : [];
+}
+
+function nodeOutputAssertionDrafts(value: unknown): NodeOutputAssertionDraft[] {
+  const assertions = (value as { assertions?: unknown } | undefined)?.assertions;
+  return Array.isArray(assertions)
+    ? assertions.flatMap((assertion) => {
+        if (!assertion || typeof assertion !== 'object') return [];
+        const item = assertion as Record<string, unknown>;
+        return item.kind === 'node_output' &&
+          typeof item.nodeId === 'string' &&
+          typeof item.path === 'string' &&
+          typeof item.operator === 'string'
+          ? [{
+              id: typeof item.id === 'string' ? item.id : crypto.randomUUID(),
+              nodeId: item.nodeId,
+              path: item.path,
+              operator: item.operator as NodeOutputAssertionDraft['operator'],
+              expected:
+                typeof item.expected === 'string'
+                  ? item.expected
+                  : JSON.stringify(item.expected) ?? '',
+            }]
+          : [];
+      })
+    : [];
+}
+
+function nodeTextAssertionDrafts(value: unknown): NodeTextAssertionDraft[] {
+  const assertions = (value as { assertions?: unknown } | undefined)?.assertions;
+  return Array.isArray(assertions) ? assertions.flatMap((assertion) => {
+    if (!assertion || typeof assertion !== 'object') return [];
+    const item = assertion as Record<string, unknown>;
+    return item.kind === 'node_text' && typeof item.nodeId === 'string' && typeof item.expected === 'string'
+      ? [{ id: typeof item.id === 'string' ? item.id : crypto.randomUUID(), nodeId: item.nodeId, algorithm: item.algorithm as MatchAlgorithm, expected: item.expected }]
+      : [];
+  }) : [];
+}
+
+function nodeToolAssertionDrafts(value: unknown): NodeToolAssertionDraft[] {
+  const assertions = (value as { assertions?: unknown } | undefined)?.assertions;
+  return Array.isArray(assertions) ? assertions.flatMap((assertion) => {
+    if (!assertion || typeof assertion !== 'object') return [];
+    const item = assertion as Record<string, unknown>;
+    const tool = Array.isArray(item.tools) ? item.tools[0] as Record<string, unknown> | undefined : undefined;
+    return item.kind === 'node_tool_trajectory' && typeof item.nodeId === 'string' && typeof tool?.name === 'string'
+      ? [{ id: typeof item.id === 'string' ? item.id : crypto.randomUUID(), nodeId: item.nodeId, toolName: tool.name, count: Math.max(1, item.tools.length) }]
+      : [];
+  }) : [];
+}
+
 function toolFixtureDrafts(value: unknown): ToolFixtureDraft[] {
   const fixtures = (value as { toolFixtures?: unknown } | undefined)
     ?.toolFixtures;
@@ -444,6 +727,7 @@ function toolFixtureDrafts(value: unknown): ToolFixtureDraft[] {
         return [
           {
             id: crypto.randomUUID(),
+            nodeId: typeof item.nodeId === 'string' ? item.nodeId : '',
             tool: typeof item.tool === 'string' ? item.tool : '',
             args: JSON.stringify(item.args ?? {}, null, 2),
             result: JSON.stringify(item.result ?? {}, null, 2),
@@ -530,12 +814,56 @@ function trajectoryAssertion(draft: ToolTrajectoryDraft, t: TFunction) {
     : undefined;
 }
 
+function nodeTrajectoryAssertion(draft: NodeTrajectoryDraft) {
+  return draft.mustExecute.length ||
+    draft.mustNotExecute.length ||
+    draft.orderedNodes.length
+    ? {
+        kind: 'node_trajectory',
+        id: crypto.randomUUID(),
+        mustExecute: draft.mustExecute,
+        mustNotExecute: draft.mustNotExecute,
+        orderedNodes: draft.orderedNodes,
+        requireCompleted: draft.requireCompleted,
+      }
+    : undefined;
+}
+
+function routeAssertions(drafts: RouteAssertionDraft[]) {
+  return drafts.map((draft) => ({
+    kind: 'route',
+    id: draft.id,
+    nodeId: draft.nodeId,
+    expectedRoute: draft.expectedRoute,
+  }));
+}
+
+function nodeOutputAssertions(drafts: NodeOutputAssertionDraft[]) {
+  return drafts.map((draft) => ({
+    kind: 'node_output',
+    id: draft.id,
+    nodeId: draft.nodeId,
+    path: draft.path,
+    operator: draft.operator,
+    expected: draft.expected,
+  }));
+}
+
+function nodeTextAssertions(drafts: NodeTextAssertionDraft[]) {
+  return drafts.map((draft) => ({ kind: 'node_text', id: draft.id, nodeId: draft.nodeId, algorithm: draft.algorithm, expected: draft.expected, threshold: draft.algorithm === 'levenshtein' ? 0.8 : 1 }));
+}
+
+function nodeToolAssertions(drafts: NodeToolAssertionDraft[]) {
+  return drafts.map((draft) => ({ kind: 'node_tool_trajectory', id: draft.id, nodeId: draft.nodeId, tools: Array.from({ length: draft.count }, () => ({ name: draft.toolName, args: {} })), config: { strictOrder: true, strictArgs: false } }));
+}
+
 function fixturesFromDrafts(drafts: ToolFixtureDraft[], t: TFunction) {
   return {
     toolFixtures: drafts.map((fixture) => {
       if (!fixture.tool.trim())
         throw new Error(t('evaluations.fixtureToolRequired'));
       return {
+        ...(fixture.nodeId ? { nodeId: fixture.nodeId } : {}),
         tool: fixture.tool.trim(),
         args: jsonObject(fixture.args, t('evaluations.fixtureArgs'), t),
         result: jsonObject(fixture.result, t('evaluations.fixtureResult'), t),
@@ -548,6 +876,11 @@ function expectationFromVisualAssertions(
   value: unknown,
   assertions: VisualAssertion[],
   trajectory: ToolTrajectoryDraft,
+  nodeTrajectory: NodeTrajectoryDraft,
+  routes: RouteAssertionDraft[],
+  nodeOutputs: NodeOutputAssertionDraft[],
+  nodeTexts: NodeTextAssertionDraft[],
+  nodeTools: NodeToolAssertionDraft[],
   safety: SafetyAssertionDraft[],
   t: TFunction,
 ) {
@@ -559,13 +892,22 @@ function expectationFromVisualAssertions(
           !(
             typeof assertion === 'object' &&
             assertion !== null &&
-            ['json_path', 'text', 'tool_trajectory', 'safety'].includes(
-              String((assertion as Record<string, unknown>).kind),
-            )
+            [
+              'json_path',
+              'text',
+              'tool_trajectory',
+              'node_trajectory',
+              'route',
+              'node_output',
+              'node_text',
+              'node_tool_trajectory',
+              'safety',
+            ].includes(String((assertion as Record<string, unknown>).kind))
           ),
       )
     : [];
   const toolAssertion = trajectoryAssertion(trajectory, t);
+  const nodeAssertion = nodeTrajectoryAssertion(nodeTrajectory);
   return {
     ...base,
     assertions: [
@@ -588,6 +930,11 @@ function expectationFromVisualAssertions(
             },
       ),
       ...(toolAssertion ? [toolAssertion] : []),
+      ...(nodeAssertion ? [nodeAssertion] : []),
+      ...routeAssertions(routes),
+      ...nodeOutputAssertions(nodeOutputs),
+      ...nodeTextAssertions(nodeTexts),
+      ...nodeToolAssertions(nodeTools),
       ...safetyAssertions(safety),
     ],
   };
@@ -596,6 +943,11 @@ function expectationFromVisualAssertions(
 function serializeVisualAssertions(
   assertions: VisualAssertion[],
   trajectory: ToolTrajectoryDraft,
+  nodeTrajectory: NodeTrajectoryDraft,
+  routes: RouteAssertionDraft[],
+  nodeOutputs: NodeOutputAssertionDraft[],
+  nodeTexts: NodeTextAssertionDraft[],
+  nodeTools: NodeToolAssertionDraft[],
   safety: SafetyAssertionDraft[],
   t: TFunction,
 ) {
@@ -624,9 +976,15 @@ function serializeVisualAssertions(
   } catch {
     toolAssertion = undefined;
   }
+  const nodeAssertion = nodeTrajectoryAssertion(nodeTrajectory);
   return [
     ...output,
     ...(toolAssertion ? [toolAssertion] : []),
+    ...(nodeAssertion ? [nodeAssertion] : []),
+    ...routeAssertions(routes),
+    ...nodeOutputAssertions(nodeOutputs),
+    ...nodeTextAssertions(nodeTexts),
+    ...nodeToolAssertions(nodeTools),
     ...safetyAssertions(safety),
   ];
 }
@@ -656,6 +1014,8 @@ export function WorkflowEvaluations({
   const [activeRunId, setActiveRunId] = useState<string>();
   const [baselineVersion, setBaselineVersion] = useState<string>();
   const [candidateVersion, setCandidateVersion] = useState<string>();
+  const [selectedVersionDiff, setSelectedVersionDiff] =
+    useState<EvaluationVersionCaseDiff>();
   const [showArchivedCases, setShowArchivedCases] = useState(false);
   const [selectedResult, setSelectedResult] = useState<EvaluationCaseResult>();
   const [suiteDialogOpen, setSuiteDialogOpen] = useState(false);
@@ -687,13 +1047,35 @@ export function WorkflowEvaluations({
     strictArgs: false,
     calls: [],
   });
+  const [nodeTrajectory, setNodeTrajectory] = useState<NodeTrajectoryDraft>({
+    mustExecute: [],
+    mustNotExecute: [],
+    orderedNodes: [],
+    requireCompleted: true,
+  });
+  const [routeDrafts, setRouteDrafts] = useState<RouteAssertionDraft[]>([]);
+  const [nodeOutputDrafts, setNodeOutputDrafts] = useState<
+    NodeOutputAssertionDraft[]
+  >([]);
+  const [nodeTextDrafts, setNodeTextDrafts] = useState<NodeTextAssertionDraft[]>([]);
+  const [nodeToolDrafts, setNodeToolDrafts] = useState<NodeToolAssertionDraft[]>([]);
   const [fixtureDrafts, setFixtureDrafts] = useState<ToolFixtureDraft[]>([]);
   const [safetyDrafts, setSafetyDrafts] = useState<SafetyAssertionDraft[]>([]);
   const [saving, setSaving] = useState(false);
   const [startingRun, setStartingRun] = useState(false);
   const startingNext = useRef(false);
   const assertionsJson = JSON.stringify(
-    serializeVisualAssertions(assertionDrafts, toolTrajectory, safetyDrafts, t),
+    serializeVisualAssertions(
+      assertionDrafts,
+      toolTrajectory,
+      nodeTrajectory,
+      routeDrafts,
+      nodeOutputDrafts,
+      nodeTextDrafts,
+      nodeToolDrafts,
+      safetyDrafts,
+      t,
+    ),
     null,
     2,
   );
@@ -799,6 +1181,25 @@ export function WorkflowEvaluations({
       baselineVersion !== candidateVersion,
     ),
   });
+  const versionCriteriaDiff = useQuery({
+    queryKey: [
+      'evaluation-version-criteria-diff',
+      effectiveSuiteId,
+      baseline?.releaseVersion,
+      candidate?.releaseVersion,
+      selectedVersionDiff?.caseId,
+    ],
+    queryFn: () =>
+      compareEvaluationVersionCaseCriteria(
+        effectiveSuiteId!,
+        baseline!.releaseVersion,
+        candidate!.releaseVersion,
+        selectedVersionDiff!.caseId,
+      ),
+    enabled: Boolean(
+      effectiveSuiteId && baseline && candidate && selectedVersionDiff,
+    ),
+  });
   const toolCatalog = useQuery({
     queryKey: ['tool-catalog'],
     queryFn: listTools,
@@ -806,6 +1207,18 @@ export function WorkflowEvaluations({
   const configuredToolIds = workflowToolIds(workflowSnapshot);
   const configuredTools =
     toolCatalog.data?.filter((tool) => configuredToolIds.has(tool.id)) ?? [];
+  const configuredWorkflowNodes = workflowEvaluationNodes(workflowSnapshot, t);
+  const configuredRoutes = workflowRoutes(workflowSnapshot);
+  const configuredAgentNodes = workflowAgentNodes(workflowSnapshot);
+  const configuredRouteNodes = Array.from(
+    new Map(configuredRoutes.map((route) => [route.nodeId, route])).values(),
+  );
+  // Coverage only reflects active cases: archived or disabled cases cannot protect a workflow change.
+  const coverage = evaluationCoverage(
+    cases.data ?? [],
+    configuredWorkflowNodes,
+    configuredRoutes,
+  );
 
   useEffect(() => {
     const rows = results.data;
@@ -927,6 +1340,11 @@ export function WorkflowEvaluations({
     setCaseExpectation(item?.expectation);
     setAssertionDrafts(visualAssertions(item?.expectation));
     setToolTrajectory(toolTrajectoryDraft(item?.expectation));
+    setNodeTrajectory(nodeTrajectoryDraft(item?.expectation));
+    setRouteDrafts(routeAssertionDrafts(item?.expectation));
+    setNodeOutputDrafts(nodeOutputAssertionDrafts(item?.expectation));
+    setNodeTextDrafts(nodeTextAssertionDrafts(item?.expectation));
+    setNodeToolDrafts(nodeToolAssertionDrafts(item?.expectation));
     setFixtureDrafts(toolFixtureDrafts(item?.fixture));
     setSafetyDrafts(safetyAssertionDrafts(item?.expectation));
     setCaseDialogOpen(true);
@@ -936,7 +1354,15 @@ export function WorkflowEvaluations({
     if (
       !selectedSuite ||
       !caseName.trim() ||
-      (!assertionDrafts.length && !toolTrajectory.calls.length)
+      (!assertionDrafts.length &&
+        !toolTrajectory.calls.length &&
+        !nodeTrajectory.mustExecute.length &&
+        !nodeTrajectory.mustNotExecute.length &&
+        !nodeTrajectory.orderedNodes.length &&
+        !routeDrafts.length &&
+        !nodeOutputDrafts.length &&
+        !nodeTextDrafts.length &&
+        !nodeToolDrafts.length)
     )
       return;
     setSaving(true);
@@ -945,6 +1371,11 @@ export function WorkflowEvaluations({
         caseExpectation,
         assertionDrafts,
         toolTrajectory,
+        nodeTrajectory,
+        routeDrafts,
+        nodeOutputDrafts,
+        nodeTextDrafts,
+        nodeToolDrafts,
         safetyDrafts,
         t,
       );
@@ -987,6 +1418,16 @@ export function WorkflowEvaluations({
       setCaseInput('{}');
       setAssertionDrafts([]);
       setToolTrajectory({ strictOrder: true, strictArgs: false, calls: [] });
+      setNodeTrajectory({
+        mustExecute: [],
+        mustNotExecute: [],
+        orderedNodes: [],
+        requireCompleted: true,
+      });
+      setRouteDrafts([]);
+      setNodeOutputDrafts([]);
+      setNodeTextDrafts([]);
+      setNodeToolDrafts([]);
       setFixtureDrafts([]);
       setSafetyDrafts([]);
     } catch (error) {
@@ -1394,6 +1835,16 @@ export function WorkflowEvaluations({
                     </Button>
                   </div>
                 </div>
+                <div className='grid gap-3 rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 sm:grid-cols-3'>
+                  <div><p className='text-muted-foreground text-xs'>{t('evaluations.nodeCoverage')}</p><p className='mt-1 text-lg font-semibold'>{coverage.coveredNodes.size}/{configuredWorkflowNodes.length}</p></div>
+                  <div><p className='text-muted-foreground text-xs'>{t('evaluations.routeCoverage')}</p><p className='mt-1 text-lg font-semibold'>{coverage.coveredRoutes.size}/{configuredRoutes.length}</p></div>
+                  <div><p className='text-muted-foreground text-xs'>{t('evaluations.staleAssertions')}</p><p className='mt-1 text-lg font-semibold'>{coverage.stale.length}</p></div>
+                  {coverage.missingNodes.length || coverage.missingRoutes.length || coverage.stale.length ? <div className='text-muted-foreground border-t pt-3 text-xs sm:col-span-3'>
+                    {coverage.missingNodes.length ? <p>{t('evaluations.uncoveredNodes')}: {coverage.missingNodes.map((node) => node.label).join('、')}</p> : null}
+                    {coverage.missingRoutes.length ? <p>{t('evaluations.uncoveredRoutes')}: {coverage.missingRoutes.map((route) => `${route.nodeLabel} → ${route.label}`).join('、')}</p> : null}
+                    {coverage.stale.length ? <p className='text-destructive'>{t('evaluations.staleAssertionTargets')}: {coverage.stale.join('、')}</p> : null}
+                  </div> : <p className='text-muted-foreground border-t pt-3 text-xs sm:col-span-3'>{t('evaluations.coverageComplete')}</p>}
+                </div>
                 <div className='grid gap-5 min-[1900px]:grid-cols-[minmax(0,1fr)_18rem]'>
                   <div className='flex flex-col gap-2'>
                     <div className='flex items-center justify-between'>
@@ -1452,9 +1903,12 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={t(item.enabled
-                              ? 'evaluations.disableCase'
-                              : 'evaluations.enableCase', { name: item.name })}
+                            aria-label={t(
+                              item.enabled
+                                ? 'evaluations.disableCase'
+                                : 'evaluations.enableCase',
+                              { name: item.name },
+                            )}
                             onClick={() => void updateCaseEnabled(item)}
                           >
                             <PowerIcon />
@@ -1462,7 +1916,9 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={t('evaluations.moveCaseUp', { name: item.name })}
+                            aria-label={t('evaluations.moveCaseUp', {
+                              name: item.name,
+                            })}
                             disabled={item.position === 0}
                             onClick={() => void moveCase(item, -1)}
                           >
@@ -1471,7 +1927,9 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={t('evaluations.moveCaseDown', { name: item.name })}
+                            aria-label={t('evaluations.moveCaseDown', {
+                              name: item.name,
+                            })}
                             disabled={
                               item.position === (cases.data?.length ?? 1) - 1
                             }
@@ -1482,7 +1940,9 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={t('evaluations.copyCase', { name: item.name })}
+                            aria-label={t('evaluations.copyCase', {
+                              name: item.name,
+                            })}
                             onClick={() => void duplicateCase(item)}
                           >
                             <CopyIcon />
@@ -1490,7 +1950,9 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={t('evaluations.editCaseAria', { name: item.name })}
+                            aria-label={t('evaluations.editCaseAria', {
+                              name: item.name,
+                            })}
                             onClick={() => openCaseEditor(item)}
                           >
                             <PencilIcon />
@@ -1498,7 +1960,9 @@ export function WorkflowEvaluations({
                           <Button
                             variant='ghost'
                             size='icon-sm'
-                            aria-label={t('evaluations.deleteCaseAria', { name: item.name })}
+                            aria-label={t('evaluations.deleteCaseAria', {
+                              name: item.name,
+                            })}
                             onClick={() => setDeleteCase(item)}
                           >
                             <Trash2Icon />
@@ -1827,17 +2291,22 @@ export function WorkflowEvaluations({
                             {versionDiff.data?.length ? (
                               <div className='mt-3 flex flex-col gap-1'>
                                 {versionDiff.data.map((diff) => (
-                                  <div
+                                  <button
+                                    type='button'
                                     key={diff.caseId}
-                                    className='flex justify-between gap-2 text-xs'
+                                    className='hover:bg-muted/60 focus-visible:ring-ring flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors outline-none focus-visible:ring-2'
+                                    onClick={() => setSelectedVersionDiff(diff)}
                                   >
                                     <span className='truncate'>
                                       {diff.name}
                                     </span>
-                                    <Badge variant='outline'>
-                                      {versionDiffLabel(diff, t)}
-                                    </Badge>
-                                  </div>
+                                    <span className='flex shrink-0 items-center gap-1.5'>
+                                      <Badge variant='outline'>
+                                        {versionDiffLabel(diff, t)}
+                                      </Badge>
+                                      <ChevronRightIcon className='text-muted-foreground size-3.5' />
+                                    </span>
+                                  </button>
                                 ))}
                               </div>
                             ) : (
@@ -1856,6 +2325,56 @@ export function WorkflowEvaluations({
           </section>
         </div>
       </div>
+
+      <Dialog
+        open={Boolean(selectedVersionDiff)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedVersionDiff(undefined);
+        }}
+      >
+        <DialogContent className='max-w-2xl! gap-0 overflow-hidden p-0'>
+          <DialogHeader className='border-b bg-linear-to-br from-rose-500/10 to-amber-500/10 px-6 py-5 pr-14'>
+            <DialogTitle className='text-lg'>
+              {t('evaluations.regressionLocation')}
+            </DialogTitle>
+            <DialogDescription className='mt-1'>
+              {selectedVersionDiff?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className='max-h-[min(62vh,560px)] overflow-y-auto px-6 py-5'>
+            {versionCriteriaDiff.isLoading ? (
+              <div className='text-muted-foreground flex items-center gap-2 py-8 text-sm'>
+                <Spinner className='size-4' />
+                {t('evaluations.loadingRegressionLocation')}
+              </div>
+            ) : versionCriteriaDiff.data ? (
+              <VersionCriterionComparison
+                comparison={versionCriteriaDiff.data}
+                baselineLabel={baseline?.releaseVersion ?? ''}
+                candidateLabel={candidate?.releaseVersion ?? ''}
+                nodeNames={Object.fromEntries(
+                  configuredWorkflowNodes.map((node) => [node.id, node.label]),
+                )}
+                routeNames={Object.fromEntries(
+                  configuredRoutes.map((route) => [
+                    `${route.nodeId}:${route.route}`,
+                    route.label,
+                  ]),
+                )}
+              />
+            ) : (
+              <p className='text-muted-foreground py-8 text-sm'>
+                {t('evaluations.noCriterionDifferences')}
+              </p>
+            )}
+          </div>
+          <DialogFooter className='mx-0 mb-0'>
+            <Button variant='outline' onClick={() => setSelectedVersionDiff(undefined)}>
+              {t('common.close')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={qualityGateOpen} onOpenChange={setQualityGateOpen}>
         <DialogContent className='max-w-2xl! gap-0 overflow-hidden p-0'>
@@ -2001,7 +2520,7 @@ export function WorkflowEvaluations({
               </FieldSet>
             </FieldGroup>
           </div>
-          <DialogFooter className='border-t px-6 py-4'>
+          <DialogFooter className='mx-0 mb-0'>
             <Button variant='outline' onClick={() => setQualityGateOpen(false)}>
               {t('common.cancel')}
             </Button>
@@ -2074,7 +2593,7 @@ export function WorkflowEvaluations({
               </FieldGroup>
             </FieldSet>
           </div>
-          <DialogFooter className='border-t px-6 py-4'>
+          <DialogFooter className='mx-0 mb-0'>
             <Button
               variant='outline'
               disabled={saving}
@@ -2251,7 +2770,8 @@ export function WorkflowEvaluations({
                       ])
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addRule')}
+                    <PlusIcon data-icon='inline-start' />{' '}
+                    {t('evaluations.addRule')}
                   </Button>
                 </div>
                 <FieldGroup className='mt-4 gap-3'>
@@ -2284,12 +2804,20 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>{t('evaluations.assertionTarget')}</FieldLabel>
+                          <FieldLabel>
+                            {t('evaluations.assertionTarget')}
+                          </FieldLabel>
                           <Select
                             value={assertion.subject}
                             items={[
-                              { value: 'final_json', label: t('evaluations.finalOutputField') },
-                              { value: 'final_text', label: t('evaluations.finalOutputText') },
+                              {
+                                value: 'final_json',
+                                label: t('evaluations.finalOutputField'),
+                              },
+                              {
+                                value: 'final_text',
+                                label: t('evaluations.finalOutputText'),
+                              },
                             ]}
                             onValueChange={(value) =>
                               setAssertionDrafts((current) =>
@@ -2323,7 +2851,9 @@ export function WorkflowEvaluations({
                         </Field>
                         {assertion.subject === 'final_json' ? (
                           <Field>
-                            <FieldLabel>{t('evaluations.fieldPath')}</FieldLabel>
+                            <FieldLabel>
+                              {t('evaluations.fieldPath')}
+                            </FieldLabel>
                             <Input
                               value={assertion.path}
                               placeholder='$.decision'
@@ -2346,15 +2876,36 @@ export function WorkflowEvaluations({
                             items={
                               assertion.subject === 'final_json'
                                 ? [
-                                    { value: 'equals', label: t('evaluations.equals') },
-                                    { value: 'not_equals', label: t('evaluations.notEquals') },
-                                    { value: 'contains', label: t('evaluations.contains') },
-                                    { value: 'not_contains', label: t('evaluations.notContains') },
-                                    { value: 'exists', label: t('evaluations.fieldExists') },
+                                    {
+                                      value: 'equals',
+                                      label: t('evaluations.equals'),
+                                    },
+                                    {
+                                      value: 'not_equals',
+                                      label: t('evaluations.notEquals'),
+                                    },
+                                    {
+                                      value: 'contains',
+                                      label: t('evaluations.contains'),
+                                    },
+                                    {
+                                      value: 'not_contains',
+                                      label: t('evaluations.notContains'),
+                                    },
+                                    {
+                                      value: 'exists',
+                                      label: t('evaluations.fieldExists'),
+                                    },
                                   ]
                                 : [
-                                    { value: 'exact', label: t('evaluations.exactMatch') },
-                                    { value: 'contains', label: t('evaluations.containsText') },
+                                    {
+                                      value: 'exact',
+                                      label: t('evaluations.exactMatch'),
+                                    },
+                                    {
+                                      value: 'contains',
+                                      label: t('evaluations.containsText'),
+                                    },
                                     {
                                       value: 'levenshtein',
                                       label: t('evaluations.textSimilarity'),
@@ -2381,7 +2932,9 @@ export function WorkflowEvaluations({
                               <SelectGroup>
                                 {assertion.subject === 'final_json' ? (
                                   <>
-                                    <SelectItem value='equals'>{t('evaluations.equals')}</SelectItem>
+                                    <SelectItem value='equals'>
+                                      {t('evaluations.equals')}
+                                    </SelectItem>
                                     <SelectItem value='not_equals'>
                                       {t('evaluations.notEquals')}
                                     </SelectItem>
@@ -2414,7 +2967,9 @@ export function WorkflowEvaluations({
                         </Field>
                         {assertion.operator !== 'exists' ? (
                           <Field>
-                            <FieldLabel>{t('evaluations.expectedValue')}</FieldLabel>
+                            <FieldLabel>
+                              {t('evaluations.expectedValue')}
+                            </FieldLabel>
                             <Input
                               value={assertion.expected}
                               placeholder={
@@ -2448,10 +3003,666 @@ export function WorkflowEvaluations({
                 </FieldGroup>
               </FieldSet>
 
+              <FieldSet className='rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-4 sm:p-5'>
+                <div className='flex items-start justify-between gap-3'>
+                  <div><FieldLegend>{t('evaluations.agentMessageAssertions')}</FieldLegend><FieldDescription>{t('evaluations.agentMessageAssertionsDescription')}</FieldDescription></div>
+                  <Button type='button' variant='outline' size='sm' disabled={!configuredAgentNodes.length} onClick={() => { const node = configuredAgentNodes[0]; if (node) setNodeTextDrafts((current) => [...current, { id: crypto.randomUUID(), nodeId: node.id, algorithm: 'contains', expected: '' }]); }}><PlusIcon data-icon='inline-start' /> {t('evaluations.addAgentMessageAssertion')}</Button>
+                </div>
+                {configuredAgentNodes.length ? <FieldGroup className='mt-4 gap-3'>
+                  {nodeTextDrafts.map((draft, index) => <div key={draft.id} className='grid gap-3 rounded-lg border bg-background p-3 sm:grid-cols-3'>
+                    <Field><FieldLabel>{t('evaluations.agentNode')}</FieldLabel><Select value={draft.nodeId} items={configuredAgentNodes.map((node) => ({ value: node.id, label: node.label }))} onValueChange={(nodeId) => setNodeTextDrafts((current) => current.map((item) => item.id === draft.id && nodeId ? { ...item, nodeId } : item))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{configuredAgentNodes.map((node) => <SelectItem key={node.id} value={node.id}>{node.label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+                    <Field><FieldLabel>{t('evaluations.operator')}</FieldLabel><Select value={draft.algorithm} items={[{ value: 'exact', label: t('evaluations.exactMatch') }, { value: 'contains', label: t('evaluations.containsText') }, { value: 'levenshtein', label: t('evaluations.textSimilarity') }]} onValueChange={(algorithm) => setNodeTextDrafts((current) => current.map((item) => item.id === draft.id && algorithm ? { ...item, algorithm: algorithm as MatchAlgorithm } : item))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='exact'>{t('evaluations.exactMatch')}</SelectItem><SelectItem value='contains'>{t('evaluations.containsText')}</SelectItem><SelectItem value='levenshtein'>{t('evaluations.textSimilarity')}</SelectItem></SelectGroup></SelectContent></Select></Field>
+                    <Field><FieldLabel>{t('evaluations.expectedText')}</FieldLabel><div className='flex gap-2'><Input value={draft.expected} onChange={(event) => setNodeTextDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, expected: event.target.value } : item))} /><Button type='button' variant='ghost' size='icon-sm' aria-label={t('evaluations.deleteAgentMessageAssertion', { index: index + 1 })} onClick={() => setNodeTextDrafts((current) => current.filter((item) => item.id !== draft.id))}><Trash2Icon /></Button></div></Field>
+                  </div>)}
+                  {!nodeTextDrafts.length ? <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm'>{t('evaluations.noAgentMessageAssertions')}</p> : null}
+                </FieldGroup> : <p className='text-muted-foreground mt-4 rounded-lg border border-dashed px-3 py-4 text-center text-sm'>{t('evaluations.noAgentNodes')}</p>}
+              </FieldSet>
+
+              <FieldSet className='rounded-xl border border-teal-500/20 bg-teal-500/5 p-4 sm:p-5'>
+                <div className='flex items-start justify-between gap-3'><div><FieldLegend>{t('evaluations.nodeToolAssertions')}</FieldLegend><FieldDescription>{t('evaluations.nodeToolAssertionsDescription')}</FieldDescription></div><Button type='button' variant='outline' size='sm' disabled={!configuredAgentNodes.length || !configuredTools.length} onClick={() => { const node = configuredAgentNodes[0]; const tool = configuredTools[0]; if (node && tool) setNodeToolDrafts((current) => [...current, { id: crypto.randomUUID(), nodeId: node.id, toolName: tool.name, count: 1 }]); }}><PlusIcon data-icon='inline-start' /> {t('evaluations.addNodeToolAssertion')}</Button></div>
+                <FieldGroup className='mt-4 gap-3'>{nodeToolDrafts.map((draft, index) => <div key={draft.id} className='grid gap-3 rounded-lg border bg-background p-3 sm:grid-cols-4'><Field><FieldLabel>{t('evaluations.agentNode')}</FieldLabel><Select value={draft.nodeId} items={configuredAgentNodes.map((node) => ({ value: node.id, label: node.label }))} onValueChange={(nodeId) => setNodeToolDrafts((current) => current.map((item) => item.id === draft.id && nodeId ? { ...item, nodeId } : item))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{configuredAgentNodes.map((node) => <SelectItem key={node.id} value={node.id}>{node.label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field><Field><FieldLabel>{t('evaluations.tool')}</FieldLabel><Select value={draft.toolName} items={configuredTools.map((tool) => ({ value: tool.name, label: toolLabel(tool) }))} onValueChange={(toolName) => setNodeToolDrafts((current) => current.map((item) => item.id === draft.id && toolName ? { ...item, toolName } : item))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{configuredTools.map((tool) => <SelectItem key={tool.id} value={tool.name}>{toolLabel(tool)}</SelectItem>)}</SelectGroup></SelectContent></Select></Field><Field><FieldLabel>{t('evaluations.callCount')}</FieldLabel><Input type='number' min={1} value={draft.count} onChange={(event) => setNodeToolDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, count: Math.max(1, Number(event.target.value) || 1) } : item))} /></Field><Button type='button' variant='ghost' size='icon-sm' className='self-end' aria-label={t('evaluations.deleteNodeToolAssertion', { index: index + 1 })} onClick={() => setNodeToolDrafts((current) => current.filter((item) => item.id !== draft.id))}><Trash2Icon /></Button></div>)}{!nodeToolDrafts.length ? <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm'>{t('evaluations.noNodeToolAssertions')}</p> : null}</FieldGroup>
+              </FieldSet>
+
+              <FieldSet className='rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4 sm:p-5'>
+                <div className='flex items-start justify-between gap-3'>
+                  <div>
+                    <FieldLegend>{t('evaluations.nodeOutputAssertions')}</FieldLegend>
+                    <FieldDescription>{t('evaluations.nodeOutputAssertionsDescription')}</FieldDescription>
+                  </div>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    disabled={!configuredWorkflowNodes.length}
+                    onClick={() => {
+                      const node = configuredWorkflowNodes[0];
+                      if (!node) return;
+                      setNodeOutputDrafts((current) => [
+                        ...current,
+                        { id: crypto.randomUUID(), nodeId: node.id, path: '$.', operator: 'equals', expected: '' },
+                      ]);
+                    }}
+                  >
+                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addNodeOutputAssertion')}
+                  </Button>
+                </div>
+                {configuredWorkflowNodes.length ? (
+                  <FieldGroup className='mt-4 gap-3'>
+                    {nodeOutputDrafts.map((draft, index) => (
+                      <div key={draft.id} className='grid gap-3 rounded-lg border bg-background p-3 sm:grid-cols-2'>
+                        <Field>
+                          <FieldLabel>{t('evaluations.outputNode')}</FieldLabel>
+                          <Select value={draft.nodeId} items={configuredWorkflowNodes.map((node) => ({ value: node.id, label: node.label }))} onValueChange={(nodeId) => setNodeOutputDrafts((current) => current.map((item) => item.id === draft.id && nodeId ? { ...item, nodeId } : item))}>
+                            <SelectTrigger><SelectValue placeholder={t('evaluations.selectWorkflowNode')} /></SelectTrigger>
+                            <SelectContent><SelectGroup>{configuredWorkflowNodes.map((node) => <SelectItem key={node.id} value={node.id}>{node.label}</SelectItem>)}</SelectGroup></SelectContent>
+                          </Select>
+                        </Field>
+                        <Field>
+                          <FieldLabel>{t('evaluations.fieldPath')}</FieldLabel>
+                          <Input value={draft.path} placeholder='$.riskLevel' onChange={(event) => setNodeOutputDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, path: event.target.value } : item))} />
+                        </Field>
+                        <Field>
+                          <FieldLabel>{t('evaluations.operator')}</FieldLabel>
+                          <Select
+                            value={draft.operator}
+                            items={[
+                              { value: 'equals', label: t('evaluations.equals') },
+                              { value: 'not_equals', label: t('evaluations.notEquals') },
+                              { value: 'contains', label: t('evaluations.contains') },
+                              { value: 'not_contains', label: t('evaluations.notContains') },
+                              { value: 'exists', label: t('evaluations.fieldExists') },
+                            ]}
+                            onValueChange={(operator) => setNodeOutputDrafts((current) => current.map((item) => item.id === draft.id && operator ? { ...item, operator: operator as NodeOutputAssertionDraft['operator'] } : item))}
+                          >
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent><SelectGroup>
+                              <SelectItem value='equals'>{t('evaluations.equals')}</SelectItem><SelectItem value='not_equals'>{t('evaluations.notEquals')}</SelectItem><SelectItem value='contains'>{t('evaluations.contains')}</SelectItem><SelectItem value='not_contains'>{t('evaluations.notContains')}</SelectItem><SelectItem value='exists'>{t('evaluations.fieldExists')}</SelectItem>
+                            </SelectGroup></SelectContent>
+                          </Select>
+                        </Field>
+                        <Field>
+                          <FieldLabel>{t('evaluations.expectedValue')}</FieldLabel>
+                          <div className='flex gap-2'><Input value={draft.expected} disabled={draft.operator === 'exists'} onChange={(event) => setNodeOutputDrafts((current) => current.map((item) => item.id === draft.id ? { ...item, expected: event.target.value } : item))} /><Button type='button' variant='ghost' size='icon-sm' aria-label={t('evaluations.deleteNodeOutputAssertion', { index: index + 1 })} onClick={() => setNodeOutputDrafts((current) => current.filter((item) => item.id !== draft.id))}><Trash2Icon /></Button></div>
+                        </Field>
+                      </div>
+                    ))}
+                    {!nodeOutputDrafts.length ? <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm'>{t('evaluations.noNodeOutputAssertions')}</p> : null}
+                  </FieldGroup>
+                ) : <p className='text-muted-foreground mt-4 rounded-lg border border-dashed px-3 py-4 text-center text-sm'>{t('evaluations.noWorkflowNodes')}</p>}
+              </FieldSet>
+
+              <FieldSet className='rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/5 p-4 sm:p-5'>
+                <div className='flex items-start justify-between gap-3'>
+                  <div>
+                    <FieldLegend>
+                      {t('evaluations.routeAssertions')}
+                    </FieldLegend>
+                    <FieldDescription>
+                      {t('evaluations.routeAssertionsDescription')}
+                    </FieldDescription>
+                  </div>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    disabled={!configuredRoutes.length}
+                    onClick={() => {
+                      const route = configuredRoutes[0];
+                      if (!route) return;
+                      setRouteDrafts((current) => [
+                        ...current,
+                        {
+                          id: crypto.randomUUID(),
+                          nodeId: route.nodeId,
+                          expectedRoute: route.route,
+                        },
+                      ]);
+                    }}
+                  >
+                    <PlusIcon data-icon='inline-start' />{' '}
+                    {t('evaluations.addRouteAssertion')}
+                  </Button>
+                </div>
+                {configuredRoutes.length ? (
+                  <FieldGroup className='mt-4 gap-3'>
+                    {routeDrafts.map((draft, index) => {
+                      const routesForNode = configuredRoutes.filter(
+                        (route) => route.nodeId === draft.nodeId,
+                      );
+                      return (
+                        <div
+                          key={draft.id}
+                          className='bg-background grid gap-3 rounded-lg border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]'
+                        >
+                          <Field>
+                            <FieldLabel>
+                              {t('evaluations.routeNode')}
+                            </FieldLabel>
+                            <Select
+                              value={draft.nodeId}
+                              items={configuredRouteNodes.map((route) => ({
+                                value: route.nodeId,
+                                label: route.nodeLabel,
+                              }))}
+                              onValueChange={(nodeId) => {
+                                const firstRoute = configuredRoutes.find(
+                                  (route) => route.nodeId === nodeId,
+                                );
+                                setRouteDrafts((current) =>
+                                  current.map((item) =>
+                                    item.id === draft.id && nodeId && firstRoute
+                                      ? {
+                                          ...item,
+                                          nodeId,
+                                          expectedRoute: firstRoute.route,
+                                        }
+                                      : item,
+                                  ),
+                                );
+                              }}
+                            >
+                              <SelectTrigger>
+                                <SelectValue
+                                  placeholder={t('evaluations.selectRouteNode')}
+                                />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {configuredRouteNodes.map((route) => (
+                                    <SelectItem
+                                      key={route.nodeId}
+                                      value={route.nodeId}
+                                    >
+                                      {route.nodeLabel}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                          <Field>
+                            <FieldLabel>
+                              {t('evaluations.expectedRoute')}
+                            </FieldLabel>
+                            <Select
+                              value={draft.expectedRoute}
+                              items={routesForNode.map((route) => ({
+                                value: route.route,
+                                label: route.label,
+                              }))}
+                              onValueChange={(expectedRoute) =>
+                                setRouteDrafts((current) =>
+                                  current.map((item) =>
+                                    item.id === draft.id && expectedRoute
+                                      ? { ...item, expectedRoute }
+                                      : item,
+                                  ),
+                                )
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue
+                                  placeholder={t(
+                                    'evaluations.selectExpectedRoute',
+                                  )}
+                                />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {routesForNode.map((route) => (
+                                    <SelectItem
+                                      key={route.route}
+                                      value={route.route}
+                                    >
+                                      {route.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='icon-sm'
+                            className='self-end'
+                            aria-label={t('evaluations.deleteRouteAssertion', {
+                              index: index + 1,
+                            })}
+                            onClick={() =>
+                              setRouteDrafts((current) =>
+                                current.filter((item) => item.id !== draft.id),
+                              )
+                            }
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                    {!routeDrafts.length ? (
+                      <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm'>
+                        {t('evaluations.noRouteAssertions')}
+                      </p>
+                    ) : null}
+                  </FieldGroup>
+                ) : (
+                  <p className='text-muted-foreground mt-4 rounded-lg border border-dashed px-3 py-4 text-center text-sm'>
+                    {t('evaluations.noRouteNodes')}
+                  </p>
+                )}
+              </FieldSet>
+
+              <FieldSet className='rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 sm:p-5'>
+                <div className='flex items-start justify-between gap-3'>
+                  <div>
+                    <FieldLegend>{t('evaluations.nodeTrajectory')}</FieldLegend>
+                    <FieldDescription>
+                      {t('evaluations.nodeTrajectoryDescription')}
+                    </FieldDescription>
+                  </div>
+                </div>
+                {configuredWorkflowNodes.length ? (
+                  <FieldGroup className='mt-4 gap-4'>
+                    <div className='grid gap-4 lg:grid-cols-2'>
+                      <Field className='bg-background rounded-lg border p-3'>
+                        <div className='mb-3 flex items-center justify-between gap-3'>
+                          <FieldLabel>
+                            {t('evaluations.requiredNodes')}
+                          </FieldLabel>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            onClick={() =>
+                              setNodeTrajectory((current) => {
+                                const node = configuredWorkflowNodes.find(
+                                  (candidate) =>
+                                    !current.mustExecute.includes(
+                                      candidate.id,
+                                    ) &&
+                                    !current.mustNotExecute.includes(
+                                      candidate.id,
+                                    ),
+                                );
+                                return node
+                                  ? {
+                                      ...current,
+                                      mustExecute: [
+                                        ...current.mustExecute,
+                                        node.id,
+                                      ],
+                                    }
+                                  : current;
+                              })
+                            }
+                          >
+                            <PlusIcon data-icon='inline-start' />{' '}
+                            {t('evaluations.addNode')}
+                          </Button>
+                        </div>
+                        <div className='flex flex-col gap-2'>
+                          {nodeTrajectory.mustExecute.map((nodeId, index) => (
+                            <div
+                              key={`${nodeId}-${index}`}
+                              className='flex items-center gap-2'
+                            >
+                              <Select
+                                value={nodeId}
+                                items={configuredWorkflowNodes.map((node) => ({
+                                  value: node.id,
+                                  label: node.label,
+                                }))}
+                                onValueChange={(value) =>
+                                  setNodeTrajectory((current) => ({
+                                    ...current,
+                                    mustExecute: current.mustExecute.map(
+                                      (node, itemIndex) =>
+                                        itemIndex === index
+                                          ? (value ?? '')
+                                          : node,
+                                    ),
+                                  }))
+                                }
+                              >
+                                <SelectTrigger className='min-w-0 flex-1'>
+                                  <SelectValue
+                                    placeholder={t(
+                                      'evaluations.selectWorkflowNode',
+                                    )}
+                                  />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    {configuredWorkflowNodes.map((node) => (
+                                      <SelectItem key={node.id} value={node.id}>
+                                        {node.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                type='button'
+                                variant='ghost'
+                                size='icon-sm'
+                                aria-label={t('evaluations.removeNode', {
+                                  index: index + 1,
+                                })}
+                                onClick={() =>
+                                  setNodeTrajectory((current) => ({
+                                    ...current,
+                                    mustExecute: current.mustExecute.filter(
+                                      (_, itemIndex) => itemIndex !== index,
+                                    ),
+                                  }))
+                                }
+                              >
+                                <Trash2Icon />
+                              </Button>
+                            </div>
+                          ))}
+                          {!nodeTrajectory.mustExecute.length ? (
+                            <p className='text-muted-foreground text-sm'>
+                              {t('evaluations.noRequiredNodes')}
+                            </p>
+                          ) : null}
+                        </div>
+                      </Field>
+                      <Field className='bg-background rounded-lg border p-3'>
+                        <div className='mb-3 flex items-center justify-between gap-3'>
+                          <FieldLabel>
+                            {t('evaluations.forbiddenNodes')}
+                          </FieldLabel>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            onClick={() =>
+                              setNodeTrajectory((current) => {
+                                const node = configuredWorkflowNodes.find(
+                                  (candidate) =>
+                                    !current.mustExecute.includes(
+                                      candidate.id,
+                                    ) &&
+                                    !current.mustNotExecute.includes(
+                                      candidate.id,
+                                    ),
+                                );
+                                return node
+                                  ? {
+                                      ...current,
+                                      mustNotExecute: [
+                                        ...current.mustNotExecute,
+                                        node.id,
+                                      ],
+                                    }
+                                  : current;
+                              })
+                            }
+                          >
+                            <PlusIcon data-icon='inline-start' />{' '}
+                            {t('evaluations.addNode')}
+                          </Button>
+                        </div>
+                        <div className='flex flex-col gap-2'>
+                          {nodeTrajectory.mustNotExecute.map(
+                            (nodeId, index) => (
+                              <div
+                                key={`${nodeId}-${index}`}
+                                className='flex items-center gap-2'
+                              >
+                                <Select
+                                  value={nodeId}
+                                  items={configuredWorkflowNodes.map(
+                                    (node) => ({
+                                      value: node.id,
+                                      label: node.label,
+                                    }),
+                                  )}
+                                  onValueChange={(value) =>
+                                    setNodeTrajectory((current) => ({
+                                      ...current,
+                                      mustNotExecute:
+                                        current.mustNotExecute.map(
+                                          (node, itemIndex) =>
+                                            itemIndex === index
+                                              ? (value ?? '')
+                                              : node,
+                                        ),
+                                    }))
+                                  }
+                                >
+                                  <SelectTrigger className='min-w-0 flex-1'>
+                                    <SelectValue
+                                      placeholder={t(
+                                        'evaluations.selectWorkflowNode',
+                                      )}
+                                    />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectGroup>
+                                      {configuredWorkflowNodes.map((node) => (
+                                        <SelectItem
+                                          key={node.id}
+                                          value={node.id}
+                                        >
+                                          {node.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
+                                <Button
+                                  type='button'
+                                  variant='ghost'
+                                  size='icon-sm'
+                                  aria-label={t('evaluations.removeNode', {
+                                    index: index + 1,
+                                  })}
+                                  onClick={() =>
+                                    setNodeTrajectory((current) => ({
+                                      ...current,
+                                      mustNotExecute:
+                                        current.mustNotExecute.filter(
+                                          (_, itemIndex) => itemIndex !== index,
+                                        ),
+                                    }))
+                                  }
+                                >
+                                  <Trash2Icon />
+                                </Button>
+                              </div>
+                            ),
+                          )}
+                          {!nodeTrajectory.mustNotExecute.length ? (
+                            <p className='text-muted-foreground text-sm'>
+                              {t('evaluations.noForbiddenNodes')}
+                            </p>
+                          ) : null}
+                        </div>
+                      </Field>
+                    </div>
+                    <Field className='bg-background rounded-lg border p-3'>
+                      <div className='mb-3 flex items-center justify-between gap-3'>
+                        <div>
+                          <FieldLabel>{t('evaluations.nodeOrder')}</FieldLabel>
+                          <FieldDescription>
+                            {t('evaluations.nodeOrderDescription')}
+                          </FieldDescription>
+                        </div>
+                        <Button
+                          type='button'
+                          variant='outline'
+                          size='sm'
+                          onClick={() =>
+                            setNodeTrajectory((current) => ({
+                              ...current,
+                              orderedNodes: [
+                                ...current.orderedNodes,
+                                configuredWorkflowNodes[0].id,
+                              ],
+                            }))
+                          }
+                        >
+                          <PlusIcon data-icon='inline-start' />{' '}
+                          {t('evaluations.addNode')}
+                        </Button>
+                      </div>
+                      <div className='flex flex-col gap-2'>
+                        {nodeTrajectory.orderedNodes.map((nodeId, index) => (
+                          <div
+                            key={`${nodeId}-${index}`}
+                            className='flex items-center gap-2'
+                          >
+                            <span className='text-muted-foreground w-5 text-right text-sm'>
+                              {index + 1}.
+                            </span>
+                            <Select
+                              value={nodeId}
+                              items={configuredWorkflowNodes.map((node) => ({
+                                value: node.id,
+                                label: node.label,
+                              }))}
+                              onValueChange={(value) =>
+                                setNodeTrajectory((current) => ({
+                                  ...current,
+                                  orderedNodes: current.orderedNodes.map(
+                                    (node, itemIndex) =>
+                                      itemIndex === index
+                                        ? (value ?? '')
+                                        : node,
+                                  ),
+                                }))
+                              }
+                            >
+                              <SelectTrigger className='min-w-0 flex-1'>
+                                <SelectValue
+                                  placeholder={t(
+                                    'evaluations.selectWorkflowNode',
+                                  )}
+                                />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  {configuredWorkflowNodes.map((node) => (
+                                    <SelectItem key={node.id} value={node.id}>
+                                      {node.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              size='icon-sm'
+                              disabled={index === 0}
+                              aria-label={t('evaluations.moveNodeUp', {
+                                index: index + 1,
+                              })}
+                              onClick={() =>
+                                setNodeTrajectory((current) => {
+                                  const orderedNodes = [
+                                    ...current.orderedNodes,
+                                  ];
+                                  [
+                                    orderedNodes[index - 1],
+                                    orderedNodes[index],
+                                  ] = [
+                                    orderedNodes[index],
+                                    orderedNodes[index - 1],
+                                  ];
+                                  return { ...current, orderedNodes };
+                                })
+                              }
+                            >
+                              <ArrowUpIcon />
+                            </Button>
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              size='icon-sm'
+                              disabled={
+                                index === nodeTrajectory.orderedNodes.length - 1
+                              }
+                              aria-label={t('evaluations.moveNodeDown', {
+                                index: index + 1,
+                              })}
+                              onClick={() =>
+                                setNodeTrajectory((current) => {
+                                  const orderedNodes = [
+                                    ...current.orderedNodes,
+                                  ];
+                                  [
+                                    orderedNodes[index],
+                                    orderedNodes[index + 1],
+                                  ] = [
+                                    orderedNodes[index + 1],
+                                    orderedNodes[index],
+                                  ];
+                                  return { ...current, orderedNodes };
+                                })
+                              }
+                            >
+                              <ArrowDownIcon />
+                            </Button>
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              size='icon-sm'
+                              aria-label={t('evaluations.removeNode', {
+                                index: index + 1,
+                              })}
+                              onClick={() =>
+                                setNodeTrajectory((current) => ({
+                                  ...current,
+                                  orderedNodes: current.orderedNodes.filter(
+                                    (_, itemIndex) => itemIndex !== index,
+                                  ),
+                                }))
+                              }
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </div>
+                        ))}
+                        {!nodeTrajectory.orderedNodes.length ? (
+                          <p className='text-muted-foreground text-sm'>
+                            {t('evaluations.noNodeOrder')}
+                          </p>
+                        ) : null}
+                      </div>
+                    </Field>
+                    <Field orientation='horizontal'>
+                      <Checkbox
+                        id='evaluation-node-require-completed'
+                        checked={nodeTrajectory.requireCompleted}
+                        onCheckedChange={(checked) =>
+                          setNodeTrajectory((current) => ({
+                            ...current,
+                            requireCompleted: checked === true,
+                          }))
+                        }
+                      />
+                      <Label htmlFor='evaluation-node-require-completed'>
+                        {t('evaluations.requireNodeCompletion')}
+                      </Label>
+                    </Field>
+                  </FieldGroup>
+                ) : (
+                  <p className='text-muted-foreground mt-4 rounded-lg border border-dashed px-3 py-4 text-center text-sm'>
+                    {t('evaluations.noWorkflowNodes')}
+                  </p>
+                )}
+              </FieldSet>
+
               <FieldSet className='rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 sm:p-5'>
                 <div className='flex items-start justify-between gap-3'>
                   <div>
-                    <FieldLegend>{t('evaluations.safetyAssertions')}</FieldLegend>
+                    <FieldLegend>
+                      {t('evaluations.safetyAssertions')}
+                    </FieldLegend>
                     <FieldDescription>
                       {t('evaluations.safetyAssertionsDescription')}
                     </FieldDescription>
@@ -2472,7 +3683,8 @@ export function WorkflowEvaluations({
                       ])
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addSafetyRule')}
+                    <PlusIcon data-icon='inline-start' />{' '}
+                    {t('evaluations.addSafetyRule')}
                   </Button>
                 </div>
                 <FieldGroup className='mt-4 gap-3'>
@@ -2503,13 +3715,24 @@ export function WorkflowEvaluations({
                       </div>
                       <div className='grid gap-3 sm:grid-cols-2'>
                         <Field>
-                          <FieldLabel>{t('evaluations.checkTarget')}</FieldLabel>
+                          <FieldLabel>
+                            {t('evaluations.checkTarget')}
+                          </FieldLabel>
                           <Select
                             value={rule.target}
                             items={[
-                              { value: 'final_output', label: t('evaluations.finalOutput') },
-                              { value: 'tool_arguments', label: t('evaluations.toolArguments') },
-                              { value: 'tool_results', label: t('evaluations.toolResults') },
+                              {
+                                value: 'final_output',
+                                label: t('evaluations.finalOutput'),
+                              },
+                              {
+                                value: 'tool_arguments',
+                                label: t('evaluations.toolArguments'),
+                              },
+                              {
+                                value: 'tool_results',
+                                label: t('evaluations.toolResults'),
+                              },
                             ]}
                             onValueChange={(value) =>
                               setSafetyDrafts((current) =>
@@ -2540,7 +3763,9 @@ export function WorkflowEvaluations({
                           </Select>
                         </Field>
                         <Field>
-                          <FieldLabel>{t('evaluations.forbiddenFieldPaths')}</FieldLabel>
+                          <FieldLabel>
+                            {t('evaluations.forbiddenFieldPaths')}
+                          </FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             placeholder='$.customer.email'
@@ -2560,7 +3785,9 @@ export function WorkflowEvaluations({
                           />
                         </Field>
                         <Field className='sm:col-span-2'>
-                          <FieldLabel>{t('evaluations.forbiddenText')}</FieldLabel>
+                          <FieldLabel>
+                            {t('evaluations.forbiddenText')}
+                          </FieldLabel>
                           <Textarea
                             className='min-h-20'
                             placeholder='secret-token'
@@ -2604,7 +3831,8 @@ export function WorkflowEvaluations({
                       }))
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addCall')}
+                    <PlusIcon data-icon='inline-start' />{' '}
+                    {t('evaluations.addCall')}
                   </Button>
                 </div>
                 <FieldGroup className='mt-4 gap-3'>
@@ -2685,7 +3913,11 @@ export function WorkflowEvaluations({
                             }
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder={t('evaluations.selectWorkflowTool')}>
+                              <SelectValue
+                                placeholder={t(
+                                  'evaluations.selectWorkflowTool',
+                                )}
+                              >
                                 {call.name
                                   ? selectedToolLabel(
                                       call.name,
@@ -2730,7 +3962,9 @@ export function WorkflowEvaluations({
                           />
                         </Field>
                         <Field className='sm:col-span-2'>
-                          <FieldLabel>{t('evaluations.expectedArgs')}</FieldLabel>
+                          <FieldLabel>
+                            {t('evaluations.expectedArgs')}
+                          </FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             value={call.args}
@@ -2773,7 +4007,9 @@ export function WorkflowEvaluations({
                         </Field>
                         {call.assertResult ? (
                           <Field className='sm:col-span-2'>
-                            <FieldLabel>{t('evaluations.expectedFixtureResult')}</FieldLabel>
+                            <FieldLabel>
+                              {t('evaluations.expectedFixtureResult')}
+                            </FieldLabel>
                             <Textarea
                               className='min-h-20 font-mono text-xs leading-5'
                               value={call.expectedResult}
@@ -2832,8 +4068,11 @@ export function WorkflowEvaluations({
                 </FieldDescription>
                 <FieldGroup className='mt-4 gap-3'>
                   {fixtureDrafts.map((fixture, index) => (
-                    <div key={fixture.id} className='rounded-lg border p-3'>
-                      <div className='mb-3 flex items-center justify-between'>
+                    <div
+                      key={fixture.id}
+                      className='rounded-xl border bg-card p-4 shadow-sm'
+                    >
+                      <div className='mb-4 flex items-center justify-between'>
                         <span className='text-sm font-medium'>
                           {t('evaluations.fixture', { index: index + 1 })}
                         </span>
@@ -2852,10 +4091,57 @@ export function WorkflowEvaluations({
                         >
                           <Trash2Icon />
                         </Button>
-                      </div>
-                      <div className='grid gap-3 sm:grid-cols-2'>
-                        <Field>
-                          <FieldLabel>{t('evaluations.tool')}</FieldLabel>
+                    </div>
+                      <div className='grid gap-4 md:grid-cols-2'>
+                      <Field>
+                        <FieldLabel>{t('evaluations.fixtureNode')}</FieldLabel>
+                          <Select
+                            value={fixture.nodeId || '__global__'}
+                            items={[
+                              {
+                                value: '__global__',
+                                label: t('evaluations.fixtureAnyNode'),
+                              },
+                              ...configuredAgentNodes.map((node) => ({
+                                value: node.id,
+                                label: node.label,
+                              })),
+                            ]}
+                          onValueChange={(value) =>
+                            setFixtureDrafts((current) =>
+                              current.map((item) =>
+                                item.id === fixture.id
+                                  ? {
+                                      ...item,
+                                      nodeId:
+                                        value === '__global__'
+                                          ? ''
+                                          : (value ?? ''),
+                                    }
+                                  : item,
+                              ),
+                            )
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              <SelectItem value='__global__'>
+                                {t('evaluations.fixtureAnyNode')}
+                              </SelectItem>
+                              {configuredAgentNodes.map((node) => (
+                                <SelectItem key={node.id} value={node.id}>
+                                  {node.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <Field>
+                        <FieldLabel>{t('evaluations.tool')}</FieldLabel>
                           <Select
                             value={fixture.tool}
                             onValueChange={(value) =>
@@ -2869,7 +4155,11 @@ export function WorkflowEvaluations({
                             }
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder={t('evaluations.selectWorkflowTool')}>
+                              <SelectValue
+                                placeholder={t(
+                                  'evaluations.selectWorkflowTool',
+                                )}
+                              >
                                 {fixture.tool
                                   ? selectedToolLabel(
                                       fixture.tool,
@@ -2890,7 +4180,9 @@ export function WorkflowEvaluations({
                           </Select>
                         </Field>
                         <Field>
-                          <FieldLabel>{t('evaluations.matchingArgsJson')}</FieldLabel>
+                          <FieldLabel>
+                            {t('evaluations.matchingArgsJson')}
+                          </FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             value={fixture.args}
@@ -2905,8 +4197,10 @@ export function WorkflowEvaluations({
                             }
                           />
                         </Field>
-                        <Field className='sm:col-span-2'>
-                          <FieldLabel>{t('evaluations.fixtureResultJson')}</FieldLabel>
+                        <Field>
+                          <FieldLabel>
+                            {t('evaluations.fixtureResultJson')}
+                          </FieldLabel>
                           <Textarea
                             className='min-h-20 font-mono text-xs leading-5'
                             value={fixture.result}
@@ -2933,6 +4227,7 @@ export function WorkflowEvaluations({
                         ...current,
                         {
                           id: crypto.randomUUID(),
+                          nodeId: '',
                           tool: '',
                           args: '{}',
                           result: '{}',
@@ -2940,26 +4235,37 @@ export function WorkflowEvaluations({
                       ])
                     }
                   >
-                    <PlusIcon data-icon='inline-start' /> {t('evaluations.addFixture')}
+                    <PlusIcon data-icon='inline-start' />{' '}
+                    {t('evaluations.addFixture')}
                   </Button>
                 </FieldGroup>
               </FieldSet>
             </FieldGroup>
           </div>
-          <DialogFooter>
+          <DialogFooter className='mx-0 mb-0'>
             <Button variant='outline' onClick={() => setCaseDialogOpen(false)}>
               {t('common.cancel')}
             </Button>
             <Button
               disabled={
                 !caseName.trim() ||
-                (!assertionDrafts.length && !toolTrajectory.calls.length) ||
+                (!assertionDrafts.length &&
+                  !toolTrajectory.calls.length &&
+                  !nodeTrajectory.mustExecute.length &&
+                  !nodeTrajectory.mustNotExecute.length &&
+                  !nodeTrajectory.orderedNodes.length &&
+                  !routeDrafts.length &&
+                  !nodeOutputDrafts.length &&
+                  !nodeTextDrafts.length &&
+                  !nodeToolDrafts.length) ||
                 saving
               }
               onClick={() => void saveCase()}
             >
               {saving ? <Spinner /> : null}{' '}
-              {editingCase ? t('evaluations.saveChanges') : t('evaluations.saveCase')}
+              {editingCase
+                ? t('evaluations.saveChanges')
+                : t('evaluations.saveCase')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2982,7 +4288,9 @@ export function WorkflowEvaluations({
                 <div className='flex flex-wrap items-center justify-between gap-2'>
                   <span className='font-medium'>{testImport.suiteName}</span>
                   <Badge variant='outline'>
-                    {t('evaluations.caseCount', { count: testImport.cases.length })}
+                    {t('evaluations.caseCount', {
+                      count: testImport.cases.length,
+                    })}
                   </Badge>
                 </div>
                 {testImport.suiteDescription ? (
@@ -3015,11 +4323,15 @@ export function WorkflowEvaluations({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value='create'>{t('evaluations.importSuiteCreate')}</SelectItem>
+                      <SelectItem value='create'>
+                        {t('evaluations.importSuiteCreate')}
+                      </SelectItem>
                       <SelectItem value='overwrite'>
                         {t('evaluations.importSuiteOverwrite')}
                       </SelectItem>
-                      <SelectItem value='skip'>{t('evaluations.importSkip')}</SelectItem>
+                      <SelectItem value='skip'>
+                        {t('evaluations.importSkip')}
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 </Field>
@@ -3038,16 +4350,22 @@ export function WorkflowEvaluations({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='create'>{t('evaluations.importCaseCreate')}</SelectItem>
+                    <SelectItem value='create'>
+                      {t('evaluations.importCaseCreate')}
+                    </SelectItem>
                     <SelectItem value='overwrite'>
                       {t('evaluations.importCaseOverwrite')}
                     </SelectItem>
-                    <SelectItem value='skip'>{t('evaluations.importCaseSkip')}</SelectItem>
+                    <SelectItem value='skip'>
+                      {t('evaluations.importCaseSkip')}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </Field>
               <div className='space-y-2'>
-                <p className='text-sm font-medium'>{t('evaluations.caseValidation')}</p>
+                <p className='text-sm font-medium'>
+                  {t('evaluations.caseValidation')}
+                </p>
                 {testImport.cases.map((item) => (
                   <div
                     key={item.index}
@@ -3071,7 +4389,7 @@ export function WorkflowEvaluations({
               </div>
             </div>
           ) : null}
-          <DialogFooter className='border-t px-6 py-4'>
+          <DialogFooter className='mx-0 mb-0'>
             <Button
               variant='outline'
               disabled={importing}
@@ -3124,10 +4442,15 @@ export function WorkflowEvaluations({
                 <div className='rounded-xl border border-violet-500/20 bg-violet-500/5 p-4'>
                   <div className='mb-3 flex items-center gap-2'>
                     <ResultIcon verdict={selectedResult.verdict} />
-                    <span className='text-sm font-medium'>{t('evaluations.resultSummary')}</span>
+                    <span className='text-sm font-medium'>
+                      {t('evaluations.resultSummary')}
+                    </span>
                   </div>
                   <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
-                    <ResultMetric label={t('evaluations.result')} value={selectedResult.verdict} />
+                    <ResultMetric
+                      label={t('evaluations.result')}
+                      value={selectedResult.verdict}
+                    />
                     <ResultMetric
                       label={t('evaluations.score')}
                       value={
@@ -3171,16 +4494,39 @@ export function WorkflowEvaluations({
                         (item) => item.id === selectedResult.evaluationCaseId,
                       )?.expectation
                     }
+                    nodeNames={Object.fromEntries(
+                      configuredWorkflowNodes.map((node) => [
+                        node.id,
+                        node.label,
+                      ]),
+                    )}
+                    routeNames={Object.fromEntries(
+                      configuredRoutes.map((route) => [
+                        `${route.nodeId}:${route.route}`,
+                        route.label,
+                      ]),
+                    )}
                   />
                 </FieldSet>
                 <FieldSet className='rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 sm:p-5'>
-                  <FieldLegend>{t('evaluations.toolTrajectory')}</FieldLegend>
+                  <FieldLegend>
+                    {t('evaluations.executionEvidence')}
+                  </FieldLegend>
                   <FieldDescription>
                     {t('evaluations.traceDescription')}
                   </FieldDescription>
                   <ResultTrace
                     value={selectedResult.normalizedTrace}
-                    configured={hasToolTrajectoryAssertion(
+                    nodeNames={Object.fromEntries(
+                      configuredWorkflowNodes.map((node) => [
+                        node.id,
+                        node.label,
+                      ]),
+                    )}
+                    toolConfigured={hasToolTrajectoryAssertion(
+                      selectedResult.criteriaResults,
+                    )}
+                    nodeConfigured={hasNodeTrajectoryAssertion(
                       selectedResult.criteriaResults,
                     )}
                   />
@@ -3204,22 +4550,19 @@ export function WorkflowEvaluations({
               </div>
             ) : null}
           </div>
-          <DialogFooter className='border-t px-6 py-4'>
-            <Button
-              variant='outline'
-              onClick={() => setSelectedResult(undefined)}
-            >
+          <DialogFooter className='mx-0 mb-0'>
+            <DialogClose render={<Button variant='outline' />}>
               {t('common.close')}
-            </Button>
+            </DialogClose>
             {selectedResult?.workflowRunId ? (
-              <Button
+              <DialogClose
+                render={<Button />}
                 onClick={() => {
                   onViewWorkflowRun(selectedResult.workflowRunId!);
-                  setSelectedResult(undefined);
                 }}
               >
                 {t('evaluations.viewRunOutput')}
-              </Button>
+              </DialogClose>
             ) : null}
           </DialogFooter>
         </DialogContent>
@@ -3234,7 +4577,7 @@ function ResultJson({ title, value }: { title: string; value: unknown }) {
       <div className='mb-1 text-xs font-medium tracking-wider uppercase'>
         {title}
       </div>
-      <pre className='bg-muted max-h-52 overflow-auto rounded-lg p-3 text-xs leading-5 break-words whitespace-pre-wrap'>
+      <pre className='bg-muted max-h-52 overflow-auto rounded-lg p-3 text-xs leading-5 wrap-break-word whitespace-pre-wrap'>
         {JSON.stringify(value, null, 2)}
       </pre>
     </div>
@@ -3250,10 +4593,193 @@ function ResultMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function VersionCriterionComparison({
+  comparison,
+  baselineLabel,
+  candidateLabel,
+  nodeNames,
+  routeNames,
+}: {
+  comparison: EvaluationVersionCaseCriterionComparison;
+  baselineLabel: string;
+  candidateLabel: string;
+  nodeNames: Record<string, string>;
+  routeNames: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  if (!comparison.criteria.length) {
+    return (
+      <p className='text-muted-foreground text-sm'>
+        {t('evaluations.noCriteriaResults')}
+      </p>
+    );
+  }
+  return (
+    <div className='flex flex-col gap-2'>
+      <p className='text-muted-foreground text-xs leading-5'>
+        {t('evaluations.regressionLocationDescription')}
+      </p>
+      {comparison.criteria.map((diff) => (
+        <div
+          key={diff.key}
+          className={
+            diff.kind === 'regressed'
+              ? 'border-destructive/40 bg-destructive/5 rounded-lg border p-3'
+              : 'bg-muted/30 rounded-lg border p-3'
+          }
+        >
+          <div className='flex items-start justify-between gap-3'>
+            <span className='min-w-0 text-sm font-medium'>
+              {criterionLabel(
+                {
+                  criterion: diff.key,
+                  expected: diff.baseline?.expected ?? diff.candidate?.expected,
+                },
+                undefined,
+                t,
+              )}
+            </span>
+            <Badge
+              variant={diff.kind === 'regressed' ? 'destructive' : 'outline'}
+              className='shrink-0'
+            >
+              {versionCriterionDiffLabel(diff, t)}
+            </Badge>
+          </div>
+          <div className='mt-3 grid grid-cols-2 gap-2 text-xs'>
+            <CriterionComparisonCell
+              label={baselineLabel}
+              outcome={diff.baseline}
+              criterion={diff.key}
+              nodeNames={nodeNames}
+              routeNames={routeNames}
+            />
+            <CriterionComparisonCell
+              label={candidateLabel}
+              outcome={diff.candidate}
+              criterion={diff.key}
+              nodeNames={nodeNames}
+              routeNames={routeNames}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CriterionComparisonCell({
+  label,
+  outcome,
+  criterion,
+  nodeNames,
+  routeNames,
+}: {
+  label: string;
+  outcome?: EvaluationVersionCriterionDiff['baseline'];
+  criterion: string;
+  nodeNames: Record<string, string>;
+  routeNames: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className='bg-background/70 rounded-md border px-2.5 py-2'>
+      <p className='text-muted-foreground truncate'>{label}</p>
+      <p
+        className={
+          outcome == null
+            ? 'text-muted-foreground mt-1'
+            : outcome.passed
+              ? 'mt-1 text-emerald-600 dark:text-emerald-400'
+              : 'text-destructive mt-1'
+        }
+      >
+        {outcome == null
+          ? t('evaluations.assertionNotPresent')
+          : outcome.passed
+            ? t('evaluations.assertionPassed')
+            : t('evaluations.assertionFailed')}
+      </p>
+      {outcome ? (
+        <CriterionEvidence
+          criterion={criterion}
+          expected={outcome.expected}
+          actual={outcome.actual}
+          nodeNames={nodeNames}
+          routeNames={routeNames}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CriterionEvidence({
+  criterion,
+  expected,
+  actual,
+  nodeNames,
+  routeNames,
+}: {
+  criterion: string;
+  expected: unknown;
+  actual: unknown;
+  nodeNames: Record<string, string>;
+  routeNames: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  const actualValue = actual as Record<string, unknown>;
+  const expectedValue = expected as Record<string, unknown>;
+  let evidence: ReactNode;
+  if (criterion.startsWith('nodeTrajectory:')) {
+    const executions = Array.isArray(actualValue?.nodeExecutions)
+      ? actualValue.nodeExecutions
+      : [];
+    evidence = executions.length ? (
+      <span>
+        {executions
+          .map((item) => {
+            const execution = item as Record<string, unknown>;
+            const nodeId = String(execution.nodeId ?? '');
+            return `${nodeNames[nodeId] ?? nodeId}${execution.completed === true ? ' ✓' : ' ·'}`;
+          })
+          .join(' → ')}
+      </span>
+    ) : (
+      <span>{renderEvidence(actual)}</span>
+    );
+  } else if (criterion.startsWith('route:')) {
+    const nodeId = String(expectedValue?.nodeId ?? '');
+    const route = actualValue?.route;
+    evidence = typeof route === 'string'
+      ? <span>{routeNames[`${nodeId}:${route}`] ?? route}</span>
+      : <span>{t('evaluations.routeNotRecorded')}</span>;
+  } else if (criterion.startsWith('nodeToolTrajectory:')) {
+    const uses = Array.isArray(actualValue?.toolUses)
+      ? actualValue.toolUses
+      : [];
+    const names = uses
+      .map((item) => String((item as Record<string, unknown>).name ?? ''))
+      .filter(Boolean);
+    evidence = names.length ? (
+      <span>{names.join(' · ')}</span>
+    ) : (
+      <span>{t('evaluations.noToolCallsConfigured')}</span>
+    );
+  } else {
+    evidence = <span>{renderEvidence(actual)}</span>;
+  }
+  return (
+    <div className='text-muted-foreground mt-2 max-h-20 overflow-auto border-t pt-2 leading-5 wrap-break-word'>
+      <span className='mr-1'>{t('evaluations.actual')}:</span>
+      {evidence}
+    </div>
+  );
+}
+
 function ResultValue({ value }: { value: unknown }) {
   const text = (value as { text?: unknown } | undefined)?.text;
   return (
-    <pre className='bg-muted mt-3 max-h-48 overflow-auto rounded-lg p-3 text-xs leading-5 break-words whitespace-pre-wrap'>
+    <pre className='bg-muted mt-3 max-h-48 overflow-auto rounded-lg p-3 text-xs leading-5 wrap-break-word whitespace-pre-wrap'>
       {typeof text === 'string' ? text : JSON.stringify(value, null, 2)}
     </pre>
   );
@@ -3262,9 +4788,13 @@ function ResultValue({ value }: { value: unknown }) {
 function ResultCriteria({
   value,
   expectation,
+  nodeNames,
+  routeNames,
 }: {
   value: unknown;
   expectation?: unknown;
+  nodeNames: Record<string, string>;
+  routeNames: Record<string, string>;
 }) {
   const { t } = useTranslation();
   const criteria = Array.isArray(value)
@@ -3283,7 +4813,9 @@ function ResultCriteria({
               <span
                 className={passed ? 'text-emerald-600' : 'text-destructive'}
               >
-                {passed ? t('evaluations.passed') : t('evaluations.failed')}
+                {passed
+                  ? t('evaluations.assertionPassed')
+                  : t('evaluations.assertionFailed')}
               </span>
               <span className='min-w-0 flex-1 truncate text-sm font-medium'>
                 {criterionLabel(item, expectation, t)}
@@ -3292,10 +4824,39 @@ function ResultCriteria({
                 {Math.round(Number(item.score ?? 0) * 100)}%
               </span>
             </div>
-            <div className='text-muted-foreground mt-2 grid gap-1 text-xs'>
-              <span>{t('evaluations.expected')}: {renderEvidence(item.expected)}</span>
-              <span>{t('evaluations.actual')}: {renderEvidence(item.actual)}</span>
-            </div>
+            {String(item.criterion).startsWith('nodeTrajectory:') ? (
+              <NodeTrajectoryCriterion
+                expected={item.expected}
+                actual={item.actual}
+                nodeNames={nodeNames}
+              />
+            ) : String(item.criterion).startsWith('route:') ? (
+              <RouteCriterion
+                expected={item.expected}
+                actual={item.actual}
+                nodeNames={nodeNames}
+                routeNames={routeNames}
+              />
+            ) : String(item.criterion).startsWith('nodeOutput:') ? (
+              <NodeOutputCriterion
+                expected={item.expected}
+                actual={item.actual}
+                nodeNames={nodeNames}
+              />
+            ) : String(item.criterion).startsWith('nodeText:') ? (
+              <NodeTextCriterion expected={item.expected} actual={item.actual} nodeNames={nodeNames} />
+            ) : (
+              <div className='mt-2 grid gap-2 text-xs sm:grid-cols-2'>
+                <EvidenceValue
+                  label={t('evaluations.expected')}
+                  value={item.expected}
+                />
+                <EvidenceValue
+                  label={t('evaluations.actual')}
+                  value={item.actual}
+                />
+              </div>
+            )}
           </div>
         );
       })}
@@ -3308,18 +4869,263 @@ function ResultCriteria({
   );
 }
 
-function ResultTrace({
-  value,
-  configured,
+function EvidenceValue({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className='min-w-0'>
+      <p className='text-muted-foreground mb-1 font-medium'>{label}</p>
+      <p className='bg-muted/60 overflow-auto rounded px-2 py-1.5 font-mono leading-5 wrap-break-word whitespace-pre-wrap'>
+        {renderEvidence(value)}
+      </p>
+    </div>
+  );
+}
+
+function RouteCriterion({
+  expected,
+  actual,
+  nodeNames,
+  routeNames,
 }: {
-  value: unknown;
-  configured: boolean;
+  expected: unknown;
+  actual: unknown;
+  nodeNames: Record<string, string>;
+  routeNames: Record<string, string>;
 }) {
   const { t } = useTranslation();
-  const trace = value as { toolUses?: unknown[] } | undefined;
+  const expectedValue = expected as Record<string, unknown>;
+  const actualValue = actual as Record<string, unknown>;
+  const nodeId = String(expectedValue?.nodeId ?? '');
+  const routeName = (route: unknown) =>
+    typeof route === 'string'
+      ? (routeNames[`${nodeId}:${route}`] ?? route)
+      : t('evaluations.routeNotRecorded');
+  return (
+    <div className='bg-muted/30 mt-3 grid gap-3 rounded-md border p-3 text-xs sm:grid-cols-3'>
+      <div>
+        <p className='text-muted-foreground mb-1'>
+          {t('evaluations.routeNode')}
+        </p>
+        <p className='font-medium'>{nodeNames[nodeId] ?? nodeId}</p>
+      </div>
+      <div>
+        <p className='text-muted-foreground mb-1'>
+          {t('evaluations.expectedRoute')}
+        </p>
+        <Badge variant='outline'>{routeName(expectedValue?.route)}</Badge>
+      </div>
+      <div>
+        <p className='text-muted-foreground mb-1'>
+          {t('evaluations.actualRoute')}
+        </p>
+        <Badge variant='outline'>{routeName(actualValue?.route)}</Badge>
+      </div>
+    </div>
+  );
+}
+
+function NodeOutputCriterion({
+  expected,
+  actual,
+  nodeNames,
+}: {
+  expected: unknown;
+  actual: unknown;
+  nodeNames: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  const rule = expected as Record<string, unknown>;
+  const nodeId = String(rule?.nodeId ?? '');
+  return (
+    <div className='mt-3 grid gap-3 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-3'>
+      <div><p className='text-muted-foreground mb-1'>{t('evaluations.outputNode')}</p><p className='font-medium'>{nodeNames[nodeId] ?? nodeId}</p></div>
+      <div><p className='text-muted-foreground mb-1'>{t('evaluations.fieldPath')}</p><p className='font-mono'>{String(rule?.path ?? '')}</p></div>
+      <EvidenceValue label={t('evaluations.expected')} value={rule?.value} />
+      <div className='sm:col-span-3'><EvidenceValue label={t('evaluations.actual')} value={actual} /></div>
+    </div>
+  );
+}
+
+function NodeTextCriterion({ expected, actual, nodeNames }: { expected: unknown; actual: unknown; nodeNames: Record<string, string> }) {
+  const { t } = useTranslation();
+  const rule = expected as Record<string, unknown>;
+  const nodeId = String(rule?.nodeId ?? '');
+  return <div className='mt-3 grid gap-3 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-3'>
+    <div><p className='text-muted-foreground mb-1'>{t('evaluations.agentNode')}</p><p className='font-medium'>{nodeNames[nodeId] ?? nodeId}</p></div>
+    <EvidenceValue label={t('evaluations.expectedText')} value={rule?.text} />
+    <EvidenceValue label={t('evaluations.actual')} value={actual} />
+  </div>;
+}
+
+function nodeIds(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((node): node is string => typeof node === 'string')
+    : [];
+}
+
+function NodeBadges({
+  ids,
+  nodeNames,
+}: {
+  ids: string[];
+  nodeNames: Record<string, string>;
+}) {
+  return (
+    <div className='flex flex-wrap gap-1.5'>
+      {ids.map((id) => (
+        <Badge key={id} variant='outline'>
+          {nodeNames[id] ?? id}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function NodeTrajectoryCriterion({
+  expected,
+  actual,
+  nodeNames,
+}: {
+  expected: unknown;
+  actual: unknown;
+  nodeNames: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  const expectation = expected as Record<string, unknown>;
+  const observation = actual as Record<string, unknown>;
+  const required = nodeIds(expectation?.mustExecute);
+  const forbidden = nodeIds(expectation?.mustNotExecute);
+  const ordered = nodeIds(expectation?.orderedNodes);
+  const executions = Array.isArray(observation?.nodeExecutions)
+    ? observation.nodeExecutions
+    : [];
+  const failures = [
+    ['missing', 'evaluations.missingNodes'],
+    ['forbidden', 'evaluations.forbiddenNodesExecuted'],
+    ['incomplete', 'evaluations.incompleteNodes'],
+    ['outOfOrder', 'evaluations.outOfOrderNodes'],
+  ] as const;
+
+  return (
+    <div className='mt-3 grid gap-3 text-xs'>
+      <div className='bg-muted/30 grid gap-3 rounded-md border p-3'>
+        {required.length || forbidden.length ? (
+          <div className='grid gap-3 sm:grid-cols-2'>
+            {required.length ? (
+              <div>
+                <p className='text-muted-foreground mb-1'>
+                  {t('evaluations.requiredNodes')}
+                </p>
+                <NodeBadges ids={required} nodeNames={nodeNames} />
+              </div>
+            ) : null}
+            {forbidden.length ? (
+              <div>
+                <p className='text-muted-foreground mb-1'>
+                  {t('evaluations.forbiddenNodes')}
+                </p>
+                <NodeBadges ids={forbidden} nodeNames={nodeNames} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {required.length || forbidden.length ? (
+          <div className='border-t' />
+        ) : null}
+        <div className='grid gap-3 sm:grid-cols-2'>
+          <div>
+            <p className='text-muted-foreground mb-1'>
+              {t('evaluations.expectedNodePath')}
+            </p>
+            {ordered.length ? (
+              <p>{ordered.map((id) => nodeNames[id] ?? id).join(' → ')}</p>
+            ) : (
+              <p className='text-muted-foreground'>
+                {t('evaluations.noNodeOrder')}
+              </p>
+            )}
+          </div>
+          <div>
+            <p className='text-muted-foreground mb-1'>
+              {t('evaluations.actualNodePath')}
+            </p>
+            {executions.length ? (
+              <div className='flex flex-wrap gap-1.5'>
+                {executions.map((execution, index) => {
+                  const item = execution as Record<string, unknown>;
+                  const id = String(item.nodeId ?? '');
+                  return (
+                    <Badge key={`${id}-${index}`} variant='outline'>
+                      {nodeNames[id] ?? id}{' '}
+                      {item.completed === true ? '✓' : '○'}
+                    </Badge>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className='text-muted-foreground'>
+                {t('evaluations.noNodeExecutions')}
+              </p>
+            )}
+          </div>
+        </div>
+        {!required.length && !forbidden.length && !ordered.length ? (
+          <p className='text-muted-foreground'>
+            {t('evaluations.noNodeRules')}
+          </p>
+        ) : null}
+      </div>
+      {failures.flatMap(([key, translation]) => {
+        const ids = nodeIds(observation?.[key]);
+        return ids.length
+          ? [
+              <div
+                key={key}
+                className='text-destructive flex flex-wrap items-center gap-2'
+              >
+                <span>{t(translation)}:</span>
+                <NodeBadges ids={ids} nodeNames={nodeNames} />
+              </div>,
+            ]
+          : [];
+      })}
+    </div>
+  );
+}
+
+function ResultTrace({
+  value,
+  nodeNames,
+  toolConfigured,
+  nodeConfigured,
+}: {
+  value: unknown;
+  nodeNames: Record<string, string>;
+  toolConfigured: boolean;
+  nodeConfigured: boolean;
+}) {
+  const { t } = useTranslation();
+  const trace = value as
+    | { toolUses?: unknown[]; nodeExecutions?: unknown[] }
+    | undefined;
   const tools = Array.isArray(trace?.toolUses) ? trace.toolUses : [];
+  const nodes = Array.isArray(trace?.nodeExecutions)
+    ? trace.nodeExecutions
+    : [];
   return (
     <div className='mt-3'>
+      {nodes.length ? (
+        <div className='mb-3 flex flex-wrap items-center gap-2'>
+          {nodes.map((node, index) => {
+            const item = node as Record<string, unknown>;
+            return (
+              <Badge key={`${String(item.nodeId)}-${index}`} variant='outline'>
+                {nodeNames[String(item.nodeId)] ?? String(item.nodeId)}{' '}
+                {item.completed === true ? '✓' : '○'}
+              </Badge>
+            );
+          })}
+        </div>
+      ) : null}
       {tools.length ? (
         <div className='flex flex-col gap-2'>
           {tools.map((tool, index) => (
@@ -3331,13 +5137,15 @@ function ResultTrace({
             </pre>
           ))}
         </div>
-      ) : (
+      ) : !nodes.length ? (
         <p className='text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm'>
-          {configured
+          {toolConfigured
             ? t('evaluations.noToolCallsConfigured')
-            : t('evaluations.noToolTrajectoryConfigured')}
+            : nodeConfigured
+              ? t('evaluations.noNodeExecutions')
+              : t('evaluations.noExecutionEvidenceConfigured')}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -3351,6 +5159,20 @@ function hasToolTrajectoryAssertion(value: unknown) {
         criterion !== null &&
         String((criterion as Record<string, unknown>).criterion).startsWith(
           'toolTrajectory:',
+        ),
+    )
+  );
+}
+
+function hasNodeTrajectoryAssertion(value: unknown) {
+  return (
+    Array.isArray(value) &&
+    value.some(
+      (criterion) =>
+        typeof criterion === 'object' &&
+        criterion !== null &&
+        String((criterion as Record<string, unknown>).criterion).startsWith(
+          'nodeTrajectory:',
         ),
     )
   );
@@ -3380,14 +5202,28 @@ function criterionLabel(
           ?.path
       : undefined;
     return typeof path === 'string'
-      ? t?.('evaluations.outputField', { path }) ?? `Output field ${path}`
+      ? (t?.('evaluations.outputField', { path }) ?? `Output field ${path}`)
       : typeof legacyPath === 'string'
-        ? t?.('evaluations.outputField', { path: legacyPath }) ?? `Output field ${legacyPath}`
-        : t?.('evaluations.outputFieldAssertion') ?? 'Output field assertion';
+        ? (t?.('evaluations.outputField', { path: legacyPath }) ??
+          `Output field ${legacyPath}`)
+        : (t?.('evaluations.outputFieldAssertion') ?? 'Output field assertion');
   }
-  if (id.startsWith('text:')) return t?.('evaluations.finalOutputText') ?? 'Final output text';
-  if (id.startsWith('toolTrajectory:')) return t?.('evaluations.toolTrajectory') ?? 'Tool trajectory';
-  if (id.startsWith('safety:')) return t?.('evaluations.safetyAssertions') ?? 'Safety assertion';
+  if (id.startsWith('text:'))
+    return t?.('evaluations.finalOutputText') ?? 'Final output text';
+  if (id.startsWith('toolTrajectory:'))
+    return t?.('evaluations.toolTrajectory') ?? 'Tool trajectory';
+  if (id.startsWith('nodeTrajectory:'))
+    return t?.('evaluations.nodeTrajectory') ?? 'Node path';
+  if (id.startsWith('route:'))
+    return t?.('evaluations.routeAssertions') ?? 'Route assertion';
+  if (id.startsWith('nodeOutput:'))
+    return t?.('evaluations.nodeOutputAssertions') ?? 'Node output assertion';
+  if (id.startsWith('nodeText:'))
+    return t?.('evaluations.agentMessageAssertions') ?? 'Agent message assertion';
+  if (id.startsWith('nodeToolTrajectory:'))
+    return t?.('evaluations.nodeToolAssertions') ?? 'Node tool assertion';
+  if (id.startsWith('safety:'))
+    return t?.('evaluations.safetyAssertions') ?? 'Safety assertion';
   return t?.('evaluations.assertion') ?? 'Assertion';
 }
 
@@ -3420,6 +5256,13 @@ function versionDiffLabel(
   t: (key: string) => string,
 ) {
   return t(`evaluations.versionDiff.${diff.kind}`);
+}
+
+function versionCriterionDiffLabel(
+  diff: EvaluationVersionCriterionDiff,
+  t: (key: string) => string,
+) {
+  return t(`evaluations.criterionDiff.${diff.kind}`);
 }
 
 function EvaluationTrends({
@@ -3467,8 +5310,14 @@ function EvaluationTrends({
           label={t('evaluations.averagePassRate')}
           value={`${Math.round(average(passRates))}%`}
         />
-        <TrendMetric label={t('evaluations.averageCost')} value={formatCost(averageCost)} />
-        <TrendMetric label={t('evaluations.averageDuration')} value={formatDuration(averageDuration)} />
+        <TrendMetric
+          label={t('evaluations.averageCost')}
+          value={formatCost(averageCost)}
+        />
+        <TrendMetric
+          label={t('evaluations.averageDuration')}
+          value={formatDuration(averageDuration)}
+        />
       </div>
       <div className='bg-background/60 mt-3 rounded-lg border p-3'>
         <div className='text-muted-foreground mb-2 text-[10px] font-medium'>

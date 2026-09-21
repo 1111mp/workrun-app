@@ -271,6 +271,8 @@ pub struct EvaluationExecutionProfile {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvaluationToolFixture {
+    #[serde(default)]
+    pub node_id: Option<String>,
     pub tool: String,
     #[serde(default = "empty_json_object")]
     pub args: Value,

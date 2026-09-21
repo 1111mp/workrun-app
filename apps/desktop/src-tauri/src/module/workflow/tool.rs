@@ -245,6 +245,7 @@ impl Tool for ManagedTool {
             )?;
             if let Some(result) = evaluation_fixture_result(
                 &self.execution_profile,
+                &self.agent_node_id,
                 self.name(),
                 &execution_args,
             )? {
@@ -363,16 +364,20 @@ fn tool_error_code(error: &adk_rust::AdkError) -> &'static str {
 /// the Process or MCP executor that would perform a real external operation.
 fn evaluation_fixture_result(
     profile: &WorkflowExecutionProfile,
+    node_id: &str,
     tool: &str,
     args: &Value,
 ) -> adk_rust::Result<Option<Value>> {
     let WorkflowExecutionProfile::Evaluation(profile) = profile else {
         return Ok(None);
     };
+    // A node-scoped rule wins over a legacy global rule, so shared tools can
+    // return different fixtures without making existing cases ambiguous.
     profile
         .tool_fixtures
         .iter()
-        .find(|fixture| fixture.tool == tool && fixture.args == *args)
+        .find(|fixture| fixture.node_id.as_deref() == Some(node_id) && fixture.tool == tool && fixture.args == *args)
+        .or_else(|| profile.tool_fixtures.iter().find(|fixture| fixture.node_id.is_none() && fixture.tool == tool && fixture.args == *args))
         .map(|fixture| fixture.result.clone())
         .ok_or_else(|| adk_rust::AdkError::tool(format!("Test Mode blocked unmocked tool `{tool}`")))
         .map(Some)
@@ -563,6 +568,7 @@ mod tests {
         assert_eq!(execution_args, json!({"recipient": "alice@example.com"}));
         let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
             tool_fixtures: vec![EvaluationToolFixture {
+                node_id: None,
                 tool: "lookup_customer".to_string(),
                 args: json!({"recipient": "alice@example.com"}),
                 result: json!({"found": true}),
@@ -571,7 +577,7 @@ mod tests {
         // A fixture must use the resolved execution value, never the visible
         // redaction marker the model used to construct its request.
         assert_eq!(
-            evaluation_fixture_result(&profile, "lookup_customer", &execution_args).unwrap(),
+            evaluation_fixture_result(&profile, "agent", "lookup_customer", &execution_args).unwrap(),
             Some(json!({"found": true}))
         );
     }
@@ -615,6 +621,7 @@ mod tests {
     fn evaluation_profile_returns_only_an_exact_fixture_match() {
         let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
             tool_fixtures: vec![EvaluationToolFixture {
+                node_id: None,
                 tool: "cancel_order".to_string(),
                 args: json!({ "orderId": "42" }),
                 result: json!({ "cancelled": true }),
@@ -622,11 +629,11 @@ mod tests {
         });
 
         assert_eq!(
-            evaluation_fixture_result(&profile, "cancel_order", &json!({ "orderId": "42" })).unwrap(),
+            evaluation_fixture_result(&profile, "agent", "cancel_order", &json!({ "orderId": "42" })).unwrap(),
             Some(json!({ "cancelled": true }))
         );
         assert!(
-            evaluation_fixture_result(&profile, "cancel_order", &json!({ "orderId": "43" }))
+            evaluation_fixture_result(&profile, "agent", "cancel_order", &json!({ "orderId": "43" }))
                 .unwrap_err()
                 .to_string()
                 .contains("blocked unmocked tool")

@@ -214,6 +214,36 @@ pub struct EvaluationVersionCaseDiff {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EvaluationCriterionOutcome {
+    pub criterion: String,
+    pub passed: bool,
+    pub score: f64,
+    pub threshold: f64,
+    pub expected: Value,
+    pub actual: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationVersionCriterionDiff {
+    pub key: String,
+    pub baseline: Option<EvaluationCriterionOutcome>,
+    pub candidate: Option<EvaluationCriterionOutcome>,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationVersionCaseCriterionComparison {
+    pub case_id: String,
+    pub name: String,
+    pub baseline_verdict: Option<String>,
+    pub candidate_verdict: Option<String>,
+    pub criteria: Vec<EvaluationVersionCriterionDiff>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaimedEvaluationCase {
     pub result_id: String,
     pub evaluation_run_id: String,
@@ -337,23 +367,23 @@ impl EvaluationStore {
         let result_id: String = result.try_get("id")?;
         let evaluation_run_id: String = result.try_get("evaluation_run_id")?;
         let case: EvaluationCaseSummary = serde_json::from_str(&result.try_get::<String, _>("case_snapshot_json")?)?;
-        let events = sqlx::query("SELECT event_json FROM run_events WHERE run_id = ? ORDER BY sequence DESC")
+        let events = sqlx::query("SELECT event_json FROM run_events WHERE run_id = ? ORDER BY sequence ASC")
             .bind(workflow_run_id)
             .fetch_all(&pool)
             .await?;
-        let state = events
+        let event_values = events
             .into_iter()
-            .find_map(|row| {
-                serde_json::from_str::<Value>(&row.try_get::<String, _>("event_json").ok()?)
-                    .ok()?
-                    .get("state")
-                    .cloned()
-            })
+            .filter_map(|row| serde_json::from_str::<Value>(&row.try_get::<String, _>("event_json").ok()?).ok())
+            .collect::<Vec<_>>();
+        let state = event_values
+            .iter()
+            .rev()
+            .find_map(|event| event.get("state").cloned())
             .unwrap_or_else(|| json!({}));
         let metrics = workflow_run_metrics(&pool, workflow_run_id).await?;
         let (execution_status, verdict, score_value, criteria, trace, output, reason) = if completed {
             let expectation: EvaluationExpectation = serde_json::from_value(case.expectation)?;
-            let score = score(&expectation, observe_workflow_output(&state))?;
+            let score = score(&expectation, observe_workflow_output(&state, &event_values))?;
             let verdict = if score.passed { "passed" } else { "failed" };
             let score_value = score.criteria.iter().map(|item| item.score).sum::<f64>() / score.criteria.len() as f64;
             (
@@ -853,6 +883,43 @@ impl EvaluationStore {
         }).collect())
     }
 
+    pub async fn compare_version_case_criteria(
+        suite_id: &str,
+        baseline: &str,
+        candidate: &str,
+        case_id: &str,
+    ) -> Result<EvaluationVersionCaseCriterionComparison> {
+        let pool = DBManager::global().pool()?;
+        let latest_sql = "SELECT id FROM evaluation_runs WHERE suite_id = ? AND COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') = ? ORDER BY started_at DESC, id DESC LIMIT 1";
+        let baseline_run = sqlx::query_scalar::<_, String>(latest_sql)
+            .bind(suite_id).bind(baseline).fetch_optional(&pool).await?;
+        let candidate_run = sqlx::query_scalar::<_, String>(latest_sql)
+            .bind(suite_id).bind(candidate).fetch_optional(&pool).await?;
+        let read_result = |run_id: Option<String>| async {
+            let Some(run_id) = run_id else { return Ok::<Option<(String, String, Vec<CriterionResult>)>, sqlx::Error>(None); };
+            let row = sqlx::query("SELECT case_snapshot_json, verdict, criteria_results_json FROM evaluation_case_results WHERE evaluation_run_id = ? AND evaluation_case_id = ? LIMIT 1")
+                .bind(run_id).bind(case_id).fetch_optional(&pool).await?;
+            row.map(|row| {
+                let snapshot: Value = serde_json::from_str(&row.try_get::<String, _>("case_snapshot_json")?).unwrap_or_default();
+                let criteria = serde_json::from_str(&row.try_get::<String, _>("criteria_results_json")?).unwrap_or_default();
+                Ok((snapshot.get("name").and_then(Value::as_str).unwrap_or("评测用例").to_string(), row.try_get("verdict")?, criteria))
+            }).transpose()
+        };
+        let before = read_result(baseline_run).await?;
+        let after = read_result(candidate_run).await?;
+        let name = after.as_ref().or(before.as_ref()).map(|result| result.0.clone()).unwrap_or_default();
+        let criteria = compare_criteria(
+            before.as_ref().map(|result| result.2.as_slice()).unwrap_or_default(),
+            after.as_ref().map(|result| result.2.as_slice()).unwrap_or_default(),
+        );
+        Ok(EvaluationVersionCaseCriterionComparison {
+            case_id: case_id.to_string(), name,
+            baseline_verdict: before.map(|result| result.1),
+            candidate_verdict: after.map(|result| result.1),
+            criteria,
+        })
+    }
+
     pub async fn latest_run_for_workflow(workflow_id: &str) -> Result<Option<EvaluationRunDetail>> {
         if workflow_id.trim().is_empty() { bail!("workflow id is required"); }
         let pool = DBManager::global().pool()?;
@@ -1007,7 +1074,11 @@ pub struct EvaluationExpectation {
 /// paths to object keys makes assertions deterministic and easy to explain in
 /// the result page; array selectors can be added without changing Case data.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum EvaluationAssertion {
     Text {
         #[serde(default = "default_assertion_id")]
@@ -1030,6 +1101,50 @@ pub enum EvaluationAssertion {
         #[serde(default)]
         config: ToolTrajectoryConfig,
     },
+    NodeTrajectory {
+        #[serde(default = "default_assertion_id")]
+        id: String,
+        // Older builds persisted Rust's snake_case field names. Keep reading
+        // them while making the JSON contract match the desktop camelCase API.
+        #[serde(default, alias = "must_execute")]
+        must_execute: Vec<String>,
+        #[serde(default, alias = "must_not_execute")]
+        must_not_execute: Vec<String>,
+        #[serde(default, alias = "ordered_nodes")]
+        ordered_nodes: Vec<String>,
+        #[serde(default = "default_true", alias = "require_completed")]
+        require_completed: bool,
+    },
+    Route {
+        #[serde(default = "default_assertion_id")]
+        id: String,
+        node_id: String,
+        expected_route: String,
+    },
+    NodeOutput {
+        #[serde(default = "default_assertion_id")]
+        id: String,
+        node_id: String,
+        path: String,
+        operator: JsonPathOperator,
+        expected: Value,
+    },
+    NodeText {
+        #[serde(default = "default_assertion_id")]
+        id: String,
+        node_id: String,
+        algorithm: SimilarityAlgorithm,
+        expected: String,
+        threshold: f64,
+    },
+    NodeToolTrajectory {
+        #[serde(default = "default_assertion_id")]
+        id: String,
+        node_id: String,
+        tools: Vec<ToolUse>,
+        #[serde(default)]
+        config: ToolTrajectoryConfig,
+    },
     Safety {
         #[serde(default = "default_assertion_id")]
         id: String,
@@ -1043,6 +1158,10 @@ pub enum EvaluationAssertion {
 
 fn default_assertion_id() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1071,11 +1190,56 @@ pub enum SafetyAssertionTarget {
 pub struct WorkflowEvaluationObservation {
     pub final_output: String,
     pub tool_uses: Vec<ToolUse>,
+    pub node_executions: Vec<WorkflowNodeExecution>,
+    pub routes: Vec<WorkflowRouteExecution>,
+    pub node_outputs: Vec<WorkflowNodeOutput>,
+    pub node_messages: Vec<WorkflowNodeMessage>,
+    pub node_tool_uses: Vec<WorkflowNodeToolUse>,
+}
+
+/// A `node_start` is the source of truth for control flow. Completion is
+/// joined by `(node, step)` so a retry remains a separate, inspectable event.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowNodeExecution {
+    pub node_id: String,
+    pub step: i64,
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRouteExecution {
+    pub node_id: String,
+    pub route: String,
+    pub label: Option<String>,
+    pub condition: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowNodeOutput {
+    pub node_id: String,
+    pub output: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowNodeMessage {
+    pub node_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowNodeToolUse {
+    pub node_id: String,
+    pub tool: ToolUse,
 }
 
 /// One criterion is persisted independently so the eventual Result page can
 /// explain why a case failed instead of reducing it to a single boolean.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CriterionResult {
     pub criterion: String,
@@ -1084,6 +1248,59 @@ pub struct CriterionResult {
     pub passed: bool,
     pub expected: Value,
     pub actual: Value,
+}
+
+fn criterion_outcome(criterion: &CriterionResult) -> EvaluationCriterionOutcome {
+    EvaluationCriterionOutcome {
+        criterion: criterion.criterion.clone(),
+        passed: criterion.passed,
+        score: criterion.score,
+        threshold: criterion.threshold,
+        expected: criterion.expected.clone(),
+        actual: criterion.actual.clone(),
+    }
+}
+
+fn criterion_match_key(criterion: &CriterionResult) -> String {
+    let kind = criterion.criterion.split(':').next().unwrap_or_default();
+    format!("{kind}:{}", serde_json::to_string(&criterion.expected).unwrap_or_default())
+}
+
+fn compare_criteria(
+    baseline: &[CriterionResult],
+    candidate: &[CriterionResult],
+) -> Vec<EvaluationVersionCriterionDiff> {
+    let mut remaining = candidate.iter().collect::<Vec<_>>();
+    let mut differences = Vec::new();
+    for before in baseline {
+        let index = remaining.iter().position(|after| after.criterion == before.criterion)
+            // Assertions stored before stable IDs were introduced receive a new
+            // ID while being evaluated. Match those historical results by their
+            // immutable rule definition, so they remain comparable.
+            .or_else(|| remaining.iter().position(|after| criterion_match_key(after) == criterion_match_key(before)));
+        let after = index.map(|index| remaining.remove(index));
+        let kind = match after {
+            Some(after) if before.passed && !after.passed => "regressed",
+            Some(after) if !before.passed && after.passed => "fixed",
+            Some(after) if !before.passed && !after.passed => "persistent_failure",
+            Some(_) => "persistent_pass",
+            None => "removed",
+        };
+        differences.push(EvaluationVersionCriterionDiff {
+            key: before.criterion.clone(),
+            baseline: Some(criterion_outcome(before)),
+            candidate: after.map(criterion_outcome),
+            kind: kind.to_string(),
+        });
+    }
+    differences.extend(remaining.into_iter().map(|after| EvaluationVersionCriterionDiff {
+        key: after.criterion.clone(),
+        baseline: None,
+        candidate: Some(criterion_outcome(after)),
+        kind: "added".to_string(),
+    }));
+    differences.sort_by(|left, right| left.key.cmp(&right.key));
+    differences
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1117,6 +1334,46 @@ impl EvaluationExpectation {
                     if field_paths.iter().any(|path| !path.starts_with("$.")) {
                         bail!("safety field paths must start with `$.`");
                     }
+                }
+                EvaluationAssertion::NodeTrajectory {
+                    must_execute,
+                    must_not_execute,
+                    ordered_nodes,
+                    ..
+                } => {
+                    let all_nodes = must_execute
+                        .iter()
+                        .chain(must_not_execute)
+                        .chain(ordered_nodes);
+                    if all_nodes.clone().any(|node| node.trim().is_empty()) {
+                        bail!("node trajectory assertions cannot contain an empty node id");
+                    }
+                    let required = must_execute.iter().collect::<HashSet<_>>();
+                    if must_not_execute.iter().any(|node| required.contains(node)) {
+                        bail!("a node cannot be both required and forbidden");
+                    }
+                }
+                EvaluationAssertion::Route {
+                    node_id,
+                    expected_route,
+                    ..
+                } if node_id.trim().is_empty() || expected_route.trim().is_empty() => {
+                    bail!("a route assertion needs a node and an expected route");
+                }
+                EvaluationAssertion::NodeOutput { node_id, path, .. }
+                    if node_id.trim().is_empty() || !path.starts_with("$.") =>
+                {
+                    bail!("a node output assertion needs a node and a `$.` path");
+                }
+                EvaluationAssertion::NodeText { node_id, threshold, .. }
+                    if node_id.trim().is_empty() || !(0.0..=1.0).contains(threshold) =>
+                {
+                    bail!("a node text assertion needs a node and a threshold between 0 and 1");
+                }
+                EvaluationAssertion::NodeToolTrajectory { node_id, tools, .. }
+                    if node_id.trim().is_empty() || tools.is_empty() =>
+                {
+                    bail!("a node tool trajectory needs a node and at least one tool");
                 }
                 _ => {}
             }
@@ -1168,7 +1425,7 @@ pub fn score(
                 &expected,
                 &observation.final_output,
             )),
-            EvaluationAssertion::ToolTrajectory { id, tools, config } => {
+                EvaluationAssertion::ToolTrajectory { id, tools, config } => {
                 let scorer = ToolTrajectoryScorer::with_config(config);
                 let comparison = scorer.compare(&tools, &observation.tool_uses);
                 // `adk-eval` deliberately treats expected_response as fixture
@@ -1203,6 +1460,61 @@ pub fn score(
                     }),
                 });
             }
+            EvaluationAssertion::NodeTrajectory {
+                id,
+                must_execute,
+                must_not_execute,
+                ordered_nodes,
+                require_completed,
+            } => criteria.push(score_node_trajectory_assertion(
+                &id,
+                &must_execute,
+                &must_not_execute,
+                &ordered_nodes,
+                require_completed,
+                &observation.node_executions,
+            )),
+            EvaluationAssertion::Route {
+                id,
+                node_id,
+                expected_route,
+            } => criteria.push(score_route_assertion(
+                &id,
+                &node_id,
+                &expected_route,
+                &observation.routes,
+            )),
+            EvaluationAssertion::NodeOutput {
+                id,
+                node_id,
+                path,
+                operator,
+                expected,
+            } => criteria.push(score_node_output_assertion(
+                &id,
+                &node_id,
+                &path,
+                &operator,
+                &expected,
+                &observation.node_outputs,
+            )),
+            EvaluationAssertion::NodeText {
+                id,
+                node_id,
+                algorithm,
+                expected,
+                threshold,
+            } => criteria.push(score_node_text_assertion(
+                &id,
+                &node_id,
+                algorithm,
+                &expected,
+                threshold,
+                &observation.node_messages,
+            )),
+            EvaluationAssertion::NodeToolTrajectory { id, node_id, tools, config } => criteria.push(score_node_tool_trajectory_assertion(
+                &id, &node_id, &tools, config, &observation.node_tool_uses,
+            )),
             EvaluationAssertion::Safety {
                 id,
                 target,
@@ -1223,6 +1535,173 @@ pub fn score(
         criteria,
         observation,
     })
+}
+
+fn score_node_tool_trajectory_assertion(
+    id: &str,
+    node_id: &str,
+    expected: &[ToolUse],
+    config: ToolTrajectoryConfig,
+    uses: &[WorkflowNodeToolUse],
+) -> CriterionResult {
+    let actual = uses.iter().filter(|use_| use_.node_id == node_id).map(|use_| use_.tool.clone()).collect::<Vec<_>>();
+    let comparison = ToolTrajectoryScorer::with_config(config).compare(expected, &actual);
+    let passed = comparison.score == 1.0;
+    CriterionResult {
+        criterion: format!("nodeToolTrajectory:{id}"), score: comparison.score, threshold: 1.0, passed,
+        expected: json!({ "nodeId": node_id, "tools": expected }),
+        actual: json!({ "nodeId": node_id, "toolUses": actual, "missing": comparison.missing, "extra": comparison.extra }),
+    }
+}
+
+fn score_node_text_assertion(
+    id: &str,
+    node_id: &str,
+    algorithm: SimilarityAlgorithm,
+    expected: &str,
+    threshold: f64,
+    messages: &[WorkflowNodeMessage],
+) -> CriterionResult {
+    let actual = messages
+        .iter()
+        .rev()
+        .find(|message| message.node_id == node_id)
+        .map(|message| message.content.clone())
+        .unwrap_or_default();
+    let score = ResponseScorer::with_config(ResponseMatchConfig {
+        algorithm,
+        ..Default::default()
+    })
+    .score(expected, &actual);
+    CriterionResult {
+        criterion: format!("nodeText:{id}"),
+        score,
+        threshold,
+        passed: score >= threshold,
+        expected: json!({ "nodeId": node_id, "text": expected }),
+        actual: Value::String(actual),
+    }
+}
+
+fn score_node_output_assertion(
+    id: &str,
+    node_id: &str,
+    path: &str,
+    operator: &JsonPathOperator,
+    expected: &Value,
+    node_outputs: &[WorkflowNodeOutput],
+) -> CriterionResult {
+    let output = node_outputs
+        .iter()
+        .rev()
+        .find(|output| output.node_id == node_id)
+        .map(|output| &output.output);
+    let actual = output.and_then(|output| json_path_value(output, path)).cloned();
+    let passed = match operator {
+        JsonPathOperator::Exists => actual.is_some(),
+        JsonPathOperator::Equals => actual.as_ref().is_some_and(|actual| actual == expected),
+        JsonPathOperator::NotEquals => actual.as_ref().is_some_and(|actual| actual != expected),
+        JsonPathOperator::Contains => actual.as_ref().is_some_and(|actual| json_contains(actual, expected)),
+        JsonPathOperator::NotContains => actual.as_ref().is_some_and(|actual| !json_contains(actual, expected)),
+    };
+    CriterionResult {
+        criterion: format!("nodeOutput:{id}"),
+        score: if passed { 1.0 } else { 0.0 },
+        threshold: 1.0,
+        passed,
+        expected: json!({ "nodeId": node_id, "path": path, "operator": operator, "value": expected }),
+        actual: actual.unwrap_or_else(|| json!({ "nodeId": node_id, "error": "path was not found" })),
+    }
+}
+
+fn score_route_assertion(
+    id: &str,
+    node_id: &str,
+    expected_route: &str,
+    routes: &[WorkflowRouteExecution],
+) -> CriterionResult {
+    // A control node can be retried. The final matching trace entry reflects
+    // the route that ultimately advanced the workflow.
+    let actual = routes.iter().rev().find(|route| route.node_id == node_id);
+    let passed = actual.is_some_and(|route| route.route == expected_route);
+    CriterionResult {
+        criterion: format!("route:{id}"),
+        score: if passed { 1.0 } else { 0.0 },
+        threshold: 1.0,
+        passed,
+        expected: json!({ "nodeId": node_id, "route": expected_route }),
+        actual: actual
+            .map(|route| serde_json::to_value(route).expect("route execution is serializable"))
+            .unwrap_or_else(|| json!({ "nodeId": node_id, "route": null })),
+    }
+}
+
+fn score_node_trajectory_assertion(
+    id: &str,
+    must_execute: &[String],
+    must_not_execute: &[String],
+    ordered_nodes: &[String],
+    require_completed: bool,
+    executions: &[WorkflowNodeExecution],
+) -> CriterionResult {
+    let executed = executions
+        .iter()
+        .map(|execution| execution.node_id.as_str())
+        .collect::<Vec<_>>();
+    let missing = must_execute
+        .iter()
+        .filter(|node| !executed.contains(&node.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let forbidden = must_not_execute
+        .iter()
+        .filter(|node| executed.contains(&node.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let incomplete = if require_completed {
+        must_execute
+            .iter()
+            .filter(|node| {
+                !executions
+                    .iter()
+                    .any(|execution| execution.node_id == **node && execution.completed)
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut next_index = 0;
+    let mut out_of_order = Vec::new();
+    for node in ordered_nodes {
+        match executed[next_index..].iter().position(|actual| *actual == node) {
+            Some(index) => next_index += index + 1,
+            None => out_of_order.push(node.clone()),
+        }
+    }
+    let passed = missing.is_empty()
+        && forbidden.is_empty()
+        && incomplete.is_empty()
+        && out_of_order.is_empty();
+    CriterionResult {
+        criterion: format!("nodeTrajectory:{id}"),
+        score: if passed { 1.0 } else { 0.0 },
+        threshold: 1.0,
+        passed,
+        expected: json!({
+            "mustExecute": must_execute,
+            "mustNotExecute": must_not_execute,
+            "orderedNodes": ordered_nodes,
+            "requireCompleted": require_completed,
+        }),
+        actual: json!({
+            "nodeExecutions": executions,
+            "missing": missing,
+            "forbidden": forbidden,
+            "incomplete": incomplete,
+            "outOfOrder": out_of_order,
+        }),
+    }
 }
 
 fn score_safety_assertion(
@@ -1331,10 +1810,10 @@ fn json_contains(actual: &Value, expected: &Value) -> bool {
     }
 }
 
-/// Converts the stable, redacted `workflow.trace` projection into ADK's tool
-/// schema. Keeping this boundary small lets the UI and database evolve without
-/// making ADK's `.test.json` format the Workrun runtime model.
-pub fn observe_workflow_output(state: &Value) -> WorkflowEvaluationObservation {
+/// Combines the redacted output trace with durable node lifecycle events. Tool
+/// assertions only need output trace, but control-flow assertions must retain
+/// the runtime's actual scheduling order.
+pub fn observe_workflow_output(state: &Value, events: &[Value]) -> WorkflowEvaluationObservation {
     let trace = workflow_trace(state);
     let tool_uses = trace
         .iter()
@@ -1367,7 +1846,103 @@ pub fn observe_workflow_output(state: &Value) -> WorkflowEvaluationObservation {
     WorkflowEvaluationObservation {
         final_output,
         tool_uses,
+        node_executions: observe_node_executions(events),
+        routes: observe_routes(trace.clone()),
+        node_outputs: observe_node_outputs(trace.clone()),
+        node_messages: observe_node_messages(trace.clone()),
+        node_tool_uses: observe_node_tool_uses(trace),
     }
+}
+
+fn observe_node_tool_uses(trace: Vec<&Value>) -> Vec<WorkflowNodeToolUse> {
+    trace.into_iter().flat_map(|entry| {
+        let Some(node_id) = entry.get("nodeId").and_then(Value::as_str) else { return Vec::new() };
+        entry.get("toolCalls").and_then(Value::as_array).into_iter().flatten().filter_map(|call| Some(WorkflowNodeToolUse {
+            node_id: node_id.to_string(),
+            tool: ToolUse { name: call.get("tool")?.as_str()?.to_string(), args: call.get("input").cloned().unwrap_or_else(|| json!({})), expected_response: call.get("result").cloned() },
+        })).collect::<Vec<_>>()
+    }).collect()
+}
+
+fn observe_node_messages(trace: Vec<&Value>) -> Vec<WorkflowNodeMessage> {
+    trace
+        .into_iter()
+        .flat_map(|entry| {
+            let Some(node_id) = entry.get("nodeId").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            entry
+                .get("messages")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|message| message.get("content").and_then(Value::as_str))
+                .map(|content| WorkflowNodeMessage {
+                    node_id: node_id.to_string(),
+                    content: content.to_string(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn observe_node_outputs(trace: Vec<&Value>) -> Vec<WorkflowNodeOutput> {
+    trace
+        .into_iter()
+        .filter_map(|entry| {
+            let node_id = entry.get("nodeId")?.as_str()?.to_string();
+            // Most executable nodes publish a `result`. For agent nodes the
+            // message trace itself is the observable output surface.
+            let output = entry.get("result").cloned().unwrap_or_else(|| entry.clone());
+            Some(WorkflowNodeOutput { node_id, output })
+        })
+        .collect()
+}
+
+fn observe_routes(trace: Vec<&Value>) -> Vec<WorkflowRouteExecution> {
+    trace
+        .into_iter()
+        .filter(|entry| matches!(entry.get("type").and_then(Value::as_str), Some("if_else" | "switch")))
+        .filter_map(|entry| {
+            Some(WorkflowRouteExecution {
+                node_id: entry.get("nodeId")?.as_str()?.to_string(),
+                route: entry.pointer("/result/route")?.as_str()?.to_string(),
+                label: entry.pointer("/result/label").and_then(Value::as_str).map(ToOwned::to_owned),
+                condition: entry.pointer("/result/condition").and_then(Value::as_str).map(ToOwned::to_owned),
+            })
+        })
+        .collect()
+}
+
+fn observe_node_executions(events: &[Value]) -> Vec<WorkflowNodeExecution> {
+    let mut executions = Vec::new();
+    for event in events {
+        let Some(event_type) = event.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(node_id) = event.get("node").and_then(Value::as_str) else {
+            continue;
+        };
+        let step = event.get("step").and_then(Value::as_i64).unwrap_or_default();
+        match event_type {
+            "node_start" => executions.push(WorkflowNodeExecution {
+                node_id: node_id.to_string(),
+                step,
+                completed: false,
+            }),
+            "node_end" => {
+                if let Some(execution) = executions
+                    .iter_mut()
+                    .rev()
+                    .find(|execution| execution.node_id == node_id && execution.step == step && !execution.completed)
+                {
+                    execution.completed = true;
+                }
+            }
+            _ => {},
+        }
+    }
+    executions
 }
 
 fn workflow_trace(state: &Value) -> Vec<&Value> {
@@ -1385,6 +1960,33 @@ fn workflow_trace(state: &Value) -> Vec<&Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compares_criteria_by_rule_definition_when_historical_ids_changed() {
+        let baseline = CriterionResult {
+            criterion: "jsonPath:old-generated-id".to_string(),
+            score: 1.0,
+            threshold: 1.0,
+            passed: true,
+            expected: json!({ "path": "$.decision", "operator": "equals", "value": "通过" }),
+            actual: json!("通过"),
+        };
+        let candidate = CriterionResult {
+            criterion: "jsonPath:new-generated-id".to_string(),
+            score: 0.0,
+            threshold: 1.0,
+            passed: false,
+            expected: baseline.expected.clone(),
+            actual: json!("拒绝"),
+        };
+
+        let comparison = compare_criteria(&[baseline], &[candidate]);
+
+        assert_eq!(comparison.len(), 1);
+        assert_eq!(comparison[0].kind, "regressed");
+        assert!(comparison[0].baseline.as_ref().is_some_and(|item| item.passed));
+        assert!(comparison[0].candidate.as_ref().is_some_and(|item| !item.passed));
+    }
 
     #[test]
     fn observes_workrun_agent_trace_and_scores_with_adk_eval() {
@@ -1407,12 +2009,231 @@ mod tests {
             ],
         };
 
-        let score = score(&expectation, observe_workflow_output(&state)).unwrap();
+        let score = score(&expectation, observe_workflow_output(&state, &[])).unwrap();
 
         assert!(score.passed);
         assert_eq!(score.observation.final_output, "订单 42 已取消");
         assert_eq!(score.observation.tool_uses.len(), 1);
         assert!(score.criteria.iter().all(|criterion| criterion.passed));
+    }
+
+    #[test]
+    fn scores_node_trajectory_from_durable_lifecycle_events() {
+        let events = vec![
+            json!({ "type": "node_start", "node": "intent", "step": 1 }),
+            json!({ "type": "node_end", "node": "intent", "step": 1 }),
+            json!({ "type": "node_start", "node": "refund", "step": 2 }),
+            json!({ "type": "node_end", "node": "refund", "step": 2 }),
+        ];
+        let expectation = EvaluationExpectation {
+            assertions: vec![EvaluationAssertion::NodeTrajectory {
+                id: "refund-route".to_string(),
+                must_execute: vec!["intent".to_string(), "refund".to_string()],
+                must_not_execute: vec!["manual-review".to_string()],
+                ordered_nodes: vec!["intent".to_string(), "refund".to_string()],
+                require_completed: true,
+            }],
+        };
+
+        let score = score(&expectation, observe_workflow_output(&json!({}), &events)).unwrap();
+
+        assert!(score.passed);
+        assert_eq!(score.observation.node_executions.len(), 2);
+        assert!(score.observation.node_executions.iter().all(|node| node.completed));
+    }
+
+    #[test]
+    fn reports_forbidden_and_incomplete_nodes_in_the_trajectory_evidence() {
+        let events = vec![
+            json!({ "type": "node_start", "node": "intent", "step": 1 }),
+            json!({ "type": "node_start", "node": "manual-review", "step": 2 }),
+        ];
+        let expectation = EvaluationExpectation {
+            assertions: vec![EvaluationAssertion::NodeTrajectory {
+                id: "automatic-route".to_string(),
+                must_execute: vec!["intent".to_string()],
+                must_not_execute: vec!["manual-review".to_string()],
+                ordered_nodes: vec!["intent".to_string()],
+                require_completed: true,
+            }],
+        };
+
+        let score = score(&expectation, observe_workflow_output(&json!({}), &events)).unwrap();
+
+        assert!(!score.passed);
+        assert_eq!(score.criteria[0].actual["forbidden"], json!(["manual-review"]));
+        assert_eq!(score.criteria[0].actual["incomplete"], json!(["intent"]));
+    }
+
+    #[test]
+    fn reports_nodes_that_do_not_follow_the_required_order() {
+        let events = vec![
+            json!({ "type": "node_start", "node": "refund", "step": 1 }),
+            json!({ "type": "node_end", "node": "refund", "step": 1 }),
+            json!({ "type": "node_start", "node": "intent", "step": 2 }),
+            json!({ "type": "node_end", "node": "intent", "step": 2 }),
+        ];
+        let expectation = EvaluationExpectation {
+            assertions: vec![EvaluationAssertion::NodeTrajectory {
+                id: "ordered-route".to_string(),
+                must_execute: vec![],
+                must_not_execute: vec![],
+                ordered_nodes: vec!["intent".to_string(), "refund".to_string()],
+                require_completed: false,
+            }],
+        };
+
+        let score = score(&expectation, observe_workflow_output(&json!({}), &events)).unwrap();
+
+        assert!(!score.passed);
+        assert_eq!(score.criteria[0].actual["outOfOrder"], json!(["refund"]));
+    }
+
+    #[test]
+    fn scores_the_route_recorded_by_a_control_node() {
+        let state = json!({
+            "workflow": {
+                "workflow.trace": [{
+                    "nodeId": "risk-check",
+                    "type": "switch",
+                    "result": {
+                        "route": "case:approved",
+                        "label": "Approved",
+                        "condition": "risk < 0.2"
+                    }
+                }]
+            }
+        });
+        let expectation = EvaluationExpectation {
+            assertions: vec![EvaluationAssertion::Route {
+                id: "approved-route".to_string(),
+                node_id: "risk-check".to_string(),
+                expected_route: "case:approved".to_string(),
+            }],
+        };
+
+        let score = score(&expectation, observe_workflow_output(&state, &[])).unwrap();
+
+        assert!(score.passed);
+        assert_eq!(score.observation.routes[0].label.as_deref(), Some("Approved"));
+    }
+
+    #[test]
+    fn fails_when_a_control_node_takes_another_route() {
+        let state = json!({
+            "workflow": {
+                "workflow.trace": [{
+                    "nodeId": "eligibility",
+                    "type": "if_else",
+                    "result": { "route": "false", "label": "Manual review" }
+                }]
+            }
+        });
+        let expectation = EvaluationExpectation {
+            assertions: vec![EvaluationAssertion::Route {
+                id: "automatic-route".to_string(),
+                node_id: "eligibility".to_string(),
+                expected_route: "true".to_string(),
+            }],
+        };
+
+        let score = score(&expectation, observe_workflow_output(&state, &[])).unwrap();
+
+        assert!(!score.passed);
+        assert_eq!(score.criteria[0].actual["route"], json!("false"));
+    }
+
+    #[test]
+    fn scores_an_output_field_from_the_selected_node() {
+        let state = json!({
+            "workflow": {
+                "workflow.trace": [{
+                    "nodeId": "risk-check",
+                    "type": "process",
+                    "result": { "riskLevel": "low", "score": 0.1 }
+                }]
+            }
+        });
+        let expectation = EvaluationExpectation {
+            assertions: vec![EvaluationAssertion::NodeOutput {
+                id: "risk-level".to_string(),
+                node_id: "risk-check".to_string(),
+                path: "$.riskLevel".to_string(),
+                operator: JsonPathOperator::Equals,
+                expected: json!("low"),
+            }],
+        };
+
+        let score = score(&expectation, observe_workflow_output(&state, &[])).unwrap();
+
+        assert!(score.passed);
+        assert_eq!(score.observation.node_outputs[0].output["score"], json!(0.1));
+    }
+
+    #[test]
+    fn scores_the_last_assistant_message_from_an_agent_node() {
+        let state = json!({
+            "workflow": {
+                "workflow.trace": [{
+                    "nodeId": "summarizer",
+                    "type": "agent",
+                    "messages": [{ "role": "assistant", "content": "Order 42 is approved." }]
+                }]
+            }
+        });
+        let expectation = EvaluationExpectation {
+            assertions: vec![EvaluationAssertion::NodeText {
+                id: "approval-summary".to_string(),
+                node_id: "summarizer".to_string(),
+                algorithm: SimilarityAlgorithm::Contains,
+                expected: "approved".to_string(),
+                threshold: 1.0,
+            }],
+        };
+
+        let score = score(&expectation, observe_workflow_output(&state, &[])).unwrap();
+
+        assert!(score.passed);
+        assert_eq!(score.observation.node_messages[0].content, "Order 42 is approved.");
+    }
+
+    #[test]
+    fn preserves_node_trajectory_fields_from_the_desktop_json_contract() {
+        let expectation: EvaluationExpectation = serde_json::from_value(json!({
+            "assertions": [{
+                "kind": "node_trajectory",
+                "id": "route",
+                "mustExecute": ["intent"],
+                "mustNotExecute": ["manual-review"],
+                "orderedNodes": ["intent", "refund"],
+                "requireCompleted": true
+            }]
+        }))
+        .unwrap();
+
+        let saved = serde_json::to_value(expectation).unwrap();
+
+        assert_eq!(saved["assertions"][0]["mustExecute"], json!(["intent"]));
+        assert_eq!(saved["assertions"][0]["mustNotExecute"], json!(["manual-review"]));
+        assert_eq!(saved["assertions"][0]["orderedNodes"], json!(["intent", "refund"]));
+        assert!(saved["assertions"][0].get("must_execute").is_none());
+    }
+
+    #[test]
+    fn reads_node_trajectory_saved_by_an_older_snake_case_build() {
+        let expectation: EvaluationExpectation = serde_json::from_value(json!({
+            "assertions": [{
+                "kind": "node_trajectory",
+                "must_execute": ["intent"],
+                "ordered_nodes": ["intent"]
+            }]
+        }))
+        .unwrap();
+
+        let saved = serde_json::to_value(expectation).unwrap();
+
+        assert_eq!(saved["assertions"][0]["mustExecute"], json!(["intent"]));
+        assert_eq!(saved["assertions"][0]["orderedNodes"], json!(["intent"]));
     }
 
     #[test]
@@ -1437,7 +2258,7 @@ mod tests {
             }],
         };
 
-        let score = score(&expectation, observe_workflow_output(&state)).unwrap();
+        let score = score(&expectation, observe_workflow_output(&state, &[])).unwrap();
         assert!(!score.passed);
         assert_eq!(score.criteria[0].score, 1.0);
         assert_eq!(score.criteria[0].actual["responseMismatches"].as_array().unwrap().len(), 1);
@@ -1463,6 +2284,11 @@ mod tests {
                     "token": "secret-token"
                 })),
             }],
+            node_executions: vec![],
+            routes: vec![],
+            node_outputs: vec![],
+            node_messages: vec![],
+            node_tool_uses: vec![],
         };
 
         let score = score(&expectation, observation).unwrap();
@@ -1482,6 +2308,11 @@ mod tests {
             WorkflowEvaluationObservation {
                 final_output: String::new(),
                 tool_uses: vec![],
+                node_executions: vec![],
+                routes: vec![],
+                node_outputs: vec![],
+                node_messages: vec![],
+                node_tool_uses: vec![],
             },
         )
         .unwrap();
@@ -1506,6 +2337,11 @@ mod tests {
             WorkflowEvaluationObservation {
                 final_output: json!({ "decision": "不通过" }).to_string(),
                 tool_uses: vec![],
+                node_executions: vec![],
+                routes: vec![],
+                node_outputs: vec![],
+                node_messages: vec![],
+                node_tool_uses: vec![],
             },
         )
         .unwrap();

@@ -2,7 +2,7 @@ use crate::{
     cmd::{CmdResult, StringifyErr},
     module::evaluation::{
         ClaimedEvaluationCase, CreateEvaluationCase, CreateEvaluationRun, CreateEvaluationSuite,
-        EvaluationCaseResultSummary, EvaluationCaseSummary, EvaluationQualityGate, EvaluationRunDetail, EvaluationRunSummary, EvaluationStore, EvaluationVersionCaseDiff, EvaluationVersionSummary, QualityGateAuditSummary, RecordQualityGateOverride,
+        EvaluationCaseResultSummary, EvaluationCaseSummary, EvaluationQualityGate, EvaluationRunDetail, EvaluationRunSummary, EvaluationStore, EvaluationVersionCaseCriterionComparison, EvaluationVersionCaseDiff, EvaluationVersionSummary, QualityGateAuditSummary, RecordQualityGateOverride,
         EvaluationSuiteSummary, UpdateEvaluationCase, UpdateEvaluationSuite,
     },
 };
@@ -100,6 +100,11 @@ pub async fn evaluation_version_summary(suite_id: String) -> CmdResult<Vec<Evalu
 #[tauri::command]
 pub async fn evaluation_version_compare(suite_id: String, baseline: String, candidate: String) -> CmdResult<Vec<EvaluationVersionCaseDiff>> {
     EvaluationStore::compare_versions(&suite_id, &baseline, &candidate).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn evaluation_version_case_criteria_compare(suite_id: String, baseline: String, candidate: String, case_id: String) -> CmdResult<EvaluationVersionCaseCriterionComparison> {
+    EvaluationStore::compare_version_case_criteria(&suite_id, &baseline, &candidate, &case_id).await.stringify_err()
 }
 
 #[tauri::command]

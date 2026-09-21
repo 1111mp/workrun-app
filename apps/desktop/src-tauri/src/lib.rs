@@ -111,6 +111,7 @@ pub fn run() {
             cmd::evaluation::evaluation_run_list,
             cmd::evaluation::evaluation_version_summary,
             cmd::evaluation::evaluation_version_compare,
+            cmd::evaluation::evaluation_version_case_criteria_compare,
             cmd::evaluation::evaluation_workflow_latest_run,
             cmd::evaluation::evaluation_workflow_snapshot_runs,
             cmd::evaluation::evaluation_quality_gate_get,
