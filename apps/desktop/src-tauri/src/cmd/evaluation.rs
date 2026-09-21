@@ -63,6 +63,13 @@ pub async fn evaluation_run_create(request: CreateEvaluationRun) -> CmdResult<Ev
 }
 
 #[tauri::command]
+pub async fn evaluation_run_retry_failed(source_run_id: String, id: String) -> CmdResult<EvaluationRunSummary> {
+    EvaluationStore::retry_failed_cases(&source_run_id, id)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
 pub async fn evaluation_run_claim_next_case(evaluation_run_id: String) -> CmdResult<Option<ClaimedEvaluationCase>> {
     EvaluationStore::claim_next_case(&evaluation_run_id)
         .await
@@ -74,6 +81,11 @@ pub async fn evaluation_run_start_next_case(evaluation_run_id: String) -> CmdRes
     EvaluationStore::start_next_case(&evaluation_run_id)
         .await
         .stringify_err()
+}
+
+#[tauri::command]
+pub async fn evaluation_run_cancel(evaluation_run_id: String) -> CmdResult {
+    EvaluationStore::cancel_run(&evaluation_run_id).await.stringify_err()
 }
 
 #[tauri::command]

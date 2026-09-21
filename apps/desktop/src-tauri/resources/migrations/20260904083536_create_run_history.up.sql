@@ -172,6 +172,9 @@ CREATE TABLE evaluation_runs (
   id TEXT PRIMARY KEY NOT NULL,
   suite_id TEXT NOT NULL REFERENCES evaluation_suites(id) ON DELETE RESTRICT,
   workflow_id TEXT NOT NULL,
+  -- A retry reuses frozen evidence from a finished batch rather than current
+  -- mutable definitions; retain its origin for audit and history display.
+  retry_of_run_id TEXT REFERENCES evaluation_runs(id) ON DELETE SET NULL,
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
   workflow_snapshot_json TEXT NOT NULL,
   -- Candidate releases are evaluated before receiving a release version.
@@ -200,6 +203,9 @@ CREATE INDEX idx_evaluation_runs_workflow_started
 
 CREATE INDEX idx_evaluation_runs_workflow_fingerprint_started
   ON evaluation_runs(workflow_id, workflow_fingerprint, started_at DESC, id DESC);
+
+CREATE INDEX idx_evaluation_runs_retry_of
+  ON evaluation_runs(retry_of_run_id, started_at DESC, id DESC);
 
 CREATE TABLE evaluation_case_results (
   id TEXT PRIMARY KEY NOT NULL,

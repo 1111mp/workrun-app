@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   compareEvaluationVersions,
+  cancelEvaluationRun,
   listEvaluationCases,
   latestEvaluationRunsForWorkflowSnapshot,
   recordEvaluationQualityGateOverride,
   restoreEvaluationCase,
+  retryFailedEvaluationCases,
   updateEvaluationQualityGate,
 } from './evaluation';
 
@@ -100,5 +102,20 @@ describe('evaluation service contracts', () => {
       'evaluation_quality_gate_record_override',
       { request },
     );
+  });
+
+  it('uses explicit IDs when cancelling a run or retrying its failed cases', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await cancelEvaluationRun('run-active');
+    await retryFailedEvaluationCases('run-source', 'run-retry');
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'evaluation_run_cancel', {
+      evaluationRunId: 'run-active',
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'evaluation_run_retry_failed', {
+      sourceRunId: 'run-source',
+      id: 'run-retry',
+    });
   });
 });

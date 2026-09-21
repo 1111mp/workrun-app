@@ -101,6 +101,33 @@ impl DBManager {
         .bind(&recovered_at)
         .execute(pool)
         .await?;
+        // Evaluation batches cannot survive a native restart: a queued batch
+        // may have crashed before it created its first workflow Run. Close by
+        // batch status, not only by Run linkage, so no history entry waits
+        // forever for a coordinator that no longer exists.
+        sqlx::query(
+            "UPDATE evaluation_case_results SET execution_status = 'failed', verdict = 'error', failure_reason = ?, updated_at = ? WHERE execution_status = 'running' AND evaluation_run_id IN (SELECT id FROM evaluation_runs WHERE status IN ('queued', 'running'))",
+        )
+        .bind("Evaluation execution ended when Workrun restarted.")
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "UPDATE evaluation_case_results SET execution_status = 'cancelled', verdict = 'skipped', failure_reason = ?, updated_at = ? WHERE execution_status = 'queued' AND evaluation_run_id IN (SELECT id FROM evaluation_runs WHERE status IN ('queued', 'running'))",
+        )
+        .bind("Evaluation batch stopped when Workrun restarted.")
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "UPDATE evaluation_runs SET status = 'failed', ended_at = ?, duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER), failed_cases = (SELECT COUNT(*) FROM evaluation_case_results WHERE evaluation_run_id = evaluation_runs.id AND verdict IN ('failed', 'error')), error = ?, updated_at = ? WHERE status IN ('queued', 'running')",
+        )
+        .bind(&recovered_at)
+        .bind(&recovered_at)
+        .bind("Evaluation batch stopped when Workrun restarted.")
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
         // A pending action only has meaning while its native session is alive.
         // Expire it with the recovered run so the global attention queue cannot
         // offer a decision that can no longer be applied.
@@ -154,11 +181,39 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE evaluation_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, failed_cases INTEGER NOT NULL DEFAULT 0, error TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE evaluation_case_results (id TEXT PRIMARY KEY, evaluation_run_id TEXT NOT NULL, workflow_run_id TEXT, execution_status TEXT NOT NULL, verdict TEXT NOT NULL, failure_reason TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-1', 'waiting_for_input')")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-2', 'queued')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO evaluation_runs (id, status, started_at) VALUES ('evaluation-1', 'running', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO evaluation_runs (id, status, started_at) VALUES ('evaluation-2', 'queued', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO evaluation_case_results (id, evaluation_run_id, workflow_run_id, execution_status, verdict) VALUES ('case-1', 'evaluation-1', 'run-1', 'running', 'pending'), ('case-2', 'evaluation-1', NULL, 'queued', 'pending')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO evaluation_case_results (id, evaluation_run_id, workflow_run_id, execution_status, verdict) VALUES ('case-3', 'evaluation-2', NULL, 'queued', 'pending')")
             .execute(&pool)
             .await
             .unwrap();
@@ -199,5 +254,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(queued_error, "Execution did not start before Workrun restarted.");
+        let evaluation_status: String = sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'evaluation-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let failed_cases: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evaluation_case_results WHERE evaluation_run_id = 'evaluation-1' AND verdict IN ('error', 'skipped')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(evaluation_status, "failed");
+        assert_eq!(failed_cases, 2);
+        let queued_evaluation_status: String = sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'evaluation-2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let queued_case: (String, String) = sqlx::query_as("SELECT execution_status, verdict FROM evaluation_case_results WHERE id = 'case-3'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(queued_evaluation_status, "failed");
+        assert_eq!(queued_case, ("cancelled".to_string(), "skipped".to_string()));
     }
 }

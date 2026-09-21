@@ -233,10 +233,11 @@ async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -
         .unwrap_or_else(|| started_at.clone());
     let span_id = format!("{run_id}:model:{call_id}");
     let attributes = json!({ "modelCallId": call_id });
+    let parent_span_id = RunHistoryStore::active_node_span_id(run_id, node_id).await?;
     RunHistoryStore::create_span(CreateRunSpan {
         id: span_id.clone(),
         run_id: run_id.to_string(),
-        parent_span_id: None,
+        parent_span_id,
         kind: TelemetrySpanKind::ModelCall,
         status: TelemetrySpanStatus::Running,
         node_id: Some(node_id.to_string()),
@@ -292,10 +293,11 @@ async fn project_tool_span(run_id: &str, node_id: &str, event_type: &str, data: 
     let attributes = json!({ "callId": call_id });
     match event_type {
         "agent.tool_call" => {
+            let parent_span_id = RunHistoryStore::active_node_span_id(run_id, node_id).await?;
             RunHistoryStore::create_span(CreateRunSpan {
                 id: span_id,
                 run_id: run_id.to_string(),
-                parent_span_id: None,
+                parent_span_id,
                 kind: TelemetrySpanKind::ToolCall,
                 status: TelemetrySpanStatus::Running,
                 node_id: Some(node_id.to_string()),

@@ -264,7 +264,21 @@ function WorkflowEditorContent({
 
   const { t } = useTranslation();
 
-  const latestCandidateEvaluation = candidateEvaluationRuns.data?.[0];
+  const candidateEvaluations = candidateEvaluationRuns.data ?? [];
+  const latestCandidateEvaluation = candidateEvaluations[0];
+  const completedCandidateEvaluations = candidateEvaluations.filter(
+    (run) => run.status === 'completed',
+  );
+  const candidateEvaluationTotals = completedCandidateEvaluations.reduce(
+    (totals, run) => ({
+      totalCases: totals.totalCases + run.totalCases,
+      passedCases: totals.passedCases + run.passedCases,
+      costMicrousd:
+        totals.costMicrousd + (run.estimatedCostMicrousd ?? 0),
+      durationMs: totals.durationMs + (run.durationMs ?? 0),
+    }),
+    { totalCases: 0, passedCases: 0, costMicrousd: 0, durationMs: 0 },
+  );
   const hasQualityGateRules = Boolean(
     qualityGate.data?.requireEvaluation ||
     (qualityGate.data?.minPassRate !== null &&
@@ -278,33 +292,31 @@ function WorkflowEditorContent({
 
   const gateReasons = qualityGate.data
     ? [
-        ...(hasQualityGateRules && !latestCandidateEvaluation
+        ...(hasQualityGateRules && !candidateEvaluations.length
           ? [t('workflowEditor.evaluations.gate.noCandidateRun')]
           : []),
-        ...(latestCandidateEvaluation &&
-        latestCandidateEvaluation.status !== 'completed'
+        ...(candidateEvaluations.some((run) => run.status !== 'completed')
           ? [t('workflowEditor.evaluations.gate.candidateIncomplete')]
           : []),
         ...(qualityGate.data.minPassRate !== null &&
         qualityGate.data.minPassRate !== undefined &&
-        latestCandidateEvaluation?.status === 'completed' &&
-        latestCandidateEvaluation.totalCases > 0 &&
-        latestCandidateEvaluation.passedCases /
-          latestCandidateEvaluation.totalCases <
+        candidateEvaluationTotals.totalCases > 0 &&
+        candidateEvaluationTotals.passedCases /
+          candidateEvaluationTotals.totalCases <
           qualityGate.data.minPassRate
           ? [t('workflowEditor.evaluations.gate.passRateBelow')]
           : []),
         ...(qualityGate.data.maxCostMicrousd !== null &&
         qualityGate.data.maxCostMicrousd !== undefined &&
-        latestCandidateEvaluation?.status === 'completed' &&
-        (latestCandidateEvaluation.estimatedCostMicrousd ?? 0) >
+        completedCandidateEvaluations.length > 0 &&
+        candidateEvaluationTotals.costMicrousd >
           qualityGate.data.maxCostMicrousd
           ? [t('workflowEditor.evaluations.gate.costExceeded')]
           : []),
         ...(qualityGate.data.maxDurationMs !== null &&
         qualityGate.data.maxDurationMs !== undefined &&
-        latestCandidateEvaluation?.status === 'completed' &&
-        (latestCandidateEvaluation.durationMs ?? 0) >
+        completedCandidateEvaluations.length > 0 &&
+        candidateEvaluationTotals.durationMs >
           qualityGate.data.maxDurationMs
           ? [t('workflowEditor.evaluations.gate.durationExceeded')]
           : []),
@@ -519,18 +531,26 @@ function WorkflowEditorContent({
         releaseNote.trim(),
       );
       if (gateReasons.length && qualityGate.data) {
-        void recordEvaluationQualityGateOverride({
-          workflowId: activeWorkflow.id,
-          releaseVersion: release.version,
-          reason: publishOverrideReason.trim(),
-          gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
-          evaluationSnapshot: candidateEvaluationRuns.data ?? [],
-        }).catch((error) =>
+        // The release has already been accepted by the remote server. A local
+        // audit failure must be visible, but must not incorrectly report that
+        // the irreversible publication itself failed.
+        try {
+          await recordEvaluationQualityGateOverride({
+            workflowId: activeWorkflow.id,
+            releaseVersion: release.version,
+            reason: publishOverrideReason.trim(),
+            gateSnapshot: { policy: qualityGate.data, reasons: gateReasons },
+            evaluationSnapshot: candidateEvaluations,
+          });
+        } catch (auditError) {
           toast.error(t('workflowEditor.evaluations.gate.auditRecordFailed'), {
             toasterId: 'global',
-            description: String(error),
-          }),
-        );
+            description:
+              auditError instanceof Error
+                ? auditError.message
+                : String(auditError),
+          });
+        }
       }
       setPublishOpen(false);
       setReleaseNote('');

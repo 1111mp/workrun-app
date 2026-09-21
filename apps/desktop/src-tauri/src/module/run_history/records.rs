@@ -82,6 +82,21 @@ impl RunHistoryStore {
         Ok(())
     }
 
+    /// Model and tool events arrive while their enclosing node is still
+    /// running. Resolve that durable parent at projection time so history can
+    /// render the same causal tree as the live execution.
+    pub async fn active_node_span_id(run_id: &str, node_id: &str) -> Result<Option<String>> {
+        let pool = DBManager::global().pool()?;
+        sqlx::query_scalar(
+            "SELECT id FROM run_spans WHERE run_id = ? AND node_id = ? AND kind = 'workflow_node' AND status = 'running' ORDER BY started_at DESC, id DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .bind(node_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn finish_span(id: &str, span: FinishRunSpan) -> Result<()> {
         if id.trim().is_empty() || span.duration_ms.is_some_and(|duration| duration < 0) || !span.attributes.is_object()
         {

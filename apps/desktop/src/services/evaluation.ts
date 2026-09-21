@@ -30,6 +30,7 @@ export type EvaluationRun = {
   id: string;
   suiteId: string;
   workflowId: string;
+  retryOfRunId?: string | null;
   status: string;
   totalCases: number;
   startedAt: string;
@@ -47,6 +48,7 @@ export type EvaluationRunDetail = EvaluationRun & {
 export type EvaluationVersionSummary = {
   releaseId?: string | null;
   releaseVersion: string;
+  comparisonKey: string;
   runCount: number;
   totalCases: number;
   passedCases: number;
@@ -69,8 +71,8 @@ export type EvaluationCaseResult = {
   id: string;
   evaluationCaseId: string;
   workflowRunId?: string | null;
-  executionStatus: 'queued' | 'running' | 'completed' | 'failed';
-  verdict: 'pending' | 'passed' | 'failed' | 'error';
+  executionStatus: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  verdict: 'pending' | 'passed' | 'failed' | 'error' | 'skipped';
   score?: number | null;
   actualOutput: unknown;
   criteriaResults: unknown;
@@ -164,8 +166,12 @@ export function createEvaluationRun(request: {
   return invoke<EvaluationRun>('evaluation_run_create', { request });
 }
 
-export function startNextEvaluationCase(evaluationRunId: string) {
-  return invoke('evaluation_run_start_next_case', { evaluationRunId });
+export function retryFailedEvaluationCases(sourceRunId: string, id: string) {
+  return invoke<EvaluationRun>('evaluation_run_retry_failed', { sourceRunId, id });
+}
+
+export function cancelEvaluationRun(evaluationRunId: string) {
+  return invoke('evaluation_run_cancel', { evaluationRunId });
 }
 
 export function listEvaluationCaseResults(evaluationRunId: string) {

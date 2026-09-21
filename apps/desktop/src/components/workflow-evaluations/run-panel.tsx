@@ -1,4 +1,5 @@
-import { Badge } from '@workspace/ui/components';
+import { Badge, Button } from '@workspace/ui/components';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type {
@@ -23,7 +24,7 @@ export function formatDuration(value?: number | null) {
 }
 
 export function versionKey(version: EvaluationVersionSummary) {
-  return `${version.releaseId ?? 'draft'}:${version.releaseVersion}`;
+  return version.comparisonKey;
 }
 
 export function versionPassRate(version: EvaluationVersionSummary) {
@@ -46,6 +47,16 @@ export function versionCriterionDiffLabel(
   return t(`evaluations.criterionDiff.${diff.kind}`);
 }
 
+export function selectTrendRuns(
+  runs: EvaluationRunDetail[],
+  includeRetries: boolean,
+) {
+  return runs.filter(
+    (run) =>
+      run.status === 'completed' && (includeRetries || !run.retryOfRunId),
+  );
+}
+
 export function EvaluationTrends({
   runs,
   versions,
@@ -54,7 +65,8 @@ export function EvaluationTrends({
   versions: EvaluationVersionSummary[];
 }) {
   const { t } = useTranslation();
-  const completed = runs.filter((run) => run.status === 'completed');
+  const [includeRetries, setIncludeRetries] = useState(false);
+  const completed = selectTrendRuns(runs, includeRetries);
   if (!completed.length) return null;
   const average = (values: number[]) =>
     values.length
@@ -86,6 +98,22 @@ export function EvaluationTrends({
             : t('evaluations.stable')}
         </Badge>
       </div>
+      <div className='mb-3 flex justify-end'>
+        <Button
+          size='sm'
+          variant='ghost'
+          onClick={() => setIncludeRetries((value) => !value)}
+        >
+          {includeRetries
+            ? t('evaluations.excludeRetries')
+            : t('evaluations.includeRetries')}
+        </Button>
+      </div>
+      <p className='text-muted-foreground -mt-2 mb-3 text-[10px]'>
+        {includeRetries
+          ? t('evaluations.trendsIncludeRetriesHint')
+          : t('evaluations.trendsExcludeRetriesHint')}
+      </p>
       <div className='grid grid-cols-3 gap-2'>
         <TrendMetric
           label={t('evaluations.averagePassRate')}
@@ -144,6 +172,9 @@ export function EvaluationTrends({
         <div className='mt-3 space-y-1.5'>
           <div className='text-muted-foreground text-[10px] font-medium'>
             {t('evaluations.versionPerformance')}
+          </div>
+          <div className='text-muted-foreground text-[10px]'>
+            {t('evaluations.versionPerformanceExcludesRetries')}
           </div>
           {versions.slice(0, 4).map((version) => (
             <div

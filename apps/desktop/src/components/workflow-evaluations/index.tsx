@@ -35,17 +35,19 @@ import {
   PlayIcon,
   PlusIcon,
   PowerIcon,
+  RotateCcwIcon,
   Settings2Icon,
   TestTubeDiagonalIcon,
   Trash2Icon,
   UploadIcon,
   XCircleIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import {
+  cancelEvaluationRun,
   compareEvaluationVersionCaseCriteria,
   compareEvaluationVersions,
   createEvaluationCase,
@@ -61,7 +63,7 @@ import {
   listEvaluationSuites,
   reorderEvaluationCases,
   restoreEvaluationCase,
-  startNextEvaluationCase,
+  retryFailedEvaluationCases,
   summarizeEvaluationVersions,
   updateEvaluationCase,
   updateEvaluationQualityGate,
@@ -128,6 +130,7 @@ import {
   workflowRoutes,
   workflowToolIds,
 } from './workflow-utils';
+
 const RESULT_STYLE: Record<EvaluationCaseResult['verdict'], string> = {
   pending: 'border-muted-foreground/30 bg-muted text-muted-foreground',
   passed:
@@ -135,9 +138,10 @@ const RESULT_STYLE: Record<EvaluationCaseResult['verdict'], string> = {
   failed: 'border-destructive/30 bg-destructive/10 text-destructive',
   error:
     'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+  skipped: 'border-muted-foreground/30 bg-muted text-muted-foreground',
 };
 
-type RunOutcome = 'passed' | 'failed' | 'running' | 'queued';
+type RunOutcome = 'passed' | 'failed' | 'running' | 'queued' | 'cancelled';
 
 const RUN_OUTCOME_STYLE: Record<
   RunOutcome,
@@ -165,6 +169,11 @@ const RUN_OUTCOME_STYLE: Record<
     rail: 'border-l-amber-500',
     meter: 'bg-amber-500',
   },
+  cancelled: {
+    badge: 'border-muted-foreground/30 bg-muted text-muted-foreground',
+    rail: 'border-l-muted-foreground',
+    meter: 'bg-muted-foreground',
+  },
 };
 
 function runOutcome(run: {
@@ -175,6 +184,7 @@ function runOutcome(run: {
 }): RunOutcome {
   if (run.status === 'queued') return 'queued';
   if (run.status === 'running') return 'running';
+  if (run.status === 'cancelled') return 'cancelled';
   if (run.failedCases > 0 || run.passedCases < run.totalCases) return 'failed';
   return 'passed';
 }
@@ -186,6 +196,8 @@ function ResultIcon({ verdict }: { verdict: EvaluationCaseResult['verdict'] }) {
     return <XCircleIcon className='text-destructive size-4' />;
   if (verdict === 'error')
     return <CircleAlertIcon className='size-4 text-amber-500' />;
+  if (verdict === 'skipped')
+    return <CircleAlertIcon className='text-muted-foreground size-4' />;
   return <TestTubeDiagonalIcon className='text-muted-foreground size-4' />;
 }
 
@@ -257,7 +269,8 @@ export function WorkflowEvaluations({
   const [safetyDrafts, setSafetyDrafts] = useState<SafetyAssertionDraft[]>([]);
   const [saving, setSaving] = useState(false);
   const [startingRun, setStartingRun] = useState(false);
-  const startingNext = useRef(false);
+  const [cancellingRun, setCancellingRun] = useState(false);
+  const [retryingRun, setRetryingRun] = useState(false);
   const assertionsJson = JSON.stringify(
     serializeVisualAssertions(
       assertionDrafts,
@@ -359,14 +372,14 @@ export function WorkflowEvaluations({
     queryKey: [
       'evaluation-version-diff',
       effectiveSuiteId,
-      baseline?.releaseVersion,
-      candidate?.releaseVersion,
+      baseline?.comparisonKey,
+      candidate?.comparisonKey,
     ],
     queryFn: () =>
       compareEvaluationVersions(
         effectiveSuiteId!,
-        baseline!.releaseVersion,
-        candidate!.releaseVersion,
+        baseline!.comparisonKey,
+        candidate!.comparisonKey,
       ),
     enabled: Boolean(
       effectiveSuiteId &&
@@ -379,15 +392,15 @@ export function WorkflowEvaluations({
     queryKey: [
       'evaluation-version-criteria-diff',
       effectiveSuiteId,
-      baseline?.releaseVersion,
-      candidate?.releaseVersion,
+      baseline?.comparisonKey,
+      candidate?.comparisonKey,
       selectedVersionDiff?.caseId,
     ],
     queryFn: () =>
       compareEvaluationVersionCaseCriteria(
         effectiveSuiteId!,
-        baseline!.releaseVersion,
-        candidate!.releaseVersion,
+        baseline!.comparisonKey,
+        candidate!.comparisonKey,
         selectedVersionDiff!.caseId,
       ),
     enabled: Boolean(
@@ -413,30 +426,6 @@ export function WorkflowEvaluations({
     configuredWorkflowNodes,
     configuredRoutes,
   );
-
-  useEffect(() => {
-    const rows = results.data;
-    if (!activeRunId || !rows?.length || startingNext.current) return;
-    if (rows.some((row) => row.executionStatus === 'running')) return;
-    if (!rows.some((row) => row.executionStatus === 'queued')) return;
-
-    startingNext.current = true;
-    void startNextEvaluationCase(activeRunId)
-      .then(() =>
-        queryClient.invalidateQueries({
-          queryKey: ['evaluation-case-results', activeRunId],
-        }),
-      )
-      .catch((error) => {
-        toast.error(t('evaluations.feedback.nextCaseStartFailed'), {
-          toasterId: 'global',
-          description: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        startingNext.current = false;
-      });
-  }, [activeRunId, queryClient, results.data, t]);
 
   useEffect(() => {
     let disposed = false;
@@ -645,7 +634,6 @@ export function WorkflowEvaluations({
         workflowSnapshot,
       });
       setActiveRunId(run.id);
-      await startNextEvaluationCase(run.id);
       await queryClient.invalidateQueries({
         queryKey: ['evaluation-case-results', run.id],
       });
@@ -659,6 +647,60 @@ export function WorkflowEvaluations({
       });
     } finally {
       setStartingRun(false);
+    }
+  };
+
+  const cancelRun = async () => {
+    if (!activeRunId) return;
+    setCancellingRun(true);
+    try {
+      await cancelEvaluationRun(activeRunId);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-case-results', activeRunId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-run', activeRunId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-run-history', effectiveSuiteId],
+        }),
+      ]);
+    } catch (error) {
+      toast.error(t('evaluations.feedback.runCancelFailed'), {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setCancellingRun(false);
+    }
+  };
+
+  const retryFailedCases = async () => {
+    if (!activeRunId || !effectiveSuiteId) return;
+    setRetryingRun(true);
+    try {
+      const run = await retryFailedEvaluationCases(
+        activeRunId,
+        crypto.randomUUID(),
+      );
+      setActiveRunId(run.id);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-case-results', run.id],
+        }),
+        queryClient.invalidateQueries({ queryKey: ['evaluation-run', run.id] }),
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-run-history', effectiveSuiteId],
+        }),
+      ]);
+    } catch (error) {
+      toast.error(t('evaluations.feedback.runRetryFailed'), {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setRetryingRun(false);
     }
   };
 
@@ -1232,21 +1274,71 @@ export function WorkflowEvaluations({
                         </p>
                       </div>
                       {activeRunId ? (
-                        <Badge
-                          className={
-                            runDetail.data
-                              ? RUN_OUTCOME_STYLE[runOutcome(runDetail.data)]
-                                  .badge
-                              : undefined
-                          }
-                          variant='outline'
-                        >
-                          {runDetail.data
-                            ? t(
-                                `evaluations.outcomes.${runOutcome(runDetail.data)}`,
-                              )
-                            : `${completed}/${results.data?.length ?? 0}`}
-                        </Badge>
+                        <div className='flex items-center gap-2'>
+                          {runDetail.data?.status === 'queued' ||
+                          runDetail.data?.status === 'running' ? (
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              disabled={cancellingRun}
+                              onClick={() => void cancelRun()}
+                            >
+                              {cancellingRun ? (
+                                <Spinner data-icon='inline-start' />
+                              ) : null}
+                              {t('evaluations.cancelRun')}
+                            </Button>
+                          ) : null}
+                          {runDetail.data?.retryOfRunId ? (
+                            <Button
+                              size='sm'
+                              variant='ghost'
+                              onClick={() =>
+                                setActiveRunId(
+                                  runDetail.data?.retryOfRunId ?? undefined,
+                                )
+                              }
+                            >
+                              {t('evaluations.viewRetrySource')}
+                            </Button>
+                          ) : null}
+                          {runDetail.data?.status !== 'queued' &&
+                          runDetail.data?.status !== 'running' &&
+                          results.data?.some(
+                            (result) =>
+                              result.verdict === 'failed' ||
+                              result.verdict === 'error',
+                          ) ? (
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              disabled={retryingRun}
+                              onClick={() => void retryFailedCases()}
+                            >
+                              {retryingRun ? (
+                                <Spinner data-icon='inline-start' />
+                              ) : (
+                                <RotateCcwIcon data-icon='inline-start' />
+                              )}
+                              {t('evaluations.retryFailed')}
+                            </Button>
+                          ) : null}
+                          <Badge
+                            className={
+                              runDetail.data
+                                ? RUN_OUTCOME_STYLE[runOutcome(runDetail.data)]
+                                    .badge
+                                : undefined
+                            }
+                            variant='outline'
+                          >
+                            {runDetail.data
+                              ? t(
+                                  `evaluations.outcomes.${runOutcome(runDetail.data)}`,
+                                )
+                              : `${completed}/${results.data?.length ?? 0}`}
+                          </Badge>
+                        </div>
                       ) : null}
                     </div>
                     {!activeRunId ? (
@@ -1430,6 +1522,13 @@ export function WorkflowEvaluations({
                                   <span className='text-border'>·</span>
                                   <span>{formatDuration(run.durationMs)}</span>
                                 </div>
+                                {run.retryOfRunId ? (
+                                  <div className='text-muted-foreground mt-1 text-[10px]'>
+                                    {t('evaluations.retryOf', {
+                                      runId: run.retryOfRunId.slice(0, 8),
+                                    })}
+                                  </div>
+                                ) : null}
                               </div>
                               <Badge className={style.badge} variant='outline'>
                                 {t(`evaluations.outcomes.${outcome}`)}
