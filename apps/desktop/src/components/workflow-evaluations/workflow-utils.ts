@@ -101,6 +101,18 @@ export function workflowEvaluationNodes(
   });
 }
 
+export function evaluationNodeNameMap(
+  nodes: Array<{ id: string; label: string }>,
+): Record<string, string> {
+  // Execution traces include these runtime-only IDs even though they are not
+  // selectable workflow nodes, so expose friendly names in result evidence.
+  return {
+    __start__: 'Start',
+    __end__: 'End',
+    ...Object.fromEntries(nodes.map((node) => [node.id, node.label])),
+  };
+}
+
 export function workflowRoutes(
   snapshot: EvaluationWorkflowSnapshot,
 ): WorkflowRouteOption[] {

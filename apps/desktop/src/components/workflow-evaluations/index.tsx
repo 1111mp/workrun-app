@@ -126,6 +126,7 @@ import type {
 import { VersionDiffDialog } from './version-diff-dialog';
 import {
   evaluationCoverage,
+  evaluationNodeNameMap,
   workflowAgentNodes,
   workflowEvaluationNodes,
   workflowRoutes,
@@ -1727,9 +1728,7 @@ export function WorkflowEvaluations({
         loading={versionCriteriaDiff.isLoading}
         baselineLabel={baseline ? versionDisplayLabel(baseline, t) : ''}
         candidateLabel={candidate ? versionDisplayLabel(candidate, t) : ''}
-        nodeNames={Object.fromEntries(
-          configuredWorkflowNodes.map((node) => [node.id, node.label]),
-        )}
+        nodeNames={evaluationNodeNameMap(configuredWorkflowNodes)}
         routeNames={Object.fromEntries(
           configuredRoutes.map((route) => [
             `${route.nodeId}:${route.route}`,
@@ -1829,9 +1828,7 @@ export function WorkflowEvaluations({
       <EvaluationResultDialog
         result={selectedResult}
         cases={cases.data ?? []}
-        nodeNames={Object.fromEntries(
-          configuredWorkflowNodes.map((node) => [node.id, node.label]),
-        )}
+        nodeNames={evaluationNodeNameMap(configuredWorkflowNodes)}
         routeNames={Object.fromEntries(
           configuredRoutes.map((route) => [
             `${route.nodeId}:${route.route}`,

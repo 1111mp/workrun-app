@@ -557,6 +557,10 @@ function ProcessNodeDetailEditor({
   readOnly?: boolean;
 }) {
   const { t } = useTranslation();
+  const toolExecutionPolicyOptions = toolExecutionPolicies.map((policy) => ({
+    ...policy,
+    label: t(`apps.detail.toolPolicies.${policy.value}`),
+  }));
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<DefinitionDraft>(() =>
@@ -976,7 +980,7 @@ function ProcessNodeDetailEditor({
                     {t('apps.detail.toolExecutionDescription')}
                   </FieldDescription>
                   <Select
-                    items={toolExecutionPolicies}
+                    items={toolExecutionPolicyOptions}
                     value={draft.toolExecutionPolicy}
                     onValueChange={(toolExecutionPolicy) => {
                       if (toolExecutionPolicy !== null) {
@@ -989,9 +993,9 @@ function ProcessNodeDetailEditor({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        {toolExecutionPolicies.map((policy) => (
+                        {toolExecutionPolicyOptions.map((policy) => (
                           <SelectItem key={policy.value} value={policy.value}>
-                            {t(`apps.detail.toolPolicies.${policy.value}`)}
+                            {policy.label}
                           </SelectItem>
                         ))}
                       </SelectGroup>

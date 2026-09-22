@@ -1,277 +1,184 @@
 # Workrun
 
-> 一个本地优先的 AI 自动化桌面平台：用可视化工作流编排 Agent，用可编辑的 Python App 与 MCP 工具把模型真正接入你的本机能力。
+> 本地优先的 AI 自动化桌面平台：用可视化工作流组合 Agent、Python App 与 MCP 工具，并把运行、评估和发布放在同一个工作台。
 
-Workrun 面向希望把 AI 从“单次对话”变成“可复用、可运行的能力”的开发者。它把工作流、Agent、Python 项目和 MCP Server 放进同一个桌面 App：在画布上组合步骤和分支，为 Agent 配置模型、指令与工具；把本地代码沉淀为可独立调试、也可由工作流或 Agent 复用的 App；在一次运行里查看状态、模型输出、工具调用与脚本日志。
+Workrun 面向想把一次性的 AI 对话沉淀为可复用自动化能力的开发者和团队。它将用户输入、模型推理、确定性代码、外部工具和人工审批组织为可执行工作流；你可以在画布上搭建流程，也可以维护完整的本地 Python 项目，并在每次运行后检查结果、轨迹和质量。
 
-项目仍处于早期开发阶段，工作流文件格式与部分接口可能调整。本文标注的“已实现”能力以当前代码为准；尚未完成的方向集中列在文末路线图中。
+项目仍在快速迭代。本文的“已实现”内容以当前代码为准；尚未交付的方向列于文末。
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/1f7a9be5-6b6a-480c-9370-220a5702abeb" width="24%" alt="Workrun workflow list" />
-  <img src="https://github.com/user-attachments/assets/2fc889cb-91c3-4c34-80bd-3ae1bc439044" width="24%" alt="Workrun workflow editor" />
-  <img src="https://github.com/user-attachments/assets/659512e4-b2a8-4f36-aae7-5822a8eb03e1" width="24%" alt="Workrun task output" />
-  <img src="https://github.com/user-attachments/assets/857b2640-7dd2-4eb7-9fd7-fc86dbeaac7c" width="24%" alt="Workrun chat output" />
+  <img src="https://github.com/user-attachments/assets/525a19ce-a28b-4671-8e31-0f3ba5539069" width="24%" alt="Workrun workflow list" />
+  <img src="https://github.com/user-attachments/assets/baedb261-5990-41d4-8565-dc81131f6a13" width="24%" alt="Workrun workflow editor" />
+  <img src="https://github.com/user-attachments/assets/7c5afcf0-8ab2-4ada-9226-ceff3a4d633c" width="24%" alt="Workrun run output" />
+  <img src="https://github.com/user-attachments/assets/800103bb-85a8-4e8e-bf94-52a544233e01" width="24%" alt="Workrun app editor" />
 </p>
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/d210992b-5fa0-479d-8043-ebe8ae195f10" width="24%" alt="Workrun app output" />
-  <img src="https://github.com/user-attachments/assets/c66a4fa7-7372-4d89-bb83-7b9c06a07e89" width="24%" alt="Workrun app editor" />
-  <img src="https://github.com/user-attachments/assets/33d96f85-21de-4807-87c0-a525eb14c83c" width="24%" alt="Workrun app run" />
-  <img src="https://github.com/user-attachments/assets/9f3b415c-13ff-4876-85a6-958d1383db39" width="24%" alt="Workrun app output" />
+  <img src="https://github.com/user-attachments/assets/948c92ec-306b-4a14-9328-3b60f02c5846" width="24%" alt="Workrun workflow list" />
+  <img src="https://github.com/user-attachments/assets/db940f4d-c75d-40c6-b42d-48b22c800666" width="24%" alt="Workrun workflow editor" />
+  <img src="https://github.com/user-attachments/assets/4ea37888-4f7e-4393-85b8-f945be61e282" width="24%" alt="Workrun run output" />
+  <img src="https://github.com/user-attachments/assets/f1a946e2-0c5f-4259-95a3-07b9e04b1765" width="24%" alt="Workrun app editor" />
 </p>
 
-## 它解决什么问题
+## 你可以用 Workrun 做什么
 
-许多 AI 自动化任务都会同时包含四类工作：向用户收集信息、调用 AI 推理、执行确定性的本地代码，以及访问外部工具或服务。若这些步骤散落在提示词、终端命令和多个工具中，流程不易复用，也很难知道某次运行在哪一步失败。
+- 将 Agent、Python App、MCP 工具、条件分支和人工操作组合成可视化工作流。
+- 管理可编辑的 Python 项目：既可作为工作流中的 Process 节点，也可作为 Agent 按需调用的 Tool App。
+- 在运行面板查看节点状态、模型输出、工具调用、脚本日志和 OpenTelemetry 轨迹；失败后可从检查点重试。
+- 用评估集批量回归工作流，比较版本结果，并以质量门约束发布。
+- 在团队服务中发布带版本的工作流和 App；已发布工作流会固定引用对应版本的 Team App，保证复现性。
 
-Workrun 将它们组织到同一份工作流中：
+## 快速开始
 
-- **人机协作**：工作流启动时可显示输入表单；运行中的流程也可暂停，要求人审核内容、修改后批准/拒绝，或回答一个问题再按选择分支；Python App 也可在运行中向桌面端请求表单或确认。
-- **AI 推理**：Agent 节点携带角色、指令和模型配置，读取当前工作流状态后生成结果。
-- **可编程自动化**：Python App 以独立、可编辑的 `uv` 项目存在；既能作为画布节点处理工作流状态，也能成为 Agent 的 Tool App。
-- **工具连接**：Agent 可选择本地 Tool App 或已连接 MCP Server 发现的工具，并可在调用前要求人工确认。
-- **流程控制与可观察性**：If/Else、Switch、子工作流、终止与人工决策节点根据状态字段或用户选择决定路径；运行面板流式显示节点状态、模型消息、工具调用、思考过程和脚本输出，并可从暂停处继续执行。
-- **受控状态与安全边界**：输入和节点输出可声明契约与敏感字段；状态按节点命名空间隔离、按需共享，并在发送给模型、工具和运行面板前脱敏。
+### 前置条件
 
-换言之，Workrun 不是又一个聊天窗口，而是把 AI 与本地程序纳入有输入、输出、分支和执行记录的工作流运行时。
+- Node.js 24+
+- pnpm 12（仓库锁定 `pnpm@12.5.1`）
+- Rust 工具链与对应平台的 Tauri 构建依赖
+- Python App 开发需要网络，以便 `uv` 下载 Python 与依赖；发行包会携带 `uv` sidecar
 
-## 当前已实现的能力
+### 启动桌面端
 
-### 可视化工作流编辑与运行
-
-- 基于节点画布创建、连接、保存和加载工作流，支持撤销/重做与工作流基本设置。
-- 已提供 `Start`、`End`、`Agent`、`CodeAct Agent`、`Remote Agent`、`Process`、`If/Else`、`Switch`、`Human Review`、`Ask User Question`、`Subworkflow`、`Terminate` 与 `Group` 节点；其中 Group 仅用于画布布局，不参与执行。
-- `Subworkflow` 可引用已保存工作流并把它作为一个节点运行，自动传递上下文与暂停恢复信息；运行时会阻止自引用、循环引用及过深嵌套。`Terminate` 可在任一路径立即结束整个工作流。
-- 工作流可配置为任务模式或对话模式；任务模式会根据输入定义生成测试运行表单，对话模式提供消息输入。
-- 可在工作流设置中声明输入与最终输出字段。运行输入、节点/工具参数及工具结果都会按 JSON Schema 校验，避免不符合契约的数据在图中继续传播。
-- 运行前会校验图结构并编译为执行计划：必须且只能有一个 Start、至少一个 End，边连接与分支出口也会被验证。
-- 运行时将画布 DSL 编译为 Rust 工作流图，按事件流向界面发送节点开始/结束、模型消息与错误；最终状态、执行计划与中断状态会一并返回。
-
-### 状态隔离、结构化输出与安全护栏
-
-- 每个可执行节点拥有自己的状态命名空间；只有显式发布的字段会进入共享状态。工作流作者可以逐节点授予只读访问，并只对必要节点开放原始敏感值。
-- 输入字段和节点输出支持标记为敏感。检查点中的原始状态会加密保存；默认提供给 Agent、工具追踪和界面的均是脱敏视图。
-- Agent 与 CodeAct Agent 可要求模型生成符合 JSON Schema 的结构化输出，并将其用于后续节点和条件分支。
-- 内置输入、输出和工具安全护栏：限制输入长度，脱敏常见 PII 与中国大陆手机号/身份证号，拦截凭据或认证秘密进入工具参数，并在输出与运行记录中继续清理秘密。
-
-### 人在回路中的暂停、审核与分支
-
-- `Human Review` 节点会保存检查点并暂停流程，等待用户批准或拒绝；可展示指定状态字段与附加上下文，并可允许用户直接编辑一个文本字段后再继续。
-- `Ask User Question` 节点会暂停并展示预设选项；用户的选择写入工作流状态，并从对应出口继续执行。
-- 暂停时的状态保存在本地 SQLite 检查点中。提交审核结论或问题答案后，流程会从保存的位置恢复，而不会重跑此前已完成的节点。
-
-### Agent 与模型
-
-- 本地 Agent 节点可配置名称、职责描述、指令和模型 Profile，并使用当前工作流状态作为上下文。
-- Agent 可将完整的最终文本写入指定的工作流状态字段，便于后续审核、分支或其他节点继续处理。
-- Agent 可选择本地 **Skills**（兼容 Agent Skills 的 `SKILL.md` 格式）。Skills 会在需要时渐进加载其说明，并可限制该 Agent 可使用的工具集合；桌面端可创建、编辑、删除和打开本地 Skill 目录。
-- `CodeAct Agent` 可在受限的 Python 运行时中编写并执行代码来组合工具；可配置迭代/工具调用上限、脚本时限和内存上限，以及明确授权的目录挂载、环境变量与系统时钟。
-- Remote Agent 节点通过 A2A（Agent-to-Agent）协议调用远程 Agent，作为工作流中的正式执行步骤。
-- 设置页可管理模型提供商凭据和连接地址；当前运行时已接入 Gemini、OpenAI / OpenAI-compatible、Anthropic、DeepSeek、Groq 与 Ollama。
-- API Key 以加密形式写入本地 Workrun 配置，而非交给前端持久化。
-- 每个 Agent 可选择可用工具、设置单次运行的工具调用上限与超时；还可用 State Binding 将经授权的状态字段精确映射到工具参数。运行记录会保留工具输入、输出与调用过程。
-
-### App：把本地 Python 代码变成可复用能力
-
-Workrun 中的 App 是一个由桌面端管理、但始终可由你自由编辑的本地 Python 项目。创建后，App 会拥有自己的 `pyproject.toml`、锁文件、虚拟环境和入口脚本；Workrun 使用 `uv` 准备运行环境、同步依赖和流式返回日志。它不是把代码塞进节点配置，而是保留了完整项目的可维护性。
-
-| 类型                  | 如何复用                                    | 适合的场景                                                                                                                                                        |
-| --------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **App（工作流 App）** | 单独运行，或作为 Process 节点加入任意工作流 | 数据处理、内部系统集成、确定性规则，以及需要清晰输入/输出的复杂业务逻辑。它从 stdin 接收完整工作流状态，并通过 `workrun_sdk.process.result(...)` 返回结构化结果。 |
-| **Tool App**          | 由 Agent 按 JSON Schema 描述的参数自主调用  | 查询、计算、文件/服务操作等需要由模型决定何时调用的能力。用 Python SDK 的 `@tool` 定义函数，Agent 获得经过校验的结构化结果。                                      |
-
-- App 可从 Apps 页面单独运行、调试和迭代；同一个本地项目不需要为工作流集成而牺牲正常的代码组织方式。
-- Python SDK 提供 `form()`、`collect()`、`confirm()` 等 API；App 可通过受令牌保护的本地 IPC 请求桌面端显示 JSON Schema 表单，再继续执行。
-- Tool App 可配置输入/输出契约、风险等级、权限说明与“每次询问”策略。需要确认时，图运行时会暂停并向桌面端展示本次调用参数；拒绝操作会作为反馈返回 Agent，使其能调整方案继续执行。
-- Tool App 的 stdout 和 stderr 会作为独立流显示在工作流运行面板，方便定位本地工具问题。
-- App 是本机代码，不是沙箱：请仅运行你信任的项目，并按其实际权限范围审查代码。
-
-### MCP Server：让 Agent 使用已有工具生态
-
-除本地 Tool App 外，Workrun 还可把 MCP Server 注册为 Agent 可选择的工具来源：
-
-- 支持本地 `stdio` Server 与远程 Streamable HTTP Server，可在 App 内测试连接、启停、重连并查看已发现的工具数量与连接错误。
-- 远程 Server 支持无认证、Bearer Token 和 OAuth；凭据保存在本地加密配置中，前端不会收到密钥或 OAuth 凭据。
-- Agent 节点从已启用 Server 发现的工具中按需选择；调用同样纳入超时、限额、审批和运行追踪。
-
-### 桌面端与本地体验
-
-- 基于 Tauri 2 的 React/TypeScript 桌面应用，前端画布使用 React Flow。
-- 支持浅色、深色与跟随系统主题；中英文界面；日志等级和保留策略设置。
-- 已集成自动检查更新、开机启动、静默启动、系统托盘、单实例和窗口状态等桌面能力（不同平台的实际可用性取决于系统支持）。
-
-## 示例：健康报告工作流
-
-下面是当前准备录制演示的视频场景：用户填写自身健康信息，Health Agent 根据这些输入生成一份健康报告。
-
-```text
-Start
-  │
-  ├─ 在运行面板填写：年龄、性别、身高、体重、生活习惯、关注点……
-  │
-  ▼
-Health Agent
-  ├─ 读取本次输入与 Agent 指令
-  ├─ 调用已配置的模型
-  └─ 生成健康报告（仅作健康信息整理，不替代医疗诊断）
-  │
-  ▼
-End
+```bash
+pnpm install
+pnpm app:dev
 ```
 
-同一流程可以自然扩展：在 Agent 前增加 Python App 做 BMI 或数据规范化；在 Agent 后按 `route` / `approved` 等状态使用 Switch 或 If/Else 分流；也可以把某一步替换为符合 A2A 协议的远程 Agent。
+首次启动后，在设置中创建模型 Profile，随后新建工作流、添加 `Start → Agent → End`，填写输入并运行即可。模型密钥只加密保存在本机配置中，不会被前端持久化。
 
-## 演示视频
+### 常用命令
 
-### App：创建与运行 Python App
+```bash
+# 桌面端开发 / 仅启动前端
+pnpm app:dev
+pnpm ui:dev
+
+# 检查
+pnpm typecheck
+pnpm oxlint
+pnpm format
+pnpm test
+
+# 团队服务（需 MongoDB 和认证环境变量）
+pnpm server:dev
+```
+
+团队服务至少需要 `MONGODB_URI`；认证配置见 `apps/server/src/env.validation.ts`。Python SDK 的开发与使用说明见 [packages/python-sdk/README.md](packages/python-sdk/README.md)。
+
+## 核心能力
+
+### 1. 工作流：从画布到可恢复执行
+
+工作流支持任务与对话两种模式。画布提供 `Start`、`End`、`Agent`、`CodeAct Agent`、`Remote Agent`、`Process`、`If/Else`、`Switch`、`Human Review`、`Ask User Question`、`Subworkflow`、`Terminate` 和 `Group` 节点；`Group` 仅用于布局。
+
+- 运行前会验证图结构、分支和输入/输出 JSON Schema，并编译为 Rust 执行图。
+- `Subworkflow` 会传递上下文与暂停恢复信息，并阻止自引用、循环引用和过深嵌套；`Terminate` 可结束整次运行。
+- 人工审核和提问会将执行状态写入本地 SQLite 检查点。用户提交结果后从暂停点继续，而非重跑已完成节点。
+- 失败的后台运行可从检查点重试；运行记录保留执行计划、最终状态和关键事件。
+
+```text
+Start → 数据准备（Process） → Agent → Human Review → If/Else → End
+                                  │             │
+                                  │             └─ 审批后从检查点恢复
+                                  └─ Tool App / MCP 工具调用
+```
+
+### 2. Agent、工具与模型
+
+- Agent 可配置名称、职责、指令、模型 Profile、结构化输出、工具调用上限和超时；结果可写入指定状态字段，供后续节点和分支使用。
+- 支持 Gemini、OpenAI 与兼容接口、Anthropic、DeepSeek、Groq、Ollama。
+- 本地 Skills 兼容 Agent Skills 的 `SKILL.md` 格式，可渐进加载说明，并限制 Agent 可用工具。
+- `CodeAct Agent` 在受限 Python 运行环境内编写和执行代码，支持迭代次数、工具调用数、时长、内存、目录挂载、环境变量和系统时钟限制。
+- `Remote Agent` 通过 A2A（Agent-to-Agent）协议成为工作流中的一个执行节点。
+- 工具可以来自本地 Tool App 或 MCP Server；可要求每次人工确认，拒绝会反馈给 Agent 以便调整方案。
+
+### 3. Python App：保留代码工程化体验
+
+每个 App 都是可自由编辑的本地 `uv` Python 项目，拥有自己的 `pyproject.toml`、锁文件、虚拟环境和入口脚本。桌面端负责创建环境、同步依赖和显示 stdout/stderr，但不会把业务代码塞进节点配置。
+
+| 类型               | 在工作流中的角色                   | 适用场景                           |
+| ------------------ | ---------------------------------- | ---------------------------------- |
+| App / Process Node | 读取完整工作流状态，返回结构化结果 | 数据处理、系统集成、确定性业务规则 |
+| Tool App           | 由 Agent 按 JSON Schema 参数调用   | 查询、计算、文件或服务操作         |
+
+- Process App 通过 `workrun_sdk.process.result(...)` 返回结果。
+- Python SDK 还提供 `form()`、`collect()`、`confirm()` 等 API，可经受令牌保护的本地 IPC 向桌面端请求表单或确认。
+- 本地 App 不是沙箱：只运行你信任的代码，并按实际权限范围审查项目。
+
+### 4. MCP Server：接入已有工具生态
+
+可注册本地 `stdio` 或远程 Streamable HTTP MCP Server，测试连接、启停、重连并查看已发现工具。远程服务支持无认证、Bearer Token 和 OAuth；凭据仅以加密形式保存在本机。已启用 Server 中的工具可以被 Agent 选择，并同样受超时、调用额度、审批和运行追踪约束。
+
+### 5. 状态、安全与可观察性
+
+- 节点拥有隔离的状态命名空间；只有显式发布的字段才能共享，读取权限逐节点授予。
+- 输入和节点输出可声明为敏感；检查点原始状态加密保存，对模型、工具和界面默认提供脱敏视图。
+- 内置输入、输出和工具护栏：限制长度，脱敏常见 PII、中国大陆手机号和身份证号，并阻止凭据或认证秘密进入工具参数。
+- 运行面板流式展示节点状态、模型消息、工具输入输出、脚本日志和轨迹。可配置 OTLP/gRPC collector，将诊断 Trace 导出到外部可观测性系统。
+
+### 6. 评估、回归与发布质量
+
+工作流编辑器内置 Evaluation lab，用评估集验证工作流变更：
+
+- 创建、导入、排序、归档和恢复评估用例，批量执行用例并查看每项结果与失败原因。
+- 对比两个版本的用例判定与评分标准，识别新增失败、回归和修复；失败用例可单独重试。
+- 为工作流配置质量门，在发布前要求指定评估条件；必要时可记录带理由的人工豁免审计。
+- 评估会保存对应工作流快照，避免把草稿变更误认为已发布版本的结果。
+
+### 7. 团队工作区与版本化资产
+
+桌面端可连接 NestJS 团队服务并登录。团队成员可以浏览和运行已发布的工作流，也可发布带语义版本的 Workflow 与 App。工作流发布时会校验引用；Team App 以不可变 release 固定到工作流版本，运行时按该 release 安装隔离副本，从而让历史运行和回归结果可复现。
+
+## 架构概览
+
+```mermaid
+flowchart LR
+  UI[React + TypeScript UI] <-->|Tauri commands / events| Host[Rust / Tauri Host]
+  Host --> Runtime[Workflow runtime]
+  Runtime --> Agent[Agent / CodeAct / A2A]
+  Runtime --> App[Process App]
+  Agent --> Tools[Tool App / MCP]
+  Runtime --> State[Validated, access-controlled state]
+  State --> Checkpoint[Encrypted SQLite checkpoints]
+  Runtime --> History[Run history / evaluation]
+  Host -. optional OTLP .-> Collector[Telemetry collector]
+  UI <--> Team[NestJS team service]
+```
+
+| 区域       | 位置                                       | 作用                                                      |
+| ---------- | ------------------------------------------ | --------------------------------------------------------- |
+| 桌面应用   | `apps/desktop`                             | React UI、React Flow 画布、运行面板、设置与团队体验       |
+| 本地运行时 | `apps/desktop/src-tauri`                   | Rust 工作流编译/执行、状态与检查点、Python/MCP 管理、遥测 |
+| 团队服务   | `apps/server`                              | NestJS、认证、团队 App / Workflow / 文件 API 与发布版本   |
+| Python SDK | `packages/python-sdk`                      | App 结果协议和本地 IPC 表单/确认 API                      |
+| 共享包     | `packages/ui`、`packages/json-schema-form` | UI 基础组件与 JSON Schema 表单                            |
+
+## 演示
+
+### Python App：创建与运行
 
 <a href="https://github.com/1111mp/workrun-app/releases/download/resources/app.mp4">
-  <img src="https://github.com/user-attachments/assets/fc876517-b695-49f3-bdfa-e4c43ec5085c" width="860" alt="App 操作演示动图；点击查看完整 MP4" />
+  <img src="https://github.com/user-attachments/assets/fc876517-b695-49f3-bdfa-e4c43ec5085c" width="860" alt="点击查看 Python App 演示视频" />
 </a>
 
 ### Workflow：配置并运行 Health Agent
 
 <a href="https://github.com/1111mp/workrun-app/releases/download/resources/workflow.mp4">
-  <img src="https://github.com/user-attachments/assets/1658cfdf-faeb-4365-891d-54133622b015" width="860" alt="Workflow 操作演示动图；点击查看完整 MP4" />
+  <img src="https://github.com/user-attachments/assets/1658cfdf-faeb-4365-891d-54133622b015" width="860" alt="点击查看 Workflow 演示视频" />
 </a>
 
-## 项目架构
+## 项目状态与路线图
 
-Workrun 采用 pnpm monorepo。桌面端负责交互、工作流执行编排和本地运行时管理；共享包承载 UI 与动态表单能力；Python SDK 则是 App 与桌面端之间的受控交互层。
+已具备本地工作流、App/MCP 集成、运行恢复、评估、遥测，以及团队发布和运行已发布工作流的基础能力。以下方向仍在持续完善，不应视为既有承诺：
 
-```mermaid
-flowchart TB
-  User[用户]
-  UI[Desktop UI\nReact + TypeScript + React Flow]
-  Tauri[Tauri Host / Rust]
-  Compiler[Workflow compiler\nReact Flow DSL → StateGraph]
-  State[Access-controlled State\nvalidation + redaction]
-  Agent[本地 Agent\n模型 Provider]
-  CodeAct[CodeAct Agent\n受限 Python runtime]
-  Remote[Remote Agent\nA2A]
-  Process[App / Process Node\nuv-managed Python project]
-  ToolApp[Tool App\nPython function]
-  Mcp[MCP Server\nstdio / Streamable HTTP]
-  SDK[workrun-sdk\n表单 / 确认 / 结构化结果]
-  Form[JSON Schema Form\n桌面端输入对话框]
-  Checkpoint[SQLite checkpoint\n暂停与恢复]
-
-  User --> UI
-  UI <-->|Tauri commands + event channels| Tauri
-  Tauri --> Compiler
-  Compiler --> State
-  Compiler --> Agent
-  Compiler --> CodeAct
-  Compiler --> Remote
-  Compiler --> Process
-  Process --> SDK
-  SDK <-->|local IPC| Form
-  Form --> UI
-  Agent --> ToolApp
-  Agent --> Mcp
-  CodeAct --> ToolApp
-  CodeAct --> Mcp
-  State --> Checkpoint
-```
-
-### 分层与职责
-
-| 层              | 主要位置                                                     | 职责                                                                                                                                           |
-| --------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 桌面界面        | `apps/desktop/src`                                           | 工作流画布、节点编辑器、运行面板、Apps 管理、模型与应用设置。前端只描述工作流并展示结果，不直接持有执行逻辑。                                  |
-| 桌面主机        | `apps/desktop/src-tauri/src`                                 | Tauri commands、配置与加密、系统集成、Python 运行时、App / MCP Server 注册表，以及工作流编译与执行。                                           |
-| 工作流运行时    | `module/workflow.rs`                                         | 将 React Flow 的 `nodes` / `edges` 转成 ADK Rust `StateGraph`，验证图、连接条件边、子工作流与人机节点，并以流式事件和本地检查点驱动界面状态。  |
-| 状态与安全层    | `module/state`、`module/workflow/state_bridge`、`guardrails` | 验证输入/输出契约，隔离节点状态、加密检查点中的原始状态，并在模型、工具和界面边界执行授权与脱敏。                                              |
-| AI 与工具执行器 | `module/workflow`、模型配置                                  | 创建本地 LLM Agent、CodeAct Agent 或 A2A Remote Agent；按需加载 Skills，为 Agent 装配本地 Tool App 或 MCP 工具，并处理超时和图运行时人工审批。 |
-| 本地 App 执行器 | `module/process_node`、`module/python_runtime`               | 创建、登记、检查和执行 `uv` 管理的 Python 项目；将状态、日志和结构化结果接入工作流或 Agent。                                                   |
-| MCP 注册表      | `module/mcp_server`                                          | 管理本地/远程 MCP Server 的配置、连接、认证、生命周期和工具发现。                                                                              |
-| Python 交互 SDK | `packages/python-sdk`                                        | 为 Python App 提供 `process.result()` 与 UI 请求 API，通过带令牌的本地 IPC 和桌面端通讯。                                                      |
-| 共享前端包      | `packages/ui`、`packages/json-schema-form`                   | 复用基础组件，以及基于 RJSF/Ajv 的 JSON Schema 表单渲染能力。                                                                                  |
-
-### 一次工作流如何运行
-
-1. 用户在画布定义节点、连线、输入字段和 Agent / App 配置，前端保存 React Flow 文档。
-2. 点击运行后，前端收集本次输入并调用 Tauri command；这类运行参数属于本次执行，不会回写工作流定义。
-3. Rust 端验证并编译文档，构建仅包含执行语义的 StateGraph。节点位置等画布布局信息不会进入运行时模型。
-4. 图执行各个 Agent、CodeAct Agent、Remote Agent、App、子工作流与控制节点。Agent 可以按需加载已选 Skills，并调用已选的 Tool App 或 MCP 工具；状态在节点命名空间之间按授权传递，If/Else 和 Switch 根据选择器字段决定后继路径。
-5. `Human Review` 和 `Ask User Question` 会把当前状态写入本地检查点并中断运行。用户提交审核结论、修改内容或选择答案后，桌面端更新受限的状态字段并从检查点继续。
-6. 执行事件通过 Tauri Channel 实时回到运行面板；App 的 stdout/stderr、Agent 的工具调用及其结果都会流式展示。结束后返回经权限处理的最终 state 与执行计划。
-
-### 本地数据与安全边界
-
-- 工作流定义、Workrun 配置、日志及 Process Node 项目均以本地文件为主。
-- 工作流状态按节点命名空间存储；只有显式声明的输出字段会共享。敏感输入与节点字段默认会在可见状态中被脱敏，原始检查点以加密形式保存。
-- 模型推理请求会发送给用户所选模型服务；Remote Agent 节点会请求其配置的远程地址。因此，输入中包含敏感信息时，请审查对应模型服务和远程 Agent 的数据政策。
-- Python App 与本地 stdio MCP Server 均由本机执行，应只运行你信任的代码。它们可以访问其被授予的本机权限；Workrun 不将其视为沙箱。
-- CodeAct Agent 的 Python 执行环境会施加时长、内存和挂载目录限制；仍应仅向它提供必要的目录、环境变量和工具权限。
-
-### 从本地资产到团队市场（规划中）
-
-当前 Workrun 的执行和本地资产仍以本地文件为中心，便于个人在自己的设备上开发、试验和维护工作流与 App。仓库内已包含面向团队工作区的服务端基础：支持认证，以及用户维度的 App、工作流和文件 API；桌面端也可在首次启动时连接团队服务并登录。完整同步、发布与分发体验仍在建设中。
-
-设想中的团队市场会让成员把已经验证有效的工作流或 App 发布为可发现、可安装、可复用的能力。例如，某位同学沉淀了一个解决特定业务场景的工作流，或将复杂集成封装成 App 后，其他同学可在市场中找到它、复用它，并在自己的工作流中继续组合。版本、权限、依赖与发布流程将随该能力一并逐步设计。
-
-> 团队服务端和登录基础已经可用；资产同步、版本、发布与市场能力尚未完成，现阶段的实际运行与本地项目管理仍由桌面端承担。
-
-## 仓库结构
-
-```text
-apps/desktop/                 Tauri 桌面应用
-├── src/                      React UI、画布节点、运行面板与服务层
-└── src-tauri/src/            Rust commands、运行时、配置与系统集成
-apps/server/                  NestJS 团队服务端（认证、App / 工作流 / 文件 API）
-packages/python-sdk/          Python App SDK（本地 IPC、表单、结果协议）
-packages/json-schema-form/    JSON Schema 表单主题与模板
-packages/ui/                  共享 UI 组件
-```
-
-## 本地开发
-
-### 环境要求
-
-- Node.js 24 或更高版本
-- pnpm 11
-- Rust 工具链（用于 Tauri 桌面应用）
-- macOS/Linux 上运行 Python App 时，网络可用以便 `uv` 下载所需 Python / 依赖；生产包会随附 `uv` sidecar
-
-### 常用命令
-
-```bash
-# 安装依赖
-pnpm install
-
-# 启动桌面应用开发环境
-pnpm app:dev
-
-# 仅启动前端界面
-pnpm ui:dev
-
-# 类型检查
-pnpm typecheck
-
-# 代码检查与格式检查
-pnpm oxlint
-pnpm format
-
-# 启动团队服务端（需要配置其环境变量，例如 MongoDB）
-pnpm server:dev
-```
-
-Python SDK 的开发和测试说明见 [packages/python-sdk/README.md](packages/python-sdk/README.md)。
-
-## 路线图
-
-以下方向仍在持续完善中，不应视为已经完成的承诺：
-
-- 团队资产与本地桌面端之间的同步、工作流 / App 的版本管理、发布机制与团队市场复用。
-- 更完整的本地导入导出与可分享模板能力。
-- 更丰富的节点类型、工具连接器、运行控制（取消、重试）与调试记录。
-- 更成熟的权限模型、插件机制与更完善的跨平台运行时体验。
-- 将运行历史、输入输出和错误上下文沉淀为更易复现的调试体验。
+- 更完整的资产同步、导入导出、模板和市场发现体验。
+- 更丰富的节点、连接器、运行控制与可复现调试信息。
+- 更成熟的权限、插件机制和跨平台运行时体验。
+- 团队协作下更细粒度的版本、权限和发布流程。
 
 ## 参与贡献
 
-欢迎围绕工作流节点、运行时与插件机制、模型 / 工具集成、桌面端体验、Python SDK、示例流程和文档参与贡献。较大的改动建议先通过 Issue 讨论设计方向。
+欢迎围绕工作流节点与运行时、模型和工具集成、桌面端体验、Python SDK、评估体系、示例流程和文档贡献改进。较大的设计变更建议先通过 Issue 讨论。
 
 ## License
 
