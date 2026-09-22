@@ -198,6 +198,7 @@ pub struct EvaluationRunDetail {
 pub struct EvaluationVersionSummary {
     pub release_id: Option<String>,
     pub release_version: String,
+    pub base_release_version: Option<String>,
     /// Releases compare by version; drafts compare by their immutable snapshot.
     pub comparison_key: String,
     pub run_count: i64,
@@ -1019,13 +1020,14 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         // Draft snapshots predate releases, so they deliberately form a
         // separate comparable cohort instead of being attributed to a release.
-        let rows = sqlx::query("SELECT json_extract(workflow_snapshot_json, '$.releaseId') AS release_id, COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') AS release_version, workflow_fingerprint, COUNT(*) AS run_count, SUM(total_cases) AS total_cases, SUM(passed_cases) AS passed_cases, SUM(COALESCE(duration_ms, 0)) AS total_duration_ms, SUM(COALESCE(estimated_cost_microusd, 0)) AS estimated_cost_microusd FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL GROUP BY release_id, release_version, workflow_fingerprint ORDER BY MAX(started_at) DESC")
+        let rows = sqlx::query("SELECT json_extract(workflow_snapshot_json, '$.releaseId') AS release_id, COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') AS release_version, json_extract(workflow_snapshot_json, '$.baseReleaseVersion') AS base_release_version, workflow_fingerprint, COUNT(*) AS run_count, SUM(total_cases) AS total_cases, SUM(passed_cases) AS passed_cases, SUM(COALESCE(duration_ms, 0)) AS total_duration_ms, SUM(COALESCE(estimated_cost_microusd, 0)) AS estimated_cost_microusd FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL GROUP BY release_id, release_version, base_release_version, workflow_fingerprint ORDER BY MAX(started_at) DESC")
             .bind(suite_id).fetch_all(&pool).await?;
         rows.into_iter()
             .map(|row| {
                 Ok(EvaluationVersionSummary {
                     release_id: row.try_get("release_id")?,
                     release_version: row.try_get("release_version")?,
+                    base_release_version: row.try_get("base_release_version")?,
                     comparison_key: {
                         let release_id: Option<String> = row.try_get("release_id")?;
                         if release_id.is_some() {
@@ -1671,10 +1673,45 @@ fn criterion_outcome(criterion: &CriterionResult) -> EvaluationCriterionOutcome 
 
 fn criterion_match_key(criterion: &CriterionResult) -> String {
     let kind = criterion.criterion.split(':').next().unwrap_or_default();
+    let expected = if matches!(kind, "toolTrajectory" | "nodeToolTrajectory") {
+        // A tool-result assertion can be added after a release without making
+        // it a different trajectory. Match the call identity (tool + args)
+        // so the version view can compare both frozen results side by side.
+        tool_trajectory_match_value(&criterion.expected)
+    } else {
+        criterion.expected.clone()
+    };
     format!(
         "{kind}:{}",
-        serde_json::to_string(&criterion.expected).unwrap_or_default()
+        serde_json::to_string(&expected).unwrap_or_default()
     )
+}
+
+fn tool_trajectory_match_value(expected: &Value) -> Value {
+    let normalize_tool = |tool: &Value| {
+        let mut tool = tool.clone();
+        if let Some(tool) = tool.as_object_mut() {
+            tool.remove("expected_response");
+            tool.remove("expectedResponse");
+        }
+        tool
+    };
+    match expected {
+        Value::Array(tools) => Value::Array(tools.iter().map(normalize_tool).collect()),
+        Value::Object(_) => {
+            let mut value = expected.clone();
+            if let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) {
+                for tool in tools {
+                    if let Some(tool) = tool.as_object_mut() {
+                        tool.remove("expected_response");
+                        tool.remove("expectedResponse");
+                    }
+                }
+            }
+            value
+        },
+        _ => expected.clone(),
+    }
 }
 
 fn compare_criteria(
@@ -2552,6 +2589,41 @@ mod tests {
     }
 
     #[test]
+    fn compares_tool_trajectories_when_only_the_result_assertion_changed() {
+        let baseline = CriterionResult {
+            criterion: "toolTrajectory:old-generated-id".to_string(),
+            score: 1.0,
+            threshold: 1.0,
+            passed: true,
+            expected: json!([{
+                "name": "lookup_order",
+                "args": { "orderId": "42" },
+                "expected_response": null,
+            }]),
+            actual: json!({ "toolUses": [] }),
+        };
+        let candidate = CriterionResult {
+            criterion: "toolTrajectory:new-generated-id".to_string(),
+            score: 1.0,
+            threshold: 1.0,
+            passed: true,
+            expected: json!([{
+                "name": "lookup_order",
+                "args": { "orderId": "42" },
+                "expected_response": { "status": "high_risk" },
+            }]),
+            actual: json!({ "toolUses": [] }),
+        };
+
+        let comparison = compare_criteria(&[baseline], &[candidate]);
+
+        assert_eq!(comparison.len(), 1);
+        assert_eq!(comparison[0].kind, "persistent_pass");
+        assert!(comparison[0].baseline.is_some());
+        assert!(comparison[0].candidate.is_some());
+    }
+
+    #[test]
     fn observes_workrun_agent_trace_and_scores_with_adk_eval() {
         let state = json!({
             "workflow": {
@@ -2809,6 +2881,34 @@ mod tests {
 
         assert_eq!(saved["assertions"][0]["mustExecute"], json!(["intent"]));
         assert_eq!(saved["assertions"][0]["orderedNodes"], json!(["intent"]));
+    }
+
+    #[test]
+    fn preserves_tool_trajectory_options_from_the_desktop_json_contract() {
+        // ToolUse and ToolTrajectoryConfig are supplied by adk-eval. Their
+        // serde contract is snake_case even though Workrun's outer assertion
+        // object is camelCase, so verify the exact JSON saved by the desktop.
+        let expectation: EvaluationExpectation = serde_json::from_value(json!({
+            "assertions": [{
+                "kind": "tool_trajectory",
+                "id": "order-lookup",
+                "tools": [{
+                    "name": "lookup_order",
+                    "args": { "orderId": "42" },
+                    "expected_response": { "status": "high_risk" }
+                }],
+                "config": { "strict_order": true, "strict_args": true }
+            }]
+        }))
+        .unwrap();
+
+        let saved = serde_json::to_value(expectation).unwrap();
+
+        assert_eq!(saved["assertions"][0]["config"]["strict_args"], true);
+        assert_eq!(
+            saved["assertions"][0]["tools"][0]["expected_response"],
+            json!({ "status": "high_risk" })
+        );
     }
 
     #[test]

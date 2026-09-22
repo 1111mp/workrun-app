@@ -22,6 +22,9 @@ export type StoredWorkflow = {
   editable?: boolean;
   releaseId?: string;
   version?: string;
+  baseReleaseId?: string;
+  baseReleaseVersion?: string;
+  matchesLatestRelease?: boolean;
   status?: 'draft' | 'published';
   latestRelease?: {
     version: string;

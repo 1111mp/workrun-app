@@ -48,12 +48,14 @@ export type ToolCallDraft = {
 };
 
 export type ToolTrajectoryDraft = {
+  id?: string;
   strictOrder: boolean;
   strictArgs: boolean;
   calls: ToolCallDraft[];
 };
 
 export type NodeTrajectoryDraft = {
+  id?: string;
   mustExecute: string[];
   mustNotExecute: string[];
   orderedNodes: string[];

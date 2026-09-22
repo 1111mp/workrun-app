@@ -13,6 +13,8 @@
     "@workspace/ui": "workspace:*"
   },
   "peerDependencies": {
-    "class-variance-authority": "^0.7.1"
+    "class-variance-authority": "^0.7.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   }
 }

@@ -65,30 +65,70 @@ describe('WorkflowService', () => {
   });
 
   it('returns a workflow only when it belongs to the authenticated user', async () => {
-    const lean = vi.fn().mockResolvedValue({ id: 'workflow-1' });
-    model.findOne.mockReturnValue({
-      populate: vi.fn().mockReturnValue({ lean }),
-    });
+    const publishedDocument = {
+      nodes: [{ id: 'start' }],
+      edges: [],
+      settings: {},
+    };
+    const release = {
+      id: 'release-1',
+      version: '1.0.0',
+      document: publishedDocument,
+    };
+    const lean = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'workflow-1',
+        document: publishedDocument,
+        latestReleaseId: release,
+      })
+      .mockResolvedValueOnce({
+        id: 'workflow-1',
+        document: { nodes: [{ id: 'edited' }], edges: [], settings: {} },
+        latestReleaseId: release,
+      });
+    const ownerPopulate = vi.fn().mockReturnValue({ lean });
+    const releasePopulate = vi
+      .fn()
+      .mockReturnValue({ populate: ownerPopulate });
+    model.findOne.mockReturnValue({ populate: releasePopulate });
 
     await expect(service.findOne(ownerId, 'workflow-1')).resolves.toEqual({
       id: 'workflow-1',
+      document: { nodes: [{ id: 'start' }], edges: [], settings: {} },
+      latestReleaseId: {
+        id: 'release-1',
+        version: '1.0.0',
+        document: { nodes: [{ id: 'start' }], edges: [], settings: {} },
+      },
+      baseReleaseId: 'release-1',
+      baseReleaseVersion: '1.0.0',
+      matchesLatestRelease: true,
     });
     expect(model.findOne).toHaveBeenCalledWith({
       isDelete: false,
       id: 'workflow-1',
       ownerId: expect.any(Types.ObjectId),
     });
+    expect(releasePopulate).toHaveBeenCalledWith({ path: 'latestReleaseId' });
+    await expect(service.findOne(ownerId, 'workflow-1')).resolves.toMatchObject(
+      {
+        baseReleaseVersion: '1.0.0',
+        matchesLatestRelease: false,
+      },
+    );
   });
 
   it('rejects missing, updated, or deleted workflows', async () => {
+    const ownerPopulate = vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue(null),
+    });
     model.findOne.mockReturnValue({
-      populate: vi.fn().mockReturnValue({
-        lean: vi.fn().mockResolvedValue(null),
-      }),
+      populate: vi.fn().mockReturnValue({ populate: ownerPopulate }),
     });
     model.findOneAndUpdate.mockReturnValue({
       populate: vi.fn().mockReturnValue({
-        lean: vi.fn().mockResolvedValue(null),
+        populate: ownerPopulate,
       }),
       lean: vi.fn().mockResolvedValue(null),
     });

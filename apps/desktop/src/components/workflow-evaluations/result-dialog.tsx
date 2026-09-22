@@ -34,6 +34,7 @@ import {
   ResultValue,
 } from './result-details';
 import { formatCost, formatDuration } from './run-panel';
+import { evaluationTraceToolNames } from './workflow-utils';
 
 function ResultIcon({ verdict }: { verdict: EvaluationCaseResult['verdict'] }) {
   if (verdict === 'passed')
@@ -50,6 +51,7 @@ export function EvaluationResultDialog({
   cases,
   nodeNames,
   routeNames,
+  toolNames,
   onOpenChange,
   onViewWorkflowRun,
 }: {
@@ -57,10 +59,16 @@ export function EvaluationResultDialog({
   cases: EvaluationCase[];
   nodeNames: Record<string, string>;
   routeNames: Record<string, string>;
+  toolNames: Record<string, string>;
   onOpenChange: (result?: EvaluationCaseResult) => void;
   onViewWorkflowRun: (runId: string) => void;
 }) {
   const { t } = useTranslation();
+  // The normalized trace is immutable with the evaluation run and retains the
+  // display name emitted at execution time. Prefer it over the mutable catalog.
+  const frozenToolNames = result
+    ? { ...toolNames, ...evaluationTraceToolNames(result.normalizedTrace) }
+    : toolNames;
 
   return (
     <Dialog
@@ -143,6 +151,7 @@ export function EvaluationResultDialog({
                   }
                   nodeNames={nodeNames}
                   routeNames={routeNames}
+                  toolNames={frozenToolNames}
                 />
               </FieldSet>
               <FieldSet className='rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 sm:p-5'>
@@ -159,6 +168,7 @@ export function EvaluationResultDialog({
                   nodeConfigured={hasNodeTrajectoryAssertion(
                     result.criteriaResults,
                   )}
+                  toolNames={frozenToolNames}
                 />
               </FieldSet>
               {/* Keep raw evidence available for debugging without making it the primary reading path. */}

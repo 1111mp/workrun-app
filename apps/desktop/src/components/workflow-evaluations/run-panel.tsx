@@ -27,6 +27,20 @@ export function versionKey(version: EvaluationVersionSummary) {
   return version.comparisonKey;
 }
 
+export function versionDisplayLabel(
+  version: EvaluationVersionSummary,
+  t: (key: string, options?: Record<string, string>) => string,
+) {
+  if (version.releaseId) return `v${version.releaseVersion}`;
+  const fingerprint = version.comparisonKey.slice(0, 8);
+  return version.baseReleaseVersion
+    ? t('evaluations.draftBasedOnRelease', {
+        version: version.baseReleaseVersion,
+        fingerprint,
+      })
+    : t('evaluations.draftUnknownBase', { fingerprint });
+}
+
 export function versionPassRate(version: EvaluationVersionSummary) {
   return version.totalCases
     ? Math.round((version.passedCases / version.totalCases) * 100)
@@ -182,7 +196,7 @@ export function EvaluationTrends({
               className='flex items-center justify-between gap-2 text-xs'
             >
               <span className='truncate font-medium'>
-                {version.releaseVersion}
+                {versionDisplayLabel(version, t)}
               </span>
               <span className='text-muted-foreground shrink-0'>
                 {versionPassRate(version)}% ·{' '}

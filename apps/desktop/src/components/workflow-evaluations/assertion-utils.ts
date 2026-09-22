@@ -87,7 +87,7 @@ export function testImportPreview(
                 kind: 'tool_trajectory',
                 id: crypto.randomUUID(),
                 tools,
-                config: { strictOrder: true, strictArgs: false },
+                config: { strict_order: true, strict_args: false },
               },
             ]
           : []),
@@ -174,13 +174,18 @@ export function visualAssertions(value: unknown): VisualAssertion[] {
 }
 
 export function toolCallDraft(call?: Record<string, unknown>): ToolCallDraft {
+  const expectedResponse = call?.expectedResponse ?? call?.expected_response;
   return {
     id: crypto.randomUUID(),
     name: typeof call?.name === 'string' ? call.name : '',
     args: JSON.stringify(call?.args ?? {}, null, 2),
     count: 1,
-    assertResult: call?.expectedResponse !== undefined,
-    expectedResult: JSON.stringify(call?.expectedResponse ?? {}, null, 2),
+    // Rust-owned snapshots use snake_case; desktop-authored cases use camelCase.
+    // Accept both so reopening an existing case never silently weakens its rule.
+    // `null` is how the Rust model serializes an omitted optional response;
+    // it must not turn into an enabled response assertion when reopening.
+    assertResult: expectedResponse != null,
+    expectedResult: JSON.stringify(expectedResponse ?? {}, null, 2),
   };
 }
 
@@ -197,16 +202,19 @@ export function toolTrajectoryDraft(value: unknown): ToolTrajectoryDraft {
     : undefined;
   const record = trajectory as Record<string, unknown> | undefined;
   return {
+    id: typeof record?.id === 'string' ? record.id : undefined,
     strictOrder:
       record?.config !== null &&
       typeof record?.config === 'object' &&
-      (record.config as Record<string, unknown>).strictOrder === false
+      ((record.config as Record<string, unknown>).strictOrder ??
+        (record.config as Record<string, unknown>).strict_order) === false
         ? false
         : true,
     strictArgs:
       record?.config !== null &&
       typeof record?.config === 'object' &&
-      (record.config as Record<string, unknown>).strictArgs === true,
+      ((record.config as Record<string, unknown>).strictArgs ??
+        (record.config as Record<string, unknown>).strict_args) === true,
     calls: Array.isArray(record?.tools)
       ? record.tools.flatMap((call) =>
           call && typeof call === 'object'
@@ -234,6 +242,7 @@ export function nodeTrajectoryDraft(value: unknown): NodeTrajectoryDraft {
       ? value.filter((node): node is string => typeof node === 'string')
       : [];
   return {
+    id: typeof record?.id === 'string' ? record.id : undefined,
     mustExecute: nodeIds(record?.mustExecute ?? record?.must_execute),
     mustNotExecute: nodeIds(record?.mustNotExecute ?? record?.must_not_execute),
     orderedNodes: nodeIds(record?.orderedNodes ?? record?.ordered_nodes),
@@ -420,7 +429,10 @@ export function trajectoryAssertion(draft: ToolTrajectoryDraft, t: TFunction) {
       args: jsonObject(call.args, t('evaluations.toolArguments'), t),
       ...(call.assertResult
         ? {
-            expectedResponse: jsonObject(
+            // ToolUse and ToolTrajectoryConfig come from adk-eval and use
+            // snake_case. Sending camelCase makes Serde ignore these fields
+            // and replace them with defaults before persistence.
+            expected_response: jsonObject(
               call.expectedResult,
               t('evaluations.expectedFixtureResult'),
               t,
@@ -433,11 +445,11 @@ export function trajectoryAssertion(draft: ToolTrajectoryDraft, t: TFunction) {
   return tools.length
     ? {
         kind: 'tool_trajectory',
-        id: crypto.randomUUID(),
+        id: draft.id ?? crypto.randomUUID(),
         tools,
         config: {
-          strictOrder: draft.strictOrder,
-          strictArgs: draft.strictArgs,
+          strict_order: draft.strictOrder,
+          strict_args: draft.strictArgs,
         },
       }
     : undefined;
@@ -449,7 +461,7 @@ export function nodeTrajectoryAssertion(draft: NodeTrajectoryDraft) {
     draft.orderedNodes.length
     ? {
         kind: 'node_trajectory',
-        id: crypto.randomUUID(),
+        id: draft.id ?? crypto.randomUUID(),
         mustExecute: draft.mustExecute,
         mustNotExecute: draft.mustNotExecute,
         orderedNodes: draft.orderedNodes,
@@ -498,7 +510,7 @@ export function nodeToolAssertions(drafts: NodeToolAssertionDraft[]) {
       name: draft.toolName,
       args: {},
     })),
-    config: { strictOrder: true, strictArgs: false },
+    config: { strict_order: true, strict_args: false },
   }));
 }
 

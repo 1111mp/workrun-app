@@ -104,6 +104,7 @@ import {
   formatDuration,
   formatNumber,
   versionDiffLabel,
+  versionDisplayLabel,
   versionKey,
   versionPassRate,
 } from './run-panel';
@@ -129,6 +130,7 @@ import {
   workflowEvaluationNodes,
   workflowRoutes,
   workflowToolIds,
+  toolLabel,
 } from './workflow-utils';
 
 const RESULT_STYLE: Record<EvaluationCaseResult['verdict'], string> = {
@@ -414,6 +416,12 @@ export function WorkflowEvaluations({
   const configuredToolIds = workflowToolIds(workflowSnapshot);
   const configuredTools =
     toolCatalog.data?.filter((tool) => configuredToolIds.has(tool.id)) ?? [];
+  const configuredToolNames = Object.fromEntries(
+    configuredTools.flatMap((tool) => [
+      [tool.id, toolLabel(tool)],
+      [tool.name, toolLabel(tool)],
+    ]),
+  );
   const configuredWorkflowNodes = workflowEvaluationNodes(workflowSnapshot, t);
   const configuredRoutes = workflowRoutes(workflowSnapshot);
   const configuredAgentNodes = workflowAgentNodes(workflowSnapshot);
@@ -1559,7 +1567,16 @@ export function WorkflowEvaluations({
                             <SelectTrigger>
                               <SelectValue
                                 placeholder={t('evaluations.selectBaseline')}
-                              />
+                              >
+                                {(key: string | null) => {
+                                  const version = versionSummary.data?.find(
+                                    (item) => versionKey(item) === key,
+                                  );
+                                  return version
+                                    ? versionDisplayLabel(version, t)
+                                    : t('evaluations.selectBaseline');
+                                }}
+                              </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                               <SelectGroup>
@@ -1568,7 +1585,7 @@ export function WorkflowEvaluations({
                                     key={versionKey(version)}
                                     value={versionKey(version)}
                                   >
-                                    {version.releaseVersion}
+                                    {versionDisplayLabel(version, t)}
                                   </SelectItem>
                                 ))}
                               </SelectGroup>
@@ -1584,7 +1601,16 @@ export function WorkflowEvaluations({
                             <SelectTrigger>
                               <SelectValue
                                 placeholder={t('evaluations.selectCandidate')}
-                              />
+                              >
+                                {(key: string | null) => {
+                                  const version = versionSummary.data?.find(
+                                    (item) => versionKey(item) === key,
+                                  );
+                                  return version
+                                    ? versionDisplayLabel(version, t)
+                                    : t('evaluations.selectCandidate');
+                                }}
+                              </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                               <SelectGroup>
@@ -1593,7 +1619,7 @@ export function WorkflowEvaluations({
                                     key={versionKey(version)}
                                     value={versionKey(version)}
                                   >
-                                    {version.releaseVersion}
+                                    {versionDisplayLabel(version, t)}
                                   </SelectItem>
                                 ))}
                               </SelectGroup>
@@ -1605,10 +1631,10 @@ export function WorkflowEvaluations({
                             <div className='text-muted-foreground mt-3 grid grid-cols-3 gap-y-1 text-xs'>
                               <span />
                               <span className='text-center'>
-                                {baseline.releaseVersion}
+                                {versionDisplayLabel(baseline, t)}
                               </span>
                               <span className='text-center'>
-                                {candidate.releaseVersion}
+                                {versionDisplayLabel(candidate, t)}
                               </span>
                               <span>{t('evaluations.passRate')}</span>
                               <span className='text-center'>
@@ -1633,25 +1659,50 @@ export function WorkflowEvaluations({
                               </span>
                             </div>
                             {versionDiff.data?.length ? (
-                              <div className='mt-3 flex flex-col gap-1'>
+                              <div className='border-destructive/25 bg-destructive/4 mt-4 rounded-lg border p-2'>
+                                <div className='mb-2 flex items-center gap-2 px-1.5 pt-1'>
+                                  <div className='bg-destructive/10 text-destructive flex size-7 shrink-0 items-center justify-center rounded-md'>
+                                    <CircleAlertIcon className='size-4' />
+                                  </div>
+                                  <div className='min-w-0'>
+                                    <p className='text-sm font-semibold'>
+                                      {t('evaluations.regressionLocation')}
+                                    </p>
+                                    <p className='text-muted-foreground text-[11px]'>
+                                      {t('evaluations.regressionCasesDescription', {
+                                        count: versionDiff.data.length,
+                                      })}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className='flex flex-col gap-1.5'>
                                 {versionDiff.data.map((diff) => (
                                   <button
                                     type='button'
                                     key={diff.caseId}
-                                    className='hover:bg-muted/60 focus-visible:ring-ring flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors outline-none focus-visible:ring-2'
+                                    className='group border-destructive/25 bg-background/80 hover:border-destructive/45 hover:bg-background focus-visible:ring-ring flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow] outline-none hover:shadow-sm focus-visible:ring-2'
                                     onClick={() => setSelectedVersionDiff(diff)}
                                   >
-                                    <span className='truncate'>
-                                      {diff.name}
+                                    <span className='flex min-w-0 items-center gap-2.5'>
+                                      <CircleAlertIcon className='text-destructive size-4 shrink-0' />
+                                      <span className='min-w-0'>
+                                        <span className='block truncate text-sm font-medium'>
+                                          {diff.name}
+                                        </span>
+                                        <span className='text-muted-foreground mt-0.5 block text-[11px]'>
+                                          {t('evaluations.viewRegressionDetails')}
+                                        </span>
+                                      </span>
                                     </span>
-                                    <span className='flex shrink-0 items-center gap-1.5'>
-                                      <Badge variant='outline'>
+                                    <span className='flex shrink-0 items-center gap-2'>
+                                      <Badge variant='destructive'>
                                         {versionDiffLabel(diff, t)}
                                       </Badge>
-                                      <ChevronRightIcon className='text-muted-foreground size-3.5' />
+                                      <ChevronRightIcon className='text-destructive size-4 transition-transform group-hover:translate-x-0.5' />
                                     </span>
                                   </button>
                                 ))}
+                                </div>
                               </div>
                             ) : (
                               <p className='text-muted-foreground mt-3 text-xs'>
@@ -1674,8 +1725,8 @@ export function WorkflowEvaluations({
         diff={selectedVersionDiff}
         comparison={versionCriteriaDiff.data}
         loading={versionCriteriaDiff.isLoading}
-        baselineLabel={baseline?.releaseVersion ?? ''}
-        candidateLabel={candidate?.releaseVersion ?? ''}
+        baselineLabel={baseline ? versionDisplayLabel(baseline, t) : ''}
+        candidateLabel={candidate ? versionDisplayLabel(candidate, t) : ''}
         nodeNames={Object.fromEntries(
           configuredWorkflowNodes.map((node) => [node.id, node.label]),
         )}
@@ -1685,6 +1736,7 @@ export function WorkflowEvaluations({
             route.label,
           ]),
         )}
+        toolNames={configuredToolNames}
         onOpenChange={setSelectedVersionDiff}
       />
 
@@ -1786,6 +1838,7 @@ export function WorkflowEvaluations({
             route.label,
           ]),
         )}
+        toolNames={configuredToolNames}
         onOpenChange={setSelectedResult}
         onViewWorkflowRun={onViewWorkflowRun}
       />

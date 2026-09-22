@@ -48,6 +48,7 @@ export type EvaluationRunDetail = EvaluationRun & {
 export type EvaluationVersionSummary = {
   releaseId?: string | null;
   releaseVersion: string;
+  baseReleaseVersion?: string | null;
   comparisonKey: string;
   runCount: number;
   totalCases: number;
@@ -89,6 +90,8 @@ export type EvaluationWorkflowSnapshot = {
   dsl: unknown;
   releaseId?: string;
   releaseVersion?: string;
+  baseReleaseId?: string;
+  baseReleaseVersion?: string;
 };
 
 export function listEvaluationSuites(workflowId: string) {

@@ -32,6 +32,30 @@ export function selectedToolLabel(name: string, tools: ToolDefinition[]) {
   return tool ? toolLabel(tool) : name;
 }
 
+/** Build a stable display-name map from the immutable evidence of one run. */
+export function evaluationTraceToolNames(
+  value: unknown,
+): Record<string, string> {
+  const trace = value as
+    | {
+        nodeOutputs?: Array<{
+          output?: { toolCalls?: Array<{ tool?: unknown; name?: unknown }> };
+        }>;
+      }
+    | undefined;
+  return Object.fromEntries(
+    (trace?.nodeOutputs ?? []).flatMap((entry) =>
+      (entry.output?.toolCalls ?? []).flatMap((call) =>
+        typeof call.tool === 'string' &&
+        typeof call.name === 'string' &&
+        call.name.trim()
+          ? [[call.tool, call.name.trim()]]
+          : [],
+      ),
+    ),
+  );
+}
+
 export function workflowEvaluationNodes(
   snapshot: EvaluationWorkflowSnapshot,
   t: TFunction,

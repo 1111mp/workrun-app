@@ -25,6 +25,7 @@ export function VersionDiffDialog({
   candidateLabel,
   nodeNames,
   routeNames,
+  toolNames,
   onOpenChange,
 }: {
   diff?: EvaluationVersionCaseDiff;
@@ -34,6 +35,7 @@ export function VersionDiffDialog({
   candidateLabel: string;
   nodeNames: Record<string, string>;
   routeNames: Record<string, string>;
+  toolNames: Record<string, string>;
   onOpenChange: (diff?: EvaluationVersionCaseDiff) => void;
 }) {
   const { t } = useTranslation();
@@ -43,14 +45,14 @@ export function VersionDiffDialog({
       open={Boolean(diff)}
       onOpenChange={(open) => !open && onOpenChange(undefined)}
     >
-      <DialogContent className='max-w-2xl! gap-0 overflow-hidden p-0'>
+      <DialogContent className='max-h-[calc(100dvh-2rem)] max-w-5xl! gap-0 overflow-hidden p-0'>
         <DialogHeader className='border-b bg-linear-to-br from-rose-500/10 to-amber-500/10 px-6 py-5 pr-14'>
           <DialogTitle className='text-lg'>
             {t('evaluations.regressionLocation')}
           </DialogTitle>
           <DialogDescription className='mt-1'>{diff?.name}</DialogDescription>
         </DialogHeader>
-        <div className='max-h-[min(62vh,560px)] overflow-y-auto px-6 py-5'>
+        <div className='max-h-140 overflow-y-auto px-6 py-5'>
           {loading ? (
             <div className='text-muted-foreground flex items-center gap-2 py-8 text-sm'>
               <Spinner className='size-4' />
@@ -63,6 +65,7 @@ export function VersionDiffDialog({
               candidateLabel={candidateLabel}
               nodeNames={nodeNames}
               routeNames={routeNames}
+              toolNames={toolNames}
             />
           ) : (
             <p className='text-muted-foreground py-8 text-sm'>

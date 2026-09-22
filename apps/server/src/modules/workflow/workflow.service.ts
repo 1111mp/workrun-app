@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   BadRequestException,
@@ -53,13 +54,16 @@ export class WorkflowService {
   async findOne(ownerId: string, id: string) {
     const workflow = await this.workflowModel
       .findOne({ id, ownerId: this.toOwnerId(ownerId), isDelete: false })
+      .populate<{ latestReleaseId: WorkflowRelease }>({
+        path: 'latestReleaseId',
+      })
       .populate<{ ownerId: BetterAuthUser }>({
         path: 'ownerId',
         select: 'name email emailVerified image createdAt updatedAt',
       })
       .lean();
     if (!workflow) throw new NotFoundException(`Workflow ${id} was not found`);
-    return workflow;
+    return this.editableDefinition(workflow);
   }
 
   async update(ownerId: string, id: string, dto: UpdateWorkflowDto) {
@@ -69,13 +73,16 @@ export class WorkflowService {
         dto,
         { new: true },
       )
+      .populate<{ latestReleaseId: WorkflowRelease }>({
+        path: 'latestReleaseId',
+      })
       .populate<{ ownerId: BetterAuthUser }>({
         path: 'ownerId',
         select: 'name email emailVerified image createdAt updatedAt',
       })
       .lean();
     if (!workflow) throw new NotFoundException(`Workflow ${id} was not found`);
-    return workflow;
+    return this.editableDefinition(workflow);
   }
 
   async publish(ownerId: string, id: string, dto: PublishWorkflowDto) {
@@ -277,6 +284,25 @@ export class WorkflowService {
       releaseId: release.id,
       releaseNote: release.releaseNote,
       document: release.document,
+    };
+  }
+
+  private editableDefinition(workflow: {
+    document: unknown;
+    latestReleaseId?: WorkflowRelease | null;
+  }) {
+    const release = workflow.latestReleaseId;
+    return {
+      ...workflow,
+      // The editable document is a draft. Keep its lineage separate from a
+      // release ID so evaluation never mislabels edited content as published.
+      baseReleaseId: release?.id,
+      baseReleaseVersion: release?.version,
+      // A released snapshot can be evaluated as that version until the owner
+      // changes the editable document; afterward it must remain a draft.
+      matchesLatestRelease: Boolean(
+        release && isDeepStrictEqual(workflow.document, release.document),
+      ),
     };
   }
 

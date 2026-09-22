@@ -78,6 +78,7 @@ import {
   updateWorkflow,
   type StoredWorkflow,
   type WorkflowDocument,
+  type WorkflowRelease,
   type WorkflowRunEvent,
 } from '@/services/workflow';
 import {
@@ -159,6 +160,9 @@ function WorkflowEditorContent({
   const [createdWorkflow, setCreatedWorkflow] = useState<
     StoredWorkflow | undefined
   >();
+  const [latestPublishedRelease, setLatestPublishedRelease] = useState<
+    WorkflowRelease | undefined
+  >();
   const activeWorkflow = workflow ?? createdWorkflow;
   const [savedDocument, setSavedDocument] = useState<string>(() =>
     workflow ? JSON.stringify(workflow.document) : '',
@@ -194,13 +198,44 @@ function WorkflowEditorContent({
   const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
   const isDirty = workflowDocumentSnapshot !== savedDocument;
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const localReleaseMatchesDraft = Boolean(
+    latestPublishedRelease &&
+    JSON.stringify(latestPublishedRelease.document) ===
+      workflowDocumentSnapshot,
+  );
+  const baseRelease = latestPublishedRelease
+    ? {
+        id: latestPublishedRelease.id,
+        version: latestPublishedRelease.version,
+      }
+    : {
+        id: activeWorkflow?.baseReleaseId,
+        version: activeWorkflow?.baseReleaseVersion,
+      };
+  const currentRelease = activeWorkflow?.releaseId
+    ? { id: activeWorkflow.releaseId, version: activeWorkflow.version }
+    : latestPublishedRelease
+      ? localReleaseMatchesDraft
+        ? {
+            id: latestPublishedRelease.id,
+            version: latestPublishedRelease.version,
+          }
+        : undefined
+      : activeWorkflow?.matchesLatestRelease
+        ? {
+            id: activeWorkflow.baseReleaseId,
+            version: activeWorkflow.baseReleaseVersion,
+          }
+        : undefined;
   const evaluationWorkflowSnapshot = activeWorkflow
     ? {
         targetName: workflowSettings.name,
         targetSnapshot: workflowDocument,
         dsl: toWorkflowDsl(activeWorkflow.id, nodes, edges, workflowSettings),
-        releaseId: activeWorkflow.releaseId,
-        releaseVersion: activeWorkflow.version,
+        releaseId: currentRelease?.id,
+        releaseVersion: currentRelease?.version,
+        baseReleaseId: baseRelease.id,
+        baseReleaseVersion: baseRelease.version,
       }
     : undefined;
 
@@ -530,6 +565,7 @@ function WorkflowEditorContent({
         version.trim(),
         releaseNote.trim(),
       );
+      setLatestPublishedRelease(release);
       if (gateReasons.length && qualityGate.data) {
         // The release has already been accepted by the remote server. A local
         // audit failure must be visible, but must not incorrectly report that
