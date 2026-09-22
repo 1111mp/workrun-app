@@ -164,6 +164,9 @@ pub struct IWorkrun {
     /// app log max count
     pub app_log_max_count: Option<usize>,
 
+    /// Optional OTLP/gRPC collector endpoint used for diagnostic trace export.
+    pub otlp_endpoint: Option<String>,
+
     /// i18n
     pub locale: Option<String>,
 
@@ -198,6 +201,7 @@ pub struct WorkrunPatch {
     pub app_log_level: Option<String>,
     pub app_log_max_size: Option<u64>,
     pub app_log_max_count: Option<usize>,
+    pub otlp_endpoint: Option<String>,
     pub locale: Option<String>,
     pub theme: Option<String>,
     pub enable_auto_launch: Option<bool>,
@@ -217,6 +221,7 @@ impl Default for IWorkrun {
             app_log_level: None,
             app_log_max_size: None,
             app_log_max_count: None,
+            otlp_endpoint: None,
             locale: None,
             theme: None,
             enable_auto_launch: None,
@@ -307,6 +312,7 @@ impl IWorkrun {
         patch!(app_log_level);
         patch!(app_log_max_size);
         patch!(app_log_max_count);
+        patch!(otlp_endpoint);
         patch!(locale);
         patch!(theme);
         patch!(enable_auto_launch);

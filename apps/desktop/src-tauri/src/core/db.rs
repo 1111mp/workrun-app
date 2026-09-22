@@ -156,7 +156,6 @@ impl DBManager {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::DBManager;
@@ -254,24 +253,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(queued_error, "Execution did not start before Workrun restarted.");
-        let evaluation_status: String = sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'evaluation-1'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let evaluation_status: String =
+            sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'evaluation-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let failed_cases: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evaluation_case_results WHERE evaluation_run_id = 'evaluation-1' AND verdict IN ('error', 'skipped')")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(evaluation_status, "failed");
         assert_eq!(failed_cases, 2);
-        let queued_evaluation_status: String = sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'evaluation-2'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let queued_case: (String, String) = sqlx::query_as("SELECT execution_status, verdict FROM evaluation_case_results WHERE id = 'case-3'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let queued_evaluation_status: String =
+            sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'evaluation-2'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let queued_case: (String, String) =
+            sqlx::query_as("SELECT execution_status, verdict FROM evaluation_case_results WHERE id = 'case-3'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(queued_evaluation_status, "failed");
         assert_eq!(queued_case, ("cancelled".to_string(), "skipped".to_string()));
     }

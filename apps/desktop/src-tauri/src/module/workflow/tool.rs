@@ -377,7 +377,12 @@ fn evaluation_fixture_result(
         .tool_fixtures
         .iter()
         .find(|fixture| fixture.node_id.as_deref() == Some(node_id) && fixture.tool == tool && fixture.args == *args)
-        .or_else(|| profile.tool_fixtures.iter().find(|fixture| fixture.node_id.is_none() && fixture.tool == tool && fixture.args == *args))
+        .or_else(|| {
+            profile
+                .tool_fixtures
+                .iter()
+                .find(|fixture| fixture.node_id.is_none() && fixture.tool == tool && fixture.args == *args)
+        })
         .map(|fixture| fixture.result.clone())
         .ok_or_else(|| adk_rust::AdkError::tool(format!("Test Mode blocked unmocked tool `{tool}`")))
         .map(Some)
@@ -558,13 +563,13 @@ mod tests {
         }
 
         let execution_args = resolve_execution_args(
-                &state,
-                "agent",
-                &json!({"recipient": "[EMAIL REDACTED]"}),
-                &[],
-                &json!({"type": "object", "properties": {"recipient": {"type": "string"}}, "required": ["recipient"]}),
-            )
-            .unwrap();
+            &state,
+            "agent",
+            &json!({"recipient": "[EMAIL REDACTED]"}),
+            &[],
+            &json!({"type": "object", "properties": {"recipient": {"type": "string"}}, "required": ["recipient"]}),
+        )
+        .unwrap();
         assert_eq!(execution_args, json!({"recipient": "alice@example.com"}));
         let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {
             tool_fixtures: vec![EvaluationToolFixture {

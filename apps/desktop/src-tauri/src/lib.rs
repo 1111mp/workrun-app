@@ -23,12 +23,6 @@ pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 pub fn run() {
     let _ = utils::dirs::init_portable_flag();
 
-    // ADK's OTLP initializer owns tracing's process-wide subscriber. Tauri may
-    // install one while building the application, so this must happen first.
-    tauri::async_runtime::block_on(async {
-        let _ = telemetry::init();
-    });
-
     #[cfg(target_os = "linux")]
     utils::linux::workarounds::apply_nvidia_dmabuf_renderer_workaround();
     #[cfg(target_os = "linux")]
@@ -67,6 +61,13 @@ pub fn run() {
                 .expect("failed to set global app handle");
 
             resolve::init_work_dir_and_logger()?;
+
+            // Logger initialization needs Tauri's AppHandle for its file path.
+            // Register the OTLP layer immediately afterwards so flexi_logger
+            // remains the sole owner of the global `log` facade.
+            tauri::async_runtime::block_on(async {
+                let _ = telemetry::init().await;
+            });
 
             logging!(info, Type::Setup, "Starting application initialization...");
 

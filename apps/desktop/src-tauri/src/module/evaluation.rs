@@ -36,11 +36,13 @@ fn workflow_snapshot_fingerprint(snapshot: &Value) -> String {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvaluationQualityGate {
-    #[serde(default)] pub require_evaluation: bool,
+    #[serde(default)]
+    pub require_evaluation: bool,
     pub min_pass_rate: Option<f64>,
     pub max_cost_microusd: Option<i64>,
     pub max_duration_ms: Option<i64>,
-    #[serde(default)] pub required_suite_ids: Vec<String>,
+    #[serde(default)]
+    pub required_suite_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -292,7 +294,10 @@ pub struct EvaluationStore;
 
 impl EvaluationStore {
     pub async fn record_quality_gate_override(request: RecordQualityGateOverride) -> Result<()> {
-        if request.workflow_id.trim().is_empty() || request.release_version.trim().is_empty() || request.reason.trim().is_empty() {
+        if request.workflow_id.trim().is_empty()
+            || request.release_version.trim().is_empty()
+            || request.reason.trim().is_empty()
+        {
             bail!("workflow, release version, and override reason are required");
         }
         let pool = DBManager::global().pool()?;
@@ -307,19 +312,41 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         let rows = sqlx::query("SELECT id, release_version, actor, reason, gate_snapshot_json, evaluation_snapshot_json, created_at FROM evaluation_quality_gate_audits WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 50")
             .bind(workflow_id).fetch_all(&pool).await?;
-        rows.into_iter().map(|row| Ok(QualityGateAuditSummary { id: row.try_get("id")?, release_version: row.try_get("release_version")?, actor: row.try_get("actor")?, reason: row.try_get("reason")?, gate_snapshot: serde_json::from_str(&row.try_get::<String, _>("gate_snapshot_json")?)?, evaluation_snapshot: serde_json::from_str(&row.try_get::<String, _>("evaluation_snapshot_json")?)?, created_at: row.try_get("created_at")? })).collect()
+        rows.into_iter()
+            .map(|row| {
+                Ok(QualityGateAuditSummary {
+                    id: row.try_get("id")?,
+                    release_version: row.try_get("release_version")?,
+                    actor: row.try_get("actor")?,
+                    reason: row.try_get("reason")?,
+                    gate_snapshot: serde_json::from_str(&row.try_get::<String, _>("gate_snapshot_json")?)?,
+                    evaluation_snapshot: serde_json::from_str(&row.try_get::<String, _>("evaluation_snapshot_json")?)?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
     }
     pub async fn get_quality_gate(workflow_id: &str) -> Result<EvaluationQualityGate> {
         let pool = DBManager::global().pool()?;
         let value = sqlx::query("SELECT policy_json FROM evaluation_quality_gates WHERE workflow_id = ?")
-            .bind(workflow_id).fetch_optional(&pool).await?
-            .map(|row| row.try_get::<String, _>("policy_json")).transpose()?;
-        Ok(value.map(|json| serde_json::from_str(&json)).transpose()?.unwrap_or_default())
+            .bind(workflow_id)
+            .fetch_optional(&pool)
+            .await?
+            .map(|row| row.try_get::<String, _>("policy_json"))
+            .transpose()?;
+        Ok(value
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?
+            .unwrap_or_default())
     }
 
     pub async fn update_quality_gate(workflow_id: &str, policy: EvaluationQualityGate) -> Result<()> {
-        if workflow_id.trim().is_empty() { bail!("workflow id is required"); }
-        if policy.min_pass_rate.is_some_and(|value| !(0.0..=1.0).contains(&value)) { bail!("minimum pass rate must be between 0 and 1"); }
+        if workflow_id.trim().is_empty() {
+            bail!("workflow id is required");
+        }
+        if policy.min_pass_rate.is_some_and(|value| !(0.0..=1.0).contains(&value)) {
+            bail!("minimum pass rate must be between 0 and 1");
+        }
         let pool = DBManager::global().pool()?;
         sqlx::query("INSERT INTO evaluation_quality_gates (workflow_id, policy_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(workflow_id) DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at")
             .bind(workflow_id).bind(serde_json::to_string(&policy)?).bind(chrono::Utc::now().to_rfc3339()).execute(&pool).await?;
@@ -414,7 +441,15 @@ impl EvaluationStore {
                 None,
             )
         } else {
-            ("failed", "error", None, json!([]), json!({}), json!({}), error.map(str::to_string))
+            (
+                "failed",
+                "error",
+                None,
+                json!([]),
+                json!({}),
+                json!({}),
+                error.map(str::to_string),
+            )
         };
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query("UPDATE evaluation_case_results SET execution_status = ?, verdict = ?, score = ?, criteria_results_json = ?, normalized_trace_json = ?, actual_output_json = ?, failure_reason = ?, duration_ms = ?, total_tokens = ?, estimated_cost_microusd = ?, updated_at = ? WHERE id = ?")
@@ -473,9 +508,14 @@ impl EvaluationStore {
         }
         let pool = DBManager::global().pool()?;
         let now = chrono::Utc::now().to_rfc3339();
-        let updated = sqlx::query("UPDATE evaluation_suites SET name = ?, description = ?, updated_at = ? WHERE id = ?")
-            .bind(&request.name).bind(&request.description).bind(&now).bind(&request.id)
-            .execute(&pool).await?;
+        let updated =
+            sqlx::query("UPDATE evaluation_suites SET name = ?, description = ?, updated_at = ? WHERE id = ?")
+                .bind(&request.name)
+                .bind(&request.description)
+                .bind(&now)
+                .bind(&request.id)
+                .execute(&pool)
+                .await?;
         if updated.rows_affected() == 0 {
             bail!("evaluation suite was not found");
         }
@@ -493,17 +533,25 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         let mut transaction = pool.begin().await?;
         let exists = sqlx::query("SELECT 1 FROM evaluation_suites WHERE id = ?")
-            .bind(id).fetch_optional(&mut *transaction).await?;
+            .bind(id)
+            .fetch_optional(&mut *transaction)
+            .await?;
         if exists.is_none() {
             bail!("evaluation suite was not found");
         }
         // Runs cascade to Case Results, releasing the Case foreign-key guard.
         sqlx::query("DELETE FROM evaluation_runs WHERE suite_id = ?")
-            .bind(id).execute(&mut *transaction).await?;
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
         sqlx::query("DELETE FROM evaluation_cases WHERE suite_id = ?")
-            .bind(id).execute(&mut *transaction).await?;
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
         sqlx::query("DELETE FROM evaluation_suites WHERE id = ?")
-            .bind(id).execute(&mut *transaction).await?;
+            .bind(id)
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -541,7 +589,8 @@ impl EvaluationStore {
             name: request.name,
             description: request.description,
             position: created_position,
-            enabled: request.enabled, archived: false,
+            enabled: request.enabled,
+            archived: false,
             target_agent_id: request.target_agent_id,
             input: request.input,
             expectation: serde_json::to_value(request.expectation)?,
@@ -584,11 +633,15 @@ impl EvaluationStore {
     }
 
     pub async fn delete_case(id: &str) -> Result<()> {
-        if id.trim().is_empty() { bail!("case id is required"); }
+        if id.trim().is_empty() {
+            bail!("case id is required");
+        }
         let pool = DBManager::global().pool()?;
         let deleted = sqlx::query("UPDATE evaluation_cases SET deleted_at = ?, enabled = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
             .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
-        if deleted.rows_affected() == 0 { bail!("evaluation case was not found"); }
+        if deleted.rows_affected() == 0 {
+            bail!("evaluation case was not found");
+        }
         Ok(())
     }
 
@@ -596,29 +649,47 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         let restored = sqlx::query("UPDATE evaluation_cases SET deleted_at = NULL, enabled = 1, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL")
             .bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
-        if restored.rows_affected() == 0 { bail!("archived evaluation case was not found"); }
+        if restored.rows_affected() == 0 {
+            bail!("archived evaluation case was not found");
+        }
         Ok(())
     }
 
     pub async fn reorder_cases(suite_id: &str, ids: &[String]) -> Result<()> {
-        if suite_id.trim().is_empty() { bail!("suite id is required"); }
+        if suite_id.trim().is_empty() {
+            bail!("suite id is required");
+        }
         let pool = DBManager::global().pool()?;
         let mut transaction = pool.begin().await?;
-        let existing = sqlx::query("SELECT id FROM evaluation_cases WHERE suite_id = ? AND deleted_at IS NULL ORDER BY position, id")
-            .bind(suite_id).fetch_all(&mut *transaction).await?
-            .into_iter().map(|row| row.try_get::<String, _>("id")).collect::<Result<Vec<_>, _>>()?;
+        let existing = sqlx::query(
+            "SELECT id FROM evaluation_cases WHERE suite_id = ? AND deleted_at IS NULL ORDER BY position, id",
+        )
+        .bind(suite_id)
+        .fetch_all(&mut *transaction)
+        .await?
+        .into_iter()
+        .map(|row| row.try_get::<String, _>("id"))
+        .collect::<Result<Vec<_>, _>>()?;
         let mut expected = existing.clone();
         let mut received = ids.to_vec();
-        expected.sort(); received.sort();
-        if expected != received { bail!("case order must contain every case in the suite exactly once"); }
+        expected.sort();
+        received.sort();
+        if expected != received {
+            bail!("case order must contain every case in the suite exactly once");
+        }
         // Move positions out of the unique range first so swapping adjacent
         // Cases never conflicts with `UNIQUE(suite_id, position)`.
         sqlx::query("UPDATE evaluation_cases SET position = -position - 1 WHERE suite_id = ? AND deleted_at IS NULL")
-            .bind(suite_id).execute(&mut *transaction).await?;
+            .bind(suite_id)
+            .execute(&mut *transaction)
+            .await?;
         for (position, id) in ids.iter().enumerate() {
             sqlx::query("UPDATE evaluation_cases SET position = ?, updated_at = ? WHERE id = ?")
-                .bind(position as i64).bind(chrono::Utc::now().to_rfc3339()).bind(id)
-                .execute(&mut *transaction).await?;
+                .bind(position as i64)
+                .bind(chrono::Utc::now().to_rfc3339())
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
         }
         transaction.commit().await?;
         Ok(())
@@ -785,9 +856,12 @@ impl EvaluationStore {
                 Ok(()) => return Ok(Some(claimed)),
                 Err(error) => {
                     let message = error.to_string();
-                    log::warn!("failed to start evaluation case {}: {message:#}", claimed.evaluation_case_id);
+                    log::warn!(
+                        "failed to start evaluation case {}: {message:#}",
+                        claimed.evaluation_case_id
+                    );
                     Self::fail_case_start(&claimed, &message).await?;
-                }
+                },
             }
         }
     }
@@ -819,18 +893,31 @@ impl EvaluationStore {
             .context("evaluation case fixture is invalid")?;
         let workflow_run_id = uuid::Uuid::new_v4().to_string();
         run_manager::start_workflow(StartWorkflowRun {
-            run_id: workflow_run_id.clone(), target_id: claimed.workflow_id.clone(),
-            target_name: snapshot.target_name, input: claimed.case_snapshot.input.clone(),
-            output_view: json!({}), target_snapshot: snapshot.target_snapshot,
-            release_id: snapshot.release_id, release_version: snapshot.release_version,
-            dsl: snapshot.dsl, initial_state: claimed.case_snapshot.input.clone(),
-            thread_id: format!("evaluation/{}/{}", claimed.evaluation_run_id, claimed.evaluation_case_id),
-            evaluation_profile: Some(profile), evaluation_result_id: Some(claimed.result_id.clone()),
-        }).await?;
+            run_id: workflow_run_id.clone(),
+            target_id: claimed.workflow_id.clone(),
+            target_name: snapshot.target_name,
+            input: claimed.case_snapshot.input.clone(),
+            output_view: json!({}),
+            target_snapshot: snapshot.target_snapshot,
+            release_id: snapshot.release_id,
+            release_version: snapshot.release_version,
+            dsl: snapshot.dsl,
+            initial_state: claimed.case_snapshot.input.clone(),
+            thread_id: format!(
+                "evaluation/{}/{}",
+                claimed.evaluation_run_id, claimed.evaluation_case_id
+            ),
+            evaluation_profile: Some(profile),
+            evaluation_result_id: Some(claimed.result_id.clone()),
+        })
+        .await?;
         let pool = DBManager::global().pool()?;
         sqlx::query("UPDATE evaluation_case_results SET workflow_run_id = ?, updated_at = ? WHERE id = ?")
-            .bind(workflow_run_id).bind(chrono::Utc::now().to_rfc3339())
-            .bind(&claimed.result_id).execute(&pool).await?;
+            .bind(workflow_run_id)
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(&claimed.result_id)
+            .execute(&pool)
+            .await?;
         Ok(())
     }
 
@@ -895,63 +982,141 @@ impl EvaluationStore {
     }
 
     pub async fn list_runs(suite_id: &str) -> Result<Vec<EvaluationRunDetail>> {
-        if suite_id.trim().is_empty() { bail!("suite id is required"); }
+        if suite_id.trim().is_empty() {
+            bail!("suite id is required");
+        }
         let pool = DBManager::global().pool()?;
         let rows = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE suite_id = ? ORDER BY started_at DESC, id DESC LIMIT 30")
             .bind(suite_id).fetch_all(&pool).await?;
-        rows.into_iter().map(|row| Ok(EvaluationRunDetail {
-            summary: EvaluationRunSummary { id: row.try_get("id")?, suite_id: row.try_get("suite_id")?, workflow_id: row.try_get("workflow_id")?, retry_of_run_id: row.try_get("retry_of_run_id")?, status: row.try_get("status")?, total_cases: row.try_get("total_cases")?, started_at: row.try_get("started_at")? },
-            ended_at: row.try_get("ended_at")?, duration_ms: row.try_get("duration_ms")?, passed_cases: row.try_get("passed_cases")?, failed_cases: row.try_get("failed_cases")?, total_tokens: row.try_get("total_tokens")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?, error: row.try_get("error")?,
-        })).collect()
+        rows.into_iter()
+            .map(|row| {
+                Ok(EvaluationRunDetail {
+                    summary: EvaluationRunSummary {
+                        id: row.try_get("id")?,
+                        suite_id: row.try_get("suite_id")?,
+                        workflow_id: row.try_get("workflow_id")?,
+                        retry_of_run_id: row.try_get("retry_of_run_id")?,
+                        status: row.try_get("status")?,
+                        total_cases: row.try_get("total_cases")?,
+                        started_at: row.try_get("started_at")?,
+                    },
+                    ended_at: row.try_get("ended_at")?,
+                    duration_ms: row.try_get("duration_ms")?,
+                    passed_cases: row.try_get("passed_cases")?,
+                    failed_cases: row.try_get("failed_cases")?,
+                    total_tokens: row.try_get("total_tokens")?,
+                    estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
+                    error: row.try_get("error")?,
+                })
+            })
+            .collect()
     }
 
     pub async fn summarize_versions(suite_id: &str) -> Result<Vec<EvaluationVersionSummary>> {
-        if suite_id.trim().is_empty() { bail!("suite id is required"); }
+        if suite_id.trim().is_empty() {
+            bail!("suite id is required");
+        }
         let pool = DBManager::global().pool()?;
         // Draft snapshots predate releases, so they deliberately form a
         // separate comparable cohort instead of being attributed to a release.
         let rows = sqlx::query("SELECT json_extract(workflow_snapshot_json, '$.releaseId') AS release_id, COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') AS release_version, workflow_fingerprint, COUNT(*) AS run_count, SUM(total_cases) AS total_cases, SUM(passed_cases) AS passed_cases, SUM(COALESCE(duration_ms, 0)) AS total_duration_ms, SUM(COALESCE(estimated_cost_microusd, 0)) AS estimated_cost_microusd FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL GROUP BY release_id, release_version, workflow_fingerprint ORDER BY MAX(started_at) DESC")
             .bind(suite_id).fetch_all(&pool).await?;
-        rows.into_iter().map(|row| Ok(EvaluationVersionSummary {
-            release_id: row.try_get("release_id")?, release_version: row.try_get("release_version")?, comparison_key: {
-                let release_id: Option<String> = row.try_get("release_id")?;
-                if release_id.is_some() { row.try_get("release_version")? } else { row.try_get("workflow_fingerprint")? }
-            }, run_count: row.try_get("run_count")?, total_cases: row.try_get("total_cases")?, passed_cases: row.try_get("passed_cases")?, total_duration_ms: row.try_get("total_duration_ms")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
-        })).collect()
+        rows.into_iter()
+            .map(|row| {
+                Ok(EvaluationVersionSummary {
+                    release_id: row.try_get("release_id")?,
+                    release_version: row.try_get("release_version")?,
+                    comparison_key: {
+                        let release_id: Option<String> = row.try_get("release_id")?;
+                        if release_id.is_some() {
+                            row.try_get("release_version")?
+                        } else {
+                            row.try_get("workflow_fingerprint")?
+                        }
+                    },
+                    run_count: row.try_get("run_count")?,
+                    total_cases: row.try_get("total_cases")?,
+                    passed_cases: row.try_get("passed_cases")?,
+                    total_duration_ms: row.try_get("total_duration_ms")?,
+                    estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
+                })
+            })
+            .collect()
     }
 
-    pub async fn compare_versions(suite_id: &str, baseline: &str, candidate: &str) -> Result<Vec<EvaluationVersionCaseDiff>> {
+    pub async fn compare_versions(
+        suite_id: &str,
+        baseline: &str,
+        candidate: &str,
+    ) -> Result<Vec<EvaluationVersionCaseDiff>> {
         let pool = DBManager::global().pool()?;
         let latest_sql = "SELECT id FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL AND (workflow_fingerprint = ? OR (json_extract(workflow_snapshot_json, '$.releaseId') IS NOT NULL AND COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') = ?)) ORDER BY started_at DESC, id DESC LIMIT 1";
         let baseline_run = sqlx::query_scalar::<_, String>(latest_sql)
-            .bind(suite_id).bind(baseline).bind(baseline).fetch_optional(&pool).await?;
+            .bind(suite_id)
+            .bind(baseline)
+            .bind(baseline)
+            .fetch_optional(&pool)
+            .await?;
         let candidate_run = sqlx::query_scalar::<_, String>(latest_sql)
-            .bind(suite_id).bind(candidate).bind(candidate).fetch_optional(&pool).await?;
+            .bind(suite_id)
+            .bind(candidate)
+            .bind(candidate)
+            .fetch_optional(&pool)
+            .await?;
         let read_cases = |run_id: Option<String>| async {
-            let Some(run_id) = run_id else { return Ok::<HashMap<String, (String, String)>, sqlx::Error>(HashMap::new()); };
+            let Some(run_id) = run_id else {
+                return Ok::<HashMap<String, (String, String)>, sqlx::Error>(HashMap::new());
+            };
             let rows = sqlx::query("SELECT evaluation_case_id, case_snapshot_json, verdict FROM evaluation_case_results WHERE evaluation_run_id = ?")
                 .bind(run_id).fetch_all(&pool).await?;
-            Ok(rows.into_iter().map(|row| {
-                let id: String = row.try_get("evaluation_case_id")?;
-                let snapshot: Value = serde_json::from_str(&row.try_get::<String, _>("case_snapshot_json")?).unwrap_or_default();
-                Ok((id, (snapshot.get("name").and_then(Value::as_str).unwrap_or("评测用例").to_string(), row.try_get("verdict")?)))
-            }).collect::<Result<HashMap<_, _>, sqlx::Error>>()?)
+            Ok(rows
+                .into_iter()
+                .map(|row| {
+                    let id: String = row.try_get("evaluation_case_id")?;
+                    let snapshot: Value =
+                        serde_json::from_str(&row.try_get::<String, _>("case_snapshot_json")?).unwrap_or_default();
+                    Ok((
+                        id,
+                        (
+                            snapshot
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("评测用例")
+                                .to_string(),
+                            row.try_get("verdict")?,
+                        ),
+                    ))
+                })
+                .collect::<Result<HashMap<_, _>, sqlx::Error>>()?)
         };
         let before = read_cases(baseline_run).await?;
         let after = read_cases(candidate_run).await?;
         let ids: HashSet<_> = before.keys().chain(after.keys()).cloned().collect();
-        Ok(ids.into_iter().filter_map(|id| {
-            let base = before.get(&id); let next = after.get(&id);
-            let failed = |value: Option<&(String, String)>| value.is_some_and(|(_, verdict)| matches!(verdict.as_str(), "failed" | "error"));
-            let kind = match (base, next) {
-                (None, Some(_)) => "added", (Some(_), None) => "removed",
-                _ if !failed(base) && failed(next) => "regressed",
-                _ if failed(base) && !failed(next) => "fixed",
-                _ if failed(base) && failed(next) => "persistent_failure",
-                _ => return None,
-            };
-            Some(EvaluationVersionCaseDiff { case_id: id, name: next.or(base).map(|value| value.0.clone()).unwrap_or_default(), baseline_verdict: base.map(|value| value.1.clone()), candidate_verdict: next.map(|value| value.1.clone()), kind: kind.to_string() })
-        }).collect())
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| {
+                let base = before.get(&id);
+                let next = after.get(&id);
+                let failed = |value: Option<&(String, String)>| {
+                    value.is_some_and(|(_, verdict)| matches!(verdict.as_str(), "failed" | "error"))
+                };
+                let kind = match (base, next) {
+                    (None, Some(_)) => "added",
+                    (Some(_), None) => "removed",
+                    _ if !failed(base) && failed(next) => "regressed",
+                    _ if failed(base) && !failed(next) => "fixed",
+                    _ if failed(base) && failed(next) => "persistent_failure",
+                    _ => return None,
+                };
+                Some(EvaluationVersionCaseDiff {
+                    case_id: id,
+                    name: next.or(base).map(|value| value.0.clone()).unwrap_or_default(),
+                    baseline_verdict: base.map(|value| value.1.clone()),
+                    candidate_verdict: next.map(|value| value.1.clone()),
+                    kind: kind.to_string(),
+                })
+            })
+            .collect())
     }
 
     pub async fn compare_version_case_criteria(
@@ -963,28 +1128,54 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         let latest_sql = "SELECT id FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL AND (workflow_fingerprint = ? OR (json_extract(workflow_snapshot_json, '$.releaseId') IS NOT NULL AND COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') = ?)) ORDER BY started_at DESC, id DESC LIMIT 1";
         let baseline_run = sqlx::query_scalar::<_, String>(latest_sql)
-            .bind(suite_id).bind(baseline).bind(baseline).fetch_optional(&pool).await?;
+            .bind(suite_id)
+            .bind(baseline)
+            .bind(baseline)
+            .fetch_optional(&pool)
+            .await?;
         let candidate_run = sqlx::query_scalar::<_, String>(latest_sql)
-            .bind(suite_id).bind(candidate).bind(candidate).fetch_optional(&pool).await?;
+            .bind(suite_id)
+            .bind(candidate)
+            .bind(candidate)
+            .fetch_optional(&pool)
+            .await?;
         let read_result = |run_id: Option<String>| async {
-            let Some(run_id) = run_id else { return Ok::<Option<(String, String, Vec<CriterionResult>)>, sqlx::Error>(None); };
+            let Some(run_id) = run_id else {
+                return Ok::<Option<(String, String, Vec<CriterionResult>)>, sqlx::Error>(None);
+            };
             let row = sqlx::query("SELECT case_snapshot_json, verdict, criteria_results_json FROM evaluation_case_results WHERE evaluation_run_id = ? AND evaluation_case_id = ? LIMIT 1")
                 .bind(run_id).bind(case_id).fetch_optional(&pool).await?;
             row.map(|row| {
-                let snapshot: Value = serde_json::from_str(&row.try_get::<String, _>("case_snapshot_json")?).unwrap_or_default();
-                let criteria = serde_json::from_str(&row.try_get::<String, _>("criteria_results_json")?).unwrap_or_default();
-                Ok((snapshot.get("name").and_then(Value::as_str).unwrap_or("评测用例").to_string(), row.try_get("verdict")?, criteria))
-            }).transpose()
+                let snapshot: Value =
+                    serde_json::from_str(&row.try_get::<String, _>("case_snapshot_json")?).unwrap_or_default();
+                let criteria =
+                    serde_json::from_str(&row.try_get::<String, _>("criteria_results_json")?).unwrap_or_default();
+                Ok((
+                    snapshot
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("评测用例")
+                        .to_string(),
+                    row.try_get("verdict")?,
+                    criteria,
+                ))
+            })
+            .transpose()
         };
         let before = read_result(baseline_run).await?;
         let after = read_result(candidate_run).await?;
-        let name = after.as_ref().or(before.as_ref()).map(|result| result.0.clone()).unwrap_or_default();
+        let name = after
+            .as_ref()
+            .or(before.as_ref())
+            .map(|result| result.0.clone())
+            .unwrap_or_default();
         let criteria = compare_criteria(
             before.as_ref().map(|result| result.2.as_slice()).unwrap_or_default(),
             after.as_ref().map(|result| result.2.as_slice()).unwrap_or_default(),
         );
         Ok(EvaluationVersionCaseCriterionComparison {
-            case_id: case_id.to_string(), name,
+            case_id: case_id.to_string(),
+            name,
             baseline_verdict: before.map(|result| result.1),
             candidate_verdict: after.map(|result| result.1),
             criteria,
@@ -992,14 +1183,33 @@ impl EvaluationStore {
     }
 
     pub async fn latest_run_for_workflow(workflow_id: &str) -> Result<Option<EvaluationRunDetail>> {
-        if workflow_id.trim().is_empty() { bail!("workflow id is required"); }
+        if workflow_id.trim().is_empty() {
+            bail!("workflow id is required");
+        }
         let pool = DBManager::global().pool()?;
         let row = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE workflow_id = ? ORDER BY started_at DESC, id DESC LIMIT 1")
             .bind(workflow_id).fetch_optional(&pool).await?;
-        row.map(|row| Ok(EvaluationRunDetail {
-            summary: EvaluationRunSummary { id: row.try_get("id")?, suite_id: row.try_get("suite_id")?, workflow_id: row.try_get("workflow_id")?, retry_of_run_id: row.try_get("retry_of_run_id")?, status: row.try_get("status")?, total_cases: row.try_get("total_cases")?, started_at: row.try_get("started_at")? },
-            ended_at: row.try_get("ended_at")?, duration_ms: row.try_get("duration_ms")?, passed_cases: row.try_get("passed_cases")?, failed_cases: row.try_get("failed_cases")?, total_tokens: row.try_get("total_tokens")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?, error: row.try_get("error")?,
-        })).transpose()
+        row.map(|row| {
+            Ok(EvaluationRunDetail {
+                summary: EvaluationRunSummary {
+                    id: row.try_get("id")?,
+                    suite_id: row.try_get("suite_id")?,
+                    workflow_id: row.try_get("workflow_id")?,
+                    retry_of_run_id: row.try_get("retry_of_run_id")?,
+                    status: row.try_get("status")?,
+                    total_cases: row.try_get("total_cases")?,
+                    started_at: row.try_get("started_at")?,
+                },
+                ended_at: row.try_get("ended_at")?,
+                duration_ms: row.try_get("duration_ms")?,
+                passed_cases: row.try_get("passed_cases")?,
+                failed_cases: row.try_get("failed_cases")?,
+                total_tokens: row.try_get("total_tokens")?,
+                estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
+                error: row.try_get("error")?,
+            })
+        })
+        .transpose()
     }
 
     /// Returns the newest full run for each Suite that evaluated this exact draft.
@@ -1026,8 +1236,22 @@ impl EvaluationStore {
                 continue;
             }
             runs.push(EvaluationRunDetail {
-                summary: EvaluationRunSummary { id: row.try_get("id")?, suite_id: row.try_get("suite_id")?, workflow_id: row.try_get("workflow_id")?, retry_of_run_id: row.try_get("retry_of_run_id")?, status: row.try_get("status")?, total_cases: row.try_get("total_cases")?, started_at: row.try_get("started_at")? },
-                ended_at: row.try_get("ended_at")?, duration_ms: row.try_get("duration_ms")?, passed_cases: row.try_get("passed_cases")?, failed_cases: row.try_get("failed_cases")?, total_tokens: row.try_get("total_tokens")?, estimated_cost_microusd: row.try_get("estimated_cost_microusd")?, error: row.try_get("error")?,
+                summary: EvaluationRunSummary {
+                    id: row.try_get("id")?,
+                    suite_id: row.try_get("suite_id")?,
+                    workflow_id: row.try_get("workflow_id")?,
+                    retry_of_run_id: row.try_get("retry_of_run_id")?,
+                    status: row.try_get("status")?,
+                    total_cases: row.try_get("total_cases")?,
+                    started_at: row.try_get("started_at")?,
+                },
+                ended_at: row.try_get("ended_at")?,
+                duration_ms: row.try_get("duration_ms")?,
+                passed_cases: row.try_get("passed_cases")?,
+                failed_cases: row.try_get("failed_cases")?,
+                total_tokens: row.try_get("total_tokens")?,
+                estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
+                error: row.try_get("error")?,
             });
         }
         Ok(runs)
@@ -1072,7 +1296,11 @@ async fn refresh_run_aggregate(pool: &sqlx::SqlitePool, evaluation_run_id: &str,
     let duration_ms = is_terminal
         .then(|| chrono::DateTime::parse_from_rfc3339(&started_at).ok())
         .flatten()
-        .map(|started_at| (chrono::Utc::now() - started_at.with_timezone(&chrono::Utc)).num_milliseconds().max(0));
+        .map(|started_at| {
+            (chrono::Utc::now() - started_at.with_timezone(&chrono::Utc))
+                .num_milliseconds()
+                .max(0)
+        });
     sqlx::query("UPDATE evaluation_runs SET status = ?, ended_at = CASE WHEN ? THEN ? ELSE ended_at END, duration_ms = CASE WHEN ? THEN ? ELSE duration_ms END, passed_cases = ?, failed_cases = ?, total_tokens = ?, estimated_cost_microusd = ?, updated_at = ? WHERE id = ?")
         .bind(if is_terminal { "completed" } else { "running" })
         .bind(is_terminal).bind(now)
@@ -1258,11 +1486,7 @@ pub struct EvaluationExpectation {
 /// paths to object keys makes assertions deterministic and easy to explain in
 /// the result page; array selectors can be added without changing Case data.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
+#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum EvaluationAssertion {
     Text {
         #[serde(default = "default_assertion_id")]
@@ -1447,7 +1671,10 @@ fn criterion_outcome(criterion: &CriterionResult) -> EvaluationCriterionOutcome 
 
 fn criterion_match_key(criterion: &CriterionResult) -> String {
     let kind = criterion.criterion.split(':').next().unwrap_or_default();
-    format!("{kind}:{}", serde_json::to_string(&criterion.expected).unwrap_or_default())
+    format!(
+        "{kind}:{}",
+        serde_json::to_string(&criterion.expected).unwrap_or_default()
+    )
 }
 
 fn compare_criteria(
@@ -1457,11 +1684,17 @@ fn compare_criteria(
     let mut remaining = candidate.iter().collect::<Vec<_>>();
     let mut differences = Vec::new();
     for before in baseline {
-        let index = remaining.iter().position(|after| after.criterion == before.criterion)
+        let index = remaining
+            .iter()
+            .position(|after| after.criterion == before.criterion)
             // Assertions stored before stable IDs were introduced receive a new
             // ID while being evaluated. Match those historical results by their
             // immutable rule definition, so they remain comparable.
-            .or_else(|| remaining.iter().position(|after| criterion_match_key(after) == criterion_match_key(before)));
+            .or_else(|| {
+                remaining
+                    .iter()
+                    .position(|after| criterion_match_key(after) == criterion_match_key(before))
+            });
         let after = index.map(|index| remaining.remove(index));
         let kind = match after {
             Some(after) if before.passed && !after.passed => "regressed",
@@ -1502,11 +1735,9 @@ impl EvaluationExpectation {
         }
         for assertion in &self.assertions {
             match assertion {
-                EvaluationAssertion::Text { threshold, .. }
-                    if !(0.0..=1.0).contains(threshold) =>
-                {
+                EvaluationAssertion::Text { threshold, .. } if !(0.0..=1.0).contains(threshold) => {
                     bail!("text assertion threshold must be between 0 and 1");
-                }
+                },
                 EvaluationAssertion::Safety {
                     field_paths,
                     forbidden_text,
@@ -1518,17 +1749,14 @@ impl EvaluationExpectation {
                     if field_paths.iter().any(|path| !path.starts_with("$.")) {
                         bail!("safety field paths must start with `$.`");
                     }
-                }
+                },
                 EvaluationAssertion::NodeTrajectory {
                     must_execute,
                     must_not_execute,
                     ordered_nodes,
                     ..
                 } => {
-                    let all_nodes = must_execute
-                        .iter()
-                        .chain(must_not_execute)
-                        .chain(ordered_nodes);
+                    let all_nodes = must_execute.iter().chain(must_not_execute).chain(ordered_nodes);
                     if all_nodes.clone().any(|node| node.trim().is_empty()) {
                         bail!("node trajectory assertions cannot contain an empty node id");
                     }
@@ -1536,35 +1764,34 @@ impl EvaluationExpectation {
                     if must_not_execute.iter().any(|node| required.contains(node)) {
                         bail!("a node cannot be both required and forbidden");
                     }
-                }
+                },
                 EvaluationAssertion::Route {
                     node_id,
                     expected_route,
                     ..
                 } if node_id.trim().is_empty() || expected_route.trim().is_empty() => {
                     bail!("a route assertion needs a node and an expected route");
-                }
+                },
                 EvaluationAssertion::NodeOutput { node_id, path, .. }
                     if node_id.trim().is_empty() || !path.starts_with("$.") =>
                 {
                     bail!("a node output assertion needs a node and a `$.` path");
-                }
+                },
                 EvaluationAssertion::NodeText { node_id, threshold, .. }
                     if node_id.trim().is_empty() || !(0.0..=1.0).contains(threshold) =>
                 {
                     bail!("a node text assertion needs a node and a threshold between 0 and 1");
-                }
+                },
                 EvaluationAssertion::NodeToolTrajectory { node_id, tools, .. }
                     if node_id.trim().is_empty() || tools.is_empty() =>
                 {
                     bail!("a node tool trajectory needs a node and at least one tool");
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         Ok(())
     }
-
 }
 
 /// Scores a completed Workrun execution without re-running the workflow.
@@ -1596,7 +1823,7 @@ pub fn score(
                     expected: Value::String(expected),
                     actual: Value::String(observation.final_output.clone()),
                 });
-            }
+            },
             EvaluationAssertion::JsonPath {
                 id,
                 path,
@@ -1609,7 +1836,7 @@ pub fn score(
                 &expected,
                 &observation.final_output,
             )),
-                EvaluationAssertion::ToolTrajectory { id, tools, config } => {
+            EvaluationAssertion::ToolTrajectory { id, tools, config } => {
                 let scorer = ToolTrajectoryScorer::with_config(config);
                 let comparison = scorer.compare(&tools, &observation.tool_uses);
                 // `adk-eval` deliberately treats expected_response as fixture
@@ -1643,7 +1870,7 @@ pub fn score(
                         "responseMismatches": response_mismatches,
                     }),
                 });
-            }
+            },
             EvaluationAssertion::NodeTrajectory {
                 id,
                 must_execute,
@@ -1696,8 +1923,17 @@ pub fn score(
                 threshold,
                 &observation.node_messages,
             )),
-            EvaluationAssertion::NodeToolTrajectory { id, node_id, tools, config } => criteria.push(score_node_tool_trajectory_assertion(
-                &id, &node_id, &tools, config, &observation.node_tool_uses,
+            EvaluationAssertion::NodeToolTrajectory {
+                id,
+                node_id,
+                tools,
+                config,
+            } => criteria.push(score_node_tool_trajectory_assertion(
+                &id,
+                &node_id,
+                &tools,
+                config,
+                &observation.node_tool_uses,
             )),
             EvaluationAssertion::Safety {
                 id,
@@ -1728,11 +1964,18 @@ fn score_node_tool_trajectory_assertion(
     config: ToolTrajectoryConfig,
     uses: &[WorkflowNodeToolUse],
 ) -> CriterionResult {
-    let actual = uses.iter().filter(|use_| use_.node_id == node_id).map(|use_| use_.tool.clone()).collect::<Vec<_>>();
+    let actual = uses
+        .iter()
+        .filter(|use_| use_.node_id == node_id)
+        .map(|use_| use_.tool.clone())
+        .collect::<Vec<_>>();
     let comparison = ToolTrajectoryScorer::with_config(config).compare(expected, &actual);
     let passed = comparison.score == 1.0;
     CriterionResult {
-        criterion: format!("nodeToolTrajectory:{id}"), score: comparison.score, threshold: 1.0, passed,
+        criterion: format!("nodeToolTrajectory:{id}"),
+        score: comparison.score,
+        threshold: 1.0,
+        passed,
         expected: json!({ "nodeId": node_id, "tools": expected }),
         actual: json!({ "nodeId": node_id, "toolUses": actual, "missing": comparison.missing, "extra": comparison.extra }),
     }
@@ -1863,10 +2106,7 @@ fn score_node_trajectory_assertion(
             None => out_of_order.push(node.clone()),
         }
     }
-    let passed = missing.is_empty()
-        && forbidden.is_empty()
-        && incomplete.is_empty()
-        && out_of_order.is_empty();
+    let passed = missing.is_empty() && forbidden.is_empty() && incomplete.is_empty() && out_of_order.is_empty();
     CriterionResult {
         criterion: format!("nodeTrajectory:{id}"),
         score: if passed { 1.0 } else { 0.0 },
@@ -1900,11 +2140,7 @@ fn score_safety_assertion(
             .ok()
             .into_iter()
             .collect::<Vec<_>>(),
-        SafetyAssertionTarget::ToolArguments => observation
-            .tool_uses
-            .iter()
-            .map(|tool| tool.args.clone())
-            .collect(),
+        SafetyAssertionTarget::ToolArguments => observation.tool_uses.iter().map(|tool| tool.args.clone()).collect(),
         SafetyAssertionTarget::ToolResults => observation
             .tool_uses
             .iter()
@@ -1918,7 +2154,10 @@ fn score_safety_assertion(
     let present_fields = field_paths
         .iter()
         .filter_map(|path| {
-            let matches = values.iter().filter(|value| json_path_value(value, path).is_some()).count();
+            let matches = values
+                .iter()
+                .filter(|value| json_path_value(value, path).is_some())
+                .count();
             (matches > 0).then(|| json!({ "path": path, "matches": matches }))
         })
         .collect::<Vec<_>>();
@@ -2039,13 +2278,30 @@ pub fn observe_workflow_output(state: &Value, events: &[Value]) -> WorkflowEvalu
 }
 
 fn observe_node_tool_uses(trace: Vec<&Value>) -> Vec<WorkflowNodeToolUse> {
-    trace.into_iter().flat_map(|entry| {
-        let Some(node_id) = entry.get("nodeId").and_then(Value::as_str) else { return Vec::new() };
-        entry.get("toolCalls").and_then(Value::as_array).into_iter().flatten().filter_map(|call| Some(WorkflowNodeToolUse {
-            node_id: node_id.to_string(),
-            tool: ToolUse { name: call.get("tool")?.as_str()?.to_string(), args: call.get("input").cloned().unwrap_or_else(|| json!({})), expected_response: call.get("result").cloned() },
-        })).collect::<Vec<_>>()
-    }).collect()
+    trace
+        .into_iter()
+        .flat_map(|entry| {
+            let Some(node_id) = entry.get("nodeId").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            entry
+                .get("toolCalls")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|call| {
+                    Some(WorkflowNodeToolUse {
+                        node_id: node_id.to_string(),
+                        tool: ToolUse {
+                            name: call.get("tool")?.as_str()?.to_string(),
+                            args: call.get("input").cloned().unwrap_or_else(|| json!({})),
+                            expected_response: call.get("result").cloned(),
+                        },
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn observe_node_messages(trace: Vec<&Value>) -> Vec<WorkflowNodeMessage> {
@@ -2091,8 +2347,14 @@ fn observe_routes(trace: Vec<&Value>) -> Vec<WorkflowRouteExecution> {
             Some(WorkflowRouteExecution {
                 node_id: entry.get("nodeId")?.as_str()?.to_string(),
                 route: entry.pointer("/result/route")?.as_str()?.to_string(),
-                label: entry.pointer("/result/label").and_then(Value::as_str).map(ToOwned::to_owned),
-                condition: entry.pointer("/result/condition").and_then(Value::as_str).map(ToOwned::to_owned),
+                label: entry
+                    .pointer("/result/label")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                condition: entry
+                    .pointer("/result/condition")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
             })
         })
         .collect()
@@ -2122,7 +2384,7 @@ fn observe_node_executions(events: &[Value]) -> Vec<WorkflowNodeExecution> {
                 {
                     execution.completed = true;
                 }
-            }
+            },
             _ => {},
         }
     }
@@ -2168,15 +2430,31 @@ mod tests {
 
         assert_eq!(retry.total_cases, 2);
         assert_eq!(retry.retry_of_run_id.as_deref(), Some("source"));
-        let retry_source: Option<String> = sqlx::query_scalar("SELECT retry_of_run_id FROM evaluation_runs WHERE id = 'retry'")
-            .fetch_one(&pool).await.unwrap();
+        let retry_source: Option<String> =
+            sqlx::query_scalar("SELECT retry_of_run_id FROM evaluation_runs WHERE id = 'retry'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(retry_source.as_deref(), Some("source"));
         let cases: Vec<(String, String, String, String)> = sqlx::query_as("SELECT evaluation_case_id, case_snapshot_json, execution_status, verdict FROM evaluation_case_results WHERE evaluation_run_id = 'retry' ORDER BY evaluation_case_id")
             .fetch_all(&pool).await.unwrap();
-        assert_eq!(cases, vec![
-            ("case-error".to_string(), "{\"input\":\"frozen error\"}".to_string(), "queued".to_string(), "pending".to_string()),
-            ("case-failed".to_string(), "{\"input\":\"frozen failure\"}".to_string(), "queued".to_string(), "pending".to_string()),
-        ]);
+        assert_eq!(
+            cases,
+            vec![
+                (
+                    "case-error".to_string(),
+                    "{\"input\":\"frozen error\"}".to_string(),
+                    "queued".to_string(),
+                    "pending".to_string()
+                ),
+                (
+                    "case-failed".to_string(),
+                    "{\"input\":\"frozen failure\"}".to_string(),
+                    "queued".to_string(),
+                    "pending".to_string()
+                ),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -2199,26 +2477,48 @@ mod tests {
             .await
             .unwrap();
 
-        let case: (String, String, String) = sqlx::query_as("SELECT execution_status, verdict, failure_reason FROM evaluation_case_results WHERE id = 'result-1'")
-            .fetch_one(&pool).await.unwrap();
+        let case: (String, String, String) = sqlx::query_as(
+            "SELECT execution_status, verdict, failure_reason FROM evaluation_case_results WHERE id = 'result-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let run: (String, i64) = sqlx::query_as("SELECT status, failed_cases FROM evaluation_runs WHERE id = 'run-1'")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(case, ("failed".into(), "error".into(), "fixture is invalid".into()));
         assert_eq!(run, ("completed".into(), 1));
     }
 
     #[tokio::test]
     async fn cancelling_a_run_skips_queued_cases_and_returns_active_workflow_ids() {
-        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE evaluation_runs (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, status TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, updated_at TEXT)").execute(&pool).await.unwrap();
         sqlx::query("CREATE TABLE evaluation_case_results (id TEXT PRIMARY KEY, evaluation_run_id TEXT NOT NULL, workflow_run_id TEXT, execution_status TEXT NOT NULL, verdict TEXT NOT NULL, failure_reason TEXT, updated_at TEXT)").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO evaluation_runs (id, started_at, status) VALUES ('run-1', '2026-01-01T00:00:00Z', 'running')").execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO evaluation_runs (id, started_at, status) VALUES ('run-1', '2026-01-01T00:00:00Z', 'running')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO evaluation_case_results (id, evaluation_run_id, workflow_run_id, execution_status, verdict) VALUES ('active', 'run-1', 'workflow-1', 'running', 'pending'), ('queued', 'run-1', NULL, 'queued', 'pending')").execute(&pool).await.unwrap();
 
         let workflow_run_ids = cancel_run_in_pool(&pool, "run-1").await.unwrap();
 
-        let status: String = sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'run-1'").fetch_one(&pool).await.unwrap();
-        let queued: (String, String) = sqlx::query_as("SELECT execution_status, verdict FROM evaluation_case_results WHERE id = 'queued'").fetch_one(&pool).await.unwrap();
+        let status: String = sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'run-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let queued: (String, String) =
+            sqlx::query_as("SELECT execution_status, verdict FROM evaluation_case_results WHERE id = 'queued'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(workflow_run_ids, vec!["workflow-1"]);
         assert_eq!(status, "cancelled");
         assert_eq!(queued, ("cancelled".into(), "skipped".into()));
@@ -2267,8 +2567,20 @@ mod tests {
         });
         let expectation = EvaluationExpectation {
             assertions: vec![
-                EvaluationAssertion::Text { id: "response".to_string(), algorithm: SimilarityAlgorithm::Contains, expected: "订单 42".to_string(), threshold: 1.0 },
-                EvaluationAssertion::ToolTrajectory { id: "tool".to_string(), tools: vec![ToolUse::new("cancel_order").with_args(json!({ "orderId": "42" }))], config: ToolTrajectoryConfig { strict_order: true, strict_args: true } },
+                EvaluationAssertion::Text {
+                    id: "response".to_string(),
+                    algorithm: SimilarityAlgorithm::Contains,
+                    expected: "订单 42".to_string(),
+                    threshold: 1.0,
+                },
+                EvaluationAssertion::ToolTrajectory {
+                    id: "tool".to_string(),
+                    tools: vec![ToolUse::new("cancel_order").with_args(json!({ "orderId": "42" }))],
+                    config: ToolTrajectoryConfig {
+                        strict_order: true,
+                        strict_args: true,
+                    },
+                },
             ],
         };
 
@@ -2524,7 +2836,10 @@ mod tests {
         let score = score(&expectation, observe_workflow_output(&state, &[])).unwrap();
         assert!(!score.passed);
         assert_eq!(score.criteria[0].score, 1.0);
-        assert_eq!(score.criteria[0].actual["responseMismatches"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            score.criteria[0].actual["responseMismatches"].as_array().unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -2563,7 +2878,11 @@ mod tests {
     #[test]
     fn reports_the_missing_tool_as_a_failed_criterion() {
         let expectation = EvaluationExpectation {
-            assertions: vec![EvaluationAssertion::ToolTrajectory { id: "required-tool".to_string(), tools: vec![ToolUse::new("cancel_order")], config: ToolTrajectoryConfig::default() }],
+            assertions: vec![EvaluationAssertion::ToolTrajectory {
+                id: "required-tool".to_string(),
+                tools: vec![ToolUse::new("cancel_order")],
+                config: ToolTrajectoryConfig::default(),
+            }],
         };
 
         let score = score(

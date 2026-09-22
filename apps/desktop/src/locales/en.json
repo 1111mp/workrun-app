@@ -1014,6 +1014,10 @@
     "restartSynclan": "Restart Synclan?",
     "restartDescription": "Some changes require a restart to take effect. Synclan will restart now.",
     "restart": "Restart",
+    "otlp": {
+      "restartTitle": "Restart Workrun to apply OTLP changes?",
+      "restartDescription": "The OTLP endpoint has been saved. Restart Workrun now to apply the new telemetry configuration."
+    },
 
     "general": {
       "title": "General",
@@ -1037,6 +1041,9 @@
       "cleanup": "Log Cleanup",
       "maxSize": "Max Log Size",
       "maxCount": "Max Log Count",
+      "otlpEndpoint": "OTLP endpoint",
+      "otlpEndpointDescription": "Optional diagnostic trace collector. Restart Workrun after changing this setting.",
+      "otlpEndpointPlaceholder": "http://127.0.0.1:4317",
       "fileCount": "File",
       "autoClean": {
         "0": "Never Clean",

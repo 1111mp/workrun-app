@@ -95,6 +95,42 @@ function LoggerSettings({ form }: { form: UseFormReturn<SettingsForm> }) {
           />
           <Separator />
           <Controller
+            name='otlp_endpoint'
+            control={form.control}
+            render={({ field, fieldState }) => (
+              <Field data-invalid={fieldState.invalid}>
+                <FieldLabel htmlFor='otlp_endpoint'>
+                  <Item
+                    variant='muted'
+                    size='sm'
+                    className='hover:bg-muted rounded-none'
+                  >
+                    <ItemContent>
+                      <ItemTitle>{t('settings.log.otlpEndpoint')}</ItemTitle>
+                      <p className='text-muted-foreground text-xs'>
+                        {t('settings.log.otlpEndpointDescription')}
+                      </p>
+                      {fieldState.invalid && (
+                        <FieldError errors={[fieldState.error]} />
+                      )}
+                    </ItemContent>
+                    <ItemActions>
+                      <InputGroup className='h-7 w-64'>
+                        <InputGroupInput
+                          id='otlp_endpoint'
+                          placeholder={t('settings.log.otlpEndpointPlaceholder')}
+                          value={field.value}
+                          onChange={field.onChange}
+                        />
+                      </InputGroup>
+                    </ItemActions>
+                  </Item>
+                </FieldLabel>
+              </Field>
+            )}
+          />
+          <Separator />
+          <Controller
             name='auto_log_clean'
             control={form.control}
             render={({ field, fieldState }) => (

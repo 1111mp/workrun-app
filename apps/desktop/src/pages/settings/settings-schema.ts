@@ -26,6 +26,7 @@ export const formSchema = z.object({
   auto_log_clean: z.enum(['0', '1', '2', '3', '4']),
   app_log_max_size: z.number().min(1),
   app_log_max_count: z.number().min(1),
+  otlp_endpoint: z.string().trim(),
   // model
   provider_credentials: z.array(providerCredentialSchema),
 });

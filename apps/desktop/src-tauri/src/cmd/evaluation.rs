@@ -2,8 +2,10 @@ use crate::{
     cmd::{CmdResult, StringifyErr},
     module::evaluation::{
         ClaimedEvaluationCase, CreateEvaluationCase, CreateEvaluationRun, CreateEvaluationSuite,
-        EvaluationCaseResultSummary, EvaluationCaseSummary, EvaluationQualityGate, EvaluationRunDetail, EvaluationRunSummary, EvaluationStore, EvaluationVersionCaseCriterionComparison, EvaluationVersionCaseDiff, EvaluationVersionSummary, QualityGateAuditSummary, RecordQualityGateOverride,
-        EvaluationSuiteSummary, UpdateEvaluationCase, UpdateEvaluationSuite,
+        EvaluationCaseResultSummary, EvaluationCaseSummary, EvaluationQualityGate, EvaluationRunDetail,
+        EvaluationRunSummary, EvaluationStore, EvaluationSuiteSummary, EvaluationVersionCaseCriterionComparison,
+        EvaluationVersionCaseDiff, EvaluationVersionSummary, QualityGateAuditSummary, RecordQualityGateOverride,
+        UpdateEvaluationCase, UpdateEvaluationSuite,
     },
 };
 
@@ -33,8 +35,13 @@ pub async fn evaluation_case_create(request: CreateEvaluationCase) -> CmdResult<
 }
 
 #[tauri::command]
-pub async fn evaluation_case_list(suite_id: String, include_archived: Option<bool>) -> CmdResult<Vec<EvaluationCaseSummary>> {
-    EvaluationStore::list_cases(&suite_id, include_archived.unwrap_or(false)).await.stringify_err()
+pub async fn evaluation_case_list(
+    suite_id: String,
+    include_archived: Option<bool>,
+) -> CmdResult<Vec<EvaluationCaseSummary>> {
+    EvaluationStore::list_cases(&suite_id, include_archived.unwrap_or(false))
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]
@@ -110,23 +117,43 @@ pub async fn evaluation_version_summary(suite_id: String) -> CmdResult<Vec<Evalu
     EvaluationStore::summarize_versions(&suite_id).await.stringify_err()
 }
 #[tauri::command]
-pub async fn evaluation_version_compare(suite_id: String, baseline: String, candidate: String) -> CmdResult<Vec<EvaluationVersionCaseDiff>> {
-    EvaluationStore::compare_versions(&suite_id, &baseline, &candidate).await.stringify_err()
+pub async fn evaluation_version_compare(
+    suite_id: String,
+    baseline: String,
+    candidate: String,
+) -> CmdResult<Vec<EvaluationVersionCaseDiff>> {
+    EvaluationStore::compare_versions(&suite_id, &baseline, &candidate)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]
-pub async fn evaluation_version_case_criteria_compare(suite_id: String, baseline: String, candidate: String, case_id: String) -> CmdResult<EvaluationVersionCaseCriterionComparison> {
-    EvaluationStore::compare_version_case_criteria(&suite_id, &baseline, &candidate, &case_id).await.stringify_err()
+pub async fn evaluation_version_case_criteria_compare(
+    suite_id: String,
+    baseline: String,
+    candidate: String,
+    case_id: String,
+) -> CmdResult<EvaluationVersionCaseCriterionComparison> {
+    EvaluationStore::compare_version_case_criteria(&suite_id, &baseline, &candidate, &case_id)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]
 pub async fn evaluation_workflow_latest_run(workflow_id: String) -> CmdResult<Option<EvaluationRunDetail>> {
-    EvaluationStore::latest_run_for_workflow(&workflow_id).await.stringify_err()
+    EvaluationStore::latest_run_for_workflow(&workflow_id)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]
-pub async fn evaluation_workflow_snapshot_runs(workflow_id: String, workflow_snapshot: serde_json::Value) -> CmdResult<Vec<EvaluationRunDetail>> {
-    EvaluationStore::latest_runs_for_workflow_snapshot(&workflow_id, &workflow_snapshot).await.stringify_err()
+pub async fn evaluation_workflow_snapshot_runs(
+    workflow_id: String,
+    workflow_snapshot: serde_json::Value,
+) -> CmdResult<Vec<EvaluationRunDetail>> {
+    EvaluationStore::latest_runs_for_workflow_snapshot(&workflow_id, &workflow_snapshot)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]
@@ -136,15 +163,21 @@ pub async fn evaluation_quality_gate_get(workflow_id: String) -> CmdResult<Evalu
 
 #[tauri::command]
 pub async fn evaluation_quality_gate_update(workflow_id: String, policy: EvaluationQualityGate) -> CmdResult {
-    EvaluationStore::update_quality_gate(&workflow_id, policy).await.stringify_err()
+    EvaluationStore::update_quality_gate(&workflow_id, policy)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]
 pub async fn evaluation_quality_gate_record_override(request: RecordQualityGateOverride) -> CmdResult {
-    EvaluationStore::record_quality_gate_override(request).await.stringify_err()
+    EvaluationStore::record_quality_gate_override(request)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]
 pub async fn evaluation_quality_gate_audit_list(workflow_id: String) -> CmdResult<Vec<QualityGateAuditSummary>> {
-    EvaluationStore::list_quality_gate_audits(&workflow_id).await.stringify_err()
+    EvaluationStore::list_quality_gate_audits(&workflow_id)
+        .await
+        .stringify_err()
 }

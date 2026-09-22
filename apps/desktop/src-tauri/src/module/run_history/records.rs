@@ -197,6 +197,7 @@ pub(super) async fn finish_execution_in_pool(
     error: Option<String>,
 ) -> Result<()> {
     let finished_at = chrono::Utc::now().to_rfc3339();
+    let span_outcome = terminal_span_outcome(status);
     // A terminal run can never consume another user decision. Keep the record
     // and its actions in one transaction so a coordinator cannot claim an
     // action during the transition to failed, cancelled, or interrupted.
@@ -215,6 +216,23 @@ pub(super) async fn finish_execution_in_pool(
     if result.rows_affected() == 0 {
         bail!("run record was not found: {id}");
     }
+    if let Some((span_status, error_code, error_message)) = span_outcome {
+        // A failed, cancelled, or interrupted run may never emit the node or
+        // tool terminal event that normally closes its span. Close only spans
+        // that are still open so already-recorded execution evidence wins.
+        sqlx::query(
+            "UPDATE run_spans SET status = ?, ended_at = ?, duration_ms = CASE WHEN julianday(started_at) IS NULL THEN duration_ms ELSE MAX(0, CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER)) END, error_code = COALESCE(error_code, ?), error_message = COALESCE(error_message, ?), updated_at = ? WHERE run_id = ? AND status = 'running'",
+        )
+        .bind(span_status)
+        .bind(&finished_at)
+        .bind(&finished_at)
+        .bind(error_code)
+        .bind(error_message)
+        .bind(&finished_at)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     sqlx::query(
         "UPDATE run_pending_actions SET status = 'expired', resolved_at = ? WHERE run_id = ? AND status = 'pending'",
     )
@@ -224,4 +242,28 @@ pub(super) async fn finish_execution_in_pool(
     .await?;
     transaction.commit().await?;
     Ok(())
+}
+
+fn terminal_span_outcome(status: RunStatus) -> Option<(&'static str, Option<&'static str>, Option<&'static str>)> {
+    match status {
+        RunStatus::Completed => Some(("completed", None, None)),
+        RunStatus::Failed => Some((
+            "failed",
+            Some("run_failed"),
+            // The run error can include provider diagnostics. Do not duplicate
+            // it into every open span, which would enlarge the sensitive store.
+            Some("Workflow run failed before this span completed."),
+        )),
+        RunStatus::Cancelled => Some((
+            "cancelled",
+            Some("run_cancelled"),
+            Some("Workflow run was cancelled before this span completed."),
+        )),
+        RunStatus::Interrupted => Some((
+            "cancelled",
+            Some("run_interrupted"),
+            Some("Workflow run was interrupted before this span completed."),
+        )),
+        RunStatus::Queued | RunStatus::Running | RunStatus::WaitingForInput => None,
+    }
 }

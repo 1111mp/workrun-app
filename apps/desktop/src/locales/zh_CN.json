@@ -994,6 +994,10 @@
     "restartSynclan": "重启 Synclan？",
     "restartDescription": "部分更改需要重启后才能生效。Synclan 将立即重启。",
     "restart": "重启",
+    "otlp": {
+      "restartTitle": "重启 Workrun 以应用 OTLP 更改？",
+      "restartDescription": "OTLP 端点已保存。现在重启 Workrun 以应用新的遥测配置。"
+    },
 
     "general": {
       "title": "通用",
@@ -1017,6 +1021,9 @@
       "cleanup": "日志清理",
       "maxSize": "最大日志大小",
       "maxCount": "最大日志数量",
+      "otlpEndpoint": "OTLP 端点",
+      "otlpEndpointDescription": "可选的诊断追踪采集器地址。修改后请重启 Workrun 生效。",
+      "otlpEndpointPlaceholder": "http://127.0.0.1:4317",
       "fileCount": "个",
       "autoClean": {
         "0": "不清理",

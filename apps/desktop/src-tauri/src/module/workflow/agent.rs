@@ -46,10 +46,7 @@ pub(super) async fn add_local_agent_node(
     let skills = crate::module::skill::SkillRegistry::resolve(&personal_skill_names(node)?)?;
     let tool_ids = crate::module::skill::allowed_tool_ids(&skills, tool_ids)?;
     let mut state_bindings = tool_state_bindings(node, &tool_ids)?;
-    let max_tool_calls = effective_max_tool_calls(
-        integer_data(node, "maxToolCalls", 8, 1, 50)?,
-        &execution_profile,
-    );
+    let max_tool_calls = effective_max_tool_calls(integer_data(node, "maxToolCalls", 8, 1, 50)?, &execution_profile);
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
     let tools = ToolRegistry::resolve(&tool_ids).await?;
     validate_tool_state_binding_schemas(node, &tools, &state_bindings)?;

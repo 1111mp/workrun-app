@@ -1,12 +1,15 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { FieldGroup } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
+import { Power } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useEffectEvent } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
+import { useConfirm } from '@/components';
 import { applyPendingTheme } from '@/lib/utils';
+import { restartApp } from '@/services/cmd';
 import { useWorkrunStore } from '@/stores';
 
 import { AboutSettings } from './about-settings';
@@ -21,6 +24,7 @@ function SettingsPage() {
   const config = useWorkrunStore((s) => s.config);
   const updateConfig = useWorkrunStore((s) => s.updateConfig);
 
+  const confirm = useConfirm();
   const { i18n, t } = useTranslation();
 
   const form = useForm<SettingsForm>({
@@ -37,6 +41,7 @@ function SettingsPage() {
       auto_log_clean: `${config?.auto_log_clean ?? 0}`,
       app_log_max_size: config?.app_log_max_size ?? 128,
       app_log_max_count: config?.app_log_max_count ?? 8,
+      otlp_endpoint: config?.otlp_endpoint ?? '',
       // model
       provider_credentials: config?.provider_credentials?.length
         ? config.provider_credentials.map((credential) => ({
@@ -72,6 +77,7 @@ function SettingsPage() {
       ) as IWorkrunConfig['auto_log_clean'],
       app_log_max_size: values.app_log_max_size,
       app_log_max_count: values.app_log_max_count,
+      otlp_endpoint: values.otlp_endpoint,
       // model
       provider_credentials: values.provider_credentials,
     };
@@ -85,6 +91,26 @@ function SettingsPage() {
     }
 
     await updateConfig(settings);
+
+    if (
+      settings.otlp_endpoint &&
+      settings.otlp_endpoint !== config?.otlp_endpoint
+    ) {
+      // The endpoint is persisted before offering a restart so accepting it
+      // cannot restart the process before the new collector is available.
+      const shouldRestart = await confirm({
+        icon: <Power />,
+        title: t('settings.otlp.restartTitle'),
+        description: t('settings.otlp.restartDescription'),
+        actionVariant: 'destructive',
+        cancelText: t('common.cancel'),
+        confirmText: t('settings.restart'),
+      });
+
+      if (shouldRestart) {
+        await restartApp();
+      }
+    }
   });
 
   useEffect(() => {

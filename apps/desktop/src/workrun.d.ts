@@ -50,6 +50,8 @@ interface IWorkrunConfig {
   app_log_max_size?: number;
   app_log_max_count?: number;
   auto_log_clean?: 0 | 1 | 2 | 3 | 4;
+  // OTLP diagnostic export; changes take effect after restarting the app.
+  otlp_endpoint?: string;
   // model profile
   provider_credentials?: ProviderCredential[];
 }

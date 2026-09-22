@@ -52,6 +52,12 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            "CREATE TABLE run_spans (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error_code TEXT, error_message TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO run_records (id, status, started_at) VALUES ('run-1', 'waiting_for_input', '2026-09-05T00:00:00Z')",
         )
         .execute(&pool)
@@ -165,6 +171,10 @@ mod tests {
     #[tokio::test]
     async fn terminal_run_actions_are_expired_and_cannot_be_claimed() {
         let pool = pending_action_pool().await;
+        sqlx::query("INSERT INTO run_spans (id, run_id, status, started_at) VALUES ('open-node', 'run-1', 'running', '2026-09-05T00:00:01Z'), ('closed-tool', 'run-1', 'completed', '2026-09-05T00:00:01Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         finish_execution_in_pool(
             &pool,
@@ -188,6 +198,53 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(expired, 2);
+        let spans: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT status, error_code FROM run_spans ORDER BY id ASC")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            spans,
+            vec![
+                ("completed".to_string(), None),
+                ("failed".to_string(), Some("run_failed".to_string())),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_run_closes_open_spans_without_rewriting_completed_spans() {
+        let pool = pending_action_pool().await;
+        sqlx::query("INSERT INTO run_spans (id, run_id, status, started_at) VALUES ('open-tool', 'run-1', 'running', '2026-09-05T00:00:01Z'), ('completed-node', 'run-1', 'completed', '2026-09-05T00:00:01Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        finish_execution_in_pool(
+            &pool,
+            "run-1",
+            RunStatus::Cancelled,
+            Some("Cancelled by user".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let spans: Vec<(String, Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT status, error_code, error_message FROM run_spans ORDER BY id ASC")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            spans,
+            vec![
+                ("completed".to_string(), None, None),
+                (
+                    "cancelled".to_string(),
+                    Some("run_cancelled".to_string()),
+                    Some("Workflow run was cancelled before this span completed.".to_string()),
+                ),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -210,11 +267,21 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            "CREATE TABLE run_spans (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error_code TEXT, error_message TEXT, updated_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO run_records (id, status, started_at) VALUES ('run-1', 'running', '2026-09-05T00:00:00Z')",
         )
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO run_spans (id, run_id, status, started_at) VALUES ('open-node', 'run-1', 'running', '2026-09-05T00:00:01Z')")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         finish_execution_in_pool(&pool, "run-1", RunStatus::Completed, None)
             .await
@@ -226,5 +293,12 @@ mod tests {
             .unwrap();
         assert_eq!(row.get::<String, _>("status"), "completed");
         assert!(row.get::<Option<String>, _>("ended_at").is_some());
+        let span = sqlx::query("SELECT status, ended_at, duration_ms FROM run_spans WHERE id = 'open-node'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(span.get::<String, _>("status"), "completed");
+        assert!(span.get::<Option<String>, _>("ended_at").is_some());
+        assert!(span.get::<Option<i64>, _>("duration_ms").is_some());
     }
 }
