@@ -4,6 +4,8 @@ import { defineConfig } from 'astro/config';
 
 // https://astro.build/config
 export default defineConfig({
+  // Used for canonical URLs and the generated sitemap until a custom domain is attached.
+  site: 'https://workrun-docs.pages.dev',
   integrations: [
     starlight({
       title: {
