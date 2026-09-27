@@ -1,0 +1,55 @@
+---
+// CSS switches between the two exported product screenshots with the documentation theme.
+const isEnglish = Astro.currentLocale === 'en';
+const copy = isEnglish
+	? {
+		workspace: 'Workrun / Workflows',
+		saved: 'Saved',
+		headline: 'Bring judgment and delivery onto one canvas.',
+		workflow: 'Order cancellation: risk routing and regression evaluation',
+		note: 'Workflow editor in action: agents, conditional routing, and human review collaborate on one canvas.',
+		signals: [
+			{ label: 'Local-first', detail: 'Your workspace stays on your machine' },
+			{ label: 'Checkpoint resume', detail: 'Pause for human review, then continue' },
+			{ label: 'Evaluation-ready', detail: 'Validate changes before publishing' },
+		],
+	}
+	: {
+		workspace: 'Workrun / 工作流',
+		saved: '已保存',
+		headline: '在一张画布上，完成从判断到交付。',
+		workflow: '订单取消：风险路由与回归评测',
+		note: '工作流编辑器实拍：Agent、条件路由与人工审核在同一画布中协作。',
+		signals: [
+			{ label: '本地优先', detail: '工作区与凭据保留在你的设备上' },
+			{ label: '检查点恢复', detail: '人工审核暂停后，从原处继续' },
+			{ label: '评测就绪', detail: '发布前验证每一次改动' },
+		],
+	};
+---
+
+<section
+	class="workrun-hero-preview"
+	aria-label="Workrun 工作流编辑器产品预览"
+>
+	<ul class="hero-signal-rail" aria-label={isEnglish ? 'Workrun capabilities' : 'Workrun 能力'}>
+		{copy.signals.map((signal) => (
+			<li><strong>{signal.label}</strong><span>{signal.detail}</span></li>
+		))}
+	</ul>
+	<div class="hero-preview-bar">
+		<span class="hero-preview-brand"><i></i> {copy.workspace}</span>
+		<span class="hero-preview-state"><b></b> {copy.saved}</span>
+	</div>
+	<div class="hero-preview-shot" role="img" aria-label="Workrun 工作流编辑器：订单取消风险路由与回归评测">
+		<div class="hero-preview-copy">
+			<span>REAL PRODUCT SURFACE</span>
+			<strong>{copy.headline}</strong>
+		</div>
+		<div class="hero-preview-caption">
+			<span>{copy.workflow}</span>
+			<span>CANVAS · RUN HISTORY · EVALUATION</span>
+		</div>
+	</div>
+	<p class="hero-preview-note">{copy.note}</p>
+</section>

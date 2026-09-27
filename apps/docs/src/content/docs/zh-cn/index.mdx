@@ -1,0 +1,73 @@
+---
+title: Workrun
+description: 把 Agent、Python、MCP 工具和人工审批，变成可运行、可评估、可发布的自动化能力。
+template: splash
+hero:
+  tagline: 本地优先的 AI 自动化工作台
+  actions:
+    - text: 5 分钟快速开始
+      link: /zh-cn/getting-started/quickstart/
+      icon: right-arrow
+    - text: 在 GitHub 查看项目
+      link: https://github.com/1111mp/workrun-app
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
+import HomepageHero from '../../../components/homepage-hero.astro';
+import WorkflowStudio from '../../../components/workflow-studio.astro';
+
+<HomepageHero />
+
+<div class='homepage-kicker'>WORKFLOW-NATIVE · LOCAL-FIRST · READY TO SHIP</div>
+
+## 不止编排。还要让自动化能交付。
+
+把 Agent、Python、MCP 工具与人工判断放进一张可读的工作流；每一次运行都留下状态、工具轨迹和评测证据。Workrun 让团队把一次有效的 AI 协作，变成敢于反复运行、持续演进的能力。
+
+> **产品界面素材占位 · 视频 `homepage/workflow-studio.mp4`（45–60 秒）**  
+> 画面：从新建工作流、配置 Agent、运行到 Human Review 暂停和恢复。  
+> 替换本页的静态演示或置于其下方；建议使用真实窗口录制，隐藏密钥、客户数据和内部 URL。
+
+### 配置并非黑盒
+
+下方是工作流配置的结构示意：节点从哪里取数据、由谁判断、何时暂停给人处理，以及每次运行使用的模型和工具，都应该是可见、可检查的。
+
+<WorkflowStudio />
+
+<CardGrid stagger>
+  <Card title='让 Agent 真正行动' icon='robot'>
+    用 Tool App、MCP Server、Skills 与 A2A Remote Agent 扩展
+    Agent；调用配额、超时和人工确认都在运行时受控。
+  </Card>
+  <Card title='保留代码的确定性' icon='puzzle'>
+    每个 Python App 都是独立的本地 `uv`
+    项目。把数据处理、系统集成和业务规则留在你熟悉的代码工程里。
+  </Card>
+  <Card title='把质量带进发布流程' icon='approve-check'>
+    通过运行记录、OpenTelemetry
+    轨迹、评估集、版本对比和质量门，知道一次改动是否真的更好。
+  </Card>
+</CardGrid>
+
+## 从构想到团队交付，始终在同一个工作台
+
+| 你要完成的事   | Workrun 如何帮助你                                      |
+| -------------- | ------------------------------------------------------- |
+| 组合能力       | 在画布上连接 Agent、Process、分支、子工作流和人工节点。 |
+| 可靠运行       | 节点状态隔离；暂停、失败与后台运行可从检查点恢复。      |
+| 看清发生了什么 | 逐节点查看模型消息、工具调用、脚本日志和 Trace。        |
+| 安心迭代       | 用评估集验证工作流变化，并在发布前设置质量门。          |
+
+<div class='next-step'>
+  <p class='eyebrow'>从最小闭环开始</p>
+  <h2>先让一个 Agent 工作流跑起来。</h2>
+  <p>
+    创建模型 Profile，连接 <code>Start → Agent → End</code>
+    ，输入一次真实任务并查看运行结果。
+  </p>
+  <LinkButton href='/zh-cn/getting-started/quickstart/'>
+    开始快速教程 <span aria-hidden='true'>→</span>
+  </LinkButton>
+</div>

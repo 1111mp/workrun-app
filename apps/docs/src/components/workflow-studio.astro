@@ -1,0 +1,109 @@
+---
+// This is a static product preview: it communicates the real configuration model
+// without pretending that visitors can edit a workflow from the documentation site.
+const isEnglish = Astro.currentLocale === 'en';
+const copy = isEnglish
+	? {
+		workflows: 'Workflows',
+		workflowName: 'Customer feedback triage',
+		saved: 'Saved',
+		publish: 'Publish',
+		palette: 'Nodes',
+		agent: 'Agent',
+		app: 'App',
+		condition: 'Conditional branch',
+		review: 'Human review',
+		draft: 'Draft',
+		start: 'Feedback input',
+		classification: 'Classify and recommend',
+		structuredOutput: 'Structured output',
+		highRisk: 'High risk?',
+		confirmReply: 'Confirm reply',
+		waiting: 'Waiting for approval',
+		complete: 'Complete',
+		model: 'Model configuration',
+		outputSchema: 'Output schema',
+		tools: 'Tools',
+		instruction: 'Instruction',
+		instructionText: 'Determine priority from the feedback and provide an actionable follow-up recommendation.',
+		runComplete: '● 3 / 4 complete',
+		configure: 'Configure',
+		configureText: 'Agents, Python, MCP, and human judgment',
+		validate: 'Validate',
+		validateText: 'Run traces, evaluation suites, and quality gates',
+		release: 'Publish',
+		releaseText: 'Pinned versions, reproducible by the team',
+	}
+	: {
+		workflows: '工作流',
+		workflowName: '客户反馈分流',
+		saved: '已保存',
+		publish: '发布',
+		palette: '节点',
+		agent: '智能体',
+		app: '应用',
+		condition: '条件分支',
+		review: '人工审核',
+		draft: '草稿',
+		start: '反馈输入',
+		classification: '分类与建议',
+		structuredOutput: '结构化输出',
+		highRisk: '高风险？',
+		confirmReply: '确认回复',
+		waiting: '等待批准',
+		complete: '完成',
+		model: '模型配置',
+		outputSchema: '输出架构',
+		tools: '工具',
+		instruction: '指令',
+		instructionText: '根据反馈判断优先级，并给出可执行的后续建议。',
+		runComplete: '● 3 / 4 已完成',
+		configure: '配置',
+		configureText: 'Agent、Python、MCP 与人工判断',
+		validate: '验证',
+		validateText: '运行轨迹、评测集与质量门',
+		release: '发布',
+		releaseText: '固定版本，团队可复现',
+	};
+---
+
+<section class="workflow-studio" aria-labelledby="workflow-studio-title">
+	<header class="studio-topbar">
+		<div class="studio-breadcrumb"><span class="studio-mark"></span> {copy.workflows} <span>/</span> {copy.workflowName}</div>
+		<div class="studio-actions"><span class="studio-saved">● {copy.saved}</span><span class="studio-button">{copy.publish}</span></div>
+	</header>
+	<div class="studio-body">
+		<aside class="studio-palette" aria-label={copy.palette}>
+			<p>{copy.palette}</p>
+			<div>◇ {copy.agent}</div>
+			<div>▣ {copy.app}</div>
+			<div>◇ {copy.condition}</div>
+			<div>◉ {copy.review}</div>
+		</aside>
+		<div class="studio-canvas">
+			<div class="canvas-heading"><span>{copy.workflowName}</span><small>{copy.draft}</small></div>
+			<svg class="workflow-wires" aria-hidden="true" viewBox="0 0 600 320" preserveAspectRatio="none">
+				<path d="M 110 158 H 180" /><path d="M 290 158 H 360" /><path d="M 458 158 H 510" />
+				<path d="M 410 182 V 260 H 510" class="workflow-wire-muted" />
+			</svg>
+			<div class="studio-node start"><small>START</small><strong>{copy.start}</strong><span>feedback</span></div>
+			<div class="studio-node agent"><small>AGENT</small><strong>{copy.classification}</strong><span>{copy.structuredOutput}</span></div>
+			<div class="studio-node gate"><small>IF / ELSE</small><strong>{copy.highRisk}</strong><span>priority == high</span></div>
+			<div class="studio-node review"><small>HUMAN REVIEW</small><strong>{copy.confirmReply}</strong><span>{copy.waiting}</span></div>
+			<div class="studio-node end"><small>END</small><strong>{copy.complete}</strong><span>final_state</span></div>
+		</div>
+		<aside class="studio-inspector" aria-label={`${copy.agent} ${copy.model}`}>
+			<div class="inspector-title"><span>{copy.agent}</span><strong>{copy.classification}</strong></div>
+			<label>{copy.model} <span>prod-review</span></label>
+			<label>{copy.outputSchema} <span>{'{ category, priority, recommendation }'}</span></label>
+			<label>{copy.tools} <span>GitHub MCP · 2 tools</span></label>
+			<div class="instruction-preview"><small>{copy.instruction}</small><p>{copy.instructionText}</p></div>
+			<div class="run-status"><span>RUN 0142</span><strong>{copy.runComplete}</strong></div>
+		</aside>
+	</div>
+	<footer class="studio-caption">
+		<div><span>{copy.configure}</span> {copy.configureText}</div>
+		<div><span>{copy.validate}</span> {copy.validateText}</div>
+		<div><span>{copy.release}</span> {copy.releaseText}</div>
+	</footer>
+</section>

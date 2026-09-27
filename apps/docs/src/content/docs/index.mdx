@@ -1,0 +1,68 @@
+---
+title: Workrun
+description: Turn Agents, Python, MCP tools, and human review into automation you can run, evaluate, and publish.
+template: splash
+hero:
+  tagline: A local-first workspace for AI automation
+  actions:
+    - text: Start the 5-minute quickstart
+      link: /getting-started/quickstart/
+      icon: right-arrow
+    - text: View the project on GitHub
+      link: https://github.com/1111mp/workrun-app
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
+import HomepageHero from '../../components/homepage-hero.astro';
+import WorkflowStudio from '../../components/workflow-studio.astro';
+
+<HomepageHero />
+
+<div class='homepage-kicker'>WORKFLOW-NATIVE · LOCAL-FIRST · READY TO SHIP</div>
+
+## More than orchestration. Automation that can deliver.
+
+Put Agents, Python, MCP tools, and human judgment into a readable workflow. Every run leaves state, tool traces, and evaluation evidence behind. Workrun turns one useful AI collaboration into a capability your team can run again and keep improving.
+
+> **Product media placeholder · video `homepage/workflow-studio.mp4` (45–60 seconds)**  
+> Show a new workflow, Agent configuration, a run, and a Human Review pause and resume. Use a real window recording and hide keys, customer data, and internal URLs.
+
+### Configuration is not a black box
+
+The workflow structure below shows what should remain visible and inspectable: where a node reads data, who makes a decision, when a human takes over, and which model and tools a run used.
+
+<WorkflowStudio />
+
+<CardGrid stagger>
+  <Card title='Let Agents take action' icon='robot'>
+    Extend Agents with Tool Apps, MCP servers, Skills, and A2A Remote Agents. Call limits, timeouts, and human confirmation are controlled at runtime.
+  </Card>
+  <Card title='Keep code deterministic' icon='puzzle'>
+    Every Python App is an independent local `uv` project. Keep data processing, integrations, and business rules in the codebase you know.
+  </Card>
+  <Card title='Bring quality into publishing' icon='approve-check'>
+    Use run records, OpenTelemetry traces, evaluation suites, version comparisons, and quality gates to know whether a change is actually better.
+  </Card>
+</CardGrid>
+
+## From idea to team delivery, in one workspace
+
+| What you need to do | How Workrun helps |
+| --- | --- |
+| Compose capabilities | Connect Agents, Processes, branches, subworkflows, and human nodes on a canvas. |
+| Run reliably | Isolated node state plus checkpoint recovery for pauses, failures, and background runs. |
+| See what happened | Inspect model messages, tool calls, script logs, and traces node by node. |
+| Iterate safely | Validate workflow changes with evaluation suites and quality gates before publishing. |
+
+<div class='next-step'>
+  <p class='eyebrow'>Start with a minimal loop</p>
+  <h2>Run one Agent workflow end to end.</h2>
+  <p>
+    Create a model profile, connect <code>Start → Agent → End</code>, give it a real task, and inspect the result.
+  </p>
+  <LinkButton href='/getting-started/quickstart/'>
+    Start the quickstart <span aria-hidden='true'>→</span>
+  </LinkButton>
+</div>
