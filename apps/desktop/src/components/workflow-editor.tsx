@@ -53,6 +53,7 @@ import { WorkflowEvaluations } from '@/components/workflow-evaluations';
 import { WorkflowHistory } from '@/components/workflow-history';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
+import { WorkflowSchedules } from '@/components/workflow-schedules';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
@@ -308,8 +309,7 @@ function WorkflowEditorContent({
     (totals, run) => ({
       totalCases: totals.totalCases + run.totalCases,
       passedCases: totals.passedCases + run.passedCases,
-      costMicrousd:
-        totals.costMicrousd + (run.estimatedCostMicrousd ?? 0),
+      costMicrousd: totals.costMicrousd + (run.estimatedCostMicrousd ?? 0),
       durationMs: totals.durationMs + (run.durationMs ?? 0),
     }),
     { totalCases: 0, passedCases: 0, costMicrousd: 0, durationMs: 0 },
@@ -351,8 +351,7 @@ function WorkflowEditorContent({
         ...(qualityGate.data.maxDurationMs !== null &&
         qualityGate.data.maxDurationMs !== undefined &&
         completedCandidateEvaluations.length > 0 &&
-        candidateEvaluationTotals.durationMs >
-          qualityGate.data.maxDurationMs
+        candidateEvaluationTotals.durationMs > qualityGate.data.maxDurationMs
           ? [t('workflowEditor.evaluations.gate.durationExceeded')]
           : []),
         ...qualityGate.data.requiredSuiteIds
@@ -363,7 +362,9 @@ function WorkflowEditorContent({
             return !run || run.status !== 'completed' || run.failedCases > 0;
           })
           .map((suiteId) =>
-            t('workflowEditor.evaluations.gate.requiredSuiteFailed', { suiteId }),
+            t('workflowEditor.evaluations.gate.requiredSuiteFailed', {
+              suiteId,
+            }),
           ),
       ]
     : [];
@@ -819,6 +820,34 @@ function WorkflowEditorContent({
               }))}
             onOpenChange={setSettingsOpen}
             onSettingsChange={updateWorkflowSettings}
+            automation={
+              activeWorkflow ? (
+                <WorkflowSchedules
+                  workflowId={activeWorkflow.id}
+                  document={
+                    isTeamMode() && latestPublishedRelease
+                      ? latestPublishedRelease.document
+                      : workflowDocument
+                  }
+                  dsl={
+                    latestPublishedRelease
+                      ? toWorkflowDsl(
+                          activeWorkflow.id,
+                          latestPublishedRelease.document.nodes,
+                          latestPublishedRelease.document.edges,
+                          latestPublishedRelease.document.settings,
+                        )
+                      : toWorkflowDsl(
+                          activeWorkflow.id,
+                          nodes,
+                          edges,
+                          workflowSettings,
+                        )
+                  }
+                  release={isTeamMode() ? latestPublishedRelease : undefined}
+                />
+              ) : undefined
+            }
           />
         ) : null}
         {!readOnly || allowRun ? (
@@ -908,7 +937,9 @@ function WorkflowEditorContent({
                     onChange={(event) =>
                       setPublishOverrideReason(event.target.value)
                     }
-                    placeholder={t('workflowEditor.evaluations.gate.overrideReasonPlaceholder')}
+                    placeholder={t(
+                      'workflowEditor.evaluations.gate.overrideReasonPlaceholder',
+                    )}
                   />
                 </Field>
               ) : null}

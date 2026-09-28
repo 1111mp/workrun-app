@@ -103,6 +103,43 @@ export type BackgroundWorkflowRunRequest = {
   threadId: string;
 };
 
+export type WorkflowSchedule = {
+  id: string;
+  name: string;
+  targetType: 'workflow';
+  targetId: string;
+  targetName: string;
+  cronExpression: string;
+  timezone: string;
+  enabled: boolean;
+  nextRunAt: string;
+  lastRunAt?: string;
+  editorMode?: 'daily' | 'weekdays' | 'weekly' | 'custom';
+  input?: Record<string, unknown>;
+};
+
+export type WorkflowScheduleRequest = {
+  id?: string;
+  name: string;
+  targetId: string;
+  targetName: string;
+  targetSnapshot: unknown;
+  cronExpression: string;
+  timezone: string;
+  enabled: boolean;
+  source:
+    | { kind: 'latest_local' }
+    | {
+        kind: 'published_release';
+        dsl: unknown;
+        releaseId: string;
+        releaseVersion: string;
+      };
+  input?: Record<string, unknown>;
+  initialState?: Record<string, unknown>;
+  editorMode?: 'daily' | 'weekdays' | 'weekly' | 'custom';
+};
+
 export type ToolConfirmationDecision = {
   functionCallId: string;
   fingerprint: string;
@@ -348,6 +385,10 @@ export function publishWorkflow(
   });
 }
 
+export function listWorkflowReleases(id: string) {
+  return fetchApi.get<WorkflowRelease[]>(`/workflow/${id}/releases`);
+}
+
 export function getPublishedWorkflow(id: string) {
   return fetchApi.get<StoredWorkflow>(`/workflow/team/${id}`);
 }
@@ -381,6 +422,22 @@ export function startBackgroundWorkflowRun(
   request: BackgroundWorkflowRunRequest,
 ) {
   return invoke('workflow_run_start', { request });
+}
+
+export function listWorkflowSchedules(workflowId: string) {
+  return invoke<WorkflowSchedule[]>('workflow_schedule_list', { workflowId });
+}
+
+export function saveWorkflowSchedule(request: WorkflowScheduleRequest) {
+  return invoke<WorkflowSchedule>('workflow_schedule_save', { request });
+}
+
+export function setWorkflowScheduleEnabled(id: string, enabled: boolean) {
+  return invoke('schedule_set_enabled', { id, enabled });
+}
+
+export function deleteWorkflowSchedule(id: string) {
+  return invoke('schedule_delete', { id });
 }
 
 export function resumeBackgroundWorkflowRun(

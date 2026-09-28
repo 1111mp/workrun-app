@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
   Badge,
   Button,
   Card,
@@ -153,15 +162,22 @@ function ScheduleRow({
   }).format(new Date(schedule.nextRunAt));
 
   return (
-    <article className='group relative grid gap-4 rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-muted/25 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'>
-      <div className={`flex size-11 shrink-0 items-center justify-center rounded-xl ${schedule.enabled ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+    <article className='group bg-card hover:bg-muted/25 relative grid gap-4 rounded-xl border p-4 shadow-sm transition-colors sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'>
+      <div
+        className={`flex size-11 shrink-0 items-center justify-center rounded-xl ${schedule.enabled ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}
+      >
         <CalendarClockIcon className='size-5' />
       </div>
       <div className='min-w-0'>
         <div className='flex flex-wrap items-center gap-2'>
           <h3 className='truncate text-sm font-semibold'>{schedule.name}</h3>
-          <Badge variant={schedule.enabled ? 'secondary' : 'outline'} className='h-5 rounded-full px-2 text-[10px] font-medium'>
-            {schedule.enabled ? t('apps.schedules.active') : t('apps.schedules.paused')}
+          <Badge
+            variant={schedule.enabled ? 'secondary' : 'outline'}
+            className='h-5 rounded-full px-2 text-[10px] font-medium'
+          >
+            {schedule.enabled
+              ? t('apps.schedules.active')
+              : t('apps.schedules.paused')}
           </Badge>
         </div>
         <p className='text-muted-foreground mt-1 truncate text-sm'>
@@ -169,21 +185,39 @@ function ScheduleRow({
         </p>
         <div className='text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs'>
           <span className='font-mono'>{schedule.timezone}</span>
-          <span className='hidden size-1 rounded-full bg-border sm:inline-block' />
-          <span>{schedule.enabled ? t('apps.schedules.next', { time: nextRun }) : t('apps.schedules.schedulingPaused')}</span>
+          <span className='bg-border hidden size-1 rounded-full sm:inline-block' />
+          <span>
+            {schedule.enabled
+              ? t('apps.schedules.next', { time: nextRun })
+              : t('apps.schedules.schedulingPaused')}
+          </span>
         </div>
       </div>
       {!readOnly ? (
         <div className='flex items-center justify-end gap-1 border-t pt-3 sm:border-t-0 sm:pt-0'>
           <Switch
-            aria-label={schedule.enabled ? t('apps.schedules.pause') : t('apps.schedules.resume')}
+            aria-label={
+              schedule.enabled
+                ? t('apps.schedules.pause')
+                : t('apps.schedules.resume')
+            }
             checked={schedule.enabled}
             onCheckedChange={onToggle}
           />
-          <Button variant='ghost' size='icon-sm' aria-label={t('apps.schedules.edit')} onClick={onEdit}>
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            aria-label={t('apps.schedules.edit')}
+            onClick={onEdit}
+          >
             <PencilIcon />
           </Button>
-          <Button variant='ghost' size='icon-sm' aria-label={t('apps.schedules.delete')} onClick={onDelete}>
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            aria-label={t('apps.schedules.delete')}
+            onClick={onDelete}
+          >
             <Trash2Icon />
           </Button>
         </div>
@@ -206,25 +240,21 @@ function ScheduleDialog({
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
 
-  const initial = useMemo(() => {
-    const [minute = '0', hour = '9', , , weekday = '*'] =
+  const [draft, setDraft] = useState(() => {
+    const [minute = '0', hour = '9'] =
       schedule?.cronExpression.split(/\s+/) ?? [];
     return {
       name: schedule?.name ?? `${app.definition.name} schedule`,
-      frequency: (weekday === '1-5'
-        ? 'weekdays'
-        : weekday === '1'
-          ? 'weekly'
-          : weekday === '*'
-            ? 'daily'
-            : 'custom') as Frequency,
+      // A Cron expression does not identify its originating UI choice. Existing
+      // schedules without this metadata open as Custom so their meaning is kept.
+      frequency: schedule
+        ? ((schedule.editorMode as Frequency | undefined) ?? 'custom')
+        : 'daily',
       time: `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`,
-      cron: schedule?.cronExpression ?? '0 9 * * 1-5',
+      cron: schedule?.cronExpression ?? '0 9 * * *',
       timezone: schedule?.timezone ?? deviceTimezone(),
     };
-  }, [app.definition.name, schedule]);
-
-  const [draft, setDraft] = useState(initial);
+  });
 
   const cron = cronFor(draft.frequency, draft.time, draft.cron);
 
@@ -244,6 +274,7 @@ function ScheduleDialog({
         cronExpression: cron,
         timezone: draft.timezone,
         enabled: schedule?.enabled ?? true,
+        editorMode: draft.frequency,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -437,6 +468,7 @@ export function AppSchedules({
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<AppSchedule>();
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<AppSchedule>();
   const schedules = useQuery({
     queryKey: ['app-schedules', app.definition.id],
     queryFn: () => listAppSchedules(app.definition.id),
@@ -453,7 +485,7 @@ export function AppSchedules({
   const remove = useMutation({
     mutationFn: deleteSchedule,
     onSuccess: () => {
-      refresh();
+      void refresh();
       toast.success(t('apps.schedules.deleted'), { toasterId: 'global' });
     },
   });
@@ -473,11 +505,13 @@ export function AppSchedules({
           </div>
         ) : null}
         {!schedules.isLoading && !schedules.data?.length ? (
-          <div className='flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/15 px-6 py-8 text-center'>
+          <div className='bg-muted/15 flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-8 text-center'>
             <span className='bg-primary/10 text-primary flex size-11 items-center justify-center rounded-xl'>
               <CalendarClockIcon className='size-5' />
             </span>
-            <p className='mt-4 text-sm font-medium'>{t('apps.schedules.empty')}</p>
+            <p className='mt-4 text-sm font-medium'>
+              {t('apps.schedules.empty')}
+            </p>
             <p className='text-muted-foreground mt-1 max-w-sm text-sm'>
               {t('apps.schedules.description')}
             </p>
@@ -495,9 +529,11 @@ export function AppSchedules({
             schedule={schedule}
             language={i18n.language}
             readOnly={readOnly}
-            onToggle={(enabled) => setEnabled.mutate({ id: schedule.id, enabled })}
+            onToggle={(enabled) =>
+              setEnabled.mutate({ id: schedule.id, enabled })
+            }
             onEdit={() => setEditing(schedule)}
-            onDelete={() => remove.mutate(schedule.id)}
+            onDelete={() => setDeleting(schedule)}
           />
         ))}
         {!readOnly && schedules.data?.length ? (
@@ -520,6 +556,36 @@ export function AppSchedules({
           onOpenChange={(open) => !open && setEditing(undefined)}
         />
       ) : null}
+      <AlertDialog
+        open={Boolean(deleting)}
+        onOpenChange={(open) => !open && setDeleting(undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className='bg-destructive/10 text-destructive dark:bg-destructive/20 dark:text-destructive'>
+              <Trash2Icon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {t('apps.schedules.deleteConfirmTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('apps.schedules.deleteConfirmDescription', {
+                name: deleting?.name,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('apps.schedules.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              disabled={remove.isPending}
+              onClick={() => deleting && remove.mutate(deleting.id)}
+            >
+              {t('apps.schedules.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

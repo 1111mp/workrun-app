@@ -108,7 +108,11 @@ function useWorkflowRun(
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
     useState(false);
-  const [activeRunId, setActiveRunId] = useState<string>();
+  // `undefined` follows a restored history run, while `null` records that the
+  // restored run has finished or been closed during this editor session.
+  const [activeRunId, setActiveRunId] = useState<string | null>();
+  const resolvedActiveRunId =
+    activeRunId === undefined ? restoredRun?.id : (activeRunId ?? undefined);
   const [telemetryRevision, setTelemetryRevision] = useState(0);
   const store = useWorkflowRunStore(
     useShallow((state) => ({
@@ -255,7 +259,6 @@ function useWorkflowRun(
   useEffect(() => {
     if (!restoredRun) return;
     runId.current = restoredRun.id;
-    setActiveRunId(restoredRun.id);
     runThreadId.current = restoredRun.threadId;
     let disposed = false;
     // Keep this restored-run subscription intact while routing events through
@@ -368,7 +371,7 @@ function useWorkflowRun(
         description: error instanceof Error ? error.message : String(error),
       });
       runId.current = undefined;
-      setActiveRunId(undefined);
+      setActiveRunId(null);
     }
   };
 
@@ -564,7 +567,7 @@ function useWorkflowRun(
     resolvePendingAskUserQuestion,
     resumeWorkflowRun,
     retryFailedWorkflowRun,
-    runId: activeRunId,
+    runId: resolvedActiveRunId,
     telemetryRevision,
   };
 }

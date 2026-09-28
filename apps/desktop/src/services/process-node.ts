@@ -166,6 +166,7 @@ export type AppSchedule = {
   enabled: boolean;
   nextRunAt: string;
   lastRunAt?: string;
+  editorMode?: 'daily' | 'weekdays' | 'weekly' | 'custom';
 };
 
 export type AppScheduleRequest = {
@@ -177,6 +178,7 @@ export type AppScheduleRequest = {
   cronExpression: string;
   timezone: string;
   enabled: boolean;
+  editorMode?: 'daily' | 'weekdays' | 'weekly' | 'custom';
 };
 
 export type ProcessNodeRunEvent =

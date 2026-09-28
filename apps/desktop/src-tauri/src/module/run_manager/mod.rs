@@ -243,6 +243,8 @@ pub struct StartWorkflowRun {
     /// runtime so a very fast completion can recover the link before the
     /// evaluation coordinator has finished its follow-up database update.
     pub evaluation_result_id: Option<String>,
+    #[serde(default)]
+    pub schedule_trigger: Option<ScheduleTrigger>,
 }
 
 #[derive(Debug, Deserialize)]

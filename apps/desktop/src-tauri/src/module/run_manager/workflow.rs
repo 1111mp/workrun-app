@@ -38,6 +38,11 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         "releaseId": request.release_id,
         "releaseVersion": request.release_version,
         "dependencies": dependencies,
+        "trigger": request.schedule_trigger.map(|trigger| json!({
+            "type": "schedule",
+            "scheduleId": trigger.schedule_id,
+            "scheduledFor": trigger.scheduled_for,
+        })),
     });
     RunHistoryStore::create(CreateRunRecord {
         id: request.run_id.clone(),

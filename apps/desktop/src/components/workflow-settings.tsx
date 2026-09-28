@@ -23,6 +23,7 @@ import {
   Textarea,
 } from '@workspace/ui/components';
 import { PlusIcon, Trash2Icon } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type WorkflowSettingsPanelProps = {
@@ -31,6 +32,7 @@ type WorkflowSettingsPanelProps = {
   executableNodes: { id: string; name: string }[];
   onOpenChange: (open: boolean) => void;
   onSettingsChange: (patch: Partial<WorkflowSettings>) => void;
+  automation?: ReactNode;
 };
 
 function WorkflowSettingsPanel({
@@ -39,6 +41,7 @@ function WorkflowSettingsPanel({
   executableNodes,
   onOpenChange,
   onSettingsChange,
+  automation,
 }: WorkflowSettingsPanelProps) {
   const { t } = useTranslation();
   const inputTypeLabels = [
@@ -193,6 +196,7 @@ function WorkflowSettingsPanel({
                 }
               />
             </FieldSet>
+            {automation}
             <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
               <div className='flex items-center justify-between gap-2'>
                 <FieldLegend>{t('workflowEditor.settings.inputs')}</FieldLegend>

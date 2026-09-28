@@ -264,6 +264,9 @@ CREATE TABLE schedules (
   target_id TEXT NOT NULL,
   target_name TEXT NOT NULL,
   target_snapshot_json TEXT NOT NULL,
+  -- The target snapshot is history-facing. Execution recipes may instead be
+  -- pinned Team releases or a local-latest resolver.
+  execution_recipe_json TEXT NOT NULL DEFAULT '{}',
   cron_expression TEXT NOT NULL,
   timezone TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
@@ -271,6 +274,7 @@ CREATE TABLE schedules (
     CHECK (overlap_policy IN ('skip_if_active')),
   next_run_at TEXT NOT NULL,
   last_run_at TEXT,
+  last_error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -285,6 +289,7 @@ CREATE TABLE schedule_occurrences (
   status TEXT NOT NULL CHECK (status IN ('queued', 'skipped')),
   run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
   reason TEXT,
+  error TEXT,
   created_at TEXT NOT NULL,
   UNIQUE(schedule_id, scheduled_for)
 );

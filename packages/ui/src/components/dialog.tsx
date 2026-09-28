@@ -38,15 +38,20 @@ function DialogOverlay({
 
 function DialogContent({
   className,
+  overlayClassName,
+  forceOverlay = false,
   children,
   showCloseButton = true,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
+  overlayClassName?: string;
+  /** Render a visible backdrop when this Dialog is nested inside another modal. */
+  forceOverlay?: boolean;
 }) {
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay forceRender={forceOverlay} className={overlayClassName} />
       <DialogPrimitive.Popup
         data-slot='dialog-content'
         className={cn(
