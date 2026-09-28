@@ -2,7 +2,7 @@ use crate::{
     config::BaseConfig,
     core::{db, logger::Logger, tray::Tray},
     logging, logging_error,
-    module::{ipc::IpcServer, run_manager},
+    module::{ipc::IpcServer, run_manager, schedule},
     process::AsyncHandler,
     utils::{init, logging::Type, window_manager::WindowManager},
 };
@@ -33,6 +33,7 @@ pub fn resolve_server_setup_async() {
         // Queued Apps can create an IPC session as soon as they are claimed.
         // Start dispatch only after every native dependency they need is ready.
         run_manager::start_supervisor();
+        schedule::start_scheduler();
     });
 }
 

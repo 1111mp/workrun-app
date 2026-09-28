@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS schedule_occurrences;
+DROP TABLE IF EXISTS schedules;
 DROP TABLE IF EXISTS evaluation_case_results;
 DROP TABLE IF EXISTS evaluation_runs;
 DROP TABLE IF EXISTS evaluation_cases;

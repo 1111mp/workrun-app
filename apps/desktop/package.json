@@ -45,6 +45,8 @@
     "@xyflow/react": "^12.11.6",
     "ajv-errors": "^3.0.0",
     "better-auth": "^1.7.5",
+    "cron-parser": "^5.10.1",
+    "cronstrue": "^3.27.0",
     "i18next": "^26.4.2",
     "immer": "^11.1.18",
     "json-edit-react": "2.0.0-beta.10",

@@ -253,3 +253,41 @@ CREATE TABLE evaluation_quality_gate_audits (
 
 CREATE INDEX idx_evaluation_quality_gate_audits_workflow_created
   ON evaluation_quality_gate_audits(workflow_id, created_at DESC);
+
+-- Schedules retain a target discriminator even though the first product surface
+-- only creates App schedules. Workflow schedules can reuse the same durable
+-- trigger and occurrence history without a schema redesign.
+CREATE TABLE schedules (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  target_type TEXT NOT NULL CHECK (target_type IN ('app', 'workflow')),
+  target_id TEXT NOT NULL,
+  target_name TEXT NOT NULL,
+  target_snapshot_json TEXT NOT NULL,
+  cron_expression TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  overlap_policy TEXT NOT NULL DEFAULT 'skip_if_active'
+    CHECK (overlap_policy IN ('skip_if_active')),
+  next_run_at TEXT NOT NULL,
+  last_run_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_schedules_due
+  ON schedules(enabled, next_run_at ASC, id ASC);
+
+CREATE TABLE schedule_occurrences (
+  id TEXT PRIMARY KEY NOT NULL,
+  schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+  scheduled_for TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'skipped')),
+  run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
+  reason TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(schedule_id, scheduled_for)
+);
+
+CREATE INDEX idx_schedule_occurrences_schedule_time
+  ON schedule_occurrences(schedule_id, scheduled_for DESC);

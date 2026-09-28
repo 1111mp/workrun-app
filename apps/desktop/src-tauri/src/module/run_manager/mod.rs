@@ -268,6 +268,15 @@ pub struct StartAppRun {
     pub target_name: String,
     pub output_view: Value,
     pub target_snapshot: Value,
+    #[serde(default)]
+    pub schedule_trigger: Option<ScheduleTrigger>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleTrigger {
+    pub schedule_id: String,
+    pub scheduled_for: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

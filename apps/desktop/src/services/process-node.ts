@@ -155,6 +155,30 @@ export type BackgroundProcessNodeRunRequest = {
   targetSnapshot: unknown;
 };
 
+export type AppSchedule = {
+  id: string;
+  name: string;
+  targetType: 'app' | 'workflow';
+  targetId: string;
+  targetName: string;
+  cronExpression: string;
+  timezone: string;
+  enabled: boolean;
+  nextRunAt: string;
+  lastRunAt?: string;
+};
+
+export type AppScheduleRequest = {
+  id?: string;
+  name: string;
+  targetId: string;
+  targetName: string;
+  targetSnapshot: unknown;
+  cronExpression: string;
+  timezone: string;
+  enabled: boolean;
+};
+
 export type ProcessNodeRunEvent =
   | { type: 'output'; stream: ProcessNodeOutputStream; data: string }
   | { type: 'app_done'; execution: ProcessNodeRunResult['execution'] }
@@ -535,6 +559,22 @@ export function startBackgroundProcessNodeRun(
 
 export function cancelBackgroundProcessNodeRun(runId: string) {
   return invoke('process_node_run_cancel', { runId });
+}
+
+export function listAppSchedules(appId: string) {
+  return invoke<AppSchedule[]>('app_schedule_list', { appId });
+}
+
+export function saveAppSchedule(request: AppScheduleRequest) {
+  return invoke<AppSchedule>('app_schedule_save', { request });
+}
+
+export function setScheduleEnabled(id: string, enabled: boolean) {
+  return invoke('schedule_set_enabled', { id, enabled });
+}
+
+export function deleteSchedule(id: string) {
+  return invoke('schedule_delete', { id });
 }
 
 export function subscribeProcessNodeRun(
