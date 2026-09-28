@@ -18,13 +18,18 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use std::{
     str::FromStr as _,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use uuid::Uuid;
 
-const SCHEDULE_TICK: Duration = Duration::from_secs(15);
+const MAX_SCHEDULE_SLEEP: Duration = Duration::from_secs(60 * 60);
+const SCHEDULE_ERROR_RETRY: Duration = Duration::from_secs(5);
 static STARTED: AtomicBool = AtomicBool::new(false);
+static SCHEDULE_CHANGES: OnceLock<tokio::sync::watch::Sender<u64>> = OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -162,6 +167,7 @@ impl ScheduleStore {
             .bind(&now)
             .execute(&pool)
             .await?;
+        notify_scheduler();
         Ok(ScheduleSummary {
             id,
             name: request.name,
@@ -195,6 +201,7 @@ impl ScheduleStore {
             .bind(request.target_snapshot.to_string()).bind(serde_json::to_string(&recipe)?)
             .bind(&request.cron_expression).bind(&request.timezone).bind(request.enabled)
             .bind(next_run_at.to_rfc3339()).bind(&now).bind(&now).execute(&pool).await?;
+        notify_scheduler();
         Ok(ScheduleSummary {
             id,
             name: request.name,
@@ -217,6 +224,7 @@ impl ScheduleStore {
             .bind(id)
             .execute(&pool)
             .await?;
+        notify_scheduler();
         Ok(())
     }
 
@@ -245,6 +253,7 @@ impl ScheduleStore {
         .bind(id)
         .execute(&pool)
         .await?;
+        notify_scheduler();
         Ok(())
     }
 }
@@ -255,14 +264,115 @@ pub fn start_scheduler() {
     if STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
-    AsyncHandler::spawn(|| async {
-        loop {
-            if let Err(error) = trigger_due_schedules().await {
-                log::error!("failed to process scheduled runs: {error:#}");
-            }
-            tokio::time::sleep(SCHEDULE_TICK).await;
+    let (sender, changes) = tokio::sync::watch::channel(0_u64);
+    // Store mutations can occur while the scheduler sleeps until a distant run.
+    // A watch channel retains the latest version, so that wake-up cannot be lost.
+    let _ = SCHEDULE_CHANGES.set(sender);
+    AsyncHandler::spawn(move || async move {
+        if let Err(error) = skip_missed_schedules().await {
+            log::error!("failed to skip missed scheduled runs during startup: {error:#}");
         }
+        run_scheduler(changes).await;
     });
+}
+
+fn notify_scheduler() {
+    if let Some(sender) = SCHEDULE_CHANGES.get() {
+        sender.send_modify(|version| *version = version.wrapping_add(1));
+    }
+}
+
+async fn run_scheduler(mut changes: tokio::sync::watch::Receiver<u64>) {
+    loop {
+        if let Err(error) = trigger_due_schedules().await {
+            log::error!("failed to process scheduled runs: {error:#}");
+            if !wait_for_change_or_timeout(&mut changes, SCHEDULE_ERROR_RETRY).await {
+                return;
+            }
+            continue;
+        }
+
+        let next_run_at = match next_enabled_run_at().await {
+            Ok(next_run_at) => next_run_at,
+            Err(error) => {
+                log::error!("failed to find the next scheduled run: {error:#}");
+                if !wait_for_change_or_timeout(&mut changes, SCHEDULE_ERROR_RETRY).await {
+                    return;
+                }
+                continue;
+            },
+        };
+
+        match next_run_at {
+            Some(next_run_at) => {
+                // Tokio timers use a monotonic clock. Rechecking hourly also bounds
+                // the effect of a user changing the wall clock while the app sleeps.
+                let wait = next_run_at
+                    .signed_duration_since(Utc::now())
+                    .to_std()
+                    .unwrap_or(Duration::ZERO)
+                    .min(MAX_SCHEDULE_SLEEP);
+                if !wait_for_change_or_timeout(&mut changes, wait).await {
+                    return;
+                }
+            },
+            None => {
+                // No enabled schedules means no database polling until a write wakes us.
+                if changes.changed().await.is_err() {
+                    return;
+                }
+            },
+        }
+    }
+}
+
+async fn wait_for_change_or_timeout(changes: &mut tokio::sync::watch::Receiver<u64>, timeout: Duration) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(timeout) => true,
+        changed = changes.changed() => changed.is_ok(),
+    }
+}
+
+async fn next_enabled_run_at() -> Result<Option<DateTime<Utc>>> {
+    let pool = DBManager::global().pool()?;
+    let next_run_at: Option<String> = sqlx::query_scalar(
+        "SELECT next_run_at FROM schedules WHERE enabled = 1 ORDER BY next_run_at ASC, id ASC LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    next_run_at.map(|value| parse_time(&value)).transpose()
+}
+
+async fn skip_missed_schedules() -> Result<()> {
+    let pool = DBManager::global().pool()?;
+    let now = Utc::now();
+    let rows = sqlx::query(
+        "SELECT id, cron_expression, timezone, next_run_at FROM schedules WHERE enabled = 1 AND next_run_at <= ?",
+    )
+    .bind(now.to_rfc3339())
+    .fetch_all(&pool)
+    .await?;
+
+    for row in rows {
+        let id: String = row.try_get("id")?;
+        let expression: String = row.try_get("cron_expression")?;
+        let timezone: String = row.try_get("timezone")?;
+        let scheduled_for: String = row.try_get("next_run_at")?;
+        let next_run_at = next_run(&expression, &timezone, now)?;
+
+        // Do not turn desktop downtime into a burst of delayed App or Workflow runs.
+        // The conditional update preserves a schedule edited while startup was in flight.
+        sqlx::query(
+            "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ? AND enabled = 1 AND next_run_at = ?",
+        )
+        .bind(next_run_at.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .bind(id)
+        .bind(scheduled_for)
+        .execute(&pool)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn trigger_due_schedules() -> Result<()> {
@@ -576,6 +686,17 @@ mod tests {
     }
 
     #[test]
+    fn recovery_advances_an_overdue_schedule_to_a_future_occurrence() {
+        let now = DateTime::parse_from_rfc3339("2026-09-28T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let next = next_run("*/15 * * * *", "UTC", now).unwrap();
+
+        assert!(next > now);
+        assert_eq!(next.to_rfc3339(), "2026-09-28T10:15:00+00:00");
+    }
+
+    #[test]
     fn rejects_non_user_facing_cron_shapes() {
         let error = next_run("0 0 9 * * *", "UTC", Utc::now()).unwrap_err();
         assert!(error.to_string().contains("five fields"));
@@ -610,5 +731,15 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("recipient"));
+    }
+
+    #[tokio::test]
+    async fn schedule_changes_interrupt_a_pending_wait() {
+        let (sender, mut changes) = tokio::sync::watch::channel(0_u64);
+        sender.send_modify(|version| *version += 1);
+
+        let woke_for_change = wait_for_change_or_timeout(&mut changes, Duration::from_secs(60)).await;
+
+        assert!(woke_for_change);
     }
 }
