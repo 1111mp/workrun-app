@@ -110,6 +110,11 @@ export default defineConfig({
               translations: { 'zh-CN': '人工审批与恢复' },
               link: '/guides/human-in-the-loop/',
             },
+            {
+              label: 'Schedule Apps and Workflows',
+              translations: { 'zh-CN': '为 App 和工作流配置定时运行' },
+              link: '/guides/scheduled-runs/',
+            },
           ],
         },
         {

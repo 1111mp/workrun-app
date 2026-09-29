@@ -31,7 +31,9 @@ async-trait = "0.1.92"
 base64 = "0.23.1"
 bitflags = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 console-subscriber = { version = "0.5.0", optional = true }
+croner = { workspace = true }
 dark-light = { git = "https://github.com/rust-dark-light/dark-light" }
 dunce = "1.0.5"
 flate2 = { workspace = true }

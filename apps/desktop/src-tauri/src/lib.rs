@@ -181,6 +181,12 @@ pub fn run() {
             cmd::run_manager::process_node_run_cancel,
             cmd::run_manager::run_replay,
             cmd::run_manager::run_replay_missing_dependencies,
+            cmd::schedule::app_schedule_list,
+            cmd::schedule::app_schedule_save,
+            cmd::schedule::workflow_schedule_list,
+            cmd::schedule::workflow_schedule_save,
+            cmd::schedule::schedule_set_enabled,
+            cmd::schedule::schedule_delete,
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,

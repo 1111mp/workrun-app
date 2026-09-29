@@ -38,13 +38,16 @@ function AlertDialogOverlay({
 function AlertDialogContent({
   className,
   size = 'default',
+  forceOverlay = false,
   ...props
 }: AlertDialogPrimitive.Popup.Props & {
   size?: 'default' | 'sm';
+  /** Render a visible backdrop when this Alert Dialog is nested inside another modal. */
+  forceOverlay?: boolean;
 }) {
   return (
     <AlertDialogPortal>
-      <AlertDialogOverlay />
+      <AlertDialogOverlay forceRender={forceOverlay} />
       <AlertDialogPrimitive.Popup
         data-slot='alert-dialog-content'
         data-size={size}

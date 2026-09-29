@@ -71,6 +71,7 @@ import {
   AppRunOutputPanel,
   restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
+import { AppSchedules } from '@/components/app-schedules';
 import { AppPublishForm } from '@/components/forms';
 import { JsonEditorField } from '@/components/json-editor';
 import { isTeamMode } from '@/lib/constant';
@@ -1063,6 +1064,7 @@ function ProcessNodeDetailEditor({
             </div>
           </CardFooter>
         </Card>
+        <AppSchedules app={processNode} readOnly={readOnly} />
         <Card className='shadow-sm'>
           <CardHeader>
             <CardTitle>{t('apps.detail.dataContract')}</CardTitle>

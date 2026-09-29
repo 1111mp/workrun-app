@@ -910,6 +910,7 @@ impl EvaluationStore {
             ),
             evaluation_profile: Some(profile),
             evaluation_result_id: Some(claimed.result_id.clone()),
+            schedule_trigger: None,
         })
         .await?;
         let pool = DBManager::global().pool()?;
@@ -1681,10 +1682,7 @@ fn criterion_match_key(criterion: &CriterionResult) -> String {
     } else {
         criterion.expected.clone()
     };
-    format!(
-        "{kind}:{}",
-        serde_json::to_string(&expected).unwrap_or_default()
-    )
+    format!("{kind}:{}", serde_json::to_string(&expected).unwrap_or_default())
 }
 
 fn tool_trajectory_match_value(expected: &Value) -> Value {

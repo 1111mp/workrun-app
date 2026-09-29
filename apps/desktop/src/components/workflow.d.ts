@@ -292,7 +292,6 @@ type WorkflowNode =
   | WorkflowTerminateNode
   | WorkflowHumanReviewNode
   | WorkflowAskUserQuestionNode
-  | WorkflowTerminateNode
   // control nodes
   | WorkflowStartNode
   | WorkflowEndNode
