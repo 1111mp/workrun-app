@@ -440,7 +440,7 @@ function ScheduleDialog({
             </div>
           </aside>
         </div>
-        <DialogFooter className='bg-muted/15 border-t px-7 py-4'>
+        <DialogFooter className='bg-muted/15 mx-0 mb-0 border-t px-7 py-4'>
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('apps.schedules.cancel')}
           </Button>
@@ -485,6 +485,7 @@ export function AppSchedules({
   const remove = useMutation({
     mutationFn: deleteSchedule,
     onSuccess: () => {
+      setDeleting(undefined);
       void refresh();
       toast.success(t('apps.schedules.deleted'), { toasterId: 'global' });
     },

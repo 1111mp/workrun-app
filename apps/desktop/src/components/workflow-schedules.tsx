@@ -562,7 +562,7 @@ function WorkflowScheduleDialog({
             </div>
           </aside>
         </div>
-        <DialogFooter className='bg-muted/15 border-t px-7 py-4'>
+        <DialogFooter className='bg-muted/15 mx-0 mb-0 border-t px-7 py-4'>
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('workflowEditor.schedules.cancel')}
           </Button>
@@ -615,10 +615,12 @@ export function WorkflowSchedules({
   });
   const remove = useMutation({
     mutationFn: deleteWorkflowSchedule,
-    onSuccess: () =>
+    onSuccess: () => {
+      setDeleting(undefined);
       void queryClient.invalidateQueries({
         queryKey: ['workflow-schedules', workflowId],
-      }),
+      });
+    },
   });
   return (
     <Card className='shadow-sm' aria-labelledby='workflow-schedules-title'>
