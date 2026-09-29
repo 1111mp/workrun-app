@@ -898,7 +898,6 @@ impl EvaluationStore {
             target_id: claimed.workflow_id.clone(),
             target_name: snapshot.target_name,
             input: claimed.case_snapshot.input.clone(),
-            output_view: json!({}),
             target_snapshot: snapshot.target_snapshot,
             release_id: snapshot.release_id,
             release_version: snapshot.release_version,

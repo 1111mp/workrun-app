@@ -1,9 +1,13 @@
 import type { Node } from '@xyflow/react';
 import { describe, expect, it } from 'vitest';
 
-import type { WorkflowRunEvent } from '@/services/workflow';
+import type { WorkflowRunEventEnvelope } from '@/services/workflow';
 
-import { replayWorkflowRunView, restoreWorkflowRunView } from './workflow-run.store';
+import {
+  replayWorkflowRunProjection,
+  useWorkflowRunStore,
+  workflowRunView,
+} from './workflow-run.store';
 
 const node: Node = {
   id: 'research',
@@ -12,51 +16,39 @@ const node: Node = {
   data: { name: 'Research' },
 };
 
-describe('replayWorkflowRunView', () => {
-  it('uses terminal lifecycle metadata from the archived run', () => {
-    const view = restoreWorkflowRunView(
-      { status: 'running', startedAt: 1000 },
-      {
-        status: 'cancelled',
-        startedAt: '2026-09-06T13:26:34.192Z',
-        endedAt: '2026-09-06T13:26:40.684Z',
-        durationMs: 6492,
-        error: 'Cancelled by user',
-      },
+function events(
+  ...event: WorkflowRunEventEnvelope['event'][]
+): WorkflowRunEventEnvelope[] {
+  return event.map((item, index) => ({
+    runId: 'run-1',
+    sequence: index,
+    event: item,
+  }));
+}
+
+describe('workflow run projection', () => {
+  it('replays persisted envelopes into the same task output model', () => {
+    const projection = replayWorkflowRunProjection(
+      'run-1',
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        {
+          type: 'message',
+          node: 'research',
+          content: 'Completed research.',
+          is_final: true,
+        },
+        { type: 'node_end', node: 'research', step: 1, duration_ms: 42 },
+        {
+          type: 'done',
+          state: { global: {}, nodes: {}, workflow: {} },
+          total_steps: 1,
+        },
+      ),
+      { mode: 'task', nodes: [node] },
     );
 
-    expect(view).toMatchObject({
-      status: 'cancelled',
-      startedAt: Date.parse('2026-09-06T13:26:34.192Z'),
-      endedAt: Date.parse('2026-09-06T13:26:40.684Z'),
-      durationMs: 6492,
-      error: undefined,
-    });
-  });
-
-  it('rebuilds the output timeline from persisted events', () => {
-    const events: WorkflowRunEvent[] = [
-      { type: 'node_start', node: 'research', step: 1 },
-      {
-        type: 'message',
-        node: 'research',
-        content: 'Completed research.',
-        is_final: true,
-      },
-      { type: 'node_end', node: 'research', step: 1, duration_ms: 42 },
-      {
-        type: 'done',
-        state: { global: {}, nodes: {}, workflow: {} },
-        total_steps: 1,
-      },
-    ];
-
-    const view = replayWorkflowRunView({ status: 'running' }, events, {
-      mode: 'task',
-      nodes: [node],
-    });
-
-    expect(view).toMatchObject({
+    expect(workflowRunView(projection)).toMatchObject({
       status: 'completed',
       totalSteps: 1,
       execution: [
@@ -69,26 +61,158 @@ describe('replayWorkflowRunView', () => {
     });
   });
 
-  it('ends a running node when its workflow is cancelled', () => {
-    const view = replayWorkflowRunView(
-      { status: 'running' },
-      [
+  it('uses sequence-based IDs and preserves completed entity identity', () => {
+    const store = useWorkflowRunStore.getState();
+    store.startWorkflowRun('run-1', {}, 'task');
+    store.applyRunEvents(
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        { type: 'node_end', node: 'research', step: 1, duration_ms: 42 },
+      ),
+      { mode: 'task', nodes: [node] },
+    );
+    const firstId = useWorkflowRunStore.getState().projection.executionIds[0];
+    const completed =
+      useWorkflowRunStore.getState().projection.executionsById[firstId];
+
+    store.applyRunEvents(
+      events(
+        { type: 'node_start', node: 'write', step: 2 },
+        {
+          type: 'message',
+          node: 'write',
+          content: 'Drafting.',
+          is_final: true,
+        },
+      ).map((envelope) => ({ ...envelope, sequence: envelope.sequence + 2 })),
+      {
+        mode: 'task',
+        nodes: [node, { ...node, id: 'write', data: { name: 'Write' } }],
+      },
+    );
+
+    const projection = useWorkflowRunStore.getState().projection;
+    expect(firstId).toBe('run-1:execution:0');
+    expect(projection.executionsById[firstId]).toBe(completed);
+    expect(projection.executionIds).toHaveLength(2);
+  });
+
+  it('does not end thinking when an agent tool result arrives', () => {
+    const store = useWorkflowRunStore.getState();
+    store.startWorkflowRun('run-1', {}, 'task');
+    store.applyRunEvents(
+      events(
         { type: 'node_start', node: 'research', step: 1 },
         {
           type: 'custom',
-          node: '',
-          event_type: 'workflow.run_cancelled',
-          data: {},
+          node: 'research',
+          event_type: 'agent.tool_result',
+          data: { tool: 'search' },
         },
-      ],
+      ),
+      { mode: 'task', nodes: [node] },
+    );
+    const thoughtId =
+      useWorkflowRunStore.getState().projection.latestThoughtIdByNode.research;
+    expect(
+      useWorkflowRunStore.getState().projection.thoughtsById[thoughtId]?.status,
+    ).toBe('running');
+
+    store.applyRunEvents(
+      events({
+        type: 'node_end',
+        node: 'research',
+        step: 1,
+        duration_ms: 5,
+      }).map((envelope) => ({ ...envelope, sequence: 3 })),
+      { mode: 'task', nodes: [node] },
+    );
+    expect(
+      useWorkflowRunStore.getState().projection.thoughtsById[thoughtId]?.status,
+    ).toBe('completed');
+  });
+
+  it('treats a tool confirmation interrupt as awaiting input, not an error', () => {
+    const store = useWorkflowRunStore.getState();
+    store.startWorkflowRun('run-1', {}, 'task');
+    store.applyRunEvents(
+      events(
+        {
+          type: 'custom',
+          node: 'research',
+          event_type: 'agent.tool_approval_required',
+          data: { functionCallId: 'call-1', fingerprint: 'fingerprint' },
+        },
+        {
+          type: 'interrupted',
+          node: 'research',
+          message: 'Dynamic interrupt: tool_confirmation',
+        },
+      ),
       { mode: 'task', nodes: [node] },
     );
 
-    expect(view).toMatchObject({
-      status: 'cancelled',
-      activeNodeId: undefined,
+    expect(useWorkflowRunStore.getState().projection).toMatchObject({
+      status: 'interrupted',
       error: undefined,
-      execution: [expect.objectContaining({ status: 'cancelled' })],
     });
+    expect(useWorkflowRunStore.getState().toolApproval).toMatchObject({
+      functionCallId: 'call-1',
+    });
+  });
+
+  it('merges an action-resumed node into its original logical execution', () => {
+    const projection = replayWorkflowRunProjection(
+      'run-1',
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        { type: 'node_end', node: 'research', step: 1, duration_ms: 10 },
+        {
+          type: 'interrupted',
+          node: 'research',
+          message: 'Dynamic interrupt: tool_confirmation',
+        },
+        { type: 'resumed', step: 1, pending_nodes: ['research'] },
+        { type: 'node_start', node: 'research', step: 1 },
+        { type: 'node_end', node: 'research', step: 1, duration_ms: 20 },
+      ),
+      { mode: 'chat', nodes: [node] },
+    );
+
+    expect(projection.executionIds).toHaveLength(1);
+    expect(projection.thoughtIds).toHaveLength(1);
+    expect(workflowRunView(projection).execution[0]).toMatchObject({
+      nodeId: 'research',
+      status: 'completed',
+      durationMs: 20,
+    });
+  });
+
+  it('keeps chat node responses on their execution instead of appending bubbles', () => {
+    const store = useWorkflowRunStore.getState();
+    store.startWorkflowRun(
+      'run-1',
+      { input: 'Research this.' },
+      'chat',
+      'turn-1',
+    );
+    store.applyRunEvents(
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        {
+          type: 'message',
+          node: 'research',
+          content: 'Research complete.',
+          is_final: true,
+        },
+      ),
+      { mode: 'chat', nodes: [node], turnId: 'turn-1' },
+    );
+
+    const projection = useWorkflowRunStore.getState().projection;
+    expect(projection.messageIds).toHaveLength(1);
+    expect(projection.executionsById['run-1:execution:0']?.messages).toEqual([
+      { role: 'assistant', content: 'Research complete.' },
+    ]);
   });
 });

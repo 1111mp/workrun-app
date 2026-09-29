@@ -26,13 +26,17 @@ import {
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
 import { PlayIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 
-import { WorkflowRunOutput } from '@/components/workflow-output-panel';
+import {
+  LiveWorkflowTaskOutput,
+  WorkflowRunOutput,
+} from '@/components/workflow-output-panel';
 import type { RunSpan } from '@/services/run-history';
 import { useWorkflowRunStore } from '@/stores';
+import { workflowRunView } from '@/stores/workflow-run.store';
 
 type RunValues = Record<string, string | boolean>;
 
@@ -219,28 +223,39 @@ function WorkflowRunPanel({
   const {
     lastRunInput,
     open,
-    run,
+    projection,
+    runStatus,
     showOutput,
     setRunPanelOpen: onOpenChange,
   } = useWorkflowRunStore(
     useShallow((state) => ({
       lastRunInput: state.lastRunInput,
       open: state.runPanelOpen,
-      run: state.runView,
+      // Select the stable projection reference. Calling workflowRunView here
+      // would create a new selector result during getSnapshot and make chat
+      // mode loop before a run has even started.
+      projection:
+        settings.mode === 'chat' || readOnly ? state.projection : undefined,
+      runStatus: state.projection.status,
       showOutput: state.showRunOutput,
       setRunPanelOpen: state.setRunPanelOpen,
     })),
   );
 
-  const isRunning = run.status === 'running';
+  const run = useMemo(
+    () => (projection ? workflowRunView(projection) : undefined),
+    [projection],
+  );
+
+  const isRunning = runStatus === 'running';
   const [retryConfirmationOpen, setRetryConfirmationOpen] = useState(false);
   const formKey = `${open}:${JSON.stringify(settings)}`;
   const runAgain = () => {
-    if (run.status === 'interrupted') {
+    if (runStatus === 'interrupted') {
       onResume();
       return;
     }
-    if (run.status === 'failed') {
+    if (runStatus === 'failed') {
       setRetryConfirmationOpen(true);
       return;
     }
@@ -262,7 +277,7 @@ function WorkflowRunPanel({
         <DrawerContent>
           {settings.mode === 'chat' ? (
             <WorkflowRunOutput
-              run={run}
+              run={run!}
               workflowNodes={nodes}
               isRunning={isRunning}
               isChat
@@ -275,17 +290,27 @@ function WorkflowRunPanel({
               spans={spans}
             />
           ) : showOutput ? (
-            <WorkflowRunOutput
-              run={run}
-              workflowNodes={nodes}
-              isRunning={isRunning}
-              readOnly={readOnly}
-              onRunAgain={runAgain}
-              onClose={() =>
-                readOnly ? onHistoricalClose?.() : onOpenChange(false)
-              }
-              spans={spans}
-            />
+            readOnly ? (
+              <WorkflowRunOutput
+                run={run!}
+                workflowNodes={nodes}
+                isRunning={isRunning}
+                readOnly={readOnly}
+                onRunAgain={runAgain}
+                onClose={() =>
+                  readOnly ? onHistoricalClose?.() : onOpenChange(false)
+                }
+                spans={spans}
+              />
+            ) : (
+              <LiveWorkflowTaskOutput
+                workflowNodes={nodes}
+                readOnly={readOnly}
+                onRunAgain={runAgain}
+                onClose={() => onOpenChange(false)}
+                spans={spans}
+              />
+            )
           ) : (
             <>
               <DrawerHeader>

@@ -32,11 +32,11 @@ export default defineConfig({
         'starlight-theme-obsidian/styles/common.css',
         './src/styles/custom.css',
       ],
-      // The package's Graph integration is currently incompatible with Astro 7.
-      // Use its visual components directly until the upstream plugin is fixed.
       components: {
         Sidebar: 'starlight-theme-obsidian/overrides/Sidebar.astro',
-        PageFrame: 'starlight-theme-obsidian/overrides/PageFrame.astro',
+        // The installed theme cannot register its graph integration on Astro 7.
+        // This local override adapts its older mobile menu to Starlight's Popover API.
+        PageFrame: './src/components/PageFrame.astro',
         Pagination: 'starlight-theme-obsidian/overrides/Pagination.astro',
       },
       editLink: {

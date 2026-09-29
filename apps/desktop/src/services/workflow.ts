@@ -94,7 +94,6 @@ export type BackgroundWorkflowRunRequest = {
   targetId: string;
   targetName: string;
   input: Record<string, unknown>;
-  outputView: unknown;
   targetSnapshot: unknown;
   releaseId?: string;
   releaseVersion?: string;
@@ -470,10 +469,10 @@ export function cancelBackgroundWorkflowRun(runId: string) {
 
 export function subscribeWorkflowRun(
   runId: string,
-  onEvent: (event: WorkflowRunEvent) => void,
+  onEvent: (event: WorkflowRunEventEnvelope) => void,
 ): Promise<UnlistenFn> {
   return listen<WorkflowRunEventEnvelope>('run-event', ({ payload }) => {
-    if (payload.runId === runId) onEvent(payload.event);
+    if (payload.runId === runId) onEvent(payload);
   });
 }
 

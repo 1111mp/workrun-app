@@ -16,17 +16,9 @@ import {
   toWorkflowDsl,
   type ToolConfirmationDecision,
   type WorkflowRunEvent,
+  type WorkflowRunEventEnvelope,
 } from '@/services/workflow';
 import { useRunWorkspaceStore, useWorkflowRunStore } from '@/stores';
-
-type MessageEvent = Extract<WorkflowRunEvent, { type: 'message' }>;
-type BufferedMessageEvent = Omit<MessageEvent, 'content'> & {
-  content: string[];
-  offset: number;
-};
-type PendingRunEvent =
-  | Exclude<WorkflowRunEvent, MessageEvent>
-  | BufferedMessageEvent;
 
 type SubworkflowContext = {
   workflowId: string;
@@ -80,21 +72,6 @@ function unconfiguredSubworkflow(nodes: Node[]) {
   });
 }
 
-function charactersPerFrame(pendingCharacters: number) {
-  if (pendingCharacters <= 0) return 0;
-  return Math.min(1 + Math.floor(Math.sqrt(pendingCharacters) * 0.6), 32);
-}
-
-function splitGraphemes(str: string): string[] {
-  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-    const segmenter = new Intl.Segmenter(undefined, {
-      granularity: 'grapheme',
-    });
-    return Array.from(segmenter.segment(str), (s) => s.segment);
-  }
-  return Array.from(str);
-}
-
 function useWorkflowRun(
   workflowId: string,
   nodes: Node[],
@@ -117,14 +94,13 @@ function useWorkflowRun(
   const store = useWorkflowRunStore(
     useShallow((state) => ({
       runningNodeId: state.runningNodeId,
-      runStatus: state.runView.status,
+      runStatus: state.projection.status,
       toolApproval: state.toolApproval,
       humanReview: state.humanReview,
       askUserQuestion: state.askUserQuestion,
       resetRunView: state.resetRunView,
       setRunPanelOpen: state.setRunPanelOpen,
       setShowRunOutput: state.setShowRunOutput,
-      setRunView: state.setRunView,
       lastRunInput: state.lastRunInput,
       startWorkflowRun: state.startWorkflowRun,
       resumeWorkflowRun: state.resumeWorkflowRun,
@@ -141,11 +117,12 @@ function useWorkflowRun(
   const runId = useRef<string | undefined>(undefined);
   const unlistenRunEvents = useRef<(() => void) | undefined>(undefined);
   const chatTurnId = useRef<string | undefined>(undefined);
-  const pendingEvents = useRef<PendingRunEvent[]>([]);
-  const pendingCharacters = useRef(0);
+  const pendingEvents = useRef<WorkflowRunEventEnvelope[]>([]);
   const pendingFrame = useRef<number | undefined>(undefined);
   const afterDrain = useRef<(() => void)[]>([]);
-  const handleEventRef = useRef<(event: WorkflowRunEvent) => void>(() => {});
+  const handleEventRef = useRef<(event: WorkflowRunEventEnvelope) => void>(
+    () => {},
+  );
 
   const context = () => ({
     mode: settings.mode,
@@ -159,36 +136,11 @@ function useWorkflowRun(
   };
 
   const drain = () => {
-    const events: WorkflowRunEvent[] = [];
-    let remaining = charactersPerFrame(pendingCharacters.current);
-
-    while (pendingEvents.current.length) {
-      const event = pendingEvents.current[0];
-      if (event.type !== 'message') {
-        pendingEvents.current.shift();
-        events.push(event);
-        continue;
-      }
-      const count = Math.min(remaining, event.content.length - event.offset);
-      const content = event.content
-        .slice(event.offset, event.offset + count)
-        .join('');
-      event.offset += count;
-      pendingCharacters.current -= count;
-      remaining -= count;
-      const complete = event.offset === event.content.length;
-      events.push({
-        type: 'message',
-        node: event.node,
-        content,
-        is_final: complete && event.is_final,
-      });
-      if (complete) pendingEvents.current.shift();
-      if (remaining === 0) break;
-    }
-
-    if (events.length) store.applyRunEvents(events, context());
+    const event = pendingEvents.current.shift();
+    if (event) store.applyRunEvents([event], context());
     if (pendingEvents.current.length) {
+      // Preserve native ordering at visual boundaries. In particular, two
+      // quick node_start events must not first appear as one combined list.
       pendingFrame.current = requestAnimationFrame(drain);
       return;
     }
@@ -198,10 +150,8 @@ function useWorkflowRun(
     callbacks.forEach((callback) => callback());
   };
 
-  const queue = (event: MessageEvent) => {
-    const content = splitGraphemes(event.content);
-    pendingCharacters.current += content.length;
-    pendingEvents.current.push({ ...event, content, offset: 0 });
+  const queue = (event: WorkflowRunEventEnvelope) => {
+    pendingEvents.current.push(event);
     if (pendingFrame.current !== undefined) return;
     pendingFrame.current = requestAnimationFrame(drain);
   };
@@ -237,22 +187,15 @@ function useWorkflowRun(
     }
   };
 
-  const handleEvent = (event: WorkflowRunEvent) => {
+  const handleEvent = (envelope: WorkflowRunEventEnvelope) => {
+    const event = envelope.event;
     if (event.type === 'custom' && event.event_type === 'agent.model_call') {
       // The native runtime persists this span before emitting the event. A
       // revision lets the output panel refresh precisely when usage is ready.
       setTelemetryRevision((revision) => revision + 1);
     }
     handleTerminalEvent(event);
-    if (event.type === 'message') {
-      if (event.content) queue(event);
-      return;
-    }
-    if (pendingEvents.current.length) {
-      pendingEvents.current.push(event);
-      return;
-    }
-    store.applyRunEvents([event], context());
+    if (event.type !== 'message' || event.content) queue(envelope);
   };
   handleEventRef.current = handleEvent;
 
@@ -312,7 +255,6 @@ function useWorkflowRun(
       pendingFrame.current = undefined;
     }
     pendingEvents.current = [];
-    pendingCharacters.current = 0;
     afterDrain.current = [];
     chatTurnId.current =
       settings.mode === 'chat' ? crypto.randomUUID() : undefined;
@@ -324,7 +266,7 @@ function useWorkflowRun(
     const id = crypto.randomUUID();
     runId.current = id;
     setTelemetryRevision(0);
-    store.startWorkflowRun(input, settings.mode, chatTurnId.current);
+    store.startWorkflowRun(id, input, settings.mode, chatTurnId.current);
     const preparationToastId = `workflow-preparation-${id}`;
     let isPreparingTeamApp = false;
     try {
@@ -348,7 +290,6 @@ function useWorkflowRun(
         targetId: executionWorkflowId,
         targetName: settings.name,
         input,
-        outputView: useWorkflowRunStore.getState().runView,
         targetSnapshot: toWorkflowDocument(nodes, edges, settings),
         releaseId,
         releaseVersion,
@@ -383,7 +324,6 @@ function useWorkflowRun(
       pendingFrame.current = undefined;
     }
     pendingEvents.current = [];
-    pendingCharacters.current = 0;
     afterDrain.current = [];
     store.resumeWorkflowRun();
     void resumeBackgroundWorkflowRun(id, toolConfirmation).catch((error) => {
@@ -412,10 +352,30 @@ function useWorkflowRun(
     }
   };
 
+  const resetRunContext = () => {
+    if (pendingFrame.current !== undefined) {
+      cancelAnimationFrame(pendingFrame.current);
+      pendingFrame.current = undefined;
+    }
+    pendingEvents.current = [];
+    afterDrain.current = [];
+    unlistenRunEvents.current?.();
+    unlistenRunEvents.current = undefined;
+    runId.current = undefined;
+    runThreadId.current = undefined;
+    chatTurnId.current = undefined;
+    // Clear the query identity with the output projection. Otherwise a mode
+    // switch can render the prior task's telemetry in an empty chat session.
+    setActiveRunId(null);
+    setTelemetryRevision(0);
+    store.resetRunView();
+    store.setShowRunOutput(false);
+  };
+
   const startRun = () => {
     if (settings.mode === 'chat') {
+      resetRunContext();
       chatThreadId.current = crypto.randomUUID();
-      store.resetRunView();
       store.setRunPanelOpen(true);
     } else if (settings.inputSchema.fields.length === 0) {
       startWorkflowRun({});
@@ -437,15 +397,22 @@ function useWorkflowRun(
       store.applyRunEvents(
         [
           {
-            type: 'custom',
-            node: nodeId,
-            event_type: 'agent.tool_denied',
-            data: {
-              tool: approval?.tool,
-              name: approval?.name,
-              input: approval?.input,
-              status: 'denied',
-              message: 'Denied by user',
+            runId: runId.current ?? 'local',
+            // Insert between the last persisted event and the next native
+            // sequence, so the local denial cannot suppress resume events.
+            sequence:
+              useWorkflowRunStore.getState().projection.eventSequence + 0.5,
+            event: {
+              type: 'custom',
+              node: nodeId,
+              event_type: 'agent.tool_denied',
+              data: {
+                tool: approval?.tool,
+                name: approval?.name,
+                input: approval?.input,
+                status: 'denied',
+                message: 'Denied by user',
+              },
             },
           },
         ],
@@ -567,6 +534,7 @@ function useWorkflowRun(
     resolvePendingAskUserQuestion,
     resumeWorkflowRun,
     retryFailedWorkflowRun,
+    resetRunContext,
     runId: resolvedActiveRunId,
     telemetryRevision,
   };

@@ -2,47 +2,146 @@ import type { Node } from '@xyflow/react';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
-import type { WorkflowRunEvent, WorkflowRunView } from '@/services/workflow';
+import type {
+  WorkflowRunEvent,
+  WorkflowRunEventEnvelope,
+  WorkflowRunExecution,
+  WorkflowRunMessage,
+  WorkflowRunNode,
+  WorkflowRunStatus,
+  WorkflowRunThought,
+  WorkflowRunView,
+} from '@/services/workflow';
 
-const initialRunView: WorkflowRunView = {
-  status: 'idle',
-  nodes: [],
-  messages: [],
-  thoughts: [],
-  processLogs: [],
-  execution: [],
+export type WorkflowRunEventContext = {
+  mode: WorkflowMode;
+  nodes: Node[];
+  turnId?: string;
 };
+
+/**
+ * The only runtime projection. Arrays carry stable render order; entity maps
+ * let a delta update one row without replacing completed output rows.
+ */
+export type WorkflowRunProjection = {
+  runId?: string;
+  status: WorkflowRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  durationMs?: number;
+  activeNodeId?: string;
+  totalSteps?: number;
+  finalState?: Record<string, unknown>;
+  error?: string;
+  eventSequence: number;
+  nodeIds: string[];
+  nodesById: Record<string, WorkflowRunNode>;
+  executionIds: string[];
+  executionsById: Record<string, WorkflowRunExecution>;
+  thoughtIds: string[];
+  thoughtsById: Record<string, WorkflowRunThought>;
+  messageIds: string[];
+  messagesById: Record<string, WorkflowRunMessage>;
+  latestExecutionIdByNode: Record<string, string>;
+  latestThoughtIdByNode: Record<string, string>;
+  resumePendingNodeIds: Record<string, true>;
+  activeMessageIdByNode: Record<string, string>;
+  processLogsByNode: Record<
+    string,
+    { nodeId: string; name: string; stdout: string; stderr: string }
+  >;
+};
+
+export function createWorkflowRunProjection(
+  runId?: string,
+): WorkflowRunProjection {
+  return {
+    runId,
+    status: 'idle',
+    // Native run logs are zero-based. Start below the first valid sequence so
+    // the initial node_start is not mistaken for a duplicate event.
+    eventSequence: -1,
+    nodeIds: [],
+    nodesById: {},
+    executionIds: [],
+    executionsById: {},
+    thoughtIds: [],
+    thoughtsById: {},
+    messageIds: [],
+    messagesById: {},
+    latestExecutionIdByNode: {},
+    latestThoughtIdByNode: {},
+    resumePendingNodeIds: {},
+    activeMessageIdByNode: {},
+    processLogsByNode: {},
+  };
+}
+
+/** Converts the normalized projection only at read-only component boundaries. */
+export function workflowRunView(
+  projection: WorkflowRunProjection,
+): WorkflowRunView {
+  return {
+    status: projection.status,
+    startedAt: projection.startedAt,
+    endedAt: projection.endedAt,
+    durationMs: projection.durationMs,
+    activeNodeId: projection.activeNodeId,
+    totalSteps: projection.totalSteps,
+    finalState: projection.finalState,
+    error: projection.error,
+    nodes: projection.nodeIds
+      .map((id) => projection.nodesById[id])
+      .filter(Boolean),
+    execution: projection.executionIds
+      .map((id) => projection.executionsById[id])
+      .filter(Boolean),
+    thoughts: projection.thoughtIds
+      .map((id) => projection.thoughtsById[id])
+      .filter(Boolean),
+    messages: projection.messageIds
+      .map((id) => projection.messagesById[id])
+      .filter(Boolean),
+    processLogs: Object.values(projection.processLogsByNode),
+  };
+}
+
+export function replayWorkflowRunProjection(
+  runId: string,
+  events: WorkflowRunEventEnvelope[],
+  context: WorkflowRunEventContext,
+): WorkflowRunProjection {
+  const projection = createWorkflowRunProjection(runId);
+  for (const envelope of events)
+    reduceWorkflowRunEvent(projection, envelope, context);
+  return projection;
+}
 
 type WorkflowRunStore = {
   lastRunInput?: Record<string, unknown>;
   runPanelOpen: boolean;
-  runView: WorkflowRunView;
+  projection: WorkflowRunProjection;
   runningNodeId: string | null;
   showRunOutput: boolean;
   toolApproval?: Record<string, unknown>;
   humanReview?: Record<string, unknown>;
   askUserQuestion?: Record<string, unknown>;
-  isResuming: boolean;
   setLastRunInput: (input: Record<string, unknown> | undefined) => void;
   setRunPanelOpen: (open: boolean) => void;
   setRunningNodeId: (nodeId: string | null) => void;
-  setRunView: (
-    view: WorkflowRunView | ((current: WorkflowRunView) => WorkflowRunView),
-  ) => void;
   setShowRunOutput: (show: boolean) => void;
-  setToolApproval: (approval: Record<string, unknown> | undefined) => void;
-  setHumanReview: (review: Record<string, unknown> | undefined) => void;
-  setAskUserQuestion: (question: Record<string, unknown> | undefined) => void;
   resetRunView: () => void;
   startWorkflowRun: (
+    runId: string,
     input: Record<string, unknown>,
     mode: WorkflowMode,
     turnId?: string,
   ) => void;
+  restoreWorkflowRun: (projection: WorkflowRunProjection) => void;
   resumeWorkflowRun: () => void;
   applyRunEvents: (
-    events: WorkflowRunEvent[],
-    context: { mode: WorkflowMode; nodes: Node[]; turnId?: string },
+    events: WorkflowRunEventEnvelope[],
+    context: WorkflowRunEventContext,
   ) => void;
   projectFailedRun: (message: string) => void;
   clearRunningNode: () => void;
@@ -51,337 +150,217 @@ type WorkflowRunStore = {
   clearAskUserQuestion: () => void;
 };
 
-type WorkflowRunReplayState = Pick<
-  WorkflowRunStore,
-  | 'runView'
-  | 'runningNodeId'
-  | 'toolApproval'
-  | 'humanReview'
-  | 'askUserQuestion'
-  | 'isResuming'
->;
-
-type WorkflowRunEventContext = {
-  mode: WorkflowMode;
-  nodes: Node[];
-  turnId?: string;
-};
-
-type WorkflowRunArchive = {
-  status: string;
-  startedAt: string;
-  endedAt?: string;
-  durationMs?: number;
-  error?: string;
-};
-
-function terminalWorkflowRunStatus(
-  status: string | undefined,
-): Extract<WorkflowRunView['status'], 'completed' | 'failed' | 'cancelled' | 'interrupted'> | undefined {
-  return status === 'completed' ||
-    status === 'failed' ||
-    status === 'cancelled' ||
-    status === 'interrupted'
-    ? status
-    : undefined;
-}
-
-export function restoreWorkflowRunView(
-  outputView: unknown,
-  archive?: WorkflowRunArchive,
-): WorkflowRunView {
-  const view =
-    outputView && typeof outputView === 'object'
-      ? (outputView as Partial<WorkflowRunView>)
-      : {};
-  const startedAt = archive ? Date.parse(archive.startedAt) : Number.NaN;
-  const endedAt = archive?.endedAt ? Date.parse(archive.endedAt) : Number.NaN;
-  const status = terminalWorkflowRunStatus(archive?.status);
-  // Replay records created before all collection fields were persisted.
-  return {
-    ...view,
-    // outputView is captured when a run starts; terminal lifecycle metadata
-    // belongs to the archived run record and must win when reopening history.
-    status: status ?? view.status ?? 'idle',
-    error:
-      status && status !== 'cancelled' ? archive?.error : view.error,
-    durationMs: archive?.durationMs ?? view.durationMs,
-    startedAt: Number.isNaN(startedAt) ? view.startedAt : startedAt,
-    endedAt: Number.isNaN(endedAt) ? view.endedAt : endedAt,
-    nodes: Array.isArray(view.nodes) ? view.nodes : [],
-    messages: Array.isArray(view.messages) ? view.messages : [],
-    thoughts: Array.isArray(view.thoughts) ? view.thoughts : [],
-    processLogs: Array.isArray(view.processLogs) ? view.processLogs : [],
-    execution: Array.isArray(view.execution) ? view.execution : [],
-  };
-}
-
-/** Rebuilds a read-only run view without mutating the editor's live store. */
-export function replayWorkflowRunView(
-  outputView: unknown,
-  events: WorkflowRunEvent[],
-  context: WorkflowRunEventContext,
-): WorkflowRunView {
-  const state: WorkflowRunReplayState = {
-    runView: restoreWorkflowRunView(outputView),
-    runningNodeId: null,
-    toolApproval: undefined,
-    humanReview: undefined,
-    askUserQuestion: undefined,
-    isResuming: false,
-  };
-  for (const event of events) applyRunEvent(state, event, context);
-  return state.runView;
-}
-
-/** Transient UI state for the workflow run panel. It is intentionally not persisted. */
 export const useWorkflowRunStore = create<WorkflowRunStore>()(
   immer((set) => ({
-    lastRunInput: undefined,
     runPanelOpen: false,
-    runView: initialRunView,
+    projection: createWorkflowRunProjection(),
     runningNodeId: null,
     showRunOutput: false,
-    toolApproval: undefined,
-    humanReview: undefined,
-    askUserQuestion: undefined,
-    isResuming: false,
-
-    setLastRunInput: (input) => {
+    setLastRunInput: (input) =>
       set((state) => {
         state.lastRunInput = input;
-      });
-    },
-    setRunPanelOpen: (open) => {
+      }),
+    setRunPanelOpen: (open) =>
       set((state) => {
         state.runPanelOpen = open;
-      });
-    },
-    setRunningNodeId: (nodeId) => {
+      }),
+    setRunningNodeId: (nodeId) =>
       set((state) => {
         state.runningNodeId = nodeId;
-      });
-    },
-    setRunView: (view) => {
-      set((state) => {
-        state.runView =
-          typeof view === 'function'
-            ? view(state.runView as WorkflowRunView)
-            : view;
-      });
-    },
-    setShowRunOutput: (show) => {
+      }),
+    setShowRunOutput: (show) =>
       set((state) => {
         state.showRunOutput = show;
-      });
-    },
-    setToolApproval: (approval) => {
+      }),
+    resetRunView: () =>
       set((state) => {
-        state.toolApproval = approval;
-      });
-    },
-    setHumanReview: (review) => {
+        state.projection = createWorkflowRunProjection();
+        state.runningNodeId = null;
+      }),
+    startWorkflowRun: (runId, input, mode, turnId) =>
       set((state) => {
-        state.humanReview = review;
-      });
-    },
-    setAskUserQuestion: (question) => {
-      set((state) => {
-        state.askUserQuestion = question;
-      });
-    },
-    resetRunView: () => {
-      set((state) => {
-        state.runView = initialRunView;
-        state.isResuming = false;
-      });
-    },
-    startWorkflowRun: (input, mode, turnId) => {
-      set((state) => {
-        state.isResuming = false;
-        state.lastRunInput = input;
-        // Workflows present their live graph trace as soon as a run starts.
-        state.runPanelOpen = true;
-        state.showRunOutput = true;
+        const projection = createWorkflowRunProjection(runId);
+        projection.status = 'running';
+        projection.startedAt = Date.now();
         if (mode === 'chat') {
-          const value = input.input;
-          state.runView.status = 'running';
-          state.runView.startedAt = Date.now();
-          state.runView.endedAt = undefined;
-          state.runView.activeNodeId = undefined;
-          state.runView.finalState = undefined;
-          state.runView.error = undefined;
-          state.runView.nodes = [];
-          state.runView.execution = [];
-          state.runView.messages.push({
-            id: crypto.randomUUID(),
+          const id = `${runId}:input:${turnId ?? 0}`;
+          projection.messageIds.push(id);
+          projection.messagesById[id] = {
+            id,
             nodeId: 'You',
             content:
-              typeof value === 'string'
-                ? value
-                : (JSON.stringify(value ?? '') ?? ''),
+              typeof input.input === 'string'
+                ? input.input
+                : JSON.stringify(input.input ?? ''),
             isStreaming: false,
             role: 'user',
             turnId,
-          });
-        } else {
-          state.runView = {
-            ...initialRunView,
-            status: 'running',
-            startedAt: Date.now(),
           };
         }
-      });
-    },
-    resumeWorkflowRun: () => {
-      set((state) => {
-        state.isResuming = true;
+        state.lastRunInput = input;
+        state.projection = projection;
+        state.runningNodeId = null;
         state.runPanelOpen = true;
         state.showRunOutput = true;
-        state.runView.status = 'running';
-        state.runView.endedAt = undefined;
-        state.runView.activeNodeId = undefined;
-        state.runView.finalState = undefined;
-        state.runView.error = undefined;
-      });
-    },
-    applyRunEvents: (events, context) => {
+      }),
+    restoreWorkflowRun: (projection) =>
       set((state) => {
-        for (const event of events) applyRunEvent(state, event, context);
-      });
-    },
-    projectFailedRun: (message) => {
-      set((state) =>
-        projectTerminalRunState(state, 'failed', undefined, message),
-      );
-    },
-    clearRunningNode: () => {
+        state.projection = projection;
+        state.runningNodeId = projection.activeNodeId ?? null;
+        state.showRunOutput = true;
+        state.runPanelOpen = true;
+      }),
+    resumeWorkflowRun: () =>
+      set((state) => {
+        state.projection.status = 'running';
+        state.projection.endedAt = undefined;
+        state.projection.error = undefined;
+        state.projection.finalState = undefined;
+      }),
+    applyRunEvents: (events, context) =>
+      set((state) => {
+        for (const event of events)
+          reduceWorkflowRunEvent(state.projection, event, context, state);
+      }),
+    projectFailedRun: (message) =>
+      set((state) => {
+        projectTerminal(state.projection, 'failed', undefined, message);
+        state.runningNodeId = null;
+      }),
+    clearRunningNode: () =>
       set((state) => {
         state.runningNodeId = null;
-      });
-    },
-    clearToolApproval: () => {
+      }),
+    clearToolApproval: () =>
       set((state) => {
         state.toolApproval = undefined;
-      });
-    },
-    clearHumanReview: () => {
+      }),
+    clearHumanReview: () =>
       set((state) => {
         state.humanReview = undefined;
-      });
-    },
-    clearAskUserQuestion: () => {
+      }),
+    clearAskUserQuestion: () =>
       set((state) => {
         state.askUserQuestion = undefined;
-      });
-    },
+      }),
   })),
 );
 
-function applyRunEvent(
-  state: WorkflowRunReplayState,
-  event: WorkflowRunEvent,
+function reduceWorkflowRunEvent(
+  projection: WorkflowRunProjection,
+  envelope: WorkflowRunEventEnvelope,
   context: WorkflowRunEventContext,
+  transient?: Pick<
+    WorkflowRunStore,
+    'runningNodeId' | 'toolApproval' | 'humanReview' | 'askUserQuestion'
+  >,
 ) {
-  const view = state.runView;
+  const event = envelope.event;
+  if (envelope.sequence <= projection.eventSequence) return;
+  projection.eventSequence = envelope.sequence;
   if (event.type === 'node_start') {
     const node = context.nodes.find((item) => item.id === event.node);
-    const existing = view.nodes.find((item) => item.id === event.node);
-    if (existing) existing.status = 'running';
-    else
-      view.nodes.push({
-        id: event.node,
-        name: displayName(node),
+    const current = projection.nodesById[event.node];
+    projection.nodesById[event.node] = {
+      id: event.node,
+      name: displayName(node),
+      status: 'running',
+      durationMs: current?.durationMs,
+    };
+    if (!current) projection.nodeIds.push(event.node);
+    projection.activeNodeId = event.node;
+    if (transient) transient.runningNodeId = event.node;
+    const resuming = projection.resumePendingNodeIds[event.node] === true;
+    delete projection.resumePendingNodeIds[event.node];
+    const executionId = projection.latestExecutionIdByNode[event.node];
+    const thoughtId = projection.latestThoughtIdByNode[event.node];
+    if (resuming && executionId && thoughtId) {
+      // A dynamic interrupt re-enters the same graph node after its action is
+      // resolved. Keep one user-visible execution rather than rendering the
+      // approval preflight and the resumed work as duplicate node rows.
+      Object.assign(projection.executionsById[executionId], {
         status: 'running',
+        durationMs: undefined,
       });
-    state.runningNodeId = event.node;
-    view.activeNodeId = event.node;
-    const previousExecution = state.isResuming
-      ? view.execution.findLast((entry) => entry.nodeId === event.node)
-      : undefined;
-    if (previousExecution) {
-      Object.assign(previousExecution, {
+      Object.assign(projection.thoughtsById[thoughtId], {
         status: 'running',
         durationMs: undefined,
       });
     } else {
-      view.execution.push({
+      const nextExecutionId = `${projection.runId ?? envelope.runId}:execution:${envelope.sequence}`;
+      const nextThoughtId = `${projection.runId ?? envelope.runId}:thought:${envelope.sequence}`;
+      projection.executionIds.push(nextExecutionId);
+      projection.thoughtIds.push(nextThoughtId);
+      projection.executionsById[nextExecutionId] = {
         nodeId: event.node,
         type: node?.type ?? 'node',
         status: 'running',
         turnId: context.turnId,
-      });
-    }
-    const previousThought = state.isResuming
-      ? view.thoughts.findLast((thought) => thought.nodeId === event.node)
-      : undefined;
-    if (previousThought) {
-      Object.assign(previousThought, {
-        status: 'running',
-        durationMs: undefined,
-      });
-    } else {
-      view.thoughts.push({
-        id: crypto.randomUUID(),
+      };
+      projection.thoughtsById[nextThoughtId] = {
+        id: nextThoughtId,
         nodeId: event.node,
         status: 'running',
         turnId: context.turnId,
-      });
+      };
+      projection.latestExecutionIdByNode[event.node] = nextExecutionId;
+      projection.latestThoughtIdByNode[event.node] = nextThoughtId;
     }
-    state.isResuming = false;
     return;
   }
-  if (event.type === 'message') return appendMessage(view, event, context);
+  if (event.type === 'message')
+    return appendMessage(projection, envelope, event, context);
   if (event.type === 'resumed') {
-    // Persisted histories replay from the beginning, so they do not call the
-    // live `resumeWorkflowRun` action. Mark the next node start as a retry of
-    // the paused node rather than creating a duplicate execution entry.
-    state.isResuming = true;
+    projection.status = 'running';
+    projection.error = undefined;
+    for (const nodeId of event.pending_nodes)
+      projection.resumePendingNodeIds[nodeId] = true;
     return;
   }
   if (event.type === 'node_end') {
-    const node = view.nodes.find((item) => item.id === event.node);
+    const node = projection.nodesById[event.node];
     if (node)
       Object.assign(node, {
         status: 'completed',
         durationMs: event.duration_ms,
       });
-    const execution = view.execution.findLast(
-      (item) => item.nodeId === event.node,
-    );
+    const execution = latestExecution(projection, event.node);
     if (execution)
       Object.assign(execution, {
         status: 'completed',
         durationMs: event.duration_ms,
       });
-    const thought = view.thoughts.findLast(
-      (item) => item.nodeId === event.node && item.status === 'running',
-    );
-    if (thought)
+    const thought = latestThought(projection, event.node);
+    if (thought?.status === 'running')
       Object.assign(thought, {
         status: 'completed',
         durationMs: event.duration_ms,
       });
-    if (view.activeNodeId === event.node) view.activeNodeId = undefined;
-    view.messages.forEach((item) => {
-      if (item.nodeId === event.node) item.isStreaming = false;
-    });
+    if (projection.activeNodeId === event.node)
+      projection.activeNodeId = undefined;
+    if (transient?.runningNodeId === event.node) transient.runningNodeId = null;
+    const messageId = projection.activeMessageIdByNode[event.node];
+    if (messageId && projection.messagesById[messageId])
+      projection.messagesById[messageId].isStreaming = false;
     return;
   }
-  if (event.type === 'custom') return applyCustom(state, event);
+  if (event.type === 'custom') return applyCustom(projection, event, transient);
   if (event.type === 'done') {
-    projectTerminalRunState(state, 'completed', event.state);
-    view.totalSteps = event.total_steps;
-  } else if (event.type === 'error') {
-    projectTerminalRunState(state, 'failed', undefined, event.message);
-  } else if (event.type === 'interrupted') {
+    projectTerminal(projection, 'completed', event.state);
+    projection.totalSteps = event.total_steps;
+  } else if (event.type === 'error')
+    projectTerminal(projection, 'failed', undefined, event.message);
+  else if (event.type === 'interrupted') {
     const awaitingInput = Boolean(
-      state.toolApproval || state.humanReview || state.askUserQuestion,
+      transient?.toolApproval ||
+      transient?.humanReview ||
+      transient?.askUserQuestion,
     );
-    // Dynamic interrupts pause the workflow for a user decision; they are not
-    // execution failures and should not leave a destructive error banner behind.
-    projectTerminalRunState(
-      state,
+    // A dynamic interrupt is the runtime's checkpoint signal for an approval
+    // or review. It is not a failed workflow and must not surface its internal
+    // reason as an error banner while the corresponding action is pending.
+    projectTerminal(
+      projection,
       'interrupted',
       undefined,
       awaitingInput ? undefined : event.message,
@@ -389,16 +368,26 @@ function applyRunEvent(
   }
 }
 
+function latestExecution(projection: WorkflowRunProjection, nodeId: string) {
+  const id = projection.latestExecutionIdByNode[nodeId];
+  return id ? projection.executionsById[id] : undefined;
+}
+function latestThought(projection: WorkflowRunProjection, nodeId: string) {
+  const id = projection.latestThoughtIdByNode[nodeId];
+  return id ? projection.thoughtsById[id] : undefined;
+}
+
 function appendMessage(
-  view: WorkflowRunView,
+  projection: WorkflowRunProjection,
+  envelope: WorkflowRunEventEnvelope,
   event: Extract<WorkflowRunEvent, { type: 'message' }>,
-  context: { mode: WorkflowMode; turnId?: string },
+  context: WorkflowRunEventContext,
 ) {
-  if (context.mode !== 'chat') {
-    const execution = view.execution.findLast(
-      (item) => item.nodeId === event.node,
-    );
-    if (!execution) return;
+  const execution = latestExecution(projection, event.node);
+  if (execution) {
+    // Node messages belong to the execution that produced them in both task
+    // and chat modes. Chat renders that execution directly below the user
+    // turn, preventing all node responses from accumulating at the bottom.
     const messages = Array.isArray(execution.messages)
       ? execution.messages
       : [];
@@ -408,74 +397,81 @@ function appendMessage(
     execution.messages = messages;
     return;
   }
-  const last = view.messages.at(-1);
-  if (last?.nodeId === event.node && last.isStreaming) {
-    last.content += event.content;
-    last.isStreaming = !event.is_final;
-  } else
-    view.messages.push({
-      id: crypto.randomUUID(),
-      nodeId: event.node,
-      content: event.content,
-      isStreaming: !event.is_final,
-      role: 'assistant',
-      turnId: context.turnId,
-    });
+  // Keep a normal assistant bubble only for transports that do not identify a
+  // workflow node, because there is no execution row that can own the text.
+  if (context.mode !== 'chat') return;
+  const activeId = projection.activeMessageIdByNode[event.node];
+  const active = activeId ? projection.messagesById[activeId] : undefined;
+  if (active?.isStreaming) {
+    active.content += event.content;
+    active.isStreaming = !event.is_final;
+    return;
+  }
+  const id = `${projection.runId ?? envelope.runId}:message:${envelope.sequence}`;
+  projection.messageIds.push(id);
+  projection.messagesById[id] = {
+    id,
+    nodeId: event.node,
+    content: event.content,
+    isStreaming: !event.is_final,
+    role: 'assistant',
+    turnId: context.turnId,
+  };
+  if (!event.is_final) projection.activeMessageIdByNode[event.node] = id;
 }
 
 function applyCustom(
-  state: WorkflowRunReplayState,
+  projection: WorkflowRunProjection,
   event: Extract<WorkflowRunEvent, { type: 'custom' }>,
+  transient?: Pick<
+    WorkflowRunStore,
+    'toolApproval' | 'humanReview' | 'askUserQuestion'
+  >,
 ) {
-  if (event.event_type === 'workflow.run_cancelled') {
-    projectTerminalRunState(state, 'cancelled');
-    return;
-  }
+  if (event.event_type === 'workflow.run_cancelled')
+    return projectTerminal(projection, 'cancelled');
   if (typeof event.data !== 'object' || event.data === null) return;
   if (event.event_type === 'agent.tool_approval_required') {
-    state.toolApproval = event.data as Record<string, unknown>;
+    if (transient)
+      transient.toolApproval = event.data as Record<string, unknown>;
     return;
   }
   if (event.event_type === 'workflow.human_review_required') {
-    state.humanReview = event.data as Record<string, unknown>;
+    if (transient)
+      transient.humanReview = event.data as Record<string, unknown>;
     return;
   }
   if (event.event_type === 'workflow.ask_user_question_required') {
-    state.askUserQuestion = event.data as Record<string, unknown>;
+    if (transient)
+      transient.askUserQuestion = event.data as Record<string, unknown>;
     return;
   }
-  const execution = state.runView.execution.findLast(
-    (item) => item.nodeId === event.node,
-  );
+  const execution = latestExecution(projection, event.node);
   if (!execution) return;
   if (
     event.event_type === 'agent.tool_result' ||
     event.event_type === 'agent.tool_denied'
   ) {
     const call = event.data as Record<string, unknown>;
-    const toolName = typeof call.tool === 'string' ? call.tool : undefined;
-    const pendingOutput = Array.isArray(execution.pendingToolOutput)
+    const tool = typeof call.tool === 'string' ? call.tool : undefined;
+    const pending = Array.isArray(execution.pendingToolOutput)
       ? execution.pendingToolOutput
       : [];
-    const output = pendingOutput.filter(
+    const output = pending.filter(
       (item) =>
         typeof item === 'object' &&
         item !== null &&
-        (item as Record<string, unknown>).tool === toolName,
+        (item as Record<string, unknown>).tool === tool,
     );
-    execution.pendingToolOutput = pendingOutput.filter(
+    execution.pendingToolOutput = pending.filter(
       (item) =>
         typeof item !== 'object' ||
         item === null ||
-        (item as Record<string, unknown>).tool !== toolName,
+        (item as Record<string, unknown>).tool !== tool,
     );
-
-    // A tool emits stdout/stderr before its result event. Attach buffered logs
-    // here so each invocation owns the diagnostics it produced.
-    const callWithOutput = output.length > 0 ? { ...call, output } : call;
     execution.toolCalls = [
       ...(Array.isArray(execution.toolCalls) ? execution.toolCalls : []),
-      callWithOutput,
+      output.length ? { ...call, output } : call,
     ];
   } else if (event.event_type === 'agent.tool_output') {
     const { data, stream, tool } = event.data as Record<string, unknown>;
@@ -484,7 +480,6 @@ function applyCustom(
       typeof data !== 'string'
     )
       return;
-
     execution.pendingToolOutput = [
       ...(Array.isArray(execution.pendingToolOutput)
         ? execution.pendingToolOutput
@@ -501,8 +496,6 @@ function applyCustom(
     Object.assign(execution, event.data);
     if (Array.isArray(messages) && messages.length)
       execution.messages = messages;
-    // The final node snapshot repeats tool calls without their live stdout/stderr.
-    // Keep the live records because they are the only records carrying Tool App logs.
     if (Array.isArray(toolCalls) && toolCalls.length)
       execution.toolCalls = toolCalls;
   } else if (event.event_type === 'process.output') {
@@ -512,66 +505,50 @@ function applyCustom(
       typeof data !== 'string'
     )
       return;
-    execution[stream] = truncate(((execution[stream] as string) ?? '') + data);
-    let log = state.runView.processLogs.find(
-      (item) => item.nodeId === event.node,
+    execution[stream] = truncate(
+      `${(execution[stream] as string) ?? ''}${data}`,
     );
-    if (!log) {
-      log = {
-        nodeId: event.node,
-        name: typeof name === 'string' ? name : event.node,
-        stdout: '',
-        stderr: '',
-      };
-      state.runView.processLogs.push(log);
-    }
+    const log = projection.processLogsByNode[event.node] ?? {
+      nodeId: event.node,
+      name: typeof name === 'string' ? name : event.node,
+      stdout: '',
+      stderr: '',
+    };
     log[stream] = truncate(log[stream] + data);
+    projection.processLogsByNode[event.node] = log;
   }
 }
 
-/**
- * Projects a terminal event into renderer-only output. The native run record
- * owns status, end time, and duration; this never writes lifecycle timestamps.
- */
-function projectTerminalRunState(
-  state: WorkflowRunReplayState,
-  status: WorkflowRunView['status'],
+function projectTerminal(
+  projection: WorkflowRunProjection,
+  status: WorkflowRunStatus,
   finalState?: Record<string, unknown>,
   error?: string,
 ) {
-  const view = state.runView;
-  view.status = status;
-  view.activeNodeId = undefined;
-  if (finalState) view.finalState = finalState;
-  // A later completion (for example after a human-review resume) supersedes
-  // any error from an earlier execution attempt.
-  view.error = error;
-  // Terminal events may arrive from Run Center rather than the editor's own
-  // decision handler, so they must also dismiss any visible approval dialog.
-  state.toolApproval = undefined;
-  state.humanReview = undefined;
-  state.askUserQuestion = undefined;
-  // The graph does not emit node_end after cancellation. Mark every live
-  // projection terminal so history cannot continue to describe a cancelled
-  // node as awaiting a response.
-  const nodeStatus =
+  projection.status = status;
+  projection.activeNodeId = undefined;
+  projection.finalState = finalState;
+  projection.error = error;
+  const entityStatus =
     status === 'completed'
       ? 'completed'
       : status === 'cancelled'
         ? 'cancelled'
         : 'failed';
-  view.nodes.forEach((item) => {
-    if (item.status === 'running') item.status = nodeStatus;
-  });
-  view.execution.forEach((item) => {
-    if (item.status === 'running') item.status = nodeStatus;
-  });
-  view.thoughts.forEach((item) => {
-    if (item.status === 'running') item.status = nodeStatus;
-  });
-  view.messages.forEach((item) => {
-    item.isStreaming = false;
-  });
+  for (const id of projection.nodeIds) {
+    const node = projection.nodesById[id];
+    if (node.status === 'running') node.status = entityStatus;
+  }
+  for (const id of projection.executionIds) {
+    const execution = projection.executionsById[id];
+    if (execution.status === 'running') execution.status = entityStatus;
+  }
+  for (const id of projection.thoughtIds) {
+    const thought = projection.thoughtsById[id];
+    if (thought.status === 'running') thought.status = entityStatus;
+  }
+  for (const id of projection.messageIds)
+    projection.messagesById[id].isStreaming = false;
 }
 
 function displayName(node?: Node) {
@@ -586,7 +563,6 @@ function displayName(node?: Node) {
           ? data.title
           : (node?.id ?? '');
 }
-
 function truncate(value: string) {
   return value.length <= 200_000
     ? value

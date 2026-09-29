@@ -1,5 +1,4 @@
 import { listen } from '@tauri-apps/api/event';
-import type { Node } from '@xyflow/react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,6 +16,7 @@ import {
   DrawerTitle,
   ScrollArea,
 } from '@workspace/ui/components';
+import type { Node } from '@xyflow/react';
 import { PinIcon, XIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -36,7 +36,10 @@ import {
   type WorkflowRunEvent,
 } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
-import { replayWorkflowRunView } from '@/stores/workflow-run.store';
+import {
+  replayWorkflowRunProjection,
+  workflowRunView,
+} from '@/stores/workflow-run.store';
 
 function workflowSnapshot(snapshot: unknown): {
   mode: 'task' | 'chat';
@@ -86,10 +89,16 @@ function RunWorkspace() {
   const workflowRun = useMemo(() => {
     if (activeTab?.targetType !== 'workflow' || !activeRecord) return;
     const snapshot = workflowSnapshot(activeRecord.targetSnapshot);
-    const run = replayWorkflowRunView(
-      activeRecord.outputView,
-      activeRecord.events.map(({ event }) => event as WorkflowRunEvent),
-      snapshot,
+    const run = workflowRunView(
+      replayWorkflowRunProjection(
+        activeRecord.id,
+        activeRecord.events.map(({ sequence, event }) => ({
+          runId: activeRecord.id,
+          sequence,
+          event: event as WorkflowRunEvent,
+        })),
+        snapshot,
+      ),
     );
     const startedAt = Date.parse(activeRecord.startedAt);
     const endedAt =
@@ -121,7 +130,9 @@ function RunWorkspace() {
         durationMs: activeRecord.durationMs,
         startedAt: Number.isNaN(startedAt) ? run.startedAt : startedAt,
         endedAt:
-          endedAt === undefined || Number.isNaN(endedAt) ? run.endedAt : endedAt,
+          endedAt === undefined || Number.isNaN(endedAt)
+            ? run.endedAt
+            : endedAt,
       },
     };
   }, [activeRecord, activeTab?.targetType]);
@@ -139,7 +150,12 @@ function RunWorkspace() {
   };
 
   const requestFailedWorkflowRetry = () => {
-    if (!activeRecord || activeRecord.targetType !== 'workflow' || activeRecord.status !== 'failed') return;
+    if (
+      !activeRecord ||
+      activeRecord.targetType !== 'workflow' ||
+      activeRecord.status !== 'failed'
+    )
+      return;
     setRetrySourceRunId(activeRecord.id);
   };
 
@@ -201,35 +217,42 @@ function RunWorkspace() {
     return (
       <>
         <Drawer
-        open={open}
-        showSwipeHandle
-        snapPoints={['31rem', 1]}
-        onOpenChange={setOpen}
-      >
-        <DrawerContent>
-          <WorkflowRunOutput
-            readOnly
-            isChat={workflowRun.mode === 'chat'}
-            isRunning={workflowRun.run.status === 'running'}
-            run={workflowRun.run}
-            workflowNodes={workflowRun.nodes}
-            spans={activeRecord.spans}
-            onClose={() => setOpen(false)}
-            onRunAgain={requestFailedWorkflowRetry}
-          />
-        </DrawerContent>
+          open={open}
+          showSwipeHandle
+          snapPoints={['31rem', 1]}
+          onOpenChange={setOpen}
+        >
+          <DrawerContent>
+            <WorkflowRunOutput
+              readOnly
+              isChat={workflowRun.mode === 'chat'}
+              isRunning={workflowRun.run.status === 'running'}
+              run={workflowRun.run}
+              workflowNodes={workflowRun.nodes}
+              spans={activeRecord?.spans}
+              onClose={() => setOpen(false)}
+              onRunAgain={requestFailedWorkflowRetry}
+            />
+          </DrawerContent>
         </Drawer>
-        <AlertDialog open={Boolean(retrySourceRunId)} onOpenChange={(open) => !open && setRetrySourceRunId(undefined)}>
+        <AlertDialog
+          open={Boolean(retrySourceRunId)}
+          onOpenChange={(open) => !open && setRetrySourceRunId(undefined)}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
               <AlertDialogDescription>
-                Earlier completed nodes will not run again. The failed node may have already performed an external action, such as sending a message or updating a record.
+                Earlier completed nodes will not run again. The failed node may
+                have already performed an external action, such as sending a
+                message or updating a record.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={retryFailedWorkflow}>Retry failed node</AlertDialogAction>
+              <AlertDialogAction onClick={retryFailedWorkflow}>
+                Retry failed node
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

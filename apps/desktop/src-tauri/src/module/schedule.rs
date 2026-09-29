@@ -477,7 +477,6 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                 target_id: due.summary.target_id,
                 target_name: due.summary.target_name,
                 input: recipe.input.clone(),
-                output_view: json!({"isRunning": true}),
                 target_snapshot,
                 release_id,
                 release_version,

@@ -52,7 +52,9 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         status: RunStatus::Queued,
         started_at: chrono::Utc::now().to_rfc3339(),
         input: Some(request.input),
-        output_view: request.output_view,
+        // Workflow output is reconstructed exclusively from its event log.
+        // The shared run-record column remains for App run output.
+        output_view: json!({}),
         target_snapshot: request.target_snapshot,
         runtime,
     })
@@ -160,7 +162,7 @@ pub async fn retry_failed_workflow(source_run_id: &str) -> Result<RunRecordSumma
         status: RunStatus::Queued,
         started_at: chrono::Utc::now().to_rfc3339(),
         input: source.input,
-        output_view: replay_output_view(RunTargetType::Workflow),
+        output_view: json!({}),
         target_snapshot: source.target_snapshot,
         runtime,
     })
@@ -241,16 +243,7 @@ async fn missing_replay_dependencies(runtime: &Value) -> Result<Vec<MissingRepla
 
 fn replay_output_view(target_type: RunTargetType) -> Value {
     match target_type {
-        // Workflow history restores this snapshot before replaying its event
-        // journal, so its collection fields must exist even before node events.
-        RunTargetType::Workflow => json!({
-            "status": "running",
-            "nodes": [],
-            "messages": [],
-            "thoughts": [],
-            "processLogs": [],
-            "execution": [],
-        }),
+        RunTargetType::Workflow => json!({}),
         RunTargetType::App => json!({}),
     }
 }
@@ -319,15 +312,10 @@ mod replay_tests {
     }
 
     #[test]
-    fn replayed_workflow_starts_with_a_restorable_output_view() {
+    fn replayed_workflow_starts_with_an_empty_output_cache() {
         let view = replay_output_view(super::RunTargetType::Workflow);
 
-        assert_eq!(view["status"], "running");
-        assert_eq!(view["nodes"], json!([]));
-        assert_eq!(view["messages"], json!([]));
-        assert_eq!(view["thoughts"], json!([]));
-        assert_eq!(view["processLogs"], json!([]));
-        assert_eq!(view["execution"], json!([]));
+        assert_eq!(view, json!({}));
     }
 
     #[test]

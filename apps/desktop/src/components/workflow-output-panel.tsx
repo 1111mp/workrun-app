@@ -53,9 +53,20 @@ import {
   RotateCcwIcon,
   TerminalIcon,
 } from 'lucide-react';
-import { Children, Fragment, type ReactNode, useState } from 'react';
+import {
+  Children,
+  Fragment,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
+import { useShallow } from 'zustand/react/shallow';
 
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
 import type { RunSpan } from '@/services/run-history';
@@ -64,6 +75,7 @@ import type {
   WorkflowRunMessage,
   WorkflowRunView,
 } from '@/services/workflow';
+import { useWorkflowRunStore } from '@/stores';
 
 type WorkflowOutputPanelProps = {
   run: WorkflowRunView;
@@ -124,7 +136,7 @@ function durationLabel(run: WorkflowRunView) {
 }
 
 function nodeDisplayName(
-  run: WorkflowRunView,
+  run: Pick<WorkflowRunView, 'nodes'>,
   workflowNodes: Node[],
   nodeId: string,
 ) {
@@ -357,7 +369,7 @@ function toolCallOutput(value: unknown) {
     .join('\n\n');
 }
 
-function ToolCalls({ calls }: { calls: unknown[] }) {
+const ToolCalls = memo(function ToolCalls({ calls }: { calls: unknown[] }) {
   if (calls.length === 0) return null;
 
   return (
@@ -416,7 +428,7 @@ function ToolCalls({ calls }: { calls: unknown[] }) {
       </CollapsibleContent>
     </Collapsible>
   );
-}
+});
 
 function ToolCallValue({ label, value }: { label: string; value: unknown }) {
   if (value === undefined) return null;
@@ -484,7 +496,13 @@ function formatCost(microusd: number) {
   return `$${(microusd / 1_000_000).toFixed(microusd >= 10_000 ? 2 : 4)}`;
 }
 
-function ModelUsage({ nodeId, spans }: { nodeId: string; spans: RunSpan[] }) {
+const ModelUsage = memo(function ModelUsage({
+  nodeId,
+  spans,
+}: {
+  nodeId: string;
+  spans: RunSpan[];
+}) {
   const { t } = useTranslation();
   const modelCalls = spans.filter(
     (span) => span.kind === 'model_call' && span.nodeId === nodeId,
@@ -591,16 +609,21 @@ function ModelUsage({ nodeId, spans }: { nodeId: string; spans: RunSpan[] }) {
       </CollapsibleContent>
     </Collapsible>
   );
-}
+});
 
 function TraceResult({
   entry,
   showAgentResponse = true,
   spans = [],
+  animateResponses = false,
+  onResponsePresentationComplete,
 }: {
   entry: WorkflowTraceEntry;
   showAgentResponse?: boolean;
   spans?: RunSpan[];
+  /** Historical output is a snapshot and must never replay live typing. */
+  animateResponses?: boolean;
+  onResponsePresentationComplete?: (responseIndex: number) => void;
 }) {
   const result =
     typeof entry.result === 'object' && entry.result !== null
@@ -731,10 +754,17 @@ function TraceResult({
           <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
             {responses.map((response, index) => (
               <div key={index} className='text-sm leading-6'>
-                <MarkdownContent
-                  content={response}
-                  isStreaming={entry.status === 'running'}
-                />
+                {animateResponses ? (
+                  <TypewriterMarkdown
+                    content={response}
+                    isStreaming={entry.status === 'running'}
+                    onPresentationComplete={() =>
+                      onResponsePresentationComplete?.(index)
+                    }
+                  />
+                ) : (
+                  <MarkdownContent content={response} />
+                )}
               </div>
             ))}
           </div>
@@ -860,6 +890,70 @@ function MarkdownContent({
   return <Markdown components={markdownComponents}>{content}</Markdown>;
 }
 
+/**
+ * Reveals only this response locally. Keeping the animation outside Zustand
+ * prevents a cosmetic typing frame from invalidating the workflow timeline.
+ */
+function TypewriterMarkdown({
+  content,
+  isStreaming,
+  onPresentationComplete,
+}: {
+  content: string;
+  isStreaming: boolean;
+  onPresentationComplete?: () => void;
+}) {
+  const [displayed, setDisplayed] = useState('');
+  const displayedRef = useRef('');
+  const completeRef = useRef(onPresentationComplete);
+  completeRef.current = onPresentationComplete;
+
+  useEffect(() => {
+    // A resumed/replaced response is not an append; reveal its new value from
+    // the beginning rather than slicing through a Unicode grapheme.
+    if (!content.startsWith(displayedRef.current)) {
+      displayedRef.current = '';
+      setDisplayed('');
+    }
+    const graphemes = Array.from(content);
+    let frame: number | undefined;
+    let cancelled = false;
+    const reveal = () => {
+      if (cancelled) return;
+      const shown = Array.from(displayedRef.current).length;
+      if (shown >= graphemes.length) return;
+      const remaining = graphemes.length - shown;
+      const next = graphemes
+        .slice(
+          0,
+          shown + Math.min(1 + Math.floor(Math.sqrt(remaining) * 0.6), 32),
+        )
+        .join('');
+      displayedRef.current = next;
+      setDisplayed(next);
+      frame = requestAnimationFrame(reveal);
+    };
+    frame = requestAnimationFrame(reveal);
+    return () => {
+      cancelled = true;
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [content]);
+
+  useEffect(() => {
+    if (!isStreaming && displayed === content) completeRef.current?.();
+  }, [content, displayed, isStreaming]);
+
+  return (
+    <MarkdownContent
+      content={displayed}
+      // Defer Markdown parsing until the local reveal is complete; parsing a
+      // new AST for every character is itself a source of layout churn.
+      isStreaming={isStreaming || displayed !== content}
+    />
+  );
+}
+
 function ChatMessageBubble({
   message,
   nodeName,
@@ -903,6 +997,7 @@ function ThinkingProcess({
   isRunning: boolean;
   nodeName: (nodeId: string) => string;
 }) {
+  const { t } = useTranslation();
   if (thoughts.length === 0 && !isRunning) return null;
 
   const completed = thoughts.filter(
@@ -910,9 +1005,9 @@ function ThinkingProcess({
   ).length;
   const label = isRunning
     ? completed > 0
-      ? `Thinking · ${completed} step${completed === 1 ? '' : 's'} complete`
-      : 'Thinking…'
-    : `Thought process · ${completed} step${completed === 1 ? '' : 's'}`;
+      ? t('workflowEditor.output.thinkingProgress', { count: completed })
+      : t('workflowEditor.output.thinking')
+    : t('workflowEditor.output.thinkingProgress', { count: completed });
 
   return (
     <div className='flex flex-col gap-2 py-1'>
@@ -930,8 +1025,13 @@ function ThinkingProcess({
                 {thought.status === 'running' ? <Spinner /> : <CircleIcon />}
               </MarkerIcon>
               <MarkerContent>
-                {thought.status === 'running' ? 'Working in' : 'Finished'}{' '}
-                {nodeName(thought.nodeId)}
+                {thought.status === 'running'
+                  ? t('workflowEditor.output.workingIn', {
+                      node: nodeName(thought.nodeId),
+                    })
+                  : t('workflowEditor.output.finishedIn', {
+                      node: nodeName(thought.nodeId),
+                    })}
                 {thought.durationMs !== undefined
                   ? ` · ${(thought.durationMs / 1000).toFixed(1)}s`
                   : ''}
@@ -943,6 +1043,164 @@ function ThinkingProcess({
     </div>
   );
 }
+
+/** A single, keyed tail item for live thoughts; it is not an execution row. */
+const LiveThinkingProcess = memo(function LiveThinkingProcess({
+  workflowNodes,
+  isRunning,
+}: {
+  workflowNodes: Node[];
+  isRunning: boolean;
+}) {
+  const { t } = useTranslation();
+  const thoughtIds = useWorkflowRunStore(
+    (state) => state.projection.thoughtIds,
+  );
+  const thoughtsById = useWorkflowRunStore(
+    (state) => state.projection.thoughtsById,
+  );
+  const activeThoughts = useMemo(
+    () =>
+      thoughtIds
+        .map((thoughtId) => thoughtsById[thoughtId])
+        .filter(
+          (item): item is NonNullable<typeof item> =>
+            item?.status === 'running',
+        ),
+    [thoughtIds, thoughtsById],
+  );
+  const completedThoughts = useMemo(
+    () =>
+      thoughtIds
+        .map((thoughtId) => thoughtsById[thoughtId])
+        .filter(
+          (item): item is NonNullable<typeof item> =>
+            item?.status === 'completed',
+        ),
+    [thoughtIds, thoughtsById],
+  );
+
+  if (!isRunning && completedThoughts.length === 0) return null;
+
+  const displayNodeName = (id: string) =>
+    nodeDisplayName({ nodes: [] }, workflowNodes, id);
+
+  return (
+    <div className='flex flex-col gap-2 py-2'>
+      <Marker variant='separator'>
+        <MarkerIcon>
+          {activeThoughts.length > 0 ? <Spinner /> : <CheckCircle2Icon />}
+        </MarkerIcon>
+        <MarkerContent>
+          {activeThoughts.length > 0 && completedThoughts.length > 0
+            ? t('workflowEditor.output.thinkingProgress', {
+                count: completedThoughts.length,
+              })
+            : activeThoughts.length > 0
+              ? t('workflowEditor.output.thinking')
+              : t('workflowEditor.output.thinkingProgress', {
+                  count: completedThoughts.length,
+                })}
+        </MarkerContent>
+      </Marker>
+      <div className='flex flex-col gap-1.5 px-3'>
+        {completedThoughts.map((item) => (
+          <Marker key={item.id}>
+            <MarkerIcon>
+              <CircleIcon />
+            </MarkerIcon>
+            <MarkerContent>
+              {t('workflowEditor.output.finishedIn', {
+                node: displayNodeName(item.nodeId),
+              })}
+              {item.durationMs !== undefined
+                ? ` · ${(item.durationMs / 1000).toFixed(1)}s`
+                : ''}
+            </MarkerContent>
+          </Marker>
+        ))}
+        {activeThoughts.map((thought) => (
+          <Marker key={thought.id}>
+            <MarkerIcon>
+              <Spinner />
+            </MarkerIcon>
+            <MarkerContent>
+              {t('workflowEditor.output.workingIn', {
+                node: displayNodeName(thought.nodeId),
+              })}
+            </MarkerContent>
+          </Marker>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+const LiveTaskExecution = memo(function LiveTaskExecution({
+  id,
+  index,
+  workflowNodes,
+  spans,
+  onResponsePresentationComplete,
+}: {
+  id: string;
+  index: number;
+  workflowNodes: Node[];
+  spans: RunSpan[];
+  onResponsePresentationComplete: (responseIndex: number) => void;
+}) {
+  const { t } = useTranslation();
+
+  const entry = useWorkflowRunStore(
+    (state) => state.projection.executionsById[id],
+  );
+  if (!entry) return null;
+
+  const displayNodeName = (nodeId: string) =>
+    nodeDisplayName({ nodes: [] }, workflowNodes, nodeId);
+
+  const app = processNodeInfo(workflowNodes, entry.nodeId);
+  const log = processLog(entry);
+
+  return (
+    <MessageScrollerItem
+      messageId={id}
+      // Dynamic output cannot use the scroller's estimated 10rem item height:
+      // swapping that estimate for real streamed text causes visible reflow.
+      style={{ contentVisibility: 'visible' }}
+    >
+      <Marker variant='separator'>
+        <MarkerIcon>{executionStatusIcon(entry.status)}</MarkerIcon>
+        <MarkerContent>
+          {index + 2}. {displayNodeName(entry.nodeId)} · {entry.type}
+          {entry.durationMs !== undefined ? ` · ${entry.durationMs}ms` : ''}
+        </MarkerContent>
+      </Marker>
+      {app ? (
+        <div className='mt-2 flex items-center gap-2 px-1 text-sm'>
+          <span className='font-medium'>
+            {app.appName || displayNodeName(entry.nodeId)}
+          </span>
+          {app.version ? (
+            <Badge className='font-mono text-xs' variant='secondary'>
+              v{app.version}
+            </Badge>
+          ) : null}
+        </div>
+      ) : null}
+      <TraceResult
+        entry={entry}
+        spans={spans}
+        animateResponses
+        onResponsePresentationComplete={onResponsePresentationComplete}
+      />
+      <ExecutionOutput
+        label={t('workflowEditor.output.processOutput')}
+        log={log}
+      />
+    </MessageScrollerItem>
+  );
+});
 
 function RunTelemetry({
   spans,
@@ -1151,6 +1409,305 @@ function RunModelUsage({ spans }: { spans: RunSpan[] }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Live task output deliberately does not receive a derived view as a prop. Its
+ * rows subscribe to `executionsById[id]`, so Rust output for the active node
+ * cannot rerender or remount completed rows (or the thinking spinner).
+ */
+function LiveWorkflowTaskOutput({
+  workflowNodes,
+  onRunAgain,
+  onClose,
+  readOnly = false,
+  spans = [],
+}: Omit<WorkflowOutputPanelProps, 'run' | 'isRunning' | 'isChat' | 'onSend'>) {
+  const { t } = useTranslation();
+  const {
+    status,
+    startedAt,
+    endedAt,
+    durationMs,
+    activeNodeId,
+    error,
+    finalState,
+    executionIds,
+    thoughtIds,
+  } = useWorkflowRunStore(
+    useShallow((state) => ({
+      status: state.projection.status,
+      startedAt: state.projection.startedAt,
+      endedAt: state.projection.endedAt,
+      durationMs: state.projection.durationMs,
+      activeNodeId: state.projection.activeNodeId,
+      error: state.projection.error,
+      finalState: state.projection.finalState,
+      executionIds: state.projection.executionIds,
+      thoughtIds: state.projection.thoughtIds,
+    })),
+  );
+  const [presentation, setPresentation] = useState(() => ({
+    startedAt,
+    responses: new Set<string>(),
+  }));
+  // A new run gets an empty presentation set during this same render. The
+  // callback below adopts its key atomically, avoiding a reset effect.
+  const presentedResponses =
+    presentation.startedAt === startedAt ? presentation.responses : new Set();
+
+  const responseIds = executionIds.flatMap((id) => {
+    const messages =
+      useWorkflowRunStore.getState().projection.executionsById[id]?.messages;
+    return Array.isArray(messages)
+      ? messages.flatMap((message, index) =>
+          typeof message === 'object' &&
+          message !== null &&
+          typeof (message as { content?: unknown }).content === 'string' &&
+          (message as { content: string }).content.length > 0
+            ? [`${id}:${index}`]
+            : [],
+        )
+      : [];
+  });
+  const terminal = status !== 'idle' && status !== 'running';
+  const presentationComplete =
+    !terminal || responseIds.every((id) => presentedResponses.has(id));
+  const presentationStatus = presentationComplete ? status : 'running';
+  const onResponsePresentationComplete = useCallback(
+    (id: string) => {
+      setPresentation((current) => {
+        const responses =
+          current.startedAt === startedAt
+            ? current.responses
+            : new Set<string>();
+        if (responses.has(id) && current.startedAt === startedAt)
+          return current;
+        const next = new Set(responses);
+        next.add(id);
+        return { startedAt, responses: next };
+      });
+    },
+    [startedAt],
+  );
+  const run = {
+    status: presentationStatus,
+    startedAt,
+    endedAt,
+    durationMs,
+    activeNodeId,
+    error,
+    finalState,
+    nodes: [],
+    messages: [],
+    thoughts: [],
+    processLogs: [],
+    execution: [],
+  } as WorkflowRunView;
+  const isRunning = presentationStatus === 'running';
+  const duration = durationLabel(run);
+  const displayNodeName = (nodeId: string) =>
+    nodeDisplayName(run, workflowNodes, nodeId);
+  const copyAll = async () => {
+    const live = useWorkflowRunStore.getState().projection;
+    const output = live.executionIds
+      .flatMap((id) => {
+        const messages = live.executionsById[id]?.messages;
+        return Array.isArray(messages)
+          ? messages.map((message) =>
+              typeof message === 'object' &&
+              message !== null &&
+              typeof (message as { content?: unknown }).content === 'string'
+                ? (message as { content: string }).content
+                : '',
+            )
+          : [];
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    if (output) await navigator.clipboard.writeText(output);
+  };
+
+  return (
+    <>
+      <DrawerHeader className='relative min-h-16'>
+        <DrawerTitle>{t('workflowEditor.output.runOutput')}</DrawerTitle>
+        <DrawerDescription className='absolute inset-x-4 bottom-2'>
+          {statusLabel(run, t)}
+          {activeNodeId ? ` · ${displayNodeName(activeNodeId)}` : ''}
+          {duration ? ` · ${duration}` : ''}
+        </DrawerDescription>
+      </DrawerHeader>
+
+      <div className='relative flex min-h-0 flex-1 flex-col'>
+        {error ? (
+          <Alert
+            variant='destructive'
+            className='z-10 mx-4 mb-4 w-auto shadow-md'
+          >
+            <CircleAlertIcon />
+            <AlertTitle>{t('workflowEditor.output.workflowFailed')}</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <RunModelUsage spans={spans} />
+
+        <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
+          <MessageScroller>
+            <MessageScrollerViewport>
+              <MessageScrollerContent className='gap-4 px-4 py-4'>
+                {executionIds.length > 0 ? (
+                  <MessageScrollerItem
+                    messageId='execution-start'
+                    style={{ contentVisibility: 'visible' }}
+                  >
+                    <div>
+                      <Marker variant='separator'>
+                        <MarkerIcon>
+                          <CheckCircle2Icon />
+                        </MarkerIcon>
+                        <MarkerContent>
+                          1. {t('workflowEditor.output.start')}
+                        </MarkerContent>
+                      </Marker>
+                      <p className='text-muted-foreground mt-2 text-sm'>
+                        {t('workflowEditor.output.workflowStarted')}
+                      </p>
+                    </div>
+                  </MessageScrollerItem>
+                ) : null}
+                {executionIds.map((id, index) => (
+                  <LiveTaskExecution
+                    key={id}
+                    id={id}
+                    index={index}
+                    workflowNodes={workflowNodes}
+                    spans={spans}
+                    onResponsePresentationComplete={(responseIndex) =>
+                      onResponsePresentationComplete(`${id}:${responseIndex}`)
+                    }
+                  />
+                ))}
+                <MessageScrollerItem
+                  key='live-thinking'
+                  messageId='live-thinking'
+                  style={{ contentVisibility: 'visible' }}
+                >
+                  <LiveThinkingProcess
+                    workflowNodes={workflowNodes}
+                    isRunning={isRunning}
+                  />
+                </MessageScrollerItem>
+                {presentationComplete &&
+                status === 'completed' &&
+                executionIds.length > 0 ? (
+                  <MessageScrollerItem
+                    messageId='execution-end'
+                    style={{ contentVisibility: 'visible' }}
+                  >
+                    <Marker variant='separator'>
+                      <MarkerIcon>
+                        <CheckCircle2Icon />
+                      </MarkerIcon>
+                      <MarkerContent>
+                        {executionIds.length + 2}.{' '}
+                        {t('workflowEditor.output.end')}
+                      </MarkerContent>
+                    </Marker>
+                    <p className='text-muted-foreground mt-2 text-sm'>
+                      {t('workflowEditor.output.workflowCompleted')}
+                    </p>
+                  </MessageScrollerItem>
+                ) : null}
+                {executionIds.length === 0 &&
+                isRunning &&
+                thoughtIds.length === 0 ? (
+                  <Empty className='border-0'>
+                    <EmptyHeader>
+                      <EmptyMedia variant='icon'>
+                        <Spinner />
+                      </EmptyMedia>
+                      <EmptyTitle>
+                        {t('workflowEditor.output.waitingForOutput')}
+                      </EmptyTitle>
+                      <EmptyDescription>
+                        {t('workflowEditor.output.responsesAppearHere')}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : null}
+                {presentationComplete && finalState ? (
+                  <MessageScrollerItem
+                    messageId='final-state'
+                    style={{ contentVisibility: 'visible' }}
+                  >
+                    <Collapsible className='bg-card overflow-hidden rounded-xl border shadow-sm'>
+                      <CollapsibleTrigger
+                        render={
+                          <Button
+                            variant='ghost'
+                            className='group hover:bg-muted/60 h-auto w-full justify-between rounded-none px-3 py-3'
+                          />
+                        }
+                      >
+                        <span className='flex items-center gap-2.5'>
+                          <span className='bg-primary/10 text-primary flex size-8 items-center justify-center rounded-lg'>
+                            <DatabaseIcon className='size-4' />
+                          </span>
+                          <span className='flex flex-col items-start'>
+                            <span className='text-sm font-semibold'>
+                              {t('workflowEditor.output.finalState')}
+                            </span>
+                            <span className='text-muted-foreground text-xs'>
+                              {t('workflowEditor.output.finalStateDescription')}
+                            </span>
+                          </span>
+                        </span>
+                        <ChevronDownIcon className='text-muted-foreground size-4 transition-transform group-data-panel-open/button:rotate-180' />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <FinalState
+                          state={finalState}
+                          nodeDisplayName={displayNodeName}
+                          execution={executionIds
+                            .map(
+                              (id) =>
+                                useWorkflowRunStore.getState().projection
+                                  .executionsById[id],
+                            )
+                            .filter(Boolean)}
+                        />
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </MessageScrollerItem>
+                ) : null}
+                {presentationComplete ? (
+                  <RunTelemetry spans={spans} nodeName={displayNodeName} />
+                ) : null}
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+            <MessageScrollerButton />
+          </MessageScroller>
+        </MessageScrollerProvider>
+      </div>
+      <DrawerFooter className='flex-row justify-end'>
+        {!readOnly ? (
+          <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+            <RotateCcwIcon data-icon='inline-start' />
+            {rerunLabel(status, t)}
+          </Button>
+        ) : null}
+        <Button variant='outline' onClick={copyAll}>
+          <ClipboardIcon data-icon='inline-start' />
+          {t('workflowEditor.output.copyAll')}
+        </Button>
+        <Button type='button' onClick={onClose}>
+          {t('workflowEditor.output.close')}
+        </Button>
+      </DrawerFooter>
+    </>
   );
 }
 
@@ -1390,11 +1947,7 @@ function WorkflowRunOutput({
                                     </MarkerContent>
                                   </Marker>
                                   {appIdentity(entry.nodeId)}
-                                  <TraceResult
-                                    entry={entry}
-                                    showAgentResponse={false}
-                                    spans={spans}
-                                  />
+                                  <TraceResult entry={entry} spans={spans} />
                                   <ExecutionOutput
                                     label={t(
                                       'workflowEditor.output.processOutput',
@@ -1469,17 +2022,12 @@ function WorkflowRunOutput({
 
       {isChat ? (
         <DrawerFooter>
-          {!readOnly &&
-            (run.status === 'interrupted' || run.status === 'failed') && (
-              <Button
-                variant='outline'
-                disabled={isRunning}
-                onClick={onRunAgain}
-              >
-                <RotateCcwIcon data-icon='inline-start' />
-                {rerunLabel(run.status, t)}
-              </Button>
-            )}
+          {!readOnly && run.status === 'failed' && (
+            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+              <RotateCcwIcon data-icon='inline-start' />
+              {rerunLabel(run.status, t)}
+            </Button>
+          )}
           <form className='w-full' onSubmit={sendMessage}>
             <InputGroup className='h-auto'>
               <InputGroupTextarea
@@ -1535,4 +2083,4 @@ function WorkflowRunOutput({
   );
 }
 
-export { WorkflowRunOutput };
+export { LiveWorkflowTaskOutput, WorkflowRunOutput };

@@ -20,6 +20,39 @@
 		radial-gradient(ellipse 32rem 22rem at 82% 28%, rgb(27 132 188 / 8%), transparent 76%);
 }
 
+/* The current Starlight menu toggles this popover; older theme CSS only observed
+ * a removed body attribute, leaving the mobile sidebar translated off screen. */
+@media (max-width: 50em) {
+	#starlight__sidebar {
+		opacity: 0;
+		transform: translateX(-100%);
+		transition:
+			transform 0.2s ease-in-out,
+			opacity 0.2s ease-in-out,
+			display 0.2s allow-discrete,
+			overlay 0.2s allow-discrete;
+	}
+
+	#starlight__sidebar:popover-open {
+		opacity: 1;
+		transform: translateX(0);
+	}
+
+	/* Allow the Popover API to animate from its otherwise hidden initial state. */
+	@starting-style {
+		#starlight__sidebar:popover-open {
+			opacity: 0;
+			transform: translateX(-100%);
+		}
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#starlight__sidebar {
+		transition: none;
+	}
+}
+
 @media (min-width: 50rem) {
 	:root[data-has-hero] .hero {
 		padding-block: clamp(2rem, 4vmin, 3.75rem) 1.25rem;

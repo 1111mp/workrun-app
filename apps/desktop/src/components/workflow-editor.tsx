@@ -84,7 +84,7 @@ import {
 } from '@/services/workflow';
 import {
   createWorkflowStore,
-  restoreWorkflowRunView,
+  replayWorkflowRunProjection,
   useWorkflowRunStore,
   useWorkflowStoreApi,
   WorkflowStoreProvider,
@@ -431,12 +431,19 @@ function WorkflowEditorContent({
     // needs to refetch when the native runtime reports new model usage.
     enabled:
       Boolean(workflowRun.runId) && !historicalRun && !viewingHistoricalRunId,
+    // A model-call event changes only the revision portion of this key. Keep
+    // the current run's spans during that refetch so RunModelUsage does not
+    // unmount for one render and flash back in when SQLite responds.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === workflowRun.runId
+        ? keepPreviousData(previousData)
+        : undefined,
   });
 
   const restoreHistoricalRun = useWorkflowRunStore(
     useShallow((state) => ({
       setRunPanelOpen: state.setRunPanelOpen,
-      setRunView: state.setRunView,
+      restoreWorkflowRun: state.restoreWorkflowRun,
       setShowRunOutput: state.setShowRunOutput,
       resetRunView: state.resetRunView,
       applyRunEvents: state.applyRunEvents,
@@ -455,31 +462,33 @@ function WorkflowEditorContent({
 
   useEffect(() => {
     if (!historicalRun) return;
-    restoreHistoricalRun.setRunView(
-      restoreWorkflowRunView(historicalRun.outputView, historicalRun),
+    restoreHistoricalRun.restoreWorkflowRun(
+      replayWorkflowRunProjection(
+        historicalRun.id,
+        historicalRun.events.map(({ sequence, event }) => ({
+          runId: historicalRun.id,
+          sequence,
+          event: event as WorkflowRunEvent,
+        })),
+        { mode: workflowSettings.mode, nodes },
+      ),
     );
-    // Native sessions persist the transport trace, so an active run can be
-    // reconstructed after its original editor was closed or unmounted.
-    restoreHistoricalRun.applyRunEvents(
-      historicalRun.events.map(({ event }) => event as WorkflowRunEvent),
-      { mode: workflowSettings.mode, nodes },
-    );
-    restoreHistoricalRun.setShowRunOutput(true);
-    restoreHistoricalRun.setRunPanelOpen(true);
   }, [historicalRun, nodes, workflowSettings.mode, restoreHistoricalRun]);
 
   const openHistoricalRun = async (id: string) => {
     try {
       const record = await inspectRunRecord(id);
-      restoreHistoricalRun.setRunView(
-        restoreWorkflowRunView(record.outputView, record),
+      restoreHistoricalRun.restoreWorkflowRun(
+        replayWorkflowRunProjection(
+          record.id,
+          record.events.map(({ sequence, event }) => ({
+            runId: record.id,
+            sequence,
+            event: event as WorkflowRunEvent,
+          })),
+          { mode: workflowSettings.mode, nodes },
+        ),
       );
-      restoreHistoricalRun.applyRunEvents(
-        record.events.map(({ event }) => event as WorkflowRunEvent),
-        { mode: workflowSettings.mode, nodes },
-      );
-      restoreHistoricalRun.setShowRunOutput(true);
-      restoreHistoricalRun.setRunPanelOpen(true);
       setViewingHistoricalRunId(id);
       setViewingHistoricalRun(record);
     } catch (error) {
@@ -700,9 +709,11 @@ function WorkflowEditorContent({
                     items={workflowModes}
                     value={workflowSettings.mode}
                     disabled={readOnly}
-                    onValueChange={(mode) =>
-                      updateWorkflowSettings({ mode: mode as WorkflowMode })
-                    }
+                    onValueChange={(mode) => {
+                      if (mode !== workflowSettings.mode)
+                        workflowRun.resetRunContext();
+                      updateWorkflowSettings({ mode: mode as WorkflowMode });
+                    }}
                   >
                     <SelectTrigger
                       id='workflow-mode'
