@@ -76,6 +76,7 @@ import {
   publishWorkflow,
   toWorkflowDocument,
   toWorkflowDsl,
+  workflowDocumentFromSnapshot,
   updateWorkflow,
   type StoredWorkflow,
   type WorkflowDocument,
@@ -392,6 +393,14 @@ function WorkflowEditorContent({
     typeof runtime?.threadId === 'string'
       ? { id: historicalRun!.id, threadId: runtime.threadId }
       : undefined;
+  const displayedHistoricalRun = historicalRun ?? viewingHistoricalRun;
+  const displayedRunDocument = workflowDocumentFromSnapshot(
+    displayedHistoricalRun?.targetSnapshot,
+  );
+  // The output shell chooses its chat/task layout from these props, so it must
+  // use the same run-time snapshot as event replay rather than editor state.
+  const displayedRunSettings = displayedRunDocument?.settings ?? workflowSettings;
+  const displayedRunNodes = displayedRunDocument?.nodes ?? nodes;
 
   const createWorkflowForTeamRun = async () => {
     if (activeWorkflow) return activeWorkflow.id;
@@ -462,6 +471,9 @@ function WorkflowEditorContent({
 
   useEffect(() => {
     if (!historicalRun) return;
+    const runDocument = workflowDocumentFromSnapshot(
+      historicalRun.targetSnapshot,
+    );
     restoreHistoricalRun.restoreWorkflowRun(
       replayWorkflowRunProjection(
         historicalRun.id,
@@ -470,7 +482,12 @@ function WorkflowEditorContent({
           sequence,
           event: event as WorkflowRunEvent,
         })),
-        { mode: workflowSettings.mode, nodes },
+        {
+          mode: runDocument?.settings.mode ?? workflowSettings.mode,
+          nodes: runDocument?.nodes ?? nodes,
+          input: historicalRun.input,
+          turnId: `history:${historicalRun.id}`,
+        },
       ),
     );
   }, [historicalRun, nodes, workflowSettings.mode, restoreHistoricalRun]);
@@ -478,6 +495,7 @@ function WorkflowEditorContent({
   const openHistoricalRun = async (id: string) => {
     try {
       const record = await inspectRunRecord(id);
+      const runDocument = workflowDocumentFromSnapshot(record.targetSnapshot);
       restoreHistoricalRun.restoreWorkflowRun(
         replayWorkflowRunProjection(
           record.id,
@@ -486,7 +504,12 @@ function WorkflowEditorContent({
             sequence,
             event: event as WorkflowRunEvent,
           })),
-          { mode: workflowSettings.mode, nodes },
+          {
+            mode: runDocument?.settings.mode ?? workflowSettings.mode,
+            nodes: runDocument?.nodes ?? nodes,
+            input: record.input,
+            turnId: `history:${record.id}`,
+          },
         ),
       );
       setViewingHistoricalRunId(id);
@@ -863,16 +886,14 @@ function WorkflowEditorContent({
         ) : null}
         {!readOnly || allowRun ? (
           <WorkflowRunPanel
-            settings={workflowSettings}
-            nodes={nodes}
+            settings={displayedRunSettings}
+            nodes={displayedRunNodes}
             onRun={workflowRun.startWorkflowRun}
             onResume={workflowRun.resumeWorkflowRun}
             onRetryFailed={workflowRun.retryFailedWorkflowRun}
-            readOnly={Boolean(historicalRun || viewingHistoricalRunId)}
+            readOnly={Boolean(displayedHistoricalRun)}
             spans={
-              historicalRun?.spans ??
-              viewingHistoricalRun?.spans ??
-              liveRunRecord.data?.spans
+              displayedHistoricalRun?.spans ?? liveRunRecord.data?.spans
             }
             onHistoricalClose={() => {
               if (historicalRun) {

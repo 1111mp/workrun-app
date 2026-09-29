@@ -17,6 +17,7 @@ export type WorkflowRunEventContext = {
   mode: WorkflowMode;
   nodes: Node[];
   turnId?: string;
+  input?: Record<string, unknown>;
 };
 
 /**
@@ -112,6 +113,23 @@ export function replayWorkflowRunProjection(
   context: WorkflowRunEventContext,
 ): WorkflowRunProjection {
   const projection = createWorkflowRunProjection(runId);
+  if (context.mode === 'chat' && context.input) {
+    // Live runs add the user bubble before native events arrive. Recreate it
+    // for history so node executions have a visible chat turn to attach to.
+    const id = `${runId}:input:${context.turnId ?? 0}`;
+    projection.messageIds.push(id);
+    projection.messagesById[id] = {
+      id,
+      nodeId: 'You',
+      content:
+        typeof context.input.input === 'string'
+          ? context.input.input
+          : JSON.stringify(context.input.input ?? ''),
+      isStreaming: false,
+      role: 'user',
+      turnId: context.turnId,
+    };
+  }
   for (const envelope of events)
     reduceWorkflowRunEvent(projection, envelope, context);
   return projection;

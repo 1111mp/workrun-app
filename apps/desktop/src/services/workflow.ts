@@ -14,6 +14,26 @@ export type WorkflowDocument = {
   settings: WorkflowSettings;
 };
 
+/**
+ * Returns the document captured when a run started. Run history predates this
+ * snapshot for some records, so callers must retain a current-document fallback.
+ */
+export function workflowDocumentFromSnapshot(
+  snapshot: unknown,
+): WorkflowDocument | undefined {
+  if (!snapshot || typeof snapshot !== 'object') return undefined;
+  const document = snapshot as Partial<WorkflowDocument>;
+  if (
+    !Array.isArray(document.nodes) ||
+    !Array.isArray(document.edges) ||
+    !document.settings ||
+    (document.settings.mode !== 'chat' && document.settings.mode !== 'task')
+  ) {
+    return undefined;
+  }
+  return document as WorkflowDocument;
+}
+
 export type StoredWorkflow = {
   id: string;
   createdAt: string;

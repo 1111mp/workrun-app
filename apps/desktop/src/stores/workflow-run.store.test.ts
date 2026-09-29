@@ -215,4 +215,41 @@ describe('workflow run projection', () => {
       { role: 'assistant', content: 'Research complete.' },
     ]);
   });
+
+  it('restores the user turn needed to display historical chat output', () => {
+    const projection = replayWorkflowRunProjection(
+      'run-1',
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        {
+          type: 'message',
+          node: 'research',
+          content: 'Research complete.',
+          is_final: true,
+        },
+      ),
+      {
+        mode: 'chat',
+        nodes: [node],
+        input: { input: 'Research this.' },
+        turnId: 'history:run-1',
+      },
+    );
+
+    expect(workflowRunView(projection)).toMatchObject({
+      messages: [
+        {
+          role: 'user',
+          content: 'Research this.',
+          turnId: 'history:run-1',
+        },
+      ],
+      execution: [
+        {
+          turnId: 'history:run-1',
+          messages: [{ role: 'assistant', content: 'Research complete.' }],
+        },
+      ],
+    });
+  });
 });
