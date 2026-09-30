@@ -10,6 +10,7 @@
     "docs:dev": "turbo dev --filter workrun-docs",
     "docs:build": "turbo build --filter workrun-docs",
     "ui:dev": "turbo ui:dev --filter workrun",
+    "app:oxlint": "turbo oxlint --filter workrun",
     "oxlint": "turbo oxlint",
     "format": "turbo format",
     "typecheck": "turbo typecheck",

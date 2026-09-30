@@ -35,6 +35,13 @@ pub async fn chat_session_get(id: String) -> CmdResult<ChatSession> {
 }
 
 #[tauri::command]
+pub async fn chat_session_update_snapshot(id: String, workflow_snapshot: Value) -> CmdResult {
+    ChatSessionStore::update_workflow_snapshot(&id, workflow_snapshot)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
 pub async fn chat_session_begin_turn(request: BeginChatTurn) -> CmdResult {
     ChatSessionStore::begin_turn(&request.session_id, &request.turn_id, &request.run_id, &request.message)
         .await
@@ -49,6 +56,11 @@ pub async fn chat_session_list_turns(session_id: String) -> CmdResult<Vec<ChatTu
 #[tauri::command]
 pub async fn chat_session_list(workflow_id: String) -> CmdResult<Vec<ChatSession>> {
     ChatSessionStore::list(&workflow_id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn chat_session_list_history(workflow_id: String) -> CmdResult<Vec<ChatSession>> {
+    ChatSessionStore::list_history(&workflow_id).await.stringify_err()
 }
 
 #[tauri::command]

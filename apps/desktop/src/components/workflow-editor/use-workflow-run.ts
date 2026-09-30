@@ -7,7 +7,9 @@ import { prepareWorkflowProcessApps } from '@/services/process-node';
 import { resolvePendingAction } from '@/services/run-history';
 import { inspectRunRecord } from '@/services/run-history';
 import {
+  archiveChatSession as archiveChatSessionRequest,
   createChatSession,
+  getChatSession,
   listChatSessionTurns,
   resolveAskUserQuestion,
   resolveHumanReview,
@@ -17,7 +19,10 @@ import {
   subscribeWorkflowRun,
   toWorkflowDocument,
   toWorkflowDsl,
+  updateChatSessionSnapshot,
   type ToolConfirmationDecision,
+  type ChatSession,
+  type ChatWorkflowSnapshot,
   type WorkflowRunEvent,
   type WorkflowRunEventEnvelope,
 } from '@/services/workflow';
@@ -107,6 +112,22 @@ function recentChatMessages() {
   return messages.slice(-20);
 }
 
+function workflowSnapshot(session: ChatSession): ChatWorkflowSnapshot {
+  const snapshot = session.workflowSnapshot;
+  if (
+    !snapshot ||
+    !snapshot.dsl ||
+    typeof snapshot.dsl !== 'object' ||
+    !snapshot.document ||
+    !Array.isArray(snapshot.document.nodes) ||
+    !Array.isArray(snapshot.document.edges) ||
+    !snapshot.document.settings
+  ) {
+    throw new Error('This conversation has an invalid workflow snapshot.');
+  }
+  return snapshot;
+}
+
 function useWorkflowRun(
   workflowId: string,
   nodes: Node[],
@@ -120,6 +141,7 @@ function useWorkflowRun(
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
     useState(false);
+  const [isRestoringChatSession, setIsRestoringChatSession] = useState(false);
   // `undefined` follows a restored history run, while `null` records that the
   // restored run has finished or been closed during this editor session.
   const [activeRunId, setActiveRunId] = useState<string | null>();
@@ -151,6 +173,9 @@ function useWorkflowRun(
   );
   const runThreadId = useRef<string | undefined>(undefined);
   const chatSessionId = useRef<string | undefined>(undefined);
+  const chatSessionSnapshot = useRef<ChatWorkflowSnapshot | undefined>(
+    undefined,
+  );
   const runId = useRef<string | undefined>(undefined);
   const unlistenRunEvents = useRef<(() => void) | undefined>(undefined);
   const chatTurnId = useRef<string | undefined>(undefined);
@@ -169,6 +194,7 @@ function useWorkflowRun(
 
   const rememberChatSession = (sessionId: string | undefined) => {
     chatSessionId.current = sessionId;
+    if (!sessionId) chatSessionSnapshot.current = undefined;
     store.setActiveChatSession(
       sessionId ? { workflowId, sessionId } : undefined,
     );
@@ -294,19 +320,45 @@ function useWorkflowRun(
         return;
       }
     }
-    if (settings.mode === 'chat' && !chatSessionId.current) {
-      const persisted = store.activeChatSession;
-      if (persisted?.workflowId === executionWorkflowId)
-        chatSessionId.current = persisted.sessionId;
-    }
-    if (settings.mode === 'chat' && !chatSessionId.current) {
-      const id = crypto.randomUUID();
-      await createChatSession(
-        id,
-        executionWorkflowId,
-        toWorkflowDocument(nodes, edges, settings),
-      );
-      rememberChatSession(id);
+    const currentDocument = toWorkflowDocument(nodes, edges, settings);
+    const currentDsl = toWorkflowDsl(
+      executionWorkflowId,
+      nodes,
+      edges,
+      settings,
+    );
+    if (settings.mode === 'chat') {
+      try {
+        if (!chatSessionId.current) {
+          const persisted = store.activeChatSession;
+          if (persisted?.workflowId === executionWorkflowId)
+            chatSessionId.current = persisted.sessionId;
+        }
+        if (chatSessionId.current && !chatSessionSnapshot.current) {
+          chatSessionSnapshot.current = workflowSnapshot(
+            await getChatSession(chatSessionId.current),
+          );
+        }
+        if (!chatSessionId.current) {
+          const id = crypto.randomUUID();
+          const snapshot: ChatWorkflowSnapshot = {
+            dsl: currentDsl,
+            document: currentDocument,
+            targetName: settings.name,
+            releaseId,
+            releaseVersion,
+          };
+          await createChatSession(id, executionWorkflowId, snapshot);
+          chatSessionSnapshot.current = snapshot;
+          rememberChatSession(id);
+        }
+      } catch (error) {
+        toast.error('Workflow could not start', {
+          toasterId: 'global',
+          description: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
     }
     if (pendingFrame.current !== undefined) {
       cancelAnimationFrame(pendingFrame.current);
@@ -337,9 +389,11 @@ function useWorkflowRun(
     try {
       unlistenRunEvents.current?.();
       unlistenRunEvents.current = await subscribeWorkflowRun(id, handleEvent);
+      const sessionSnapshot = chatSessionSnapshot.current;
+      const executionReleaseId = sessionSnapshot?.releaseId ?? releaseId;
       const dsl = await prepareWorkflowProcessApps(
-        toWorkflowDsl(executionWorkflowId, nodes, edges, settings),
-        `release-${releaseId ?? `draft-${executionWorkflowId}`}`,
+        sessionSnapshot?.dsl ?? currentDsl,
+        `release-${executionReleaseId ?? `draft-${executionWorkflowId}`}`,
         (progress) => {
           isPreparingTeamApp = true;
           toast.loading('Preparing Team Apps', {
@@ -350,14 +404,24 @@ function useWorkflowRun(
         },
       );
       if (isPreparingTeamApp) toast.dismiss(preparationToastId);
+      if (sessionSnapshot && chatSessionId.current) {
+        // Team App preparation resolves immutable releases to local executable
+        // IDs. Persist that resolved DSL before native code reloads the session.
+        const preparedSnapshot = { ...sessionSnapshot, dsl };
+        await updateChatSessionSnapshot(
+          chatSessionId.current,
+          preparedSnapshot,
+        );
+        chatSessionSnapshot.current = preparedSnapshot;
+      }
       await startBackgroundWorkflowRun({
         runId: id,
         targetId: executionWorkflowId,
-        targetName: settings.name,
+        targetName: sessionSnapshot?.targetName ?? settings.name,
         input,
-        targetSnapshot: toWorkflowDocument(nodes, edges, settings),
-        releaseId,
-        releaseVersion,
+        targetSnapshot: sessionSnapshot?.document ?? currentDocument,
+        releaseId: executionReleaseId,
+        releaseVersion: sessionSnapshot?.releaseVersion ?? releaseVersion,
         dsl,
         initialState,
         threadId,
@@ -420,33 +484,67 @@ function useWorkflowRun(
   };
 
   const restoreChatSession = async (sessionId: string) => {
-    const turns = await listChatSessionTurns(sessionId);
-    resetRunContext();
-    rememberChatSession(sessionId);
-    for (const turn of turns) {
-      const record = await inspectRunRecord(turn.runId);
-      store.startWorkflowRun(
-        record.id,
-        record.input ?? { input: turn.userMessage },
-        'chat',
-        turn.id,
+    setIsRestoringChatSession(true);
+    try {
+      // Read the complete replacement before clearing the active transcript.
+      // A transient database failure must leave the visible conversation intact.
+      const session = await getChatSession(sessionId);
+      const snapshot = workflowSnapshot(session);
+      const turns = await listChatSessionTurns(sessionId);
+      const records = await Promise.all(
+        turns.map((turn) => inspectRunRecord(turn.runId)),
       );
-      store.applyRunEvents(
-        record.events.map(({ sequence, event }) => ({
-          runId: record.id,
-          sequence,
-          event: event as WorkflowRunEvent,
-        })),
-        {
-          mode: 'chat',
-          nodes,
-          turnId: turn.id,
-          input: record.input ?? undefined,
-        },
-      );
-      runId.current = record.id;
-      const threadId = (record.runtime as { threadId?: unknown }).threadId;
-      runThreadId.current = typeof threadId === 'string' ? threadId : undefined;
+      resetRunContext();
+      chatSessionSnapshot.current = snapshot;
+      rememberChatSession(sessionId);
+      for (const [turn, record] of turns.map(
+        (turn, index) => [turn, records[index]] as const,
+      )) {
+        store.startWorkflowRun(
+          record.id,
+          record.input ?? { input: turn.userMessage },
+          'chat',
+          turn.id,
+        );
+        store.applyRunEvents(
+          record.events.map(({ sequence, event }) => ({
+            runId: record.id,
+            sequence,
+            event: event as WorkflowRunEvent,
+          })),
+          {
+            mode: 'chat',
+            nodes: snapshot.document.nodes,
+            turnId: turn.id,
+            input: record.input ?? undefined,
+          },
+        );
+        runId.current = record.id;
+        const threadId = (record.runtime as { threadId?: unknown }).threadId;
+        runThreadId.current =
+          typeof threadId === 'string' ? threadId : undefined;
+      }
+    } catch (error) {
+      toast.error('Could not restore this conversation', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsRestoringChatSession(false);
+    }
+  };
+
+  const archiveChatSession = async (sessionId: string) => {
+    try {
+      await archiveChatSessionRequest(sessionId);
+      if (chatSessionId.current === sessionId) resetRunContext();
+      return true;
+    } catch (error) {
+      toast.error('Could not archive this conversation', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return false;
     }
   };
 
@@ -646,6 +744,9 @@ function useWorkflowRun(
     resumeWorkflowRun,
     retryFailedWorkflowRun,
     restoreChatSession,
+    archiveChatSession,
+    isRestoringChatSession,
+    chatSessionDocument: chatSessionSnapshot.current?.document,
     resetRunContext,
     newChat,
     activeChatSessionId:

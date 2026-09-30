@@ -1,6 +1,7 @@
 import {
   keepPreviousData,
   useInfiniteQuery,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -42,7 +43,7 @@ import {
   Settings2Icon,
   UploadIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
@@ -50,7 +51,10 @@ import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
 import { WorkflowEvaluations } from '@/components/workflow-evaluations';
-import { WorkflowHistory } from '@/components/workflow-history';
+import {
+  WorkflowHistory,
+  type ChatSessionHistoryItem,
+} from '@/components/workflow-history';
 import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
 import { WorkflowSchedules } from '@/components/workflow-schedules';
@@ -69,17 +73,21 @@ import {
   listRunHistoryPage,
   type RunHistoryCursor,
   type RunRecord,
+  type RunStatus,
 } from '@/services/run-history';
 import {
   createWorkflow,
-  archiveChatSession,
   createWorkflowDocument,
+  getChatSession,
+  listChatSessionHistory,
+  listChatSessions,
+  listChatSessionTurns,
   publishWorkflow,
   toWorkflowDocument,
   toWorkflowDsl,
-  workflowDocumentFromSnapshot,
   updateWorkflow,
-  listChatSessions,
+  workflowDocumentFromSnapshot,
+  type ChatSession,
   type StoredWorkflow,
   type WorkflowDocument,
   type WorkflowRelease,
@@ -102,9 +110,22 @@ type WorkflowEditorProps = {
   allowRun?: boolean;
   autoStartRun?: boolean;
   historicalRun?: RunRecord;
+  historicalChatSessionId?: string;
 };
 
 type ObservabilityPeriod = '7d' | '30d' | 'all';
+
+function chatHistoryStatus(status?: string): RunStatus {
+  return status === 'queued' ||
+    status === 'running' ||
+    status === 'waiting_for_input' ||
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'interrupted'
+    ? status
+    : 'completed';
+}
 
 function replayInput(record: Pick<RunRecord, 'input' | 'runtime'>) {
   if (record.input && typeof record.input === 'object') return record.input;
@@ -121,6 +142,7 @@ function WorkflowEditor({
   allowRun,
   autoStartRun,
   historicalRun,
+  historicalChatSessionId,
 }: WorkflowEditorProps) {
   const [draftDocument] = useState<WorkflowDocument>(() =>
     createWorkflowDocument(),
@@ -137,6 +159,7 @@ function WorkflowEditor({
         allowRun={allowRun}
         autoStartRun={autoStartRun}
         historicalRun={historicalRun}
+        historicalChatSessionId={historicalChatSessionId}
       />
     </WorkflowStoreProvider>
   );
@@ -148,6 +171,7 @@ function WorkflowEditorContent({
   allowRun = false,
   autoStartRun,
   historicalRun,
+  historicalChatSessionId,
 }: WorkflowEditorProps) {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [publishOpen, setPublishOpen] = useState(false);
@@ -170,6 +194,12 @@ function WorkflowEditorContent({
   const [viewingHistoricalRun, setViewingHistoricalRun] = useState<
     RunRecord | undefined
   >();
+  const [viewingHistoricalChatSession, setViewingHistoricalChatSession] =
+    useState<ChatSession>();
+  const [
+    viewingHistoricalChatTurnRecords,
+    setViewingHistoricalChatTurnRecords,
+  ] = useState<Array<{ turnId: string; record: RunRecord }>>([]);
   const [createdWorkflow, setCreatedWorkflow] = useState<
     StoredWorkflow | undefined
   >();
@@ -408,11 +438,18 @@ function WorkflowEditorContent({
   const displayedRunDocument = workflowDocumentFromSnapshot(
     displayedHistoricalRun?.targetSnapshot,
   );
+  const displayedHistoricalChatDocument =
+    viewingHistoricalChatSession?.workflowSnapshot?.document;
+  const displayedOutputDocument =
+    displayedRunDocument ?? displayedHistoricalChatDocument;
+  const viewingHistoricalOutput = Boolean(
+    displayedHistoricalRun || viewingHistoricalChatSession,
+  );
   // The output shell chooses its chat/task layout from these props, so it must
   // use the same run-time snapshot as event replay rather than editor state.
   const displayedRunSettings =
-    displayedRunDocument?.settings ?? workflowSettings;
-  const displayedRunNodes = displayedRunDocument?.nodes ?? nodes;
+    displayedOutputDocument?.settings ?? workflowSettings;
+  const displayedRunNodes = displayedOutputDocument?.nodes ?? nodes;
 
   const createWorkflowForTeamRun = async () => {
     if (activeWorkflow) return activeWorkflow.id;
@@ -451,7 +488,10 @@ function WorkflowEditorContent({
     // Historical output is an immutable snapshot. Only the editor's own run
     // needs to refetch when the native runtime reports new model usage.
     enabled:
-      Boolean(workflowRun.runId) && !historicalRun && !viewingHistoricalRunId,
+      Boolean(workflowRun.runId) &&
+      !historicalRun &&
+      !viewingHistoricalRunId &&
+      !viewingHistoricalChatSession,
     // A model-call event changes only the revision portion of this key. Keep
     // the current run's spans during that refetch so RunModelUsage does not
     // unmount for one render and flash back in when SQLite responds.
@@ -465,6 +505,58 @@ function WorkflowEditorContent({
     queryFn: () => listChatSessions(activeWorkflow!.id),
     enabled: workflowSettings.mode === 'chat' && Boolean(activeWorkflow?.id),
   });
+  const chatHistorySessions = useQuery({
+    queryKey: ['chat-session-history', activeWorkflow?.id],
+    queryFn: () => listChatSessionHistory(activeWorkflow!.id),
+    // History is determined by durable session/run snapshots, not the mode of
+    // the editor's current draft. A workflow may be changed to Task after a
+    // Chat session was recorded and must still expose that conversation here.
+    enabled: historyOpen && Boolean(activeWorkflow?.id),
+  });
+  const chatHistoryTurns = useQueries({
+    queries: (chatHistorySessions.data ?? []).map((session) => ({
+      queryKey: ['chat-session-turns', session.id],
+      queryFn: () => listChatSessionTurns(session.id),
+    })),
+  });
+  const chatHistoryItems = useMemo<ChatSessionHistoryItem[]>(
+    () =>
+      (chatHistorySessions.data ?? []).map((session, index) => ({
+        id: session.id,
+        title: session.latestTurnMessage,
+        status: chatHistoryStatus(session.latestTurnStatus),
+        createdAt: session.createdAt,
+        activityAt: session.latestTurnAt ?? session.createdAt,
+        turnCount: chatHistoryTurns[index]?.data?.length ?? 0,
+      })),
+    [chatHistorySessions.data, chatHistoryTurns],
+  );
+  const chatHistoryRunIds = useMemo(
+    () =>
+      new Set(
+        chatHistoryTurns.flatMap((query) =>
+          (query.data ?? []).map((turn) => turn.runId),
+        ),
+      ),
+    [chatHistoryTurns],
+  );
+  const chatSessionTurns = useQuery({
+    queryKey: ['chat-session-turns', workflowRun.activeChatSessionId],
+    queryFn: () => listChatSessionTurns(workflowRun.activeChatSessionId!),
+    enabled: Boolean(workflowRun.activeChatSessionId),
+  });
+  const chatTurnRecords = useQueries({
+    queries: (chatSessionTurns.data ?? []).map((turn) => ({
+      queryKey: ['run-history-inspect', turn.runId],
+      queryFn: () => inspectRunRecord(turn.runId),
+    })),
+  });
+  const chatSpansByTurn = Object.fromEntries(
+    (chatSessionTurns.data ?? []).flatMap((turn, index) => {
+      const record = chatTurnRecords[index]?.data;
+      return record ? [[turn.id, record.spans] as const] : [];
+    }),
+  );
 
   useEffect(() => {
     if (workflowSettings.mode !== 'chat' || !activeWorkflow?.id) return;
@@ -474,10 +566,17 @@ function WorkflowEditorContent({
     void queryClient.invalidateQueries({
       queryKey: ['chat-sessions', activeWorkflow.id],
     });
+    void queryClient.invalidateQueries({
+      queryKey: ['chat-session-history', activeWorkflow.id],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ['chat-session-turns', workflowRun.activeChatSessionId],
+    });
   }, [
     activeWorkflow?.id,
     queryClient,
     workflowRun.runStatus,
+    workflowRun.activeChatSessionId,
     workflowSettings.mode,
   ]);
 
@@ -487,6 +586,7 @@ function WorkflowEditorContent({
       restoreWorkflowRun: state.restoreWorkflowRun,
       setShowRunOutput: state.setShowRunOutput,
       resetRunView: state.resetRunView,
+      startWorkflowRun: state.startWorkflowRun,
       applyRunEvents: state.applyRunEvents,
     })),
   );
@@ -528,6 +628,8 @@ function WorkflowEditorContent({
 
   const openHistoricalRun = async (id: string) => {
     try {
+      setViewingHistoricalChatSession(undefined);
+      setViewingHistoricalChatTurnRecords([]);
       const record = await inspectRunRecord(id);
       const runDocument = workflowDocumentFromSnapshot(record.targetSnapshot);
       restoreHistoricalRun.restoreWorkflowRun(
@@ -555,6 +657,76 @@ function WorkflowEditorContent({
       });
     }
   };
+
+  const openHistoricalChatSession = useCallback(
+    async (sessionId: string) => {
+      try {
+        const [session, turns] = await Promise.all([
+          getChatSession(sessionId),
+          listChatSessionTurns(sessionId),
+        ]);
+        const snapshot = session.workflowSnapshot;
+        if (!snapshot) throw new Error('Chat workflow snapshot is unavailable');
+        const records = await Promise.all(
+          turns.map((turn) => inspectRunRecord(turn.runId)),
+        );
+
+        // Rebuild one projection from the session's durable turn records. This
+        // preserves turn-level diagnostics while presenting one read-only chat.
+        restoreHistoricalRun.resetRunView();
+        for (const [turn, record] of turns.map(
+          (turn, index) => [turn, records[index]] as const,
+        )) {
+          restoreHistoricalRun.startWorkflowRun(
+            record.id,
+            record.input ?? { input: turn.userMessage },
+            'chat',
+            turn.id,
+          );
+          restoreHistoricalRun.applyRunEvents(
+            record.events.map(({ sequence, event }) => ({
+              runId: record.id,
+              sequence,
+              event: event as WorkflowRunEvent,
+            })),
+            {
+              mode: 'chat',
+              nodes: snapshot.document.nodes,
+              turnId: turn.id,
+              input: record.input ?? { input: turn.userMessage },
+            },
+          );
+        }
+        setViewingHistoricalRunId(undefined);
+        setViewingHistoricalRun(undefined);
+        setViewingHistoricalChatSession(session);
+        setViewingHistoricalChatTurnRecords(
+          turns.map((turn, index) => ({
+            turnId: turn.id,
+            record: records[index],
+          })),
+        );
+        restoreHistoricalRun.setShowRunOutput(true);
+        restoreHistoricalRun.setRunPanelOpen(true);
+      } catch (error) {
+        toast.error(t('workflowEditor.history.loadOutputFailed'), {
+          toasterId: 'global',
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    [restoreHistoricalRun, t],
+  );
+
+  useEffect(() => {
+    if (!historicalChatSessionId) return;
+    // Defer route-driven reconstruction until after the editor has mounted.
+    // It avoids mutating the shared output store during this render commit.
+    const frame = requestAnimationFrame(() => {
+      void openHistoricalChatSession(historicalChatSessionId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [historicalChatSessionId, openHistoricalChatSession]);
 
   useEffect(() => {
     if (!autoStartRun || autoStartHandled.current) return;
@@ -697,10 +869,15 @@ function WorkflowEditorContent({
             />
           ) : historyOpen && activeWorkflow ? (
             <WorkflowHistory
-              runs={
+              runs={(
                 workflowHistory.data?.pages.flatMap((page) => page.items) ?? []
+              ).filter((run) => !chatHistoryRunIds.has(run.id))}
+              chatSessions={chatHistoryItems}
+              isLoading={
+                workflowHistory.isLoading ||
+                chatHistorySessions.isLoading ||
+                chatHistoryTurns.some((query) => query.isLoading)
               }
-              isLoading={workflowHistory.isLoading}
               hasMore={workflowHistory.hasNextPage}
               isLoadingMore={workflowHistory.isFetchingNextPage}
               observability={workflowObservability.data}
@@ -723,6 +900,7 @@ function WorkflowEditorContent({
               onSelectedVersionChange={setObservabilityVersion}
               onLoadMore={() => void workflowHistory.fetchNextPage()}
               onView={(id) => void openHistoricalRun(id)}
+              onViewChatSession={(id) => void openHistoricalChatSession(id)}
             />
           ) : undefined
         }
@@ -930,28 +1108,58 @@ function WorkflowEditorContent({
         ) : null}
         {!readOnly || allowRun ? (
           <WorkflowRunPanel
-            settings={displayedRunSettings}
-            nodes={displayedRunNodes}
+            settings={
+              viewingHistoricalOutput
+                ? displayedRunSettings
+                : (workflowRun.chatSessionDocument?.settings ??
+                  displayedRunSettings)
+            }
+            nodes={
+              viewingHistoricalOutput
+                ? displayedRunNodes
+                : (workflowRun.chatSessionDocument?.nodes ?? displayedRunNodes)
+            }
             onRun={workflowRun.startWorkflowRun}
             onResume={workflowRun.resumeWorkflowRun}
             onRetryFailed={workflowRun.retryFailedWorkflowRun}
-            chatSessions={chatSessions.data}
-            activeChatSessionId={workflowRun.activeChatSessionId}
-            onRestoreChatSession={(id) =>
-              void workflowRun.restoreChatSession(id)
+            chatSessions={
+              viewingHistoricalChatSession
+                ? [viewingHistoricalChatSession]
+                : chatSessions.data
             }
+            activeChatSessionId={
+              viewingHistoricalChatSession?.id ??
+              workflowRun.activeChatSessionId
+            }
+            isRestoringChatSession={workflowRun.isRestoringChatSession}
+            workflowChangedForChatSession={Boolean(
+              workflowRun.chatSessionDocument &&
+              JSON.stringify(workflowRun.chatSessionDocument) !==
+                workflowDocumentSnapshot,
+            )}
+            onRestoreChatSession={workflowRun.restoreChatSession}
             onNewChat={workflowRun.newChat}
-            onArchiveChatSession={(id) =>
-              void archiveChatSession(id).then(() =>
-                queryClient.invalidateQueries({
+            onArchiveChatSession={async (id) => {
+              const archived = await workflowRun.archiveChatSession(id);
+              if (archived)
+                await queryClient.invalidateQueries({
                   queryKey: ['chat-sessions', activeWorkflow?.id],
-                }),
-              )
-            }
-            readOnly={Boolean(displayedHistoricalRun)}
+                });
+              return archived;
+            }}
+            readOnly={viewingHistoricalOutput}
             spans={displayedHistoricalRun?.spans ?? liveRunRecord.data?.spans}
+            spansByTurn={
+              viewingHistoricalChatSession
+                ? Object.fromEntries(
+                    viewingHistoricalChatTurnRecords.map(
+                      ({ turnId, record }) => [turnId, record.spans],
+                    ),
+                  )
+                : chatSpansByTurn
+            }
             onHistoricalClose={() => {
-              if (historicalRun) {
+              if (historicalRun || historicalChatSessionId) {
                 // This store outlives the history page. Reset it before returning
                 // so a cached record still opens the drawer from its closed state.
                 restoreHistoricalRun.setShowRunOutput(false);
@@ -960,6 +1168,10 @@ function WorkflowEditorContent({
               } else {
                 setViewingHistoricalRunId(undefined);
                 setViewingHistoricalRun(undefined);
+                setViewingHistoricalChatSession(undefined);
+                setViewingHistoricalChatTurnRecords([]);
+                restoreHistoricalRun.resetRunView();
+                restoreHistoricalRun.setShowRunOutput(false);
                 restoreHistoricalRun.setRunPanelOpen(false);
               }
             }}

@@ -259,6 +259,10 @@ describe('workflow run projection', () => {
     expect(projection.executionsById['run-2:execution:0']?.turnId).toBe(
       'turn-2',
     );
+    expect(workflowRunView(projection).turnsById).toMatchObject({
+      'turn-1': { status: 'completed', totalSteps: 1 },
+      'turn-2': { status: 'running' },
+    });
   });
 
   it('retains the selected chat session across an editor remount', () => {
@@ -308,6 +312,7 @@ describe('workflow run projection', () => {
           messages: [{ role: 'assistant', content: 'Research complete.' }],
         },
       ],
+      turnsById: { 'history:run-1': { status: 'running' } },
     });
   });
 
@@ -334,6 +339,12 @@ describe('workflow run projection', () => {
       status: 'failed',
       error: 'model.rate_limited',
       messages: [expect.objectContaining({ content: 'Cancel order 43' })],
+      turnsById: {
+        'history:run-1': {
+          status: 'failed',
+          error: 'model.rate_limited',
+        },
+      },
     });
   });
 });

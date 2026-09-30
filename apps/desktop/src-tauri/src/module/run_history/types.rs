@@ -204,6 +204,72 @@ pub struct RunHistoryPage {
     pub next_cursor: Option<RunHistoryCursor>,
 }
 
+/// The global history timeline mixes standalone task runs with durable chat
+/// sessions. A chat turn is deliberately not an item here: opening the
+/// session restores every turn as one conversation.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunHistoryMode {
+    Task,
+    Chat,
+}
+
+impl RunHistoryMode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Chat => "chat",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunHistoryTimelineQuery {
+    pub target_type: Option<RunTargetType>,
+    pub target_id: Option<String>,
+    pub status: Option<RunStatus>,
+    pub query: Option<String>,
+    pub mode: Option<RunHistoryMode>,
+    pub page_size: Option<i64>,
+    pub cursor: Option<RunHistoryTimelineCursor>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunHistoryTimelineCursor {
+    pub id: String,
+    pub kind: String,
+    pub activity_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunHistoryTimelinePage {
+    pub items: Vec<RunHistoryTimelineItem>,
+    pub next_cursor: Option<RunHistoryTimelineCursor>,
+    pub total_count: i64,
+    pub completed_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunHistoryTimelineItem {
+    pub kind: String,
+    pub id: String,
+    pub target_type: RunTargetType,
+    pub target_id: String,
+    pub target_name: String,
+    pub status: RunStatus,
+    pub activity_at: String,
+    pub ended_at: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub error: Option<String>,
+    pub release_version: Option<String>,
+    pub turn_count: Option<i64>,
+    pub latest_message: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunTargetType {

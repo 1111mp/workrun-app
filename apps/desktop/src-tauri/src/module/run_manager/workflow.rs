@@ -24,6 +24,37 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
     }
     if let Some(session_id) = request.chat_session_id.as_deref() {
         let session = ChatSessionStore::get(session_id).await?;
+        let snapshot = session
+            .workflow_snapshot
+            .as_ref()
+            .context("chat session workflow snapshot is missing")?;
+        // A conversation must not silently adopt edits made after it began.
+        // The session record is authoritative even if another renderer sends
+        // a newer workflow document alongside this turn.
+        request.dsl = snapshot
+            .get("dsl")
+            .cloned()
+            .filter(Value::is_object)
+            .context("chat session workflow DSL is invalid")?;
+        request.target_snapshot = snapshot
+            .get("document")
+            .cloned()
+            .filter(Value::is_object)
+            .context("chat session workflow document is invalid")?;
+        request.target_name = snapshot
+            .get("targetName")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+            .context("chat session workflow name is invalid")?;
+        request.release_id = snapshot
+            .get("releaseId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        request.release_version = snapshot
+            .get("releaseVersion")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let fields = session_state_fields(&request.dsl)?;
         apply_session_state(&mut request.initial_state, &session.state, &fields)?;
     }

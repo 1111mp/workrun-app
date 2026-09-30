@@ -74,6 +74,12 @@ impl RunHistoryStore {
             .await?;
         rows.iter().map(summary_from_row).collect()
     }
+
+    pub async fn list_timeline(query: RunHistoryTimelineQuery) -> Result<RunHistoryTimelinePage> {
+        let pool = DBManager::global().pool()?;
+        list_timeline_from_pool(&pool, query).await
+    }
+
     pub async fn inspect(id: &str) -> Result<RunRecord> {
         let pool = DBManager::global().pool()?;
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
@@ -122,7 +128,103 @@ impl RunHistoryStore {
             spans,
         })
     }
+}
 
+async fn list_timeline_from_pool(
+    pool: &sqlx::SqlitePool,
+    query: RunHistoryTimelineQuery,
+) -> Result<RunHistoryTimelinePage> {
+    let page_size = query.page_size.unwrap_or(30).clamp(1, 100);
+    if let Some(cursor) = &query.cursor {
+        if cursor.id.trim().is_empty() || cursor.kind.trim().is_empty() || cursor.activity_at.trim().is_empty() {
+            bail!("run history timeline cursor requires id, kind, and activity_at");
+        }
+    }
+
+    // Keep this union in SQLite so filtering and paging apply to one stable
+    // sequence. Pulling all chat sessions into the UI first made page
+    // boundaries and cross-mode ordering depend on loaded client state.
+    let mut sql = QueryBuilder::<Sqlite>::new(
+        "WITH timeline AS (\
+             SELECT 'task' AS kind, rr.id, rr.target_type, rr.target_id, rr.target_name, rr.status, rr.started_at AS activity_at, rr.ended_at, rr.duration_ms, rr.error, json_extract(rr.runtime_json, '$.releaseVersion') AS release_version, NULL AS turn_count, NULL AS latest_message \
+             FROM run_records rr \
+             WHERE json_extract(rr.runtime_json, '$.evaluationProfile') IS NULL \
+               AND NOT EXISTS (SELECT 1 FROM chat_turns ct WHERE ct.run_id = rr.id) \
+             UNION ALL \
+             SELECT 'chat' AS kind, cs.id, 'workflow' AS target_type, cs.workflow_id AS target_id, \
+               COALESCE((SELECT rr.target_name FROM chat_turns ct JOIN run_records rr ON rr.id = ct.run_id WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1), 'Workflow') AS target_name, \
+               (SELECT ct.status FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1) AS status, \
+               COALESCE((SELECT COALESCE(ct.completed_at, ct.created_at) FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1), cs.created_at) AS activity_at, \
+               NULL AS ended_at, NULL AS duration_ms, NULL AS error, NULL AS release_version, \
+               (SELECT COUNT(*) FROM chat_turns ct WHERE ct.session_id = cs.id) AS turn_count, \
+               (SELECT ct.user_message FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1) AS latest_message \
+             FROM chat_sessions cs \
+             WHERE EXISTS (SELECT 1 FROM chat_turns ct WHERE ct.session_id = cs.id)\
+             ), filtered AS (\
+             SELECT kind, id, target_type, target_id, target_name, status, activity_at, ended_at, duration_ms, error, release_version, turn_count, latest_message FROM timeline WHERE 1 = 1",
+    );
+    if let Some(target_type) = query.target_type {
+        sql.push(" AND target_type = ").push_bind(target_type.as_str());
+    }
+    if let Some(target_id) = query.target_id {
+        sql.push(" AND target_id = ").push_bind(target_id);
+    }
+    if let Some(status) = query.status {
+        sql.push(" AND status = ").push_bind(status.as_str());
+    }
+    if let Some(mode) = query.mode {
+        sql.push(" AND kind = ").push_bind(mode.as_str());
+    }
+    if let Some(name_query) = query.query.filter(|value| !value.trim().is_empty()) {
+        let like = format!("%{}%", name_query.trim());
+        sql.push(" AND (target_name LIKE ")
+            .push_bind(like.clone())
+            .push(" OR latest_message LIKE ")
+            .push_bind(like)
+            .push(")");
+    }
+    sql.push(") , ranked AS (SELECT filtered.*, COUNT(*) OVER () AS total_count, SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) OVER () AS completed_count FROM filtered) SELECT * FROM ranked WHERE 1 = 1");
+    if let Some(cursor) = query.cursor {
+        sql.push(" AND (activity_at < ")
+            .push_bind(&cursor.activity_at)
+            .push(" OR (activity_at = ")
+            .push_bind(&cursor.activity_at)
+            .push(" AND (kind < ")
+            .push_bind(&cursor.kind)
+            .push(" OR (kind = ")
+            .push_bind(cursor.kind)
+            .push(" AND id < ")
+            .push_bind(cursor.id)
+            .push("))))");
+    }
+    sql.push(" ORDER BY activity_at DESC, kind DESC, id DESC LIMIT ")
+        .push_bind(page_size + 1);
+    let rows = sql.build().fetch_all(pool).await?;
+    let summary: Result<Option<(i64, i64)>> = rows
+        .first()
+        .map(|row| Ok((row.try_get("total_count")?, row.try_get("completed_count")?)))
+        .transpose();
+    let (total_count, completed_count) = summary?.unwrap_or((0, 0));
+    let mut items = rows.iter().map(timeline_item_from_row).collect::<Result<Vec<_>>>()?;
+    let next_cursor = if items.len() > page_size as usize {
+        items.pop();
+        items.last().map(|item| RunHistoryTimelineCursor {
+            id: item.id.clone(),
+            kind: item.kind.clone(),
+            activity_at: item.activity_at.clone(),
+        })
+    } else {
+        None
+    };
+    Ok(RunHistoryTimelinePage {
+        items,
+        next_cursor,
+        total_count,
+        completed_count,
+    })
+}
+
+impl RunHistoryStore {
     pub async fn observability(query: RunObservabilityQuery) -> Result<RunObservability> {
         if query.workflow_id.trim().is_empty() {
             bail!("workflow_id is required for observability");
@@ -413,6 +515,39 @@ fn summary_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunRecordSummary> {
     })
 }
 
+fn timeline_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunHistoryTimelineItem> {
+    let target_type = match row.try_get::<String, _>("target_type")?.as_str() {
+        "workflow" => RunTargetType::Workflow,
+        "app" => RunTargetType::App,
+        value => bail!("stored run history contains unknown target type: {value}"),
+    };
+    let status = match row.try_get::<String, _>("status")?.as_str() {
+        "queued" => RunStatus::Queued,
+        "running" => RunStatus::Running,
+        "waiting_for_input" => RunStatus::WaitingForInput,
+        "completed" => RunStatus::Completed,
+        "failed" => RunStatus::Failed,
+        "cancelled" => RunStatus::Cancelled,
+        "interrupted" => RunStatus::Interrupted,
+        value => bail!("stored run history contains unknown status: {value}"),
+    };
+    Ok(RunHistoryTimelineItem {
+        kind: row.try_get("kind")?,
+        id: row.try_get("id")?,
+        target_type,
+        target_id: row.try_get("target_id")?,
+        target_name: row.try_get("target_name")?,
+        status,
+        activity_at: row.try_get("activity_at")?,
+        ended_at: row.try_get("ended_at")?,
+        duration_ms: row.try_get("duration_ms")?,
+        error: row.try_get("error")?,
+        release_version: row.try_get("release_version")?,
+        turn_count: row.try_get("turn_count")?,
+        latest_message: row.try_get("latest_message")?,
+    })
+}
+
 fn json_column(value: String) -> Result<Value> {
     serde_json::from_str(&value).context("stored run history contains invalid JSON")
 }
@@ -421,8 +556,9 @@ fn json_column(value: String) -> Result<Value> {
 mod tests {
     use super::{
         MetricAccumulator, RUN_RECORD_SUMMARY_COLUMNS, RunObservabilityQuery, SpanUsage, aggregate_observability,
-        observability_run_rows, observability_span_rows, summary_from_row,
+        list_timeline_from_pool, observability_run_rows, observability_span_rows, summary_from_row,
     };
+    use crate::module::run_history::{RunHistoryMode, RunHistoryTimelineQuery, RunStatus, RunTargetType};
     use sqlx::{QueryBuilder, Sqlite, sqlite::SqlitePoolOptions};
 
     #[tokio::test]
@@ -534,5 +670,141 @@ mod tests {
         );
         assert_eq!(summary.overall.count, 0);
         assert!(summary.spans.is_empty());
+    }
+
+    async fn timeline_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT NOT NULL, target_id TEXT NOT NULL, target_name TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, created_at TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE chat_turns (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, run_id TEXT NOT NULL, sequence INTEGER NOT NULL, user_message TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO run_records VALUES
+             ('task-latest', 'workflow', 'workflow-1', 'Standalone task', 'completed', '2026-09-30T05:00:00Z', NULL, 100, NULL, '{}'),
+             ('task-old', 'app', 'app-1', 'Old app task', 'failed', '2026-09-30T01:00:00Z', NULL, 200, 'failed', '{}'),
+             ('chat-a-1', 'workflow', 'workflow-1', 'Chat workflow', 'completed', '2026-09-30T02:00:00Z', NULL, 100, NULL, '{}'),
+             ('chat-a-2', 'workflow', 'workflow-1', 'Chat workflow', 'completed', '2026-09-30T06:00:00Z', NULL, 100, NULL, '{}'),
+             ('chat-b-1', 'workflow', 'workflow-2', 'Other chat workflow', 'failed', '2026-09-30T04:00:00Z', NULL, 100, 'failed', '{}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO chat_sessions VALUES
+             ('chat-a', 'workflow-1', '2026-09-30T02:00:00Z'),
+             ('chat-b', 'workflow-2', '2026-09-30T04:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO chat_turns VALUES
+             ('turn-a-1', 'chat-a', 'chat-a-1', 0, 'first chat prompt', 'completed', '2026-09-30T02:00:00Z', '2026-09-30T02:10:00Z'),
+             ('turn-a-2', 'chat-a', 'chat-a-2', 1, 'latest chat prompt', 'completed', '2026-09-30T05:30:00Z', '2026-09-30T06:00:00Z'),
+             ('turn-b-1', 'chat-b', 'chat-b-1', 0, 'failed chat prompt', 'failed', '2026-09-30T04:00:00Z', '2026-09-30T04:10:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn timeline_mixes_sessions_and_tasks_without_exposing_chat_turn_runs() {
+        let pool = timeline_pool().await;
+        let first_page = list_timeline_from_pool(
+            &pool,
+            RunHistoryTimelineQuery {
+                target_type: None,
+                target_id: None,
+                status: None,
+                query: None,
+                mode: None,
+                page_size: Some(2),
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            first_page.items.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            ["chat-a", "task-latest"],
+        );
+        assert_eq!(first_page.items[0].turn_count, Some(2));
+        assert_eq!(
+            first_page.items[0].latest_message.as_deref(),
+            Some("latest chat prompt")
+        );
+        assert_eq!(first_page.total_count, 4);
+        assert_eq!(first_page.completed_count, 2);
+
+        let second_page = list_timeline_from_pool(
+            &pool,
+            RunHistoryTimelineQuery {
+                cursor: first_page.next_cursor,
+                page_size: Some(2),
+                target_type: None,
+                target_id: None,
+                status: None,
+                query: None,
+                mode: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            second_page
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["chat-b", "task-old"],
+        );
+        assert!(second_page.next_cursor.is_none());
+        // Summary values cover the complete filtered timeline rather than
+        // only this cursor page's remaining slice.
+        assert_eq!(second_page.total_count, 4);
+        assert_eq!(second_page.completed_count, 2);
+    }
+
+    #[tokio::test]
+    async fn timeline_filters_chat_sessions_by_mode_target_status_and_message() {
+        let pool = timeline_pool().await;
+        let page = list_timeline_from_pool(
+            &pool,
+            RunHistoryTimelineQuery {
+                target_type: Some(RunTargetType::Workflow),
+                target_id: Some("workflow-1".into()),
+                status: Some(RunStatus::Completed),
+                query: Some("latest chat".into()),
+                mode: Some(RunHistoryMode::Chat),
+                page_size: None,
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "chat-a");
+        assert_eq!(page.items[0].kind, "chat");
     }
 }

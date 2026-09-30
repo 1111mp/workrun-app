@@ -37,6 +37,7 @@ import {
   HistoryIcon,
   Info,
   ListFilterIcon,
+  MessageSquareIcon,
   RefreshCwIcon,
   SearchIcon,
   WorkflowIcon,
@@ -52,9 +53,10 @@ import {
 } from '@/services/process-node';
 import {
   getReplayMissingDependencies,
-  listRunHistoryPage,
+  listRunHistoryTimelinePage,
   replayRun,
-  type RunHistoryCursor,
+  type RunHistoryTimelineCursor,
+  type RunHistoryTimelineItem,
   type RunRecordSummary,
   type RunStatus,
   type RunTargetType,
@@ -93,6 +95,8 @@ const REPLAYABLE_RUN_STATUSES: RunStatus[] = [
   'interrupted',
 ];
 
+type RunModeFilter = 'task' | 'chat';
+
 function RunsPage() {
   const { t, i18n } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -103,28 +107,35 @@ function RunsPage() {
   const targetType = searchParams.get('targetType') as RunTargetType | null;
   const targetId = searchParams.get('targetId') ?? undefined;
   const status = searchParams.get('status') as RunStatus | null;
+  const mode = searchParams.get('mode') as RunModeFilter | null;
   const nameQuery = searchParams.get('q') ?? '';
   const runs = useInfiniteQuery({
-    queryKey: ['run-history', targetType, targetId, status, nameQuery],
+    queryKey: [
+      'run-history-timeline',
+      targetType,
+      targetId,
+      status,
+      nameQuery,
+      mode,
+    ],
     queryFn: ({ pageParam }) =>
-      listRunHistoryPage({
+      listRunHistoryTimelinePage({
         targetType: targetType ?? undefined,
         targetId,
         status: status ?? undefined,
         query: nameQuery,
+        mode: mode ?? undefined,
         pageSize: 30,
         cursor: pageParam,
       }),
-    initialPageParam: undefined as RunHistoryCursor | undefined,
+    initialPageParam: undefined as RunHistoryTimelineCursor | undefined,
     getNextPageParam: (page) => page.nextCursor,
   });
-  const historyItems = useMemo(
+  const historyEntries = useMemo(
     () => runs.data?.pages.flatMap((page) => page.items) ?? [],
     [runs.data],
   );
-  const completedCount = historyItems.filter(
-    (run) => run.status === 'completed',
-  ).length;
+  const timelineSummary = runs.data?.pages[0];
   const replay = useMutation({
     mutationFn: async (sourceRunId: string) => {
       const missing = await getReplayMissingDependencies(sourceRunId);
@@ -160,7 +171,9 @@ function RunsPage() {
       return replayRun(sourceRunId);
     },
     onSuccess: (run) => {
-      void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+      void queryClient.invalidateQueries({
+        queryKey: ['run-history-timeline'],
+      });
       openWorkspaceRun(run);
     },
     onError: (error) => {
@@ -198,12 +211,16 @@ function RunsPage() {
             </div>
             <div className='bg-background/70 flex divide-x divide-sky-200/70 rounded-xl border border-sky-200/70 shadow-xs backdrop-blur-sm dark:divide-sky-400/15 dark:border-sky-400/15'>
               <Metric
-                label={t('runs.loaded')}
-                value={t('runs.count', { count: historyItems.length })}
+                label={t('runs.total')}
+                value={t('runs.count', {
+                  count: timelineSummary?.totalCount ?? 0,
+                })}
               />
               <Metric
                 label={t('runs.completed')}
-                value={t('runs.count', { count: completedCount })}
+                value={t('runs.count', {
+                  count: timelineSummary?.completedCount ?? 0,
+                })}
               />
             </div>
           </div>
@@ -242,6 +259,25 @@ function RunsPage() {
                 </Button>
               ))}
             </div>
+            <div className='flex flex-wrap items-center gap-1'>
+              <Button
+                size='sm'
+                variant={mode === null ? 'secondary' : 'ghost'}
+                onClick={() => updateFilter('mode')}
+              >
+                {t('runs.modeFilters.all')}
+              </Button>
+              {(['task', 'chat'] as const).map((filter) => (
+                <Button
+                  key={filter}
+                  size='sm'
+                  variant={mode === filter ? 'secondary' : 'ghost'}
+                  onClick={() => updateFilter('mode', filter)}
+                >
+                  {t(`runs.modeFilters.${filter}`)}
+                </Button>
+              ))}
+            </div>
             <div className='flex flex-wrap items-center gap-1 lg:ml-auto'>
               <Button
                 size='sm'
@@ -276,7 +312,7 @@ function RunsPage() {
         <div>
           <h2 className='text-sm font-semibold'>{t('runs.savedExecutions')}</h2>
           <p className='text-muted-foreground mt-0.5 text-xs'>
-            {t('runs.loadedCount', { count: historyItems.length })}
+            {t('runs.loadedCount', { count: historyEntries.length })}
           </p>
         </div>
 
@@ -288,19 +324,19 @@ function RunsPage() {
         {runs.isError ? (
           <p className='text-destructive text-sm'>{t('runs.loadError')}</p>
         ) : null}
-        {!runs.isPending && historyItems.length === 0 ? (
+        {!runs.isPending && historyEntries.length === 0 ? (
           <Empty className='min-h-64 border border-dashed'>
             <EmptyHeader>
               <EmptyMedia variant='icon'>
                 <HistoryIcon />
               </EmptyMedia>
               <EmptyTitle>
-                {status || nameQuery || targetType || targetId
+                {status || nameQuery || targetType || targetId || mode
                   ? t('runs.noMatchesTitle')
                   : t('runs.emptyTitle')}
               </EmptyTitle>
               <EmptyDescription>
-                {status || nameQuery || targetType || targetId
+                {status || nameQuery || targetType || targetId || mode
                   ? t('runs.noMatchesDescription')
                   : t('runs.emptyDescription')}
               </EmptyDescription>
@@ -308,7 +344,55 @@ function RunsPage() {
           </Empty>
         ) : null}
         <ItemGroup className='gap-2'>
-          {historyItems.map((run) => {
+          {historyEntries.map((entry) => {
+            if (entry.kind === 'chat') {
+              const session = entry;
+              return (
+                <Item
+                  key={`chat:${session.id}`}
+                  variant='outline'
+                  size='sm'
+                  className='border-l-4 border-l-sky-400/70 bg-sky-500/[0.035] hover:bg-sky-500/6.5 dark:border-l-sky-400/40'
+                >
+                  <ItemMedia
+                    variant='icon'
+                    className='size-8 rounded-md border border-sky-200/70 bg-sky-500/12 text-sky-700 dark:border-sky-400/15 dark:text-sky-300'
+                  >
+                    <MessageSquareIcon />
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle>
+                      {session.latestMessage ?? t('runs.chatSession')}
+                    </ItemTitle>
+                    <ItemDescription>
+                      {t('runs.chatTurns', { count: session.turnCount ?? 0 })} ·{' '}
+                      {new Date(session.activityAt).toLocaleString(
+                        i18n.language,
+                      )}
+                    </ItemDescription>
+                  </ItemContent>
+                  <ItemActions className='ml-auto'>
+                    <Badge
+                      variant='outline'
+                      className={RUN_STATUS_STYLES[session.status]}
+                    >
+                      {t(`runs.runStatus.${session.status}`)}
+                    </Badge>
+                    <Button
+                      size='sm'
+                      onClick={() =>
+                        void navigate(
+                          `/workflows/${session.targetId}?chatSessionId=${session.id}`,
+                        )
+                      }
+                    >
+                      {t('runs.viewOutput')}
+                    </Button>
+                  </ItemActions>
+                </Item>
+              );
+            }
+            const run = timelineItemAsRun(entry);
             const isWorkflow = run.targetType === 'workflow';
             const Icon = isWorkflow ? WorkflowIcon : AppWindowIcon;
             const canReplay = REPLAYABLE_RUN_STATUSES.includes(run.status);
@@ -392,7 +476,7 @@ function RunsPage() {
               {t('runs.loadMore')}
             </Button>
           </div>
-        ) : historyItems.length ? (
+        ) : historyEntries.length ? (
           <p className='text-muted-foreground text-center text-xs'>
             {t('runs.allLoaded')}
           </p>
@@ -451,6 +535,21 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className='mt-0.5 text-sm font-semibold tabular-nums'>{value}</div>
     </div>
   );
+}
+
+function timelineItemAsRun(item: RunHistoryTimelineItem): RunRecordSummary {
+  return {
+    id: item.id,
+    targetType: item.targetType,
+    targetId: item.targetId,
+    targetName: item.targetName,
+    status: item.status,
+    startedAt: item.activityAt,
+    endedAt: item.endedAt,
+    durationMs: item.durationMs,
+    error: item.error,
+    releaseVersion: item.releaseVersion,
+  };
 }
 
 export { RunsPage as Component };

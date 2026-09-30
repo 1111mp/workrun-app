@@ -164,6 +164,7 @@ pub fn run() {
             cmd::run_history::run_history_finalize,
             cmd::run_history::run_history_mark_running,
             cmd::run_history::run_history_list,
+            cmd::run_history::run_history_list_timeline,
             cmd::run_history::run_history_inspect,
             cmd::run_history::run_history_list_active,
             cmd::run_history::run_history_observability,
@@ -175,9 +176,11 @@ pub fn run() {
             // chat session
             cmd::chat_session::chat_session_create,
             cmd::chat_session::chat_session_get,
+            cmd::chat_session::chat_session_update_snapshot,
             cmd::chat_session::chat_session_begin_turn,
             cmd::chat_session::chat_session_list_turns,
             cmd::chat_session::chat_session_list,
+            cmd::chat_session::chat_session_list_history,
             cmd::chat_session::chat_session_archive,
             // run manager
             cmd::run_manager::workflow_run_start,

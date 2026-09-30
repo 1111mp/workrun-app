@@ -73,6 +73,7 @@ import type { RunSpan } from '@/services/run-history';
 import type {
   WorkflowRunExecution,
   WorkflowRunMessage,
+  WorkflowRunTurn,
   WorkflowRunView,
 } from '@/services/workflow';
 import { useWorkflowRunStore } from '@/stores';
@@ -87,6 +88,7 @@ type WorkflowOutputPanelProps = {
   onSend?: (initialState: Record<string, unknown>) => void;
   readOnly?: boolean;
   spans?: RunSpan[];
+  spansByTurn?: Record<string, RunSpan[]>;
 };
 
 function statusLabel(run: WorkflowRunView, t: (key: string) => string) {
@@ -270,6 +272,52 @@ function FinalState({
         </p>
       )}
     </div>
+  );
+}
+
+function TurnFinalState({
+  state,
+  nodeName,
+  execution,
+}: {
+  state: Record<string, unknown>;
+  nodeName: (nodeId: string) => string;
+  execution: WorkflowRunExecution[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <Collapsible className='bg-card overflow-hidden rounded-xl border shadow-sm'>
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant='ghost'
+            className='group hover:bg-muted/60 h-auto w-full justify-between rounded-none px-3 py-3'
+          />
+        }
+      >
+        <span className='flex items-center gap-2.5'>
+          <span className='bg-primary/10 text-primary flex size-8 items-center justify-center rounded-lg'>
+            <DatabaseIcon className='size-4' />
+          </span>
+          <span className='flex flex-col items-start'>
+            <span className='text-sm font-semibold'>
+              {t('workflowEditor.output.finalState')}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              {t('workflowEditor.output.finalStateDescription')}
+            </span>
+          </span>
+        </span>
+        <ChevronDownIcon className='text-muted-foreground size-4 transition-transform group-data-panel-open/button:rotate-180' />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <FinalState
+          state={state}
+          nodeDisplayName={nodeName}
+          execution={execution}
+        />
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -957,11 +1005,19 @@ function TypewriterMarkdown({
 function ChatMessageBubble({
   message,
   nodeName,
+  animateResponse = false,
+  onResponsePresentationComplete,
 }: {
   message: WorkflowRunMessage;
   nodeName: string;
+  animateResponse?: boolean;
+  onResponsePresentationComplete?: () => void;
 }) {
   const isUser = message.role === 'user';
+  // This is intentionally captured on mount. A response restored from a
+  // session never starts typing, while a response mounted during a live run
+  // continues its local reveal after the runtime reaches its terminal event.
+  const [typewriterStarted] = useState(() => !isUser && animateResponse);
 
   return (
     <Message align={isUser ? 'end' : 'start'}>
@@ -972,10 +1028,18 @@ function ChatMessageBubble({
           variant={isUser ? 'secondary' : 'ghost'}
         >
           <BubbleContent>
-            <MarkdownContent
-              content={message.content}
-              isStreaming={message.isStreaming}
-            />
+            {!isUser && typewriterStarted ? (
+              <TypewriterMarkdown
+                content={message.content}
+                isStreaming={message.isStreaming}
+                onPresentationComplete={onResponsePresentationComplete}
+              />
+            ) : (
+              <MarkdownContent
+                content={message.content}
+                isStreaming={message.isStreaming}
+              />
+            )}
           </BubbleContent>
         </Bubble>
         {message.isStreaming && (
@@ -1349,7 +1413,7 @@ function RunTelemetry({
   );
 }
 
-function RunModelUsage({ spans }: { spans: RunSpan[] }) {
+function RunModelUsage({ spans, title }: { spans: RunSpan[]; title?: string }) {
   const { t } = useTranslation();
   const modelCalls = spans.filter((span) => span.kind === 'model_call');
   if (modelCalls.length === 0) return null;
@@ -1381,7 +1445,7 @@ function RunModelUsage({ spans }: { spans: RunSpan[] }) {
       <div className='flex items-center justify-between gap-3'>
         <div className='min-w-0'>
           <p className='text-sm font-semibold'>
-            {t('workflowEditor.output.telemetry.runModelUsage')}
+            {title ?? t('workflowEditor.output.telemetry.runModelUsage')}
           </p>
           <p className='text-muted-foreground mt-0.5 text-xs'>
             {t('workflowEditor.output.telemetry.runModelUsageSummary', {
@@ -1409,6 +1473,225 @@ function RunModelUsage({ spans }: { spans: RunSpan[] }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function chatTurnResponse(
+  execution: WorkflowRunExecution[],
+  turnId?: string,
+): WorkflowRunMessage | undefined {
+  // Agent events are stored on their execution so task output can keep its
+  // trace. In chat, surface only the last response as the conversational
+  // answer; earlier agent output remains available from the run receipt.
+  const responses = execution.flatMap((entry) => {
+    if (entry.type !== 'agent' && entry.type !== 'remote_agent') return [];
+    const messages = Array.isArray(entry.messages) ? entry.messages : [];
+    return messages.flatMap((message) => {
+      if (typeof message !== 'object' || message === null) return [];
+      const content = (message as Record<string, unknown>).content;
+      return typeof content === 'string' && content.trim()
+        ? [
+            {
+              content,
+              nodeId: entry.nodeId,
+              isStreaming: entry.status === 'running',
+            },
+          ]
+        : [];
+    });
+  });
+  const response = responses.at(-1);
+  return response
+    ? {
+        // The turn ID remains stable while streamed content grows. That keeps
+        // the local typewriter mounted across runtime status updates.
+        id: `response:${turnId ?? response.nodeId}:${response.nodeId}`,
+        role: 'assistant',
+        ...response,
+      }
+    : undefined;
+}
+
+function turnStatusIcon(status: WorkflowRunTurn['status']) {
+  if (status === 'running') return <Spinner className='size-3.5' />;
+  if (status === 'failed') return <CircleAlertIcon className='size-3.5' />;
+  if (status === 'cancelled') return <CircleXIcon className='size-3.5' />;
+  if (status === 'interrupted') return <CircleAlertIcon className='size-3.5' />;
+  return <CheckCircle2Icon className='size-3.5' />;
+}
+
+function ChatSessionUsage({
+  spans,
+  turnCount,
+}: {
+  spans: RunSpan[];
+  turnCount: number;
+}) {
+  const { t } = useTranslation();
+  const modelCalls = spans.filter((span) => span.kind === 'model_call');
+  const totalTokens = modelCalls.reduce(
+    (total, span) => total + tokenCount(span),
+    0,
+  );
+  const cost = modelCalls.reduce(
+    (total, span) => total + (span.estimatedCostMicrousd ?? 0),
+    0,
+  );
+
+  if (turnCount === 0 && totalTokens === 0) return null;
+  return (
+    <div className='text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs'>
+      {turnCount > 0 ? (
+        <span>
+          {t('workflowEditor.output.turnCount', { count: turnCount })}
+        </span>
+      ) : null}
+      {totalTokens > 0 ? (
+        <span className='before:mr-2 before:content-["·"]'>
+          {t('workflowEditor.output.telemetry.tokens', {
+            count: totalTokens,
+            estimated: '',
+          })}
+        </span>
+      ) : null}
+      {cost > 0 ? (
+        <span className='before:mr-2 before:content-["·"]'>
+          {formatCost(cost)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function ChatTurnReceipt({
+  turn,
+  execution,
+  thoughts,
+  spans,
+  nodeName,
+  isResponsePresenting = false,
+}: {
+  turn?: WorkflowRunTurn;
+  execution: WorkflowRunExecution[];
+  thoughts: WorkflowRunView['thoughts'];
+  spans: RunSpan[];
+  nodeName: (nodeId: string) => string;
+  isResponsePresenting?: boolean;
+}) {
+  const { t } = useTranslation();
+  // Do not replace the live receipt with its terminal form while the answer
+  // is still typing. Apart from looking calmer, this avoids a terminal layout
+  // change competing with the response's own height changes.
+  const status = isResponsePresenting ? 'running' : (turn?.status ?? 'running');
+  const toolCalls = spans.filter((span) => span.kind === 'tool_call').length;
+  const modelTokens = spans
+    .filter((span) => span.kind === 'model_call')
+    .reduce((total, span) => total + tokenCount(span), 0);
+  const duration = turn
+    ? durationLabel({
+        status: turn.status,
+        startedAt: turn.startedAt,
+        endedAt: turn.endedAt,
+        durationMs: turn.durationMs,
+      } as WorkflowRunView)
+    : undefined;
+  const completed = status !== 'running' && status !== 'idle';
+
+  return (
+    <Collapsible className='border-border/60 mt-1 border-t'>
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant='ghost'
+            className='group h-auto w-full justify-between rounded-none px-0 py-2 text-left hover:bg-transparent'
+          />
+        }
+      >
+        <span className='text-muted-foreground flex min-w-0 items-center gap-2 text-xs'>
+          <span
+            className={
+              status === 'failed'
+                ? 'text-destructive'
+                : status === 'running'
+                  ? 'text-primary'
+                  : 'text-muted-foreground'
+            }
+          >
+            {turnStatusIcon(status)}
+          </span>
+          <span className='font-medium'>
+            {status === 'running'
+              ? t('workflowEditor.output.workflowWorking')
+              : t('workflowEditor.output.workflowReceipt')}
+          </span>
+          <span className='truncate'>
+            {t(`workflowEditor.output.status.${status}`)}
+            {execution.length > 0
+              ? ` · ${t('workflowEditor.output.stepCount', { count: execution.length })}`
+              : ''}
+            {toolCalls > 0
+              ? ` · ${t('workflowEditor.output.toolCount', { count: toolCalls })}`
+              : ''}
+            {modelTokens > 0
+              ? ` · ${t('workflowEditor.output.telemetry.tokens', { count: modelTokens, estimated: '' })}`
+              : ''}
+            {duration ? ` · ${duration}` : ''}
+          </span>
+        </span>
+        <span className='text-muted-foreground flex shrink-0 items-center gap-1 text-xs'>
+          {t('workflowEditor.output.viewRunDetails')}
+          <ChevronDownIcon className='size-3.5 transition-transform group-data-panel-open/button:rotate-180' />
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className='pt-1 pb-3'>
+        {turn?.error ? (
+          <p className='text-destructive mb-3 text-sm'>{turn.error}</p>
+        ) : null}
+        {!completed && execution.length === 0 ? (
+          <ThinkingProcess thoughts={thoughts} isRunning nodeName={nodeName} />
+        ) : null}
+        {execution.length > 0 ? (
+          <div className='border-border/70 ml-1 space-y-3 border-l pl-4'>
+            {execution.map((entry, index) => (
+              <div key={`${entry.nodeId}-${index}`} className='relative'>
+                <span className='bg-background border-border absolute top-1 -left-[21px] flex size-3 items-center justify-center rounded-full border'>
+                  {executionStatusIcon(entry.status)}
+                </span>
+                <p className='text-sm font-medium'>
+                  {nodeName(entry.nodeId)}
+                  <span className='text-muted-foreground font-normal'>
+                    {' · '}
+                    {entry.type}
+                    {entry.durationMs !== undefined
+                      ? ` · ${(entry.durationMs / 1000).toFixed(1)}s`
+                      : ''}
+                  </span>
+                </p>
+                {/* The chat surface promotes only the final answer, while the
+                    expanded receipt remains a complete per-node record. */}
+                <TraceResult entry={entry} spans={spans} />
+                <ExecutionOutput
+                  label={t('workflowEditor.output.processOutput')}
+                  log={processLog(entry)}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {turn?.finalState ? (
+          <div className='mt-3'>
+            <TurnFinalState
+              state={turn.finalState}
+              nodeName={nodeName}
+              execution={execution}
+            />
+          </div>
+        ) : null}
+        <div className='mt-3'>
+          <RunTelemetry spans={spans} nodeName={nodeName} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -1491,7 +1774,7 @@ function LiveWorkflowTaskOutput({
     },
     [startedAt],
   );
-  const run = {
+  const run: WorkflowRunView = {
     status: presentationStatus,
     startedAt,
     endedAt,
@@ -1504,7 +1787,8 @@ function LiveWorkflowTaskOutput({
     thoughts: [],
     processLogs: [],
     execution: [],
-  } as WorkflowRunView;
+    turnsById: {},
+  };
   const isRunning = presentationStatus === 'running';
   const duration = durationLabel(run);
   const displayNodeName = (nodeId: string) =>
@@ -1721,9 +2005,14 @@ function WorkflowRunOutput({
   onSend,
   readOnly = false,
   spans = [],
+  spansByTurn = {},
 }: WorkflowOutputPanelProps) {
   const { t } = useTranslation();
   const [message, setMessage] = useState('');
+  const animatedChatResponseIds = useRef(new Set<string>());
+  const [presentedChatResponses, setPresentedChatResponses] = useState<
+    Set<string>
+  >(() => new Set());
   const duration = durationLabel(run);
   const output = run.messages.map((message) => message.content).join('\n\n');
   const displayNodeName = (nodeId: string) =>
@@ -1751,6 +2040,70 @@ function WorkflowRunOutput({
           ...entry,
           status: 'completed',
         }));
+  const sessionSpans = isChat
+    ? Object.values(spansByTurn)
+        .flat()
+        .reduce<RunSpan[]>(
+          (all, span) => {
+            if (!all.some((item) => item.id === span.id)) all.push(span);
+            return all;
+          },
+          [...spans],
+        )
+    : spans;
+  const liveChatResponseIds = isChat
+    ? [
+        ...run.messages
+          .filter((item) => item.role === 'assistant')
+          .map((item) => item.id),
+        ...run.messages.flatMap((item) => {
+          if (item.role !== 'user') return [];
+          const response = chatTurnResponse(
+            execution.filter((entry) => entry.turnId === item.turnId),
+            item.turnId,
+          );
+          return response ? [response.id] : [];
+        }),
+      ]
+    : [];
+
+  if (isRunning) {
+    // A response earns animation only while a real workflow is live. Its ID
+    // is retained through the terminal event so an in-progress local
+    // typewriter is never replaced by restored, complete text.
+    for (const id of liveChatResponseIds)
+      animatedChatResponseIds.current.add(id);
+  }
+
+  const markChatResponsePresented = useCallback((id: string) => {
+    setPresentedChatResponses((current) => {
+      if (current.has(id)) return current;
+      return new Set(current).add(id);
+    });
+  }, []);
+
+  const chatPresentationPending = isChat
+    ? run.messages.some((item) => {
+        if (item.role === 'assistant')
+          return (
+            animatedChatResponseIds.current.has(item.id) &&
+            !item.isStreaming &&
+            !presentedChatResponses.has(item.id)
+          );
+        if (item.role !== 'user') return false;
+        const response = chatTurnResponse(
+          execution.filter((entry) => entry.turnId === item.turnId),
+          item.turnId,
+        );
+        return Boolean(
+          response &&
+          animatedChatResponseIds.current.has(response.id) &&
+          !response.isStreaming &&
+          !presentedChatResponses.has(response.id),
+        );
+      })
+    : false;
+  const chatIsBusy = isRunning || chatPresentationPending;
 
   const copyAll = async () => {
     if (!output) return;
@@ -1760,7 +2113,7 @@ function WorkflowRunOutput({
   const sendMessage = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = message.trim();
-    if (!content || readOnly || isRunning || !onSend) return;
+    if (!content || readOnly || chatIsBusy || !onSend) return;
     onSend({ input: content });
     setMessage('');
   };
@@ -1768,16 +2121,37 @@ function WorkflowRunOutput({
   return (
     <>
       <DrawerHeader>
-        <DrawerTitle>
-          {isChat
-            ? t('workflowEditor.output.chat')
-            : t('workflowEditor.output.runOutput')}
-        </DrawerTitle>
-        <DrawerDescription>
-          {statusLabel(run, t)}
-          {run.activeNodeId ? ` · ${displayNodeName(run.activeNodeId)}` : ''}
-          {duration ? ` · ${duration}` : ''}
-        </DrawerDescription>
+        <div className='flex items-start justify-between gap-4'>
+          <div className='min-w-0'>
+            <DrawerTitle>
+              {isChat
+                ? t('workflowEditor.output.chat')
+                : t('workflowEditor.output.runOutput')}
+            </DrawerTitle>
+            {isChat ? (
+              <ChatSessionUsage
+                spans={sessionSpans}
+                turnCount={
+                  run.messages.filter((item) => item.role === 'user').length
+                }
+              />
+            ) : (
+              <DrawerDescription>
+                {statusLabel(run, t)}
+                {run.activeNodeId
+                  ? ` · ${displayNodeName(run.activeNodeId)}`
+                  : ''}
+                {duration ? ` · ${duration}` : ''}
+              </DrawerDescription>
+            )}
+          </div>
+          {isChat && chatIsBusy ? (
+            <span className='text-primary flex shrink-0 items-center gap-1.5 pt-1 text-xs'>
+              <Spinner className='size-3' />
+              {t('workflowEditor.output.workflowWorking')}
+            </span>
+          ) : null}
+        </div>
       </DrawerHeader>
 
       <div className='flex min-h-0 flex-1 flex-col'>
@@ -1788,7 +2162,7 @@ function WorkflowRunOutput({
           </div>
         )}
 
-        {run.error && (
+        {!isChat && run.error && (
           <Alert variant='destructive' className='m-4 w-auto'>
             <CircleAlertIcon />
             <AlertTitle>{t('workflowEditor.output.workflowFailed')}</AlertTitle>
@@ -1800,7 +2174,7 @@ function WorkflowRunOutput({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 p-4'>
-                <RunModelUsage spans={spans} />
+                {!isChat && <RunModelUsage spans={sessionSpans} />}
                 {!isChat && execution.length > 0 && (
                   <MessageScrollerItem messageId='execution-start'>
                     <div>
@@ -1913,70 +2287,94 @@ function WorkflowRunOutput({
                       const isCurrentTurn =
                         isRunning &&
                         message.turnId === run.messages.at(-1)?.turnId;
+                      const turn = message.turnId
+                        ? run.turnsById[message.turnId]
+                        : undefined;
+                      const turnSpans = message.turnId
+                        ? (spansByTurn[message.turnId] ??
+                          (isCurrentTurn ? spans : []))
+                        : [];
+                      const assistantResponse = chatTurnResponse(
+                        turnExecution,
+                        message.turnId,
+                      );
+                      const isResponsePresenting = Boolean(
+                        assistantResponse &&
+                        animatedChatResponseIds.current.has(
+                          assistantResponse.id,
+                        ) &&
+                        !assistantResponse.isStreaming &&
+                        !presentedChatResponses.has(assistantResponse.id),
+                      );
+                      const shouldAnimateMessage =
+                        message.role === 'assistant' &&
+                        (isRunning ||
+                          animatedChatResponseIds.current.has(message.id));
+                      const shouldAnimateResponse = Boolean(
+                        assistantResponse &&
+                        (isRunning ||
+                          animatedChatResponseIds.current.has(
+                            assistantResponse.id,
+                          )),
+                      );
 
                       return (
                         <Fragment key={message.id}>
                           <MessageScrollerItem
                             messageId={message.id}
+                            // Chat intentionally anchors a newly-sent turn in
+                            // the reading area. The response and receipt stay
+                            // mounted below it, so the spacer contracts only
+                            // as the typewriter adds visible content.
                             scrollAnchor={message.role === 'user'}
                           >
                             <ChatMessageBubble
                               message={message}
                               nodeName={displayNodeName(message.nodeId)}
+                              animateResponse={shouldAnimateMessage}
+                              onResponsePresentationComplete={() =>
+                                markChatResponsePresented(message.id)
+                              }
                             />
                           </MessageScrollerItem>
-                          {message.role === 'user' &&
-                            turnExecution.map((entry, index) => {
-                              const log = processLog(entry);
-
-                              return (
-                                <MessageScrollerItem
-                                  key={`${entry.nodeId}-${index}`}
-                                  messageId={`chat-${message.id}-execution-${index}`}
-                                >
-                                  <Marker variant='separator'>
-                                    <MarkerIcon>
-                                      {executionStatusIcon(entry.status)}
-                                    </MarkerIcon>
-                                    <MarkerContent>
-                                      {displayNodeName(entry.nodeId)} ·{' '}
-                                      {entry.type}
-                                      {entry.durationMs !== undefined
-                                        ? ` · ${entry.durationMs}ms`
-                                        : ''}
-                                    </MarkerContent>
-                                  </Marker>
-                                  {appIdentity(entry.nodeId)}
-                                  <TraceResult entry={entry} spans={spans} />
-                                  <ExecutionOutput
-                                    label={t(
-                                      'workflowEditor.output.processOutput',
+                          {message.role === 'user' ? (
+                            <MessageScrollerItem
+                              messageId={`${message.id}-workflow`}
+                            >
+                              <div className='ml-1 space-y-1 sm:ml-8'>
+                                {assistantResponse ? (
+                                  <ChatMessageBubble
+                                    message={assistantResponse}
+                                    nodeName={displayNodeName(
+                                      assistantResponse.nodeId,
                                     )}
-                                    log={log}
+                                    animateResponse={shouldAnimateResponse}
+                                    onResponsePresentationComplete={() =>
+                                      markChatResponsePresented(
+                                        assistantResponse.id,
+                                      )
+                                    }
                                   />
-                                </MessageScrollerItem>
-                              );
-                            })}
-                          {message.role === 'user' &&
-                            turnExecution.length === 0 && (
-                              <MessageScrollerItem
-                                messageId={`${message.id}-thinking`}
-                              >
-                                <ThinkingProcess
+                                ) : null}
+                                <ChatTurnReceipt
+                                  turn={turn}
+                                  execution={turnExecution}
                                   thoughts={run.thoughts.filter(
                                     (thought) =>
                                       thought.turnId === message.turnId,
                                   )}
-                                  isRunning={isCurrentTurn}
+                                  spans={turnSpans}
                                   nodeName={displayNodeName}
+                                  isResponsePresenting={isResponsePresenting}
                                 />
-                              </MessageScrollerItem>
-                            )}
+                              </div>
+                            </MessageScrollerItem>
+                          ) : null}
                         </Fragment>
                       );
                     })
                 )}
-                {run.finalState && (
+                {!isChat && run.finalState && (
                   <MessageScrollerItem messageId='final-state'>
                     <Collapsible className='bg-card overflow-hidden rounded-xl border shadow-sm'>
                       <CollapsibleTrigger
@@ -2012,7 +2410,9 @@ function WorkflowRunOutput({
                     </Collapsible>
                   </MessageScrollerItem>
                 )}
-                <RunTelemetry spans={spans} nodeName={displayNodeName} />
+                {!isChat && (
+                  <RunTelemetry spans={spans} nodeName={displayNodeName} />
+                )}
               </MessageScrollerContent>
             </MessageScrollerViewport>
             <MessageScrollerButton />
@@ -2023,7 +2423,11 @@ function WorkflowRunOutput({
       {isChat ? (
         <DrawerFooter>
           {!readOnly && run.status === 'failed' && (
-            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+            <Button
+              variant='outline'
+              disabled={chatIsBusy}
+              onClick={onRunAgain}
+            >
               <RotateCcwIcon data-icon='inline-start' />
               {rerunLabel(run.status, t)}
             </Button>
@@ -2032,7 +2436,7 @@ function WorkflowRunOutput({
             <InputGroup className='h-auto'>
               <InputGroupTextarea
                 aria-label={t('workflowEditor.output.message')}
-                disabled={readOnly || isRunning}
+                disabled={readOnly || chatIsBusy}
                 placeholder={t('workflowEditor.output.messagePlaceholder')}
                 value={message}
                 onChange={(event) => setMessage(event.target.value)}
@@ -2048,7 +2452,7 @@ function WorkflowRunOutput({
                   {t('workflowEditor.output.sendHint')}
                 </InputGroupText>
                 <InputGroupButton
-                  disabled={readOnly || !message.trim() || isRunning}
+                  disabled={readOnly || !message.trim() || chatIsBusy}
                   size='icon-sm'
                   type='submit'
                   variant='default'

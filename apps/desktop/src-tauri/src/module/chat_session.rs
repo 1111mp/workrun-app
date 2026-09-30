@@ -18,6 +18,9 @@ pub struct ChatSession {
     pub updated_at: String,
     pub latest_turn_status: Option<String>,
     pub latest_turn_message: Option<String>,
+    pub latest_turn_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_snapshot: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,9 +87,28 @@ impl ChatSessionStore {
         Self::get(id).await
     }
 
+    pub async fn update_workflow_snapshot(id: &str, workflow_snapshot: Value) -> Result<()> {
+        if !workflow_snapshot.is_object() {
+            bail!("chat session workflow snapshot must be an object");
+        }
+        let pool = DBManager::global().pool()?;
+        let result = sqlx::query(
+            "UPDATE chat_sessions SET workflow_snapshot_json = ?, updated_at = ? WHERE id = ? AND status = 'active'",
+        )
+        .bind(workflow_snapshot.to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            bail!("chat session was not found or archived");
+        }
+        Ok(())
+    }
+
     pub async fn get(id: &str) -> Result<ChatSession> {
         let pool = DBManager::global().pool()?;
-        let row = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message FROM chat_sessions WHERE id = ?")
+        let row = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, created_at, updated_at, workflow_snapshot_json, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE id = ?")
             .bind(id).fetch_optional(&pool).await?
             .context("chat session was not found")?;
         Ok(ChatSession {
@@ -100,6 +122,10 @@ impl ChatSessionStore {
             updated_at: row.try_get("updated_at")?,
             latest_turn_status: row.try_get("latest_turn_status")?,
             latest_turn_message: row.try_get("latest_turn_message")?,
+            latest_turn_at: row.try_get("latest_turn_at")?,
+            workflow_snapshot: Some(serde_json::from_str(
+                &row.try_get::<String, _>("workflow_snapshot_json")?,
+            )?),
         })
     }
 
@@ -217,7 +243,7 @@ impl ChatSessionStore {
 
     pub async fn list(workflow_id: &str) -> Result<Vec<ChatSession>> {
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message FROM chat_sessions WHERE workflow_id = ? AND status = 'active' ORDER BY updated_at DESC, id DESC")
+        let rows = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE workflow_id = ? AND status = 'active' ORDER BY COALESCE((SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1), created_at) DESC, id DESC")
             .bind(workflow_id).fetch_all(&pool).await?;
         rows.into_iter()
             .map(|row| {
@@ -232,6 +258,38 @@ impl ChatSessionStore {
                     updated_at: row.try_get("updated_at")?,
                     latest_turn_status: row.try_get("latest_turn_status")?,
                     latest_turn_message: row.try_get("latest_turn_message")?,
+                    latest_turn_at: row.try_get("latest_turn_at")?,
+                    // The picker needs only summary data. Keep the immutable
+                    // execution recipe on the explicit get path.
+                    workflow_snapshot: None,
+                })
+            })
+            .collect()
+    }
+
+    /// History must include archived conversations: archiving only removes a
+    /// session from the live picker, never from its durable execution record.
+    pub async fn list_history(workflow_id: &str) -> Result<Vec<ChatSession>> {
+        let pool = DBManager::global().pool()?;
+        let rows = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE workflow_id = ? ORDER BY COALESCE((SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1), created_at) DESC, id DESC")
+            .bind(workflow_id)
+            .fetch_all(&pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ChatSession {
+                    id: row.try_get("id")?,
+                    workflow_id: row.try_get("workflow_id")?,
+                    status: row.try_get("status")?,
+                    active_run_id: row.try_get("active_run_id")?,
+                    state: serde_json::from_str(&row.try_get::<String, _>("state_json")?)?,
+                    summary: row.try_get("summary")?,
+                    created_at: row.try_get("created_at")?,
+                    updated_at: row.try_get("updated_at")?,
+                    latest_turn_status: row.try_get("latest_turn_status")?,
+                    latest_turn_message: row.try_get("latest_turn_message")?,
+                    latest_turn_at: row.try_get("latest_turn_at")?,
+                    workflow_snapshot: None,
                 })
             })
             .collect()
