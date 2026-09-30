@@ -59,6 +59,7 @@ function SettingsPage() {
             { provider: 'groq', apiKey: '', baseUrl: '' },
             { provider: 'ollama', apiKey: '', baseUrl: '' },
           ],
+      summary_model_profile_id: config?.summary_model_profile_id ?? '',
     },
   });
 
@@ -80,6 +81,7 @@ function SettingsPage() {
       otlp_endpoint: values.otlp_endpoint,
       // model
       provider_credentials: values.provider_credentials,
+      summary_model_profile_id: values.summary_model_profile_id,
     };
 
     if (settings.locale && settings.locale !== config?.locale) {

@@ -35,6 +35,7 @@ export type WorkflowRunProjection = {
   totalSteps?: number;
   finalState?: Record<string, unknown>;
   error?: string;
+  contextCompactionStage?: 'summarizing' | 'ready' | 'failed';
   eventSequence: number;
   nodeIds: string[];
   nodesById: Record<string, WorkflowRunNode>;
@@ -99,6 +100,7 @@ export function workflowRunView(
     totalSteps: projection.totalSteps,
     finalState: projection.finalState,
     error: projection.error,
+    contextCompactionStage: projection.contextCompactionStage,
     nodes: projection.nodeIds
       .map((id) => projection.nodesById[id])
       .filter(Boolean),
@@ -234,6 +236,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
         projection.totalSteps = undefined;
         projection.finalState = undefined;
         projection.error = undefined;
+        projection.contextCompactionStage = undefined;
         projection.eventSequence = -1;
         projection.latestExecutionIdByNode = {};
         projection.latestThoughtIdByNode = {};
@@ -328,6 +331,18 @@ function reduceWorkflowRunEvent(
   >,
 ) {
   const event = envelope.event;
+  if (
+    event.type === 'custom' &&
+    event.event_type === 'workflow.context_compaction'
+  ) {
+    const stage =
+      typeof event.data === 'object' && event.data !== null
+        ? (event.data as Record<string, unknown>).stage
+        : undefined;
+    if (stage === 'summarizing' || stage === 'ready' || stage === 'failed')
+      projection.contextCompactionStage = stage;
+    return;
+  }
   if (envelope.sequence <= projection.eventSequence) return;
   projection.eventSequence = envelope.sequence;
   if (event.type === 'node_start') {

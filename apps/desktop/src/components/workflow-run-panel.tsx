@@ -494,6 +494,25 @@ function WorkflowRunPanel({
                   {t('workflowEditor.settings.sessionWorkflowFixed')}
                 </p>
               ) : null}
+              {run?.contextCompactionStage === 'summarizing' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressing')}
+                </p>
+              ) : run?.contextCompactionStage === 'failed' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressionFallback')}
+                </p>
+              ) : currentSession?.summaryStatus === 'ready' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressed', {
+                    count: currentSession.summaryThroughSequence + 1,
+                  })}
+                </p>
+              ) : currentSession?.summaryStatus === 'failed' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressionFallback')}
+                </p>
+              ) : null}
               <WorkflowRunOutput
                 run={run!}
                 workflowNodes={nodes}

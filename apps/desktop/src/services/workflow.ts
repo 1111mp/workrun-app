@@ -135,6 +135,10 @@ export type ChatSession = {
   latestTurnMessage?: string;
   /** Latest turn completion (or its creation time while it is active). */
   latestTurnAt?: string;
+  summaryThroughSequence: number;
+  summaryStatus: 'idle' | 'ready' | 'failed';
+  summaryUpdatedAt?: string;
+  summaryError?: string;
   workflowSnapshot?: ChatWorkflowSnapshot;
 };
 
@@ -332,6 +336,7 @@ export type WorkflowRunView = {
   turnsById: Record<string, WorkflowRunTurn>;
   finalState?: Record<string, unknown>;
   error?: string;
+  contextCompactionStage?: 'summarizing' | 'ready' | 'failed';
 };
 
 /**

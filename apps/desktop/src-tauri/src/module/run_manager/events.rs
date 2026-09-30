@@ -476,6 +476,19 @@ pub(super) async fn publish_value_event(run_id: &str, event: Value) -> Result<()
     Ok(())
 }
 
+/// Pre-run context work has no durable run record yet. Send its lifecycle as
+/// a transient event so the chat UI can explain an otherwise silent delay.
+pub(super) fn publish_transient_event(run_id: &str, event: Value) -> Result<()> {
+    emit_on_main_thread(
+        "run-event",
+        RunEventEnvelope {
+            run_id: run_id.to_string(),
+            sequence: -1,
+            event,
+        },
+    )
+}
+
 async fn persist_app_output(run_id: String, mut receiver: mpsc::UnboundedReceiver<PythonOutputChunk>) -> Result<()> {
     let mut sequence = RunHistoryStore::last_sequence(&run_id).await? + 1;
     while let Some(chunk) = receiver.recv().await {

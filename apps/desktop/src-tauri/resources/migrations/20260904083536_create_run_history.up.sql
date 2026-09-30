@@ -57,6 +57,11 @@ CREATE TABLE chat_sessions (
   active_run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
   state_json TEXT NOT NULL DEFAULT '{}',
   summary TEXT NOT NULL DEFAULT '',
+  summary_through_sequence INTEGER NOT NULL DEFAULT -1,
+  summary_status TEXT NOT NULL DEFAULT 'idle'
+    CHECK (summary_status IN ('idle', 'ready', 'failed')),
+  summary_updated_at TEXT,
+  summary_error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

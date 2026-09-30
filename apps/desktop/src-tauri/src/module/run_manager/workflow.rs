@@ -1,4 +1,4 @@
-use super::events::{finish_run, publish_run_status, publish_value_event};
+use super::events::{finish_run, publish_run_status, publish_transient_event, publish_value_event};
 use super::execution::workflow_resume_runtime;
 use super::*;
 use crate::{
@@ -47,16 +47,30 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
             .filter(|name| !name.trim().is_empty())
             .map(str::to_owned)
             .context("chat session workflow name is invalid")?;
-        request.release_id = snapshot
-            .get("releaseId")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        request.release_id = snapshot.get("releaseId").and_then(Value::as_str).map(str::to_owned);
         request.release_version = snapshot
             .get("releaseVersion")
             .and_then(Value::as_str)
             .map(str::to_owned);
         let fields = session_state_fields(&request.dsl)?;
         apply_session_state(&mut request.initial_state, &session.state, &fields)?;
+        let compacts_context = ChatSessionStore::will_compact(session_id).await?;
+        if compacts_context {
+            publish_transient_event(
+                &request.run_id,
+                json!({ "type": "custom", "node": "workrun", "event_type": "workflow.context_compaction", "data": { "stage": "summarizing" } }),
+            )?;
+        }
+        // The renderer's transcript is a view, not the durable source of context.
+        // Replace it with Workrun-owned memory so restored and live chats agree.
+        request.initial_state["conversation"] = ChatSessionStore::context_for_next_turn(session_id).await?;
+        if compacts_context {
+            let stage = ChatSessionStore::get(session_id).await?.summary_status;
+            publish_transient_event(
+                &request.run_id,
+                json!({ "type": "custom", "node": "workrun", "event_type": "workflow.context_compaction", "data": { "stage": stage } }),
+            )?;
+        }
     }
     // Persist the immutable Team App coordinates separately from the executable
     // local IDs. Replay and cache cleanup must not infer these from a mutable catalog.

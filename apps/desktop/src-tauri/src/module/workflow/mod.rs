@@ -4,7 +4,7 @@
 //! runtime model.  The only execution data is a node's `id`, `type`, `data`,
 //! and the edge endpoint/handle information.
 
-mod agent;
+pub(crate) mod agent;
 mod ask_user_question;
 mod codeact_agent;
 mod guardrails;

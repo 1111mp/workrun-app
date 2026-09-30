@@ -154,6 +154,8 @@ pub struct IWorkrun {
 
     #[serde(default)]
     pub provider_credentials: Vec<ProviderCredential>,
+    /// Workrun-owned model for internal conversation memory compression.
+    pub summary_model_profile_id: Option<String>,
     /// app log level
     /// silent | error | warn | info | debug | trace
     pub app_log_level: Option<String>,
@@ -198,6 +200,7 @@ pub struct WorkrunPatch {
     pub local_profile: Option<LocalProfile>,
     pub team: Option<TeamSettings>,
     pub provider_credentials: Option<Vec<ProviderCredential>>,
+    pub summary_model_profile_id: Option<String>,
     pub app_log_level: Option<String>,
     pub app_log_max_size: Option<u64>,
     pub app_log_max_count: Option<usize>,
@@ -218,6 +221,7 @@ impl Default for IWorkrun {
             local_profile: None,
             team: None,
             provider_credentials: Vec::new(),
+            summary_model_profile_id: None,
             app_log_level: None,
             app_log_max_size: None,
             app_log_max_count: None,
@@ -301,6 +305,9 @@ impl IWorkrun {
                     self.provider_credentials.push(credential);
                 }
             }
+        }
+        if let Some(model_id) = &patch.summary_model_profile_id {
+            self.summary_model_profile_id = (!model_id.trim().is_empty()).then(|| model_id.clone());
         }
 
         patch!(workspace_mode);
