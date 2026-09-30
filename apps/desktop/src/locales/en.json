@@ -485,6 +485,7 @@
       "description": "The Agent requested a Tool App execution.",
       "source": "Source",
       "fallbackSource": "Tool App",
+      "input": "Call input",
       "risk": "Risk",
       "unknown": "unknown",
       "run": "Run tool"

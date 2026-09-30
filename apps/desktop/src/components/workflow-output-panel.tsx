@@ -1836,7 +1836,9 @@ function LiveWorkflowTaskOutput({
           </Alert>
         ) : null}
 
-        <RunModelUsage spans={spans} />
+        <div className='mx-4'>
+          <RunModelUsage spans={spans} />
+        </div>
 
         <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
           <MessageScroller>

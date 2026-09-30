@@ -474,6 +474,7 @@
       "description": "智能体请求执行一个工具应用。",
       "source": "来源",
       "fallbackSource": "工具应用",
+      "input": "调用参数",
       "risk": "风险",
       "unknown": "未知",
       "run": "运行工具"

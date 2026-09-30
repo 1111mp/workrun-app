@@ -107,47 +107,62 @@ function ToolApprovalDialog({
 
   return (
     <AlertDialog open onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent>
-        <AlertDialogHeader className='grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
-          <AlertDialogMedia className='mb-0 size-8'>
-            <ShieldAlertIcon />
-          </AlertDialogMedia>
-          <div className='min-w-0 space-y-1.5'>
-            <AlertDialogTitle>
-              {t('approval.tool.title', {
-                name:
-                  typeof payload.name === 'string'
-                    ? payload.name
-                    : t('approval.tool.fallbackName'),
-              })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {typeof payload.description === 'string'
-                ? payload.description
-                : t('approval.tool.description')}
-            </AlertDialogDescription>
-            <div className='flex flex-wrap gap-1.5 pt-1'>
-              <Badge variant='outline'>
-                {t('approval.tool.source')}:{' '}
-                {typeof payload.sourceName === 'string'
-                  ? payload.sourceName
-                  : typeof payload.source === 'string'
-                    ? payload.source
-                    : t('approval.tool.fallbackSource')}
-              </Badge>
-              <Badge variant='secondary'>
-                {t('approval.tool.risk')}:{' '}
-                {typeof payload.riskLevel === 'string'
-                  ? payload.riskLevel
-                  : t('approval.tool.unknown')}
-              </Badge>
+      <AlertDialogContent className='max-w-xl! gap-0 overflow-hidden p-0'>
+        <AlertDialogHeader className='via-background to-background relative block overflow-hidden border-b bg-linear-to-br from-amber-500/14 px-7 py-7 pr-16 text-left'>
+          <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(38_92%_50%/0.14)_1px,transparent_1px)] bg-size-[14px_14px]' />
+          <div className='relative flex items-start gap-4'>
+            <AlertDialogMedia className='bg-background/80 mb-0 flex size-11 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 text-amber-700 shadow-sm dark:text-amber-300'>
+              <ShieldAlertIcon className='size-5' />
+            </AlertDialogMedia>
+            <div className='min-w-0'>
+              <AlertDialogTitle className='text-lg tracking-tight'>
+                {t('approval.tool.title', {
+                  name:
+                    typeof payload.name === 'string'
+                      ? payload.name
+                      : t('approval.tool.fallbackName'),
+                })}
+              </AlertDialogTitle>
+              <AlertDialogDescription className='mt-1 max-w-2xl leading-5'>
+                {typeof payload.description === 'string'
+                  ? payload.description
+                  : t('approval.tool.description')}
+              </AlertDialogDescription>
+              <div className='flex flex-wrap gap-1.5 pt-3'>
+                <Badge variant='outline' className='bg-background/60'>
+                  {t('approval.tool.source')}:{' '}
+                  {typeof payload.sourceName === 'string'
+                    ? payload.sourceName
+                    : typeof payload.source === 'string'
+                      ? payload.source
+                      : t('approval.tool.fallbackSource')}
+                </Badge>
+                <Badge variant='secondary'>
+                  {t('approval.tool.risk')}:{' '}
+                  {typeof payload.riskLevel === 'string'
+                    ? payload.riskLevel
+                    : t('approval.tool.unknown')}
+                </Badge>
+              </div>
             </div>
           </div>
         </AlertDialogHeader>
-        <pre className='bg-muted max-h-64 overflow-auto rounded-md p-3 text-xs'>
-          {JSON.stringify(payload.input ?? {}, null, 2)}
-        </pre>
-        <AlertDialogFooter>
+        <div className='max-h-[min(58vh,560px)] overflow-y-auto px-7 py-6'>
+          <section className='bg-muted/15 rounded-xl border p-4'>
+            <div className='mb-3 flex items-center gap-2'>
+              <span className='bg-primary/10 text-primary flex size-7 items-center justify-center rounded-lg'>
+                <ShieldCheckIcon className='size-3.5' />
+              </span>
+              <h2 className='text-sm font-medium'>
+                {t('approval.tool.input')}
+              </h2>
+            </div>
+            <pre className='bg-background max-h-[min(40vh,24rem)] overflow-auto rounded-lg border p-4 font-mono text-xs leading-5'>
+              {JSON.stringify(payload.input ?? {}, null, 2)}
+            </pre>
+          </section>
+        </div>
+        <AlertDialogFooter className='bg-muted/15 mx-0 mb-0 border-t px-7 py-4'>
           <Button
             variant='outline'
             disabled={submitting}
