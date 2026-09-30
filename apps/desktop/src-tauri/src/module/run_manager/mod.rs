@@ -163,6 +163,11 @@ impl RunSupervisor {
             let app_permit = (claimed.summary.target_type == "app")
                 .then_some(available_app_permit)
                 .flatten();
+            if let Err(error) =
+                crate::module::chat_session::ChatSessionStore::set_turn_status(&run_id, RunStatus::Running).await
+            {
+                log::warn!("failed to mark chat turn running for {run_id}: {error:#}");
+            }
             publish_run_status(&run_id, RunStatus::Running).ok();
             self.active_runs.fetch_add(1, Ordering::AcqRel);
             AsyncHandler::spawn(move || async move {
@@ -235,6 +240,10 @@ pub struct StartWorkflowRun {
     pub dsl: Value,
     pub initial_state: Value,
     pub thread_id: String,
+    #[serde(default)]
+    pub chat_session_id: Option<String>,
+    #[serde(default)]
+    pub chat_turn_id: Option<String>,
     /// Present only for an Evaluation Case. Its fixtures are persisted in the
     /// run runtime snapshot and never supplied by a normal editor run.
     pub evaluation_profile: Option<EvaluationExecutionProfile>,

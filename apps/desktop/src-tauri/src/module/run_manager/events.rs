@@ -95,6 +95,12 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
                 object.insert("runActionId".to_string(), Value::String(action_id));
             }
             has_pending_action = true;
+            if let Err(error) =
+                crate::module::chat_session::ChatSessionStore::set_turn_status(&run_id, RunStatus::WaitingForInput)
+                    .await
+            {
+                log::warn!("failed to mark chat turn waiting for input for {run_id}: {error:#}");
+            }
         }
         RunHistoryStore::append_events(
             &run_id,
@@ -400,6 +406,9 @@ pub(super) async fn complete_app_cancellation(run_id: &str) -> Result<()> {
 
 pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> Result<()> {
     RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
+    if let Err(error) = crate::module::chat_session::ChatSessionStore::finish_turn(run_id, status).await {
+        log::warn!("failed to finish chat turn for run {run_id}: {error:#}");
+    }
     if let Err(error) = crate::module::evaluation::EvaluationStore::complete_workflow_run(
         run_id,
         matches!(status, RunStatus::Completed),

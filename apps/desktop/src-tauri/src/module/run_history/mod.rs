@@ -10,6 +10,7 @@ mod types;
 pub use types::*;
 
 pub struct RunHistoryStore;
+pub(crate) use records::create_in_transaction;
 
 mod pending_actions;
 mod queries;

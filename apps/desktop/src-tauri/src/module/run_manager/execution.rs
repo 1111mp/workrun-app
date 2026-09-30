@@ -53,6 +53,7 @@ async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Valu
         .map(serde_json::from_value)
         .transpose()
         .context("workflow evaluation profile is invalid")?;
+    let chat_session_id = runtime.get("chatSessionId").and_then(Value::as_str).map(str::to_owned);
     RunManager::global()
         .workflow_sessions
         .lock()
@@ -77,6 +78,7 @@ async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Valu
         resume,
         tool_confirmation,
         evaluation_profile,
+        chat_session_id,
         cancellation,
     )
     .instrument(run_span)
@@ -109,9 +111,11 @@ async fn execute_workflow(
     resume: bool,
     tool_confirmation: Option<ToolConfirmationDecisionRequest>,
     evaluation_profile: Option<workflow_module::EvaluationExecutionProfile>,
+    chat_session_id: Option<String>,
     cancellation: CancellationToken,
 ) -> Result<()> {
     let dsl: WorkflowDsl = serde_json::from_value(session.dsl)?;
+    let session_state_fields = dsl.session_state_fields.clone();
     let initial_state: State = serde_json::from_value(session.initial_state)?;
     let config = BaseConfig::workrun().await.latest_arc();
     let (events, receiver) = mpsc::unbounded_channel();
@@ -186,6 +190,20 @@ async fn execute_workflow(
         events
             .send(serde_json::to_value(event)?)
             .map_err(|_| anyhow::anyhow!("workflow event writer stopped"))?;
+    }
+    if !result.interrupted {
+        if let Some(session_id) = chat_session_id.as_deref() {
+            let global = result.state.get("global").and_then(Value::as_object);
+            let updates = global
+                .map(|global| {
+                    session_state_fields
+                        .iter()
+                        .filter_map(|key| global.get(key).cloned().map(|value| (key.clone(), value)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            crate::module::chat_session::ChatSessionStore::merge_state(session_id, &updates).await?;
+        }
     }
     drop(events);
     let has_pending_action = writer.await??;

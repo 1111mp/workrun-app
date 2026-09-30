@@ -53,6 +53,11 @@ export type WorkflowRunProjection = {
   >;
 };
 
+export type ActiveChatSession = {
+  workflowId: string;
+  sessionId: string;
+};
+
 export function createWorkflowRunProjection(
   runId?: string,
 ): WorkflowRunProjection {
@@ -141,6 +146,7 @@ type WorkflowRunStore = {
   projection: WorkflowRunProjection;
   runningNodeId: string | null;
   showRunOutput: boolean;
+  activeChatSession?: ActiveChatSession;
   toolApproval?: Record<string, unknown>;
   humanReview?: Record<string, unknown>;
   askUserQuestion?: Record<string, unknown>;
@@ -148,6 +154,7 @@ type WorkflowRunStore = {
   setRunPanelOpen: (open: boolean) => void;
   setRunningNodeId: (nodeId: string | null) => void;
   setShowRunOutput: (show: boolean) => void;
+  setActiveChatSession: (session: ActiveChatSession | undefined) => void;
   resetRunView: () => void;
   startWorkflowRun: (
     runId: string,
@@ -174,6 +181,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
     projection: createWorkflowRunProjection(),
     runningNodeId: null,
     showRunOutput: false,
+    activeChatSession: undefined,
     setLastRunInput: (input) =>
       set((state) => {
         state.lastRunInput = input;
@@ -190,6 +198,10 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
       set((state) => {
         state.showRunOutput = show;
       }),
+    setActiveChatSession: (session) =>
+      set((state) => {
+        state.activeChatSession = session;
+      }),
     resetRunView: () =>
       set((state) => {
         state.projection = createWorkflowRunProjection();
@@ -197,9 +209,27 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
       }),
     startWorkflowRun: (runId, input, mode, turnId) =>
       set((state) => {
-        const projection = createWorkflowRunProjection(runId);
+        const projection =
+          mode === 'chat' && state.projection.runId
+            ? state.projection
+            : createWorkflowRunProjection(runId);
+        // A chat turn is a new run, but it belongs to the existing transcript.
+        // Event sequence numbers are local to each durable run, so reset only
+        // the live-run cursor and indexes rather than discarding prior turns.
+        projection.runId = runId;
         projection.status = 'running';
         projection.startedAt = Date.now();
+        projection.endedAt = undefined;
+        projection.durationMs = undefined;
+        projection.activeNodeId = undefined;
+        projection.totalSteps = undefined;
+        projection.finalState = undefined;
+        projection.error = undefined;
+        projection.eventSequence = -1;
+        projection.latestExecutionIdByNode = {};
+        projection.latestThoughtIdByNode = {};
+        projection.resumePendingNodeIds = {};
+        projection.activeMessageIdByNode = {};
         if (mode === 'chat') {
           const id = `${runId}:input:${turnId ?? 0}`;
           projection.messageIds.push(id);

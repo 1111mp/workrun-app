@@ -72,12 +72,14 @@ import {
 } from '@/services/run-history';
 import {
   createWorkflow,
+  archiveChatSession,
   createWorkflowDocument,
   publishWorkflow,
   toWorkflowDocument,
   toWorkflowDsl,
   workflowDocumentFromSnapshot,
   updateWorkflow,
+  listChatSessions,
   type StoredWorkflow,
   type WorkflowDocument,
   type WorkflowRelease,
@@ -103,6 +105,15 @@ type WorkflowEditorProps = {
 };
 
 type ObservabilityPeriod = '7d' | '30d' | 'all';
+
+function replayInput(record: Pick<RunRecord, 'input' | 'runtime'>) {
+  if (record.input && typeof record.input === 'object') return record.input;
+  const initialState = (record.runtime as { initialState?: unknown })
+    ?.initialState;
+  return initialState && typeof initialState === 'object'
+    ? (initialState as Record<string, unknown>)
+    : undefined;
+}
 
 function WorkflowEditor({
   workflow,
@@ -399,7 +410,8 @@ function WorkflowEditorContent({
   );
   // The output shell chooses its chat/task layout from these props, so it must
   // use the same run-time snapshot as event replay rather than editor state.
-  const displayedRunSettings = displayedRunDocument?.settings ?? workflowSettings;
+  const displayedRunSettings =
+    displayedRunDocument?.settings ?? workflowSettings;
   const displayedRunNodes = displayedRunDocument?.nodes ?? nodes;
 
   const createWorkflowForTeamRun = async () => {
@@ -448,6 +460,26 @@ function WorkflowEditorContent({
         ? keepPreviousData(previousData)
         : undefined,
   });
+  const chatSessions = useQuery({
+    queryKey: ['chat-sessions', activeWorkflow?.id],
+    queryFn: () => listChatSessions(activeWorkflow!.id),
+    enabled: workflowSettings.mode === 'chat' && Boolean(activeWorkflow?.id),
+  });
+
+  useEffect(() => {
+    if (workflowSettings.mode !== 'chat' || !activeWorkflow?.id) return;
+    // Session creation and turn completion happen outside this query. Refresh
+    // at each run-state transition so the switcher immediately reflects a
+    // new conversation, its latest title, and its updated ordering.
+    void queryClient.invalidateQueries({
+      queryKey: ['chat-sessions', activeWorkflow.id],
+    });
+  }, [
+    activeWorkflow?.id,
+    queryClient,
+    workflowRun.runStatus,
+    workflowSettings.mode,
+  ]);
 
   const restoreHistoricalRun = useWorkflowRunStore(
     useShallow((state) => ({
@@ -485,7 +517,9 @@ function WorkflowEditorContent({
         {
           mode: runDocument?.settings.mode ?? workflowSettings.mode,
           nodes: runDocument?.nodes ?? nodes,
-          input: historicalRun.input,
+          // Older run-detail payloads can omit `input`, but workflow runtime
+          // snapshots retain the initial state required to render a chat turn.
+          input: replayInput(historicalRun),
           turnId: `history:${historicalRun.id}`,
         },
       ),
@@ -507,7 +541,7 @@ function WorkflowEditorContent({
           {
             mode: runDocument?.settings.mode ?? workflowSettings.mode,
             nodes: runDocument?.nodes ?? nodes,
-            input: record.input,
+            input: replayInput(record),
             turnId: `history:${record.id}`,
           },
         ),
@@ -852,6 +886,16 @@ function WorkflowEditorContent({
                   node.type ||
                   node.id,
               }))}
+            publishedGlobalKeys={nodes.flatMap((node) => {
+              const state = node.data?.state;
+              return state &&
+                typeof state === 'object' &&
+                Array.isArray((state as { globalKeys?: unknown }).globalKeys)
+                ? (state as { globalKeys: unknown[] }).globalKeys.filter(
+                    (key): key is string => typeof key === 'string',
+                  )
+                : [];
+            })}
             onOpenChange={setSettingsOpen}
             onSettingsChange={updateWorkflowSettings}
             automation={
@@ -891,10 +935,21 @@ function WorkflowEditorContent({
             onRun={workflowRun.startWorkflowRun}
             onResume={workflowRun.resumeWorkflowRun}
             onRetryFailed={workflowRun.retryFailedWorkflowRun}
-            readOnly={Boolean(displayedHistoricalRun)}
-            spans={
-              displayedHistoricalRun?.spans ?? liveRunRecord.data?.spans
+            chatSessions={chatSessions.data}
+            activeChatSessionId={workflowRun.activeChatSessionId}
+            onRestoreChatSession={(id) =>
+              void workflowRun.restoreChatSession(id)
             }
+            onNewChat={workflowRun.newChat}
+            onArchiveChatSession={(id) =>
+              void archiveChatSession(id).then(() =>
+                queryClient.invalidateQueries({
+                  queryKey: ['chat-sessions', activeWorkflow?.id],
+                }),
+              )
+            }
+            readOnly={Boolean(displayedHistoricalRun)}
+            spans={displayedHistoricalRun?.spans ?? liveRunRecord.data?.spans}
             onHistoricalClose={() => {
               if (historicalRun) {
                 // This store outlives the history page. Reset it before returning

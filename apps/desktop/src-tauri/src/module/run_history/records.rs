@@ -4,8 +4,20 @@ impl RunHistoryStore {
     pub async fn create(record: CreateRunRecord) -> Result<()> {
         validate_create(&record)?;
         let pool = DBManager::global().pool()?;
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
+        let mut transaction = pool.begin().await?;
+        create_in_transaction(&mut transaction, &record).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+}
+
+pub(crate) async fn create_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    record: &CreateRunRecord,
+) -> Result<()> {
+    validate_create(record)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
             "INSERT INTO run_records (id, target_type, target_id, target_name, status, started_at, input_json, output_view_json, target_snapshot_json, runtime_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&record.id)
@@ -14,18 +26,19 @@ impl RunHistoryStore {
         .bind(&record.target_name)
         .bind(record.status.as_str())
         .bind(&record.started_at)
-        .bind(record.input.map(|value| value.to_string()))
+        .bind(record.input.as_ref().map(|value| value.to_string()))
         .bind(record.output_view.to_string())
         .bind(record.target_snapshot.to_string())
         .bind(record.runtime.to_string())
         .bind(&now)
         .bind(now)
-        .execute(&pool)
+        .execute(&mut **transaction)
         .await
         .context("failed to create run record")?;
-        Ok(())
-    }
+    Ok(())
+}
 
+impl RunHistoryStore {
     pub async fn append_events(id: &str, request: AppendRunEvents) -> Result<()> {
         let pool = DBManager::global().pool()?;
         let mut transaction = pool.begin().await?;

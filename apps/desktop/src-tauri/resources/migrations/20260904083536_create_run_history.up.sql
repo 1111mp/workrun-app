@@ -47,6 +47,39 @@ CREATE INDEX idx_run_records_status_started_at_id
 CREATE INDEX idx_run_records_queue_claim
   ON run_records(status, created_at ASC, id ASC);
 
+-- Chat sessions keep only the explicitly configured workflow global state
+-- between turns. The turn record is tied to the immutable workflow run.
+CREATE TABLE chat_sessions (
+  id TEXT PRIMARY KEY NOT NULL,
+  workflow_id TEXT NOT NULL,
+  workflow_snapshot_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+  active_run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
+  state_json TEXT NOT NULL DEFAULT '{}',
+  summary TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_chat_sessions_workflow_updated
+  ON chat_sessions(workflow_id, status, updated_at DESC, id DESC);
+
+CREATE TABLE chat_turns (
+  id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE RESTRICT,
+  sequence INTEGER NOT NULL,
+  user_message TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'waiting_for_input', 'completed', 'failed', 'cancelled', 'interrupted')),
+  created_at TEXT NOT NULL,
+  completed_at TEXT,
+  UNIQUE(session_id, sequence),
+  UNIQUE(run_id)
+);
+
+CREATE INDEX idx_chat_turns_session_sequence
+  ON chat_turns(session_id, sequence ASC);
+
 -- run_events：流式事件与日志，按顺序追加
 CREATE TABLE run_events (
   run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE CASCADE,

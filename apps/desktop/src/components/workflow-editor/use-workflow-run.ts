@@ -5,7 +5,10 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { prepareWorkflowProcessApps } from '@/services/process-node';
 import { resolvePendingAction } from '@/services/run-history';
+import { inspectRunRecord } from '@/services/run-history';
 import {
+  createChatSession,
+  listChatSessionTurns,
   resolveAskUserQuestion,
   resolveHumanReview,
   resumeBackgroundWorkflowRun,
@@ -19,6 +22,7 @@ import {
   type WorkflowRunEventEnvelope,
 } from '@/services/workflow';
 import { useRunWorkspaceStore, useWorkflowRunStore } from '@/stores';
+import { workflowRunView } from '@/stores/workflow-run.store';
 
 type SubworkflowContext = {
   workflowId: string;
@@ -72,6 +76,37 @@ function unconfiguredSubworkflow(nodes: Node[]) {
   });
 }
 
+function recentChatMessages() {
+  const run = workflowRunView(useWorkflowRunStore.getState().projection);
+  const messages = run.messages.flatMap((message) => {
+    const turnExecution = run.execution.filter(
+      (entry) => entry.turnId === message.turnId,
+    );
+    return [
+      { role: message.role, content: message.content },
+      ...turnExecution.flatMap((entry) =>
+        (Array.isArray(entry.messages) ? entry.messages : [])
+          .filter(
+            (item): item is { role?: unknown; content?: unknown } =>
+              Boolean(item) && typeof item === 'object',
+          )
+          .flatMap((item) =>
+            typeof item.content === 'string' && item.content.trim()
+              ? [
+                  {
+                    role: item.role === 'user' ? 'user' : 'assistant',
+                    content: item.content,
+                  },
+                ]
+              : [],
+          ),
+      ),
+    ];
+  });
+  // Keep prompt growth bounded until durable summaries are introduced.
+  return messages.slice(-20);
+}
+
 function useWorkflowRun(
   workflowId: string,
   nodes: Node[],
@@ -110,10 +145,12 @@ function useWorkflowRun(
       clearToolApproval: state.clearToolApproval,
       clearHumanReview: state.clearHumanReview,
       clearAskUserQuestion: state.clearAskUserQuestion,
+      activeChatSession: state.activeChatSession,
+      setActiveChatSession: state.setActiveChatSession,
     })),
   );
-  const chatThreadId = useRef<string | undefined>(undefined);
   const runThreadId = useRef<string | undefined>(undefined);
+  const chatSessionId = useRef<string | undefined>(undefined);
   const runId = useRef<string | undefined>(undefined);
   const unlistenRunEvents = useRef<(() => void) | undefined>(undefined);
   const chatTurnId = useRef<string | undefined>(undefined);
@@ -129,6 +166,13 @@ function useWorkflowRun(
     nodes,
     turnId: chatTurnId.current,
   });
+
+  const rememberChatSession = (sessionId: string | undefined) => {
+    chatSessionId.current = sessionId;
+    store.setActiveChatSession(
+      sessionId ? { workflowId, sessionId } : undefined,
+    );
+  };
 
   const runAfterDrain = (callback: () => void) => {
     if (pendingEvents.current.length) afterDrain.current.push(callback);
@@ -250,6 +294,20 @@ function useWorkflowRun(
         return;
       }
     }
+    if (settings.mode === 'chat' && !chatSessionId.current) {
+      const persisted = store.activeChatSession;
+      if (persisted?.workflowId === executionWorkflowId)
+        chatSessionId.current = persisted.sessionId;
+    }
+    if (settings.mode === 'chat' && !chatSessionId.current) {
+      const id = crypto.randomUUID();
+      await createChatSession(
+        id,
+        executionWorkflowId,
+        toWorkflowDocument(nodes, edges, settings),
+      );
+      rememberChatSession(id);
+    }
     if (pendingFrame.current !== undefined) {
       cancelAnimationFrame(pendingFrame.current);
       pendingFrame.current = undefined;
@@ -258,14 +316,21 @@ function useWorkflowRun(
     afterDrain.current = [];
     chatTurnId.current =
       settings.mode === 'chat' ? crypto.randomUUID() : undefined;
-    const threadId =
-      settings.mode === 'chat'
-        ? (chatThreadId.current ?? crypto.randomUUID())
-        : crypto.randomUUID();
+    // A completed graph checkpoint is not a resumable chat session. Give each
+    // turn an execution-scoped thread; conversation continuity is injected as
+    // input until the durable ChatSession store is introduced.
+    const threadId = crypto.randomUUID();
     runThreadId.current = threadId;
     const id = crypto.randomUUID();
     runId.current = id;
     setTelemetryRevision(0);
+    const initialState =
+      settings.mode === 'chat'
+        ? {
+            ...input,
+            conversation: { recentMessages: recentChatMessages() },
+          }
+        : input;
     store.startWorkflowRun(id, input, settings.mode, chatTurnId.current);
     const preparationToastId = `workflow-preparation-${id}`;
     let isPreparingTeamApp = false;
@@ -294,8 +359,10 @@ function useWorkflowRun(
         releaseId,
         releaseVersion,
         dsl,
-        initialState: input,
+        initialState,
         threadId,
+        chatSessionId: chatSessionId.current,
+        chatTurnId: chatTurnId.current,
       });
       // The create command has returned, so the inspection query cannot race
       // the SQLite record creation for this newly started run.
@@ -352,7 +419,38 @@ function useWorkflowRun(
     }
   };
 
-  const resetRunContext = () => {
+  const restoreChatSession = async (sessionId: string) => {
+    const turns = await listChatSessionTurns(sessionId);
+    resetRunContext();
+    rememberChatSession(sessionId);
+    for (const turn of turns) {
+      const record = await inspectRunRecord(turn.runId);
+      store.startWorkflowRun(
+        record.id,
+        record.input ?? { input: turn.userMessage },
+        'chat',
+        turn.id,
+      );
+      store.applyRunEvents(
+        record.events.map(({ sequence, event }) => ({
+          runId: record.id,
+          sequence,
+          event: event as WorkflowRunEvent,
+        })),
+        {
+          mode: 'chat',
+          nodes,
+          turnId: turn.id,
+          input: record.input ?? undefined,
+        },
+      );
+      runId.current = record.id;
+      const threadId = (record.runtime as { threadId?: unknown }).threadId;
+      runThreadId.current = typeof threadId === 'string' ? threadId : undefined;
+    }
+  };
+
+  const resetRunContext = (clearChatSession = true) => {
     if (pendingFrame.current !== undefined) {
       cancelAnimationFrame(pendingFrame.current);
       pendingFrame.current = undefined;
@@ -364,6 +462,7 @@ function useWorkflowRun(
     runId.current = undefined;
     runThreadId.current = undefined;
     chatTurnId.current = undefined;
+    if (clearChatSession) rememberChatSession(undefined);
     // Clear the query identity with the output projection. Otherwise a mode
     // switch can render the prior task's telemetry in an empty chat session.
     setActiveRunId(null);
@@ -372,10 +471,21 @@ function useWorkflowRun(
     store.setShowRunOutput(false);
   };
 
+  const newChat = () => {
+    resetRunContext();
+    store.setRunPanelOpen(true);
+  };
+
   const startRun = () => {
     if (settings.mode === 'chat') {
-      resetRunContext();
-      chatThreadId.current = crypto.randomUUID();
+      const activeSession = store.activeChatSession;
+      if (activeSession?.workflowId === workflowId) {
+        void restoreChatSession(activeSession.sessionId);
+        return;
+      }
+      // Reopening the run drawer is navigation, not a request for a new
+      // conversation. Only the explicit New chat action clears its identity.
+      resetRunContext(false);
       store.setRunPanelOpen(true);
     } else if (settings.inputSchema.fields.length === 0) {
       startWorkflowRun({});
@@ -521,6 +631,7 @@ function useWorkflowRun(
 
   return {
     isRunning: store.runStatus === 'running',
+    runStatus: store.runStatus,
     startRun,
     startWorkflowRun,
     runningNodeId: store.runningNodeId,
@@ -534,7 +645,13 @@ function useWorkflowRun(
     resolvePendingAskUserQuestion,
     resumeWorkflowRun,
     retryFailedWorkflowRun,
+    restoreChatSession,
     resetRunContext,
+    newChat,
+    activeChatSessionId:
+      store.activeChatSession?.workflowId === workflowId
+        ? store.activeChatSession.sessionId
+        : undefined,
     runId: resolvedActiveRunId,
     telemetryRevision,
   };

@@ -30,6 +30,7 @@ type WorkflowSettingsPanelProps = {
   open: boolean;
   settings: WorkflowSettings;
   executableNodes: { id: string; name: string }[];
+  publishedGlobalKeys?: string[];
   onOpenChange: (open: boolean) => void;
   onSettingsChange: (patch: Partial<WorkflowSettings>) => void;
   automation?: ReactNode;
@@ -42,6 +43,7 @@ function WorkflowSettingsPanel({
   onOpenChange,
   onSettingsChange,
   automation,
+  publishedGlobalKeys = [],
 }: WorkflowSettingsPanelProps) {
   const { t } = useTranslation();
   const inputTypeLabels = [
@@ -159,6 +161,24 @@ function WorkflowSettingsPanel({
       outputSchema: {
         fields: outputFields.filter((output) => output.id !== outputId),
       },
+    });
+  const sessionStateFields = settings.sessionStateFields ?? [];
+  const sessionStateCandidates = [
+    ...new Set([
+      ...outputFields.map((field) => field.key),
+      ...publishedGlobalKeys,
+    ]),
+  ].filter(Boolean);
+  const validSessionStateKey = (key: string) =>
+    key &&
+    !key.includes('.') &&
+    !['input', 'messages', 'conversation'].includes(key) &&
+    !(settings.inputSchema.sensitiveFields ?? []).includes(key);
+  const updateSessionStateField = (index: number, key: string) =>
+    onSettingsChange({
+      sessionStateFields: sessionStateFields.map((field, current) =>
+        current === index ? key.trim() : field,
+      ),
     });
 
   return (
@@ -466,6 +486,91 @@ function WorkflowSettingsPanel({
                       </Field>
                     </FieldGroup>
                   </FieldSet>
+                ))}
+              </FieldGroup>
+            </FieldSet>
+            <FieldSet className='bg-muted/20 gap-4 rounded-xl border p-4'>
+              <div className='flex items-center justify-between gap-2'>
+                <FieldLegend>
+                  {t('workflowEditor.settings.sessionState')}
+                </FieldLegend>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  disabled={settings.mode !== 'chat'}
+                  onClick={() =>
+                    onSettingsChange({
+                      sessionStateFields: [...sessionStateFields, ''],
+                    })
+                  }
+                >
+                  <PlusIcon data-icon='inline-start' />{' '}
+                  {t('workflowEditor.settings.addSessionStateKey')}
+                </Button>
+              </div>
+              <FieldDescription>
+                {t('workflowEditor.settings.sessionStateDescription')}
+              </FieldDescription>
+              {settings.mode !== 'chat' ? (
+                <FieldDescription>
+                  {t('workflowEditor.settings.sessionStateChatOnly')}
+                </FieldDescription>
+              ) : null}
+              <FieldGroup className='gap-3'>
+                {sessionStateCandidates.length > 0 ? (
+                  <div className='flex flex-wrap gap-2'>
+                    {sessionStateCandidates.map((key) => (
+                      <Button
+                        key={key}
+                        type='button'
+                        size='sm'
+                        variant='secondary'
+                        disabled={
+                          settings.mode !== 'chat' ||
+                          sessionStateFields.includes(key)
+                        }
+                        onClick={() =>
+                          onSettingsChange({
+                            sessionStateFields: [...sessionStateFields, key],
+                          })
+                        }
+                      >
+                        {key}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+                {sessionStateFields.map((field, index) => (
+                  <Field key={`${field}-${index}`} orientation='horizontal'>
+                    <Input
+                      aria-invalid={!validSessionStateKey(field) || undefined}
+                      placeholder={t(
+                        'workflowEditor.settings.sessionStatePlaceholder',
+                      )}
+                      value={field}
+                      onChange={(event) =>
+                        updateSessionStateField(index, event.target.value)
+                      }
+                    />
+                    <Button
+                      type='button'
+                      size='icon-sm'
+                      variant='ghost'
+                      aria-label={t(
+                        'workflowEditor.settings.removeSessionStateKey',
+                      )}
+                      onClick={() =>
+                        onSettingsChange({
+                          sessionStateFields: sessionStateFields.filter(
+                            (_, current) => current !== index,
+                          ),
+                        })
+                      }
+                    >
+                      <Trash2Icon />
+                    </Button>
+                  </Field>
                 ))}
               </FieldGroup>
             </FieldSet>

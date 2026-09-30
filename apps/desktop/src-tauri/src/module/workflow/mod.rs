@@ -107,6 +107,8 @@ pub struct WorkflowDsl {
     pub input_schema: WorkflowInterfaceSchema,
     #[serde(default)]
     pub output_schema: WorkflowInterfaceSchema,
+    #[serde(default)]
+    pub session_state_fields: Vec<String>,
     pub nodes: Vec<WorkflowNode>,
     #[serde(default)]
     pub edges: Vec<WorkflowEdge>,

@@ -894,6 +894,8 @@ impl EvaluationStore {
             .context("evaluation case fixture is invalid")?;
         let workflow_run_id = uuid::Uuid::new_v4().to_string();
         run_manager::start_workflow(StartWorkflowRun {
+            chat_session_id: None,
+            chat_turn_id: None,
             run_id: workflow_run_id.clone(),
             target_id: claimed.workflow_id.clone(),
             target_name: snapshot.target_name,

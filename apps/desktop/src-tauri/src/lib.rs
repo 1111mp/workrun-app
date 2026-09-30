@@ -172,6 +172,14 @@ pub fn run() {
             cmd::run_history::run_history_claim_next_pending_action,
             cmd::run_history::run_history_release_pending_action,
             cmd::run_history::run_history_resolve_pending_action,
+            // chat session
+            cmd::chat_session::chat_session_create,
+            cmd::chat_session::chat_session_get,
+            cmd::chat_session::chat_session_begin_turn,
+            cmd::chat_session::chat_session_list_turns,
+            cmd::chat_session::chat_session_list,
+            cmd::chat_session::chat_session_archive,
+            // run manager
             cmd::run_manager::workflow_run_start,
             cmd::run_manager::workflow_run_resume,
             cmd::run_manager::workflow_run_retry_failed,

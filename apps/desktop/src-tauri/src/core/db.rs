@@ -137,6 +137,20 @@ impl DBManager {
         .execute(pool)
         .await?;
         let interrupted = active_runs.rows_affected() + queued_runs.rows_affected();
+        // Chat sessions must not retain a lock for a native execution that was
+        // interrupted during restart; their transcript remains recoverable.
+        sqlx::query(
+            "UPDATE chat_turns SET status = 'interrupted', completed_at = ? WHERE run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Execution did not start before Workrun restarted.'))",
+        )
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "UPDATE chat_sessions SET active_run_id = NULL, updated_at = ? WHERE active_run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Execution did not start before Workrun restarted.'))",
+        )
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
         if interrupted > 0 {
             logging!(
                 info,

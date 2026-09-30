@@ -120,7 +120,48 @@ export type BackgroundWorkflowRunRequest = {
   dsl: Workflow;
   initialState: Record<string, unknown>;
   threadId: string;
+  chatSessionId?: string;
+  chatTurnId?: string;
 };
+
+export type ChatSession = {
+  id: string;
+  workflowId: string;
+  status: 'active' | 'archived';
+  activeRunId?: string;
+  updatedAt: string;
+  latestTurnStatus?: string;
+  latestTurnMessage?: string;
+};
+export type ChatTurn = {
+  id: string;
+  runId: string;
+  sequence: number;
+  userMessage: string;
+  status: string;
+};
+
+export function createChatSession(
+  id: string,
+  workflowId: string,
+  workflowSnapshot: unknown,
+) {
+  return invoke<ChatSession>('chat_session_create', {
+    request: { id, workflowId, workflowSnapshot },
+  });
+}
+
+export function listChatSessionTurns(sessionId: string) {
+  return invoke<ChatTurn[]>('chat_session_list_turns', { sessionId });
+}
+
+export function listChatSessions(workflowId: string) {
+  return invoke<ChatSession[]>('chat_session_list', { workflowId });
+}
+
+export function archiveChatSession(id: string) {
+  return invoke('chat_session_archive', { id });
+}
 
 export type WorkflowSchedule = {
   id: string;
@@ -269,6 +310,7 @@ export function toWorkflowDsl(
     mode: settings.mode,
     inputSchema: settings.inputSchema,
     outputSchema: settings.outputSchema ?? { fields: [] },
+    sessionStateFields: settings.sessionStateFields ?? [],
     nodes: nodes.map(({ id, type, data }) => ({
       id,
       type: type as WorkflowNodeType,

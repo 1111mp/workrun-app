@@ -216,6 +216,64 @@ describe('workflow run projection', () => {
     ]);
   });
 
+  it('appends a second chat turn while resetting its run-local event cursor', () => {
+    const store = useWorkflowRunStore.getState();
+    store.resetRunView();
+    store.startWorkflowRun(
+      'run-1',
+      { input: 'First question' },
+      'chat',
+      'turn-1',
+    );
+    store.applyRunEvents(
+      events({
+        type: 'done',
+        state: { global: {}, nodes: {}, workflow: {} },
+        total_steps: 1,
+      }),
+      { mode: 'chat', nodes: [node], turnId: 'turn-1' },
+    );
+
+    store.startWorkflowRun(
+      'run-2',
+      { input: 'Second question' },
+      'chat',
+      'turn-2',
+    );
+    store.applyRunEvents(
+      [
+        {
+          runId: 'run-2',
+          sequence: 0,
+          event: { type: 'node_start', node: 'research', step: 1 },
+        },
+      ],
+      { mode: 'chat', nodes: [node], turnId: 'turn-2' },
+    );
+
+    const projection = useWorkflowRunStore.getState().projection;
+    expect(
+      workflowRunView(projection).messages.map((message) => message.content),
+    ).toEqual(['First question', 'Second question']);
+    expect(projection.eventSequence).toBe(0);
+    expect(projection.executionsById['run-2:execution:0']?.turnId).toBe(
+      'turn-2',
+    );
+  });
+
+  it('retains the selected chat session across an editor remount', () => {
+    const store = useWorkflowRunStore.getState();
+    store.setActiveChatSession({
+      workflowId: 'workflow-1',
+      sessionId: 'session-1',
+    });
+
+    expect(useWorkflowRunStore.getState().activeChatSession).toEqual({
+      workflowId: 'workflow-1',
+      sessionId: 'session-1',
+    });
+  });
+
   it('restores the user turn needed to display historical chat output', () => {
     const projection = replayWorkflowRunProjection(
       'run-1',
@@ -250,6 +308,32 @@ describe('workflow run projection', () => {
           messages: [{ role: 'assistant', content: 'Research complete.' }],
         },
       ],
+    });
+  });
+
+  it('keeps the user turn when a historical chat run fails before producing output', () => {
+    const projection = replayWorkflowRunProjection(
+      'run-1',
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        {
+          type: 'error',
+          node: 'research',
+          message: 'model.rate_limited',
+        },
+      ),
+      {
+        mode: 'chat',
+        nodes: [node],
+        input: { input: 'Cancel order 43' },
+        turnId: 'history:run-1',
+      },
+    );
+
+    expect(workflowRunView(projection)).toMatchObject({
+      status: 'failed',
+      error: 'model.rate_limited',
+      messages: [expect.objectContaining({ content: 'Cancel order 43' })],
     });
   });
 });

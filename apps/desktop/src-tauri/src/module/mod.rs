@@ -1,3 +1,4 @@
+pub mod chat_session;
 pub mod evaluation;
 pub mod ipc;
 pub mod mcp_server;
