@@ -4,7 +4,7 @@
 //! runtime model.  The only execution data is a node's `id`, `type`, `data`,
 //! and the edge endpoint/handle information.
 
-mod agent;
+pub(crate) mod agent;
 mod ask_user_question;
 mod codeact_agent;
 mod guardrails;
@@ -107,6 +107,8 @@ pub struct WorkflowDsl {
     pub input_schema: WorkflowInterfaceSchema,
     #[serde(default)]
     pub output_schema: WorkflowInterfaceSchema,
+    #[serde(default)]
+    pub session_state_fields: Vec<String>,
     pub nodes: Vec<WorkflowNode>,
     #[serde(default)]
     pub edges: Vec<WorkflowEdge>,

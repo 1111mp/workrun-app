@@ -2,7 +2,8 @@ use crate::{
     cmd::{CmdResult, StringifyErr},
     module::run_history::{
         AppendRunEvents, CreatePendingAction, CreateRunRecord, FinalizeRunRecord, PendingAction, RunHistoryPage,
-        RunHistoryQuery, RunHistoryStore, RunObservability, RunObservabilityQuery, RunRecord, RunRecordSummary,
+        RunHistoryQuery, RunHistoryStore, RunHistoryTimelinePage, RunHistoryTimelineQuery, RunObservability,
+        RunObservabilityQuery, RunRecord, RunRecordSummary,
     },
 };
 
@@ -29,6 +30,11 @@ pub async fn run_history_mark_running(id: String) -> CmdResult {
 #[tauri::command]
 pub async fn run_history_list(query: RunHistoryQuery) -> CmdResult<RunHistoryPage> {
     RunHistoryStore::list(query).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn run_history_list_timeline(query: RunHistoryTimelineQuery) -> CmdResult<RunHistoryTimelinePage> {
+    RunHistoryStore::list_timeline(query).await.stringify_err()
 }
 
 #[tauri::command]

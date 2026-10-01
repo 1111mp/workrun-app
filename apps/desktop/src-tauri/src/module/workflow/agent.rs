@@ -203,7 +203,9 @@ fn personal_skill_names(node: &WorkflowNode) -> Result<Vec<String>> {
         .collect()
 }
 
-pub(super) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
+/// Shared by workflow agents and Workrun-owned background model features.
+/// Callers own their prompt and must not turn an internal request into a graph node.
+pub(crate) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
     let credential = config.credential_for(&model.provider);
     let api_key = credential.and_then(|credential| credential.api_key.as_deref());
     let base_url = credential

@@ -54,4 +54,5 @@ interface IWorkrunConfig {
   otlp_endpoint?: string;
   // model profile
   provider_credentials?: ProviderCredential[];
+  summary_model_profile_id?: string;
 }

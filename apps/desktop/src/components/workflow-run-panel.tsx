@@ -6,6 +6,7 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogTitle,
   Button,
   Drawer,
@@ -14,6 +15,13 @@ import {
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Field,
   FieldContent,
   FieldDescription,
@@ -25,7 +33,15 @@ import {
   Textarea,
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
-import { PlayIcon } from 'lucide-react';
+import {
+  ArchiveIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  EllipsisIcon,
+  MessageSquareIcon,
+  PlayIcon,
+  PlusIcon,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
@@ -35,6 +51,7 @@ import {
   WorkflowRunOutput,
 } from '@/components/workflow-output-panel';
 import type { RunSpan } from '@/services/run-history';
+import type { ChatSession } from '@/services/workflow';
 import { useWorkflowRunStore } from '@/stores';
 import { workflowRunView } from '@/stores/workflow-run.store';
 
@@ -49,7 +66,43 @@ type WorkflowRunPanelProps = {
   readOnly?: boolean;
   onHistoricalClose?: () => void;
   spans?: RunSpan[];
+  spansByTurn?: Record<string, RunSpan[]>;
+  chatSessions?: ChatSession[];
+  activeChatSessionId?: string;
+  isRestoringChatSession?: boolean;
+  workflowChangedForChatSession?: boolean;
+  onRestoreChatSession?: (sessionId: string) => Promise<void>;
+  onArchiveChatSession?: (sessionId: string) => Promise<boolean>;
+  onNewChat?: () => void;
 };
+
+type ChatSessionGroup = 'today' | 'yesterday' | 'earlier';
+
+function chatSessionGroup(updatedAt: string): ChatSessionGroup {
+  const sessionDate = new Date(updatedAt);
+  const today = new Date();
+  const startOfToday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const startOfSessionDay = new Date(
+    sessionDate.getFullYear(),
+    sessionDate.getMonth(),
+    sessionDate.getDate(),
+  );
+  const daysAgo = Math.round(
+    (startOfToday.getTime() - startOfSessionDay.getTime()) / 86_400_000,
+  );
+  if (daysAgo === 0) return 'today';
+  if (daysAgo === 1) return 'yesterday';
+  return 'earlier';
+}
+
+function chatSessionTitle(session?: ChatSession) {
+  const title = session?.latestTurnMessage?.replace(/\s+/g, ' ').trim();
+  return title?.slice(0, 72);
+}
 
 const chatMessageInput: WorkflowInput = {
   id: 'chat-message',
@@ -218,6 +271,14 @@ function WorkflowRunPanel({
   readOnly = false,
   onHistoricalClose,
   spans,
+  spansByTurn,
+  chatSessions = [],
+  activeChatSessionId,
+  isRestoringChatSession = false,
+  workflowChangedForChatSession = false,
+  onRestoreChatSession,
+  onArchiveChatSession,
+  onNewChat,
 }: WorkflowRunPanelProps) {
   const { t } = useTranslation();
   const {
@@ -248,7 +309,27 @@ function WorkflowRunPanel({
   );
 
   const isRunning = runStatus === 'running';
+  const currentSession = chatSessions.find(
+    (session) => session.id === activeChatSessionId,
+  );
+  const currentTitle =
+    chatSessionTitle(currentSession) ??
+    run?.messages.find((message) => message.role === 'user')?.content ??
+    t('workflowEditor.settings.newChat');
+  const sessionGroups = useMemo(
+    () =>
+      chatSessions.reduce<Record<ChatSessionGroup, ChatSession[]>>(
+        (groups, session) => {
+          groups[chatSessionGroup(session.updatedAt)].push(session);
+          return groups;
+        },
+        { today: [], yesterday: [], earlier: [] },
+      ),
+    [chatSessions],
+  );
   const [retryConfirmationOpen, setRetryConfirmationOpen] = useState(false);
+  const [archiveCandidate, setArchiveCandidate] = useState<ChatSession>();
+  const [isArchiving, setIsArchiving] = useState(false);
   const formKey = `${open}:${JSON.stringify(settings)}`;
   const runAgain = () => {
     if (runStatus === 'interrupted') {
@@ -266,7 +347,7 @@ function WorkflowRunPanel({
     <>
       <Drawer
         open={open}
-        defaultHorizontalSnapPoint='31rem'
+        defaultHorizontalSnapPoint='48rem'
         horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
         swipeDirection='right'
         onOpenChange={(open) => {
@@ -276,19 +357,177 @@ function WorkflowRunPanel({
       >
         <DrawerContent>
           {settings.mode === 'chat' ? (
-            <WorkflowRunOutput
-              run={run!}
-              workflowNodes={nodes}
-              isRunning={isRunning}
-              isChat
-              readOnly={readOnly}
-              onRunAgain={runAgain}
-              onSend={onRun}
-              onClose={() =>
-                readOnly ? onHistoricalClose?.() : onOpenChange(false)
-              }
-              spans={spans}
-            />
+            <>
+              <div className='bg-muted/20 flex items-center justify-between border-b px-4 py-2'>
+                {readOnly ? (
+                  <div className='flex min-w-0 items-center gap-2 px-2 font-medium'>
+                    <MessageSquareIcon className='size-4 shrink-0' />
+                    <span className='truncate'>{currentTitle}</span>
+                  </div>
+                ) : (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant='ghost'
+                          className='max-w-[min(22rem,calc(100vw-12rem))] justify-start px-2 font-medium'
+                        >
+                          <MessageSquareIcon data-icon='inline-start' />
+                          <span className='truncate'>{currentTitle}</span>
+                          <ChevronDownIcon className='text-muted-foreground ml-1 size-3.5 shrink-0' />
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent align='start' className='w-80 p-2'>
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel className='px-2 py-1.5'>
+                          {t('workflowEditor.settings.conversations')}
+                        </DropdownMenuLabel>
+                      </DropdownMenuGroup>
+                      {(['today', 'yesterday', 'earlier'] as const).map(
+                        (group) =>
+                          sessionGroups[group].length > 0 ? (
+                            <DropdownMenuGroup key={group}>
+                              <DropdownMenuLabel className='px-2 pt-3 tracking-wider uppercase'>
+                                {t(`workflowEditor.settings.${group}`)}
+                              </DropdownMenuLabel>
+                              {sessionGroups[group].map((session) => {
+                                const title =
+                                  chatSessionTitle(session) ??
+                                  t('workflowEditor.settings.newChat');
+                                const selected =
+                                  session.id === activeChatSessionId;
+                                return (
+                                  <DropdownMenuItem
+                                    key={session.id}
+                                    aria-current={selected ? 'true' : undefined}
+                                    className={`group min-h-14 gap-3 rounded-lg border px-2.5 py-2 transition-none ${
+                                      selected
+                                        ? 'border-primary/25 bg-primary/10 data-highlighted:bg-primary/15 shadow-sm'
+                                        : 'data-highlighted:bg-muted/80 border-transparent'
+                                    }`}
+                                    disabled={isRestoringChatSession}
+                                    onClick={() =>
+                                      void onRestoreChatSession?.(session.id)
+                                    }
+                                  >
+                                    <span
+                                      className={
+                                        selected
+                                          ? 'bg-primary text-primary-foreground flex size-5 shrink-0 items-center justify-center rounded-md shadow-sm'
+                                          : 'flex size-5 shrink-0 items-center justify-center'
+                                      }
+                                    >
+                                      {selected ? (
+                                        <CheckIcon className='size-3.5' />
+                                      ) : (
+                                        <span
+                                          className={`size-1.5 rounded-full ${session.activeRunId ? 'bg-amber-500' : 'bg-muted-foreground/35'}`}
+                                        />
+                                      )}
+                                    </span>
+                                    <span className='min-w-0 flex-1'>
+                                      <span
+                                        className={`block truncate text-sm ${selected ? 'font-semibold' : ''}`}
+                                      >
+                                        {title}
+                                      </span>
+                                      <span
+                                        className={`block text-xs ${selected ? 'text-primary/80 font-medium' : 'text-muted-foreground'}`}
+                                      >
+                                        {session.activeRunId
+                                          ? t('workflowEditor.running')
+                                          : new Date(
+                                              session.updatedAt,
+                                            ).toLocaleTimeString([], {
+                                              hour: '2-digit',
+                                              minute: '2-digit',
+                                            })}
+                                      </span>
+                                    </span>
+                                    <Button
+                                      size='icon-sm'
+                                      variant='ghost'
+                                      disabled={Boolean(session.activeRunId)}
+                                      aria-label={t(
+                                        'workflowEditor.settings.archiveChat',
+                                      )}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setArchiveCandidate(session);
+                                      }}
+                                    >
+                                      <EllipsisIcon />
+                                    </Button>
+                                  </DropdownMenuItem>
+                                );
+                              })}
+                            </DropdownMenuGroup>
+                          ) : null,
+                      )}
+                      {chatSessions.length > 0 ? (
+                        <DropdownMenuSeparator />
+                      ) : null}
+                      <DropdownMenuItem
+                        disabled={isRestoringChatSession}
+                        onClick={onNewChat}
+                      >
+                        <PlusIcon />
+                        {t('workflowEditor.settings.newChat')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                {!readOnly ? (
+                  <Button
+                    size='sm'
+                    disabled={isRestoringChatSession}
+                    onClick={onNewChat}
+                  >
+                    <PlusIcon data-icon='inline-start' />
+                    {t('workflowEditor.settings.newChat')}
+                  </Button>
+                ) : null}
+              </div>
+              {workflowChangedForChatSession ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.sessionWorkflowFixed')}
+                </p>
+              ) : null}
+              {run?.contextCompactionStage === 'summarizing' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressing')}
+                </p>
+              ) : run?.contextCompactionStage === 'failed' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressionFallback')}
+                </p>
+              ) : currentSession?.summaryStatus === 'ready' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressed', {
+                    count: currentSession.summaryThroughSequence + 1,
+                  })}
+                </p>
+              ) : currentSession?.summaryStatus === 'failed' ? (
+                <p className='text-muted-foreground border-b px-4 py-2 text-xs'>
+                  {t('workflowEditor.settings.contextCompressionFallback')}
+                </p>
+              ) : null}
+              <WorkflowRunOutput
+                run={run!}
+                workflowNodes={nodes}
+                isRunning={isRunning}
+                isChat
+                readOnly={readOnly}
+                onRunAgain={runAgain}
+                onSend={onRun}
+                onClose={() =>
+                  readOnly ? onHistoricalClose?.() : onOpenChange(false)
+                }
+                spans={spans}
+                spansByTurn={spansByTurn}
+              />
+            </>
           ) : showOutput ? (
             readOnly ? (
               <WorkflowRunOutput
@@ -352,6 +591,44 @@ function WorkflowRunPanel({
               }}
             >
               Retry failed node
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={Boolean(archiveCandidate)}
+        onOpenChange={(open) => {
+          if (!open) setArchiveCandidate(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <ArchiveIcon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {t('workflowEditor.settings.archiveChatTitle')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('workflowEditor.settings.archiveChatDescription')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('apps.new.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isArchiving}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (!archiveCandidate || !onArchiveChatSession) return;
+                setIsArchiving(true);
+                await onArchiveChatSession(archiveCandidate.id);
+                setIsArchiving(false);
+                // Keep the list intact on failure, but do not trap the user
+                // in a confirmation dialog after the error toast explains it.
+                setArchiveCandidate(undefined);
+              }}
+            >
+              {t('workflowEditor.settings.archiveChat')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

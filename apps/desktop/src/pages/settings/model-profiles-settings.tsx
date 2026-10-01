@@ -10,11 +10,19 @@ import {
   ItemActions,
   ItemContent,
   ItemTitle,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
 } from '@workspace/ui/components';
+import { useQuery } from '@tanstack/react-query';
 import { ChevronRightIcon } from 'lucide-react';
-import { type UseFormReturn, FieldArray } from 'react-hook-form';
+import { Controller, type UseFormReturn, FieldArray } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
+import { getModelCatalog } from '@/services/cmd';
 import type { SettingsForm } from './settings-schema';
 
 const PROVIDER_SETTING_KEY = {
@@ -27,12 +35,28 @@ const PROVIDER_SETTING_KEY = {
   ollama: 'ollama',
 } as const satisfies Record<ModelProvider, string>;
 
+const NO_SUMMARY_MODEL = '__none__';
+
+const MODEL_PROVIDER_LABEL: Record<ModelProvider, string> = {
+  gemini: 'Gemini',
+  open_ai: 'OpenAI',
+  open_ai_strict: 'OpenAI Strict',
+  anthropic: 'Anthropic',
+  deep_seek: 'DeepSeek',
+  groq: 'Groq',
+  ollama: 'Ollama',
+};
+
 function ModelProfilesSettings({
   form,
 }: {
   form: UseFormReturn<SettingsForm>;
 }) {
   const { t } = useTranslation();
+  const { data: modelProfiles = [] } = useQuery({
+    queryKey: ['modelCatalog'],
+    queryFn: getModelCatalog,
+  });
 
   return (
     <FieldSet className='gap-1'>
@@ -115,6 +139,57 @@ function ModelProfilesSettings({
           />
         </FieldGroup>
       </div>
+      <Controller
+        name='summary_model_profile_id'
+        control={form.control}
+        render={({ field }) => (
+          <Field className='pt-4'>
+            <FieldLabel htmlFor='summary-model-profile'>
+              {t('settings.models.summaryModel')}
+            </FieldLabel>
+            <FieldDescription>
+              {t('settings.models.summaryModelDescription')}
+            </FieldDescription>
+            <Select
+              value={field.value || NO_SUMMARY_MODEL}
+              onValueChange={(value) =>
+                field.onChange(value === NO_SUMMARY_MODEL ? '' : value)
+              }
+            >
+              <SelectTrigger id='summary-model-profile' className='w-full'>
+                <span className='flex-1 truncate text-left'>
+                  {modelProfiles.find((profile) => profile.id === field.value)
+                    ?.name ?? t('settings.models.summaryModelNone')}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_SUMMARY_MODEL}>
+                  {t('settings.models.summaryModelNone')}
+                </SelectItem>
+                {Object.entries(
+                  modelProfiles.reduce<
+                    Partial<Record<ModelProvider, ModelDefinition[]>>
+                  >((groups, profile) => {
+                    (groups[profile.provider] ??= []).push(profile);
+                    return groups;
+                  }, {}),
+                ).map(([provider, profiles]) => (
+                  <SelectGroup key={provider}>
+                    <SelectLabel>
+                      {MODEL_PROVIDER_LABEL[provider as ModelProvider]}
+                    </SelectLabel>
+                    {profiles?.map((profile) => (
+                      <SelectItem key={profile.id} value={profile.id}>
+                        {profile.name} · {profile.model}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
+      />
     </FieldSet>
   );
 }

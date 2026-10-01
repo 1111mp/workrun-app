@@ -241,6 +241,7 @@ mod tests {
             id: "child-workflow".to_string(),
             name: String::new(),
             input_schema: WorkflowInterfaceSchema::default(),
+            session_state_fields: Vec::new(),
             output_schema: WorkflowInterfaceSchema::default(),
             nodes: vec![
                 WorkflowNode {

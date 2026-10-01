@@ -120,7 +120,82 @@ export type BackgroundWorkflowRunRequest = {
   dsl: Workflow;
   initialState: Record<string, unknown>;
   threadId: string;
+  chatSessionId?: string;
+  chatTurnId?: string;
 };
+
+export type ChatSession = {
+  id: string;
+  workflowId: string;
+  status: 'active' | 'archived';
+  activeRunId?: string;
+  createdAt: string;
+  updatedAt: string;
+  latestTurnStatus?: string;
+  latestTurnMessage?: string;
+  /** Latest turn completion (or its creation time while it is active). */
+  latestTurnAt?: string;
+  summaryThroughSequence: number;
+  summaryStatus: 'idle' | 'ready' | 'failed';
+  summaryUpdatedAt?: string;
+  summaryError?: string;
+  workflowSnapshot?: ChatWorkflowSnapshot;
+};
+
+export type ChatWorkflowSnapshot = {
+  dsl: Workflow;
+  document: WorkflowDocument;
+  targetName: string;
+  releaseId?: string;
+  releaseVersion?: string;
+};
+export type ChatTurn = {
+  id: string;
+  runId: string;
+  sequence: number;
+  userMessage: string;
+  status: string;
+};
+
+export function createChatSession(
+  id: string,
+  workflowId: string,
+  workflowSnapshot: unknown,
+) {
+  return invoke<ChatSession>('chat_session_create', {
+    request: { id, workflowId, workflowSnapshot },
+  });
+}
+
+export function listChatSessionTurns(sessionId: string) {
+  return invoke<ChatTurn[]>('chat_session_list_turns', { sessionId });
+}
+
+export function getChatSession(sessionId: string) {
+  return invoke<ChatSession>('chat_session_get', { id: sessionId });
+}
+
+export function updateChatSessionSnapshot(
+  sessionId: string,
+  workflowSnapshot: ChatWorkflowSnapshot,
+) {
+  return invoke('chat_session_update_snapshot', {
+    id: sessionId,
+    workflowSnapshot,
+  });
+}
+
+export function listChatSessions(workflowId: string) {
+  return invoke<ChatSession[]>('chat_session_list', { workflowId });
+}
+
+export function listChatSessionHistory(workflowId: string) {
+  return invoke<ChatSession[]>('chat_session_list_history', { workflowId });
+}
+
+export function archiveChatSession(id: string) {
+  return invoke('chat_session_archive', { id });
+}
 
 export type WorkflowSchedule = {
   id: string;
@@ -236,6 +311,16 @@ export type WorkflowRunExecution = {
   [key: string]: unknown;
 };
 
+export type WorkflowRunTurn = {
+  status: WorkflowRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  durationMs?: number;
+  totalSteps?: number;
+  finalState?: Record<string, unknown>;
+  error?: string;
+};
+
 export type WorkflowRunView = {
   status: WorkflowRunStatus;
   startedAt?: number;
@@ -248,8 +333,10 @@ export type WorkflowRunView = {
   thoughts: WorkflowRunThought[];
   processLogs: WorkflowProcessLog[];
   execution: WorkflowRunExecution[];
+  turnsById: Record<string, WorkflowRunTurn>;
   finalState?: Record<string, unknown>;
   error?: string;
+  contextCompactionStage?: 'summarizing' | 'ready' | 'failed';
 };
 
 /**
@@ -269,6 +356,7 @@ export function toWorkflowDsl(
     mode: settings.mode,
     inputSchema: settings.inputSchema,
     outputSchema: settings.outputSchema ?? { fields: [] },
+    sessionStateFields: settings.sessionStateFields ?? [],
     nodes: nodes.map(({ id, type, data }) => ({
       id,
       type: type as WorkflowNodeType,

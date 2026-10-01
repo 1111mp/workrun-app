@@ -17,6 +17,7 @@ function WorkflowPage() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
+  const historyChatSessionId = searchParams.get('chatSessionId');
   const isPublishedView = searchParams.get('catalog') === 'true';
 
   const workflow = useQuery({
@@ -69,6 +70,7 @@ function WorkflowPage() {
             ? historicalRun.data
             : undefined
         }
+        historicalChatSessionId={historyChatSessionId ?? undefined}
       />
     </ReactFlowProvider>
   );

@@ -10,6 +10,7 @@ import type {
   WorkflowRunNode,
   WorkflowRunStatus,
   WorkflowRunThought,
+  WorkflowRunTurn,
   WorkflowRunView,
 } from '@/services/workflow';
 
@@ -34,6 +35,7 @@ export type WorkflowRunProjection = {
   totalSteps?: number;
   finalState?: Record<string, unknown>;
   error?: string;
+  contextCompactionStage?: 'summarizing' | 'ready' | 'failed';
   eventSequence: number;
   nodeIds: string[];
   nodesById: Record<string, WorkflowRunNode>;
@@ -51,6 +53,12 @@ export type WorkflowRunProjection = {
     string,
     { nodeId: string; name: string; stdout: string; stderr: string }
   >;
+  turnsById: Record<string, WorkflowRunTurn>;
+};
+
+export type ActiveChatSession = {
+  workflowId: string;
+  sessionId: string;
 };
 
 export function createWorkflowRunProjection(
@@ -75,6 +83,7 @@ export function createWorkflowRunProjection(
     resumePendingNodeIds: {},
     activeMessageIdByNode: {},
     processLogsByNode: {},
+    turnsById: {},
   };
 }
 
@@ -91,6 +100,7 @@ export function workflowRunView(
     totalSteps: projection.totalSteps,
     finalState: projection.finalState,
     error: projection.error,
+    contextCompactionStage: projection.contextCompactionStage,
     nodes: projection.nodeIds
       .map((id) => projection.nodesById[id])
       .filter(Boolean),
@@ -104,6 +114,7 @@ export function workflowRunView(
       .map((id) => projection.messagesById[id])
       .filter(Boolean),
     processLogs: Object.values(projection.processLogsByNode),
+    turnsById: projection.turnsById,
   };
 }
 
@@ -129,6 +140,11 @@ export function replayWorkflowRunProjection(
       role: 'user',
       turnId: context.turnId,
     };
+    if (context.turnId) {
+      projection.turnsById[context.turnId] = {
+        status: 'running',
+      };
+    }
   }
   for (const envelope of events)
     reduceWorkflowRunEvent(projection, envelope, context);
@@ -141,6 +157,7 @@ type WorkflowRunStore = {
   projection: WorkflowRunProjection;
   runningNodeId: string | null;
   showRunOutput: boolean;
+  activeChatSession?: ActiveChatSession;
   toolApproval?: Record<string, unknown>;
   humanReview?: Record<string, unknown>;
   askUserQuestion?: Record<string, unknown>;
@@ -148,6 +165,7 @@ type WorkflowRunStore = {
   setRunPanelOpen: (open: boolean) => void;
   setRunningNodeId: (nodeId: string | null) => void;
   setShowRunOutput: (show: boolean) => void;
+  setActiveChatSession: (session: ActiveChatSession | undefined) => void;
   resetRunView: () => void;
   startWorkflowRun: (
     runId: string,
@@ -174,6 +192,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
     projection: createWorkflowRunProjection(),
     runningNodeId: null,
     showRunOutput: false,
+    activeChatSession: undefined,
     setLastRunInput: (input) =>
       set((state) => {
         state.lastRunInput = input;
@@ -190,6 +209,10 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
       set((state) => {
         state.showRunOutput = show;
       }),
+    setActiveChatSession: (session) =>
+      set((state) => {
+        state.activeChatSession = session;
+      }),
     resetRunView: () =>
       set((state) => {
         state.projection = createWorkflowRunProjection();
@@ -197,9 +220,28 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
       }),
     startWorkflowRun: (runId, input, mode, turnId) =>
       set((state) => {
-        const projection = createWorkflowRunProjection(runId);
+        const projection =
+          mode === 'chat' && state.projection.runId
+            ? state.projection
+            : createWorkflowRunProjection(runId);
+        // A chat turn is a new run, but it belongs to the existing transcript.
+        // Event sequence numbers are local to each durable run, so reset only
+        // the live-run cursor and indexes rather than discarding prior turns.
+        projection.runId = runId;
         projection.status = 'running';
         projection.startedAt = Date.now();
+        projection.endedAt = undefined;
+        projection.durationMs = undefined;
+        projection.activeNodeId = undefined;
+        projection.totalSteps = undefined;
+        projection.finalState = undefined;
+        projection.error = undefined;
+        projection.contextCompactionStage = undefined;
+        projection.eventSequence = -1;
+        projection.latestExecutionIdByNode = {};
+        projection.latestThoughtIdByNode = {};
+        projection.resumePendingNodeIds = {};
+        projection.activeMessageIdByNode = {};
         if (mode === 'chat') {
           const id = `${runId}:input:${turnId ?? 0}`;
           projection.messageIds.push(id);
@@ -214,6 +256,12 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
             role: 'user',
             turnId,
           };
+          if (turnId) {
+            projection.turnsById[turnId] = {
+              status: 'running',
+              startedAt: projection.startedAt,
+            };
+          }
         }
         state.lastRunInput = input;
         state.projection = projection;
@@ -242,7 +290,16 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
       }),
     projectFailedRun: (message) =>
       set((state) => {
-        projectTerminal(state.projection, 'failed', undefined, message);
+        projectTerminal(
+          state.projection,
+          'failed',
+          undefined,
+          message,
+          state.projection.messageIds.at(-1)
+            ? state.projection.messagesById[state.projection.messageIds.at(-1)!]
+                ?.turnId
+            : undefined,
+        );
         state.runningNodeId = null;
       }),
     clearRunningNode: () =>
@@ -274,6 +331,18 @@ function reduceWorkflowRunEvent(
   >,
 ) {
   const event = envelope.event;
+  if (
+    event.type === 'custom' &&
+    event.event_type === 'workflow.context_compaction'
+  ) {
+    const stage =
+      typeof event.data === 'object' && event.data !== null
+        ? (event.data as Record<string, unknown>).stage
+        : undefined;
+    if (stage === 'summarizing' || stage === 'ready' || stage === 'failed')
+      projection.contextCompactionStage = stage;
+    return;
+  }
   if (envelope.sequence <= projection.eventSequence) return;
   projection.eventSequence = envelope.sequence;
   if (event.type === 'node_start') {
@@ -331,6 +400,11 @@ function reduceWorkflowRunEvent(
   if (event.type === 'resumed') {
     projection.status = 'running';
     projection.error = undefined;
+    if (context.turnId && projection.turnsById[context.turnId]) {
+      projection.turnsById[context.turnId].status = 'running';
+      projection.turnsById[context.turnId].error = undefined;
+      projection.turnsById[context.turnId].endedAt = undefined;
+    }
     for (const nodeId of event.pending_nodes)
       projection.resumePendingNodeIds[nodeId] = true;
     return;
@@ -362,12 +436,27 @@ function reduceWorkflowRunEvent(
       projection.messagesById[messageId].isStreaming = false;
     return;
   }
-  if (event.type === 'custom') return applyCustom(projection, event, transient);
+  if (event.type === 'custom')
+    return applyCustom(projection, event, transient, context.turnId);
   if (event.type === 'done') {
-    projectTerminal(projection, 'completed', event.state);
+    projectTerminal(
+      projection,
+      'completed',
+      event.state,
+      undefined,
+      context.turnId,
+    );
     projection.totalSteps = event.total_steps;
+    if (context.turnId && projection.turnsById[context.turnId])
+      projection.turnsById[context.turnId].totalSteps = event.total_steps;
   } else if (event.type === 'error')
-    projectTerminal(projection, 'failed', undefined, event.message);
+    projectTerminal(
+      projection,
+      'failed',
+      undefined,
+      event.message,
+      context.turnId,
+    );
   else if (event.type === 'interrupted') {
     const awaitingInput = Boolean(
       transient?.toolApproval ||
@@ -382,6 +471,7 @@ function reduceWorkflowRunEvent(
       'interrupted',
       undefined,
       awaitingInput ? undefined : event.message,
+      context.turnId,
     );
   }
 }
@@ -445,9 +535,16 @@ function applyCustom(
     WorkflowRunStore,
     'toolApproval' | 'humanReview' | 'askUserQuestion'
   >,
+  turnId?: string,
 ) {
   if (event.event_type === 'workflow.run_cancelled')
-    return projectTerminal(projection, 'cancelled');
+    return projectTerminal(
+      projection,
+      'cancelled',
+      undefined,
+      undefined,
+      turnId,
+    );
   if (typeof event.data !== 'object' || event.data === null) return;
   if (event.event_type === 'agent.tool_approval_required') {
     if (transient)
@@ -542,11 +639,24 @@ function projectTerminal(
   status: WorkflowRunStatus,
   finalState?: Record<string, unknown>,
   error?: string,
+  turnId?: string,
 ) {
   projection.status = status;
   projection.activeNodeId = undefined;
   projection.finalState = finalState;
   projection.error = error;
+  if (turnId) {
+    const startedAt = projection.turnsById[turnId]?.startedAt;
+    const endedAt = Date.now();
+    projection.turnsById[turnId] = {
+      status,
+      startedAt,
+      endedAt,
+      durationMs: startedAt ? endedAt - startedAt : undefined,
+      finalState,
+      error,
+    };
+  }
   const entityStatus =
     status === 'completed'
       ? 'completed'

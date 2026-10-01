@@ -90,6 +90,37 @@ export type RunHistoryPage = {
   nextCursor?: RunHistoryCursor;
 };
 
+export type RunHistoryMode = 'task' | 'chat';
+
+export type RunHistoryTimelineCursor = {
+  id: string;
+  kind: RunHistoryMode;
+  activityAt: string;
+};
+
+export type RunHistoryTimelineItem = {
+  kind: RunHistoryMode;
+  id: string;
+  targetType: RunTargetType;
+  targetId: string;
+  targetName: string;
+  status: RunStatus;
+  activityAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  error?: string;
+  releaseVersion?: string;
+  turnCount?: number;
+  latestMessage?: string;
+};
+
+export type RunHistoryTimelinePage = {
+  items: RunHistoryTimelineItem[];
+  nextCursor?: RunHistoryTimelineCursor;
+  totalCount: number;
+  completedCount: number;
+};
+
 export type MetricSummary = {
   count: number;
   completedCount: number;
@@ -190,6 +221,22 @@ export function listRunHistoryPage(
   } = {},
 ) {
   return invoke<RunHistoryPage>('run_history_list', { query });
+}
+
+export function listRunHistoryTimelinePage(
+  query: {
+    targetType?: RunTargetType;
+    targetId?: string;
+    status?: RunStatus;
+    query?: string;
+    mode?: RunHistoryMode;
+    pageSize?: number;
+    cursor?: RunHistoryTimelineCursor;
+  } = {},
+) {
+  return invoke<RunHistoryTimelinePage>('run_history_list_timeline', {
+    query,
+  });
 }
 
 export function inspectRunRecord(id: string) {

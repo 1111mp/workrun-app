@@ -29,6 +29,7 @@ export const formSchema = z.object({
   otlp_endpoint: z.string().trim(),
   // model
   provider_credentials: z.array(providerCredentialSchema),
+  summary_model_profile_id: z.string(),
 });
 
 export type SettingsForm = z.infer<typeof formSchema>;

@@ -137,6 +137,20 @@ impl DBManager {
         .execute(pool)
         .await?;
         let interrupted = active_runs.rows_affected() + queued_runs.rows_affected();
+        // Chat sessions must not retain a lock for a native execution that was
+        // interrupted during restart; their transcript remains recoverable.
+        sqlx::query(
+            "UPDATE chat_turns SET status = 'interrupted', completed_at = ? WHERE run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Execution did not start before Workrun restarted.'))",
+        )
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "UPDATE chat_sessions SET active_run_id = NULL, updated_at = ? WHERE active_run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Execution did not start before Workrun restarted.'))",
+        )
+        .bind(&recovered_at)
+        .execute(pool)
+        .await?;
         if interrupted > 0 {
             logging!(
                 info,
@@ -180,6 +194,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // Recovery updates chat turn/session locks alongside run records.
+        // Keep this lightweight test schema aligned with that contract.
+        sqlx::query("CREATE TABLE chat_turns (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, completed_at TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, active_run_id TEXT, updated_at TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE TABLE evaluation_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, failed_cases INTEGER NOT NULL DEFAULT 0, error TEXT, updated_at TEXT)",
         )

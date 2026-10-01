@@ -95,6 +95,12 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
                 object.insert("runActionId".to_string(), Value::String(action_id));
             }
             has_pending_action = true;
+            if let Err(error) =
+                crate::module::chat_session::ChatSessionStore::set_turn_status(&run_id, RunStatus::WaitingForInput)
+                    .await
+            {
+                log::warn!("failed to mark chat turn waiting for input for {run_id}: {error:#}");
+            }
         }
         RunHistoryStore::append_events(
             &run_id,
@@ -400,6 +406,9 @@ pub(super) async fn complete_app_cancellation(run_id: &str) -> Result<()> {
 
 pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> Result<()> {
     RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
+    if let Err(error) = crate::module::chat_session::ChatSessionStore::finish_turn(run_id, status).await {
+        log::warn!("failed to finish chat turn for run {run_id}: {error:#}");
+    }
     if let Err(error) = crate::module::evaluation::EvaluationStore::complete_workflow_run(
         run_id,
         matches!(status, RunStatus::Completed),
@@ -465,6 +474,19 @@ pub(super) async fn publish_value_event(run_id: &str, event: Value) -> Result<()
     )?;
 
     Ok(())
+}
+
+/// Pre-run context work has no durable run record yet. Send its lifecycle as
+/// a transient event so the chat UI can explain an otherwise silent delay.
+pub(super) fn publish_transient_event(run_id: &str, event: Value) -> Result<()> {
+    emit_on_main_thread(
+        "run-event",
+        RunEventEnvelope {
+            run_id: run_id.to_string(),
+            sequence: -1,
+            event,
+        },
+    )
 }
 
 async fn persist_app_output(run_id: String, mut receiver: mpsc::UnboundedReceiver<PythonOutputChunk>) -> Result<()> {

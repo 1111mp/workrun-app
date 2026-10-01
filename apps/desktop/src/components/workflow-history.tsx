@@ -15,7 +15,12 @@ import {
   ItemTitle,
   Spinner,
 } from '@workspace/ui/components';
-import { ActivityIcon, HistoryIcon, PlayIcon } from 'lucide-react';
+import {
+  ActivityIcon,
+  HistoryIcon,
+  MessageSquareIcon,
+  PlayIcon,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { QualityGateAudit } from '@/services/evaluation';
@@ -27,6 +32,15 @@ import type {
   SpanMetricSummary,
   VersionMetricSummary,
 } from '@/services/run-history';
+
+export type ChatSessionHistoryItem = {
+  id: string;
+  title?: string;
+  status: RunStatus;
+  createdAt: string;
+  activityAt: string;
+  turnCount: number;
+};
 
 const RUN_STATUS_STYLES: Record<RunStatus, string> = {
   queued: 'border-muted-foreground/30 bg-muted text-muted-foreground',
@@ -56,6 +70,8 @@ function WorkflowHistory({
   onSelectedVersionChange,
   onLoadMore,
   onView,
+  chatSessions = [],
+  onViewChatSession,
 }: {
   runs: RunRecordSummary[];
   isLoading: boolean;
@@ -71,12 +87,29 @@ function WorkflowHistory({
   onSelectedVersionChange: (version: string) => void;
   onLoadMore: () => void;
   onView: (id: string) => void;
+  chatSessions?: ChatSessionHistoryItem[];
+  onViewChatSession?: (id: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const processNodes = useQuery({
     queryKey: ['processNodes'],
     queryFn: getProcessNodes,
   });
+  const historyItems = [
+    ...chatSessions.map((session) => ({
+      kind: 'chat' as const,
+      item: session,
+      sortAt: session.activityAt,
+    })),
+    ...runs.map((run) => ({
+      kind: 'run' as const,
+      item: run,
+      sortAt: run.startedAt,
+    })),
+  ].sort(
+    (left, right) =>
+      new Date(right.sortAt).getTime() - new Date(left.sortAt).getTime(),
+  );
   return (
     <div className='bg-muted/20 flex min-h-0 flex-1 flex-col overflow-y-auto bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] p-5 sm:p-7 dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]'>
       <div className='mx-auto flex w-full max-w-4xl flex-col gap-5'>
@@ -130,64 +163,111 @@ function WorkflowHistory({
           <div className='text-muted-foreground bg-card flex items-center gap-2 rounded-xl border px-4 py-8 text-sm'>
             <Spinner /> {t('workflowEditor.history.loading')}
           </div>
-        ) : runs.length ? (
+        ) : historyItems.length ? (
           <>
             <ItemGroup>
-              {runs.map((run) => (
-                <Item
-                  key={run.id}
-                  variant='outline'
-                  className='bg-card/50 border-l-4 border-l-violet-400/60'
-                >
-                  <ItemContent>
-                    <ItemTitle>
-                      {new Date(run.startedAt).toLocaleString(i18n.language)}
-                    </ItemTitle>
-                    <ItemDescription>
-                      {run.durationMs !== undefined
-                        ? t('apps.history.duration', {
-                            seconds: (run.durationMs / 1000).toFixed(1),
-                          })
-                        : t('apps.history.durationUnavailable')}
-                      {typeof run.modelTokens === 'number'
-                        ? ` · ${t(
-                            'workflowEditor.history.observability.tokens',
-                            {
-                              count: formatNumber(
-                                run.modelTokens,
-                                i18n.language,
+              {historyItems.map((entry) =>
+                entry.kind === 'chat' ? (
+                  <Item
+                    key={`chat:${entry.item.id}`}
+                    variant='outline'
+                    className='bg-card/50 border-l-4 border-l-sky-400/70'
+                  >
+                    <ItemContent>
+                      <ItemTitle className='flex items-center gap-2'>
+                        <MessageSquareIcon className='size-4 text-sky-600 dark:text-sky-400' />
+                        <span className='truncate'>
+                          {entry.item.title ??
+                            t('workflowEditor.history.conversation')}
+                        </span>
+                      </ItemTitle>
+                      <ItemDescription>
+                        {t('workflowEditor.history.turnCount', {
+                          count: entry.item.turnCount,
+                        })}
+                        {' · '}
+                        {new Date(entry.item.activityAt).toLocaleString(
+                          i18n.language,
+                        )}
+                      </ItemDescription>
+                    </ItemContent>
+                    <ItemActions>
+                      <Badge
+                        variant='outline'
+                        className={RUN_STATUS_STYLES[entry.item.status]}
+                      >
+                        {t(`runs.runStatus.${entry.item.status}`)}
+                      </Badge>
+                      <Button
+                        size='sm'
+                        onClick={() => onViewChatSession?.(entry.item.id)}
+                      >
+                        <MessageSquareIcon data-icon='inline-start' />
+                        {t('runs.viewOutput')}
+                      </Button>
+                    </ItemActions>
+                  </Item>
+                ) : (
+                  <Item
+                    key={entry.item.id}
+                    variant='outline'
+                    className='bg-card/50 border-l-4 border-l-violet-400/60'
+                  >
+                    <ItemContent>
+                      <ItemTitle>
+                        {new Date(entry.item.startedAt).toLocaleString(
+                          i18n.language,
+                        )}
+                      </ItemTitle>
+                      <ItemDescription>
+                        {entry.item.durationMs !== undefined
+                          ? t('apps.history.duration', {
+                              seconds: (entry.item.durationMs / 1000).toFixed(
+                                1,
                               ),
-                            },
-                          )}`
-                        : ''}
-                      {typeof run.modelEstimatedCostMicrousd === 'number'
-                        ? ` · ${t(
-                            'workflowEditor.output.telemetry.estimatedCost',
-                            {
-                              cost: formatUsd(
-                                run.modelEstimatedCostMicrousd,
-                                i18n.language,
-                              ),
-                            },
-                          )}`
-                        : ''}
-                      {run.error ? ` · ${run.error}` : ''}
-                    </ItemDescription>
-                  </ItemContent>
-                  <ItemActions>
-                    <Badge
-                      variant='outline'
-                      className={RUN_STATUS_STYLES[run.status]}
-                    >
-                      {t(`runs.runStatus.${run.status}`)}
-                    </Badge>
-                    <Button size='sm' onClick={() => onView(run.id)}>
-                      <PlayIcon data-icon='inline-start' />{' '}
-                      {t('runs.viewOutput')}
-                    </Button>
-                  </ItemActions>
-                </Item>
-              ))}
+                            })
+                          : t('apps.history.durationUnavailable')}
+                        {typeof entry.item.modelTokens === 'number'
+                          ? ` · ${t(
+                              'workflowEditor.history.observability.tokens',
+                              {
+                                count: formatNumber(
+                                  entry.item.modelTokens,
+                                  i18n.language,
+                                ),
+                              },
+                            )}`
+                          : ''}
+                        {typeof entry.item.modelEstimatedCostMicrousd ===
+                        'number'
+                          ? ` · ${t(
+                              'workflowEditor.output.telemetry.estimatedCost',
+                              {
+                                cost: formatUsd(
+                                  entry.item.modelEstimatedCostMicrousd,
+                                  i18n.language,
+                                ),
+                              },
+                            )}`
+                          : ''}
+                        {entry.item.error ? ` · ${entry.item.error}` : ''}
+                      </ItemDescription>
+                    </ItemContent>
+                    <ItemActions>
+                      <Badge
+                        variant='outline'
+                        className={RUN_STATUS_STYLES[entry.item.status]}
+                      >
+                        {t(`runs.runStatus.${entry.item.status}`)}
+                      </Badge>
+                      <Button size='sm' onClick={() => onView(entry.item.id)}>
+                        <PlayIcon data-icon='inline-start' />{' '}
+                        {t('runs.viewOutput')}
+                      </Button>
+                    </ItemActions>
+                  </Item>
+                ),
+              )}
             </ItemGroup>
             {hasMore ? (
               <div className='flex justify-center'>
@@ -263,12 +343,18 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
     <details className='group bg-muted/30 mt-2 rounded-md border'>
       <summary className='text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 font-medium'>
         <span>{t('workflowEditor.history.qualityGate.viewEvidence')}</span>
-        <span className='text-[11px] group-open:hidden'>{t('workflowEditor.history.qualityGate.expand')}</span>
-        <span className='hidden text-[11px] group-open:inline'>{t('workflowEditor.history.qualityGate.collapse')}</span>
+        <span className='text-[11px] group-open:hidden'>
+          {t('workflowEditor.history.qualityGate.expand')}
+        </span>
+        <span className='hidden text-[11px] group-open:inline'>
+          {t('workflowEditor.history.qualityGate.collapse')}
+        </span>
       </summary>
       <div className='space-y-3 border-t px-2.5 py-3'>
         <div>
-          <p className='text-muted-foreground mb-1 font-medium'>{t('workflowEditor.history.qualityGate.failedReasons')}</p>
+          <p className='text-muted-foreground mb-1 font-medium'>
+            {t('workflowEditor.history.qualityGate.failedReasons')}
+          </p>
           {reasons.length ? (
             <ul className='space-y-1 text-amber-700 dark:text-amber-300'>
               {reasons.map((reason) => (
@@ -276,14 +362,21 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
               ))}
             </ul>
           ) : (
-            <p className='text-muted-foreground'>{t('workflowEditor.history.qualityGate.noFailedReasons')}</p>
+            <p className='text-muted-foreground'>
+              {t('workflowEditor.history.qualityGate.noFailedReasons')}
+            </p>
           )}
         </div>
         <div>
-          <p className='text-muted-foreground mb-1 font-medium'>{t('workflowEditor.history.qualityGate.thresholds')}</p>
+          <p className='text-muted-foreground mb-1 font-medium'>
+            {t('workflowEditor.history.qualityGate.thresholds')}
+          </p>
           <div className='text-muted-foreground grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4'>
             <span>
-              {t('workflowEditor.history.qualityGate.requireEvaluation')}: {policy.requireEvaluation === true ? t('workflowEditor.history.qualityGate.yes') : t('workflowEditor.history.qualityGate.no')}
+              {t('workflowEditor.history.qualityGate.requireEvaluation')}:{' '}
+              {policy.requireEvaluation === true
+                ? t('workflowEditor.history.qualityGate.yes')
+                : t('workflowEditor.history.qualityGate.no')}
             </span>
             <span>
               {t('workflowEditor.history.qualityGate.passRate')}:
@@ -306,12 +399,15 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
           </div>
           {auditStringList(policy.requiredSuiteIds).length ? (
             <p className='text-muted-foreground mt-1'>
-              {t('workflowEditor.history.qualityGate.requiredSuites')}: {auditStringList(policy.requiredSuiteIds).join('、')}
+              {t('workflowEditor.history.qualityGate.requiredSuites')}:{' '}
+              {auditStringList(policy.requiredSuiteIds).join('、')}
             </p>
           ) : null}
         </div>
         <div>
-          <p className='text-muted-foreground mb-1 font-medium'>{t('workflowEditor.history.qualityGate.candidateEvaluation')}</p>
+          <p className='text-muted-foreground mb-1 font-medium'>
+            {t('workflowEditor.history.qualityGate.candidateEvaluation')}
+          </p>
           {runs.length ? (
             <div className='space-y-1'>
               {runs.map((run, index) => {
@@ -324,12 +420,17 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
                   >
                     <span className='font-medium'>
                       {typeof run.suiteId === 'string'
-                        ? t('workflowEditor.history.qualityGate.suite', { suiteId: run.suiteId })
+                        ? t('workflowEditor.history.qualityGate.suite', {
+                            suiteId: run.suiteId,
+                          })
                         : t('workflowEditor.history.qualityGate.evaluationRun')}
                     </span>
                     <span className='text-muted-foreground'>
-                      {t('workflowEditor.history.qualityGate.passed', { passed: passedCases, total: totalCases })} ·{' '}
-                      {formatDuration(auditNumber(run.durationMs))} ·{' '}
+                      {t('workflowEditor.history.qualityGate.passed', {
+                        passed: passedCases,
+                        total: totalCases,
+                      })}{' '}
+                      · {formatDuration(auditNumber(run.durationMs))} ·{' '}
                       {formatUsd(
                         auditNumber(run.estimatedCostMicrousd) ?? 0,
                         i18n.language,
@@ -340,7 +441,9 @@ function QualityGateAuditDetails({ audit }: { audit: QualityGateAudit }) {
               })}
             </div>
           ) : (
-            <p className='text-muted-foreground'>{t('workflowEditor.history.qualityGate.noCandidateSnapshot')}</p>
+            <p className='text-muted-foreground'>
+              {t('workflowEditor.history.qualityGate.noCandidateSnapshot')}
+            </p>
           )}
         </div>
       </div>

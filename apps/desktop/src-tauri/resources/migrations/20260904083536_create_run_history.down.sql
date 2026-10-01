@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS chat_turns;
+DROP TABLE IF EXISTS chat_sessions;
 DROP TABLE IF EXISTS schedule_occurrences;
 DROP TABLE IF EXISTS schedules;
 DROP TABLE IF EXISTS evaluation_case_results;

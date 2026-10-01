@@ -74,6 +74,8 @@ type WorkflowSettings = {
   outputSchema?: {
     fields: WorkflowInput[];
   };
+  /** Chat-only global keys promoted into the next turn's initial state. */
+  sessionStateFields?: string[];
 };
 
 // ---------- Agent Node ----------
@@ -313,6 +315,7 @@ type Workflow = {
   mode: WorkflowMode;
   inputSchema: WorkflowSettings['inputSchema'];
   outputSchema: NonNullable<WorkflowSettings['outputSchema']>;
+  sessionStateFields?: string[];
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
 };

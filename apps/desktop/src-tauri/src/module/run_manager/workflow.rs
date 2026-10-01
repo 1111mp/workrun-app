@@ -1,8 +1,10 @@
-use super::events::{finish_run, publish_run_status, publish_value_event};
+use super::events::{finish_run, publish_run_status, publish_transient_event, publish_value_event};
 use super::execution::workflow_resume_runtime;
 use super::*;
 use crate::{
     config::Config,
+    core::db::DBManager,
+    module::chat_session::ChatSessionStore,
     module::process_node::{ProcessNodeInstallStatus, ProcessNodeRegistry},
 };
 
@@ -16,9 +18,59 @@ pub struct MissingReplayDependency {
     pub installation_scope: String,
 }
 
-pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
+pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
     if request.run_id.trim().is_empty() || request.thread_id.trim().is_empty() {
         bail!("run id and thread id are required");
+    }
+    if let Some(session_id) = request.chat_session_id.as_deref() {
+        let session = ChatSessionStore::get(session_id).await?;
+        let snapshot = session
+            .workflow_snapshot
+            .as_ref()
+            .context("chat session workflow snapshot is missing")?;
+        // A conversation must not silently adopt edits made after it began.
+        // The session record is authoritative even if another renderer sends
+        // a newer workflow document alongside this turn.
+        request.dsl = snapshot
+            .get("dsl")
+            .cloned()
+            .filter(Value::is_object)
+            .context("chat session workflow DSL is invalid")?;
+        request.target_snapshot = snapshot
+            .get("document")
+            .cloned()
+            .filter(Value::is_object)
+            .context("chat session workflow document is invalid")?;
+        request.target_name = snapshot
+            .get("targetName")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+            .context("chat session workflow name is invalid")?;
+        request.release_id = snapshot.get("releaseId").and_then(Value::as_str).map(str::to_owned);
+        request.release_version = snapshot
+            .get("releaseVersion")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let fields = session_state_fields(&request.dsl)?;
+        apply_session_state(&mut request.initial_state, &session.state, &fields)?;
+        let compacts_context = ChatSessionStore::will_compact(session_id).await?;
+        if compacts_context {
+            publish_transient_event(
+                &request.run_id,
+                json!({ "type": "custom", "node": "workrun", "event_type": "workflow.context_compaction", "data": { "stage": "summarizing" } }),
+            )?;
+        }
+        // The renderer's transcript is a view, not the durable source of context.
+        // Replace it with Workrun-owned memory so restored and live chats agree.
+        request.initial_state["conversation"] = ChatSessionStore::context_for_next_turn(session_id).await?;
+        if compacts_context {
+            let stage = ChatSessionStore::get(session_id).await?.summary_status;
+            publish_transient_event(
+                &request.run_id,
+                json!({ "type": "custom", "node": "workrun", "event_type": "workflow.context_compaction", "data": { "stage": stage } }),
+            )?;
+        }
     }
     // Persist the immutable Team App coordinates separately from the executable
     // local IDs. Replay and cache cleanup must not infer these from a mutable catalog.
@@ -28,10 +80,12 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         .unwrap_or_else(|| format!("draft-{}", request.target_id));
     let installation_scope = format!("release-{release_or_draft}");
     let dependencies = team_app_dependencies(&request.dsl, &installation_scope);
+    let chat_message = request.input.get("input").and_then(Value::as_str).map(str::to_owned);
     let runtime = json!({
         "kind": "workflow",
         "dsl": request.dsl,
         "threadId": request.thread_id,
+        "chatSessionId": request.chat_session_id,
         "initialState": request.initial_state,
         "evaluationProfile": request.evaluation_profile,
         "evaluationResultId": request.evaluation_result_id,
@@ -44,7 +98,7 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
             "scheduledFor": trigger.scheduled_for,
         })),
     });
-    RunHistoryStore::create(CreateRunRecord {
+    let record = CreateRunRecord {
         id: request.run_id.clone(),
         target_type: RunTargetType::Workflow,
         target_id: request.target_id,
@@ -57,11 +111,151 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
         output_view: json!({}),
         target_snapshot: request.target_snapshot,
         runtime,
-    })
-    .await?;
+    };
+    if let (Some(session_id), Some(turn_id), Some(message)) = (
+        request.chat_session_id.as_deref(),
+        request.chat_turn_id.as_deref(),
+        chat_message.as_deref(),
+    ) {
+        let pool = DBManager::global().pool()?;
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+        ChatSessionStore::ensure_turn_available(&mut transaction, session_id).await?;
+        crate::module::run_history::create_in_transaction(&mut transaction, &record).await?;
+        let sequence: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(sequence), -1) + 1 FROM chat_turns WHERE session_id = ?")
+                .bind(session_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO chat_turns (id, session_id, run_id, sequence, user_message, status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)").bind(turn_id).bind(session_id).bind(&request.run_id).bind(sequence).bind(message).bind(&now).execute(&mut *transaction).await?;
+        sqlx::query("UPDATE chat_sessions SET active_run_id = ?, updated_at = ? WHERE id = ?")
+            .bind(&request.run_id)
+            .bind(&now)
+            .bind(session_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+    } else {
+        RunHistoryStore::create(record).await?;
+    }
     publish_run_status(&request.run_id, RunStatus::Queued)?;
     RunManager::global().supervisor.notify();
     Ok(())
+}
+
+fn session_state_fields(dsl: &Value) -> Result<Vec<String>> {
+    let values = dsl
+        .get("sessionStateFields")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let sensitive = dsl.pointer("/inputSchema/sensitiveFields").and_then(Value::as_array);
+    let fields: Vec<String> = values
+        .into_iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|key| {
+                    !key.is_empty() && !key.contains('.') && !matches!(*key, "input" | "messages" | "conversation")
+                })
+                .map(str::to_string)
+                .context("session state fields must be non-reserved top-level keys")
+        })
+        .collect::<Result<_>>()?;
+    if fields
+        .iter()
+        .any(|key| sensitive.is_some_and(|values| values.iter().any(|value| value.as_str() == Some(key))))
+    {
+        bail!("sensitive inputs cannot be session state fields");
+    }
+    if fields.len() != fields.iter().collect::<std::collections::HashSet<_>>().len() {
+        bail!("session state fields must be unique");
+    }
+    Ok(fields)
+}
+
+fn apply_session_state(initial_state: &mut Value, saved_state: &Value, fields: &[String]) -> Result<()> {
+    let saved = saved_state
+        .as_object()
+        .context("chat session state must be an object")?;
+    let input = initial_state
+        .as_object_mut()
+        .context("workflow initial state must be an object")?;
+    // The configured allowlist is the only bridge across runs. Conversation
+    // text is separate prompt context and must never silently become State.
+    for key in fields {
+        if !input.contains_key(key) {
+            if let Some(value) = saved.get(key) {
+                input.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod session_state_tests {
+    use super::{apply_session_state, session_state_fields};
+    use serde_json::json;
+
+    #[test]
+    fn accepts_explicit_top_level_global_keys() {
+        assert_eq!(
+            session_state_fields(&json!({"sessionStateFields": ["customerId", "draft"]})).unwrap(),
+            ["customerId", "draft"]
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_sensitive_and_duplicate_keys() {
+        for dsl in [
+            json!({"sessionStateFields": ["conversation"]}),
+            json!({"sessionStateFields": ["customer.email"]}),
+            json!({"inputSchema": {"sensitiveFields": ["token"]}, "sessionStateFields": ["token"]}),
+            json!({"sessionStateFields": ["draft", "draft"]}),
+        ] {
+            assert!(session_state_fields(&dsl).is_err());
+        }
+    }
+
+    #[test]
+    fn does_not_restore_values_when_no_session_fields_are_configured() {
+        let mut initial = json!({
+            "input": "Was order 43 cancelled?",
+            "conversation": {"recentMessages": [{"role": "user", "content": "Cancel order 43"}]}
+        });
+        apply_session_state(&mut initial, &json!({"orderId": "43"}), &[]).unwrap();
+
+        assert_eq!(initial.get("orderId"), None);
+        assert_eq!(
+            initial["conversation"]["recentMessages"][0]["content"],
+            "Cancel order 43"
+        );
+    }
+
+    #[test]
+    fn restores_only_explicit_session_fields_and_preserves_current_input() {
+        let mut initial = json!({"input": "Was it cancelled?", "orderId": "44"});
+        apply_session_state(
+            &mut initial,
+            &json!({"orderId": "43", "customerId": "customer-1"}),
+            &["orderId".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(initial["orderId"], "44");
+        assert_eq!(initial.get("customerId"), None);
+
+        initial.as_object_mut().unwrap().remove("orderId");
+        apply_session_state(
+            &mut initial,
+            &json!({"orderId": "43", "customerId": "customer-1"}),
+            &["orderId".to_string()],
+        )
+        .unwrap();
+        assert_eq!(initial["orderId"], "43");
+        assert_eq!(initial.get("customerId"), None);
+    }
 }
 
 fn team_app_dependencies(dsl: &Value, installation_scope: &str) -> Vec<Value> {

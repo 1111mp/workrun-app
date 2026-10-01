@@ -473,6 +473,8 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                 },
             };
             run_manager::start_workflow(StartWorkflowRun {
+                chat_session_id: None,
+                chat_turn_id: None,
                 run_id: run_id.clone(),
                 target_id: due.summary.target_id,
                 target_name: due.summary.target_name,
