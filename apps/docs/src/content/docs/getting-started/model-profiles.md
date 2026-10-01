@@ -1,29 +1,24 @@
 ---
-title: Configure model profiles
-description: Store a provider, model, and encrypted credentials for stable reuse in workflow nodes.
+title: Configure model access
+description: Add provider credentials in Settings and choose a built-in model in an Agent.
 ---
 
-A model profile is the configuration unit Agents and CodeAct Agents use to call a model. Keeping keys and model selection in a profile rather than copying them into every node makes credential rotation, model replacement, and diagnosis much clearer.
+Workrun includes a model catalog. Agent and CodeAct Agent nodes select from it, so you do not create model profiles or repeat model IDs in every workflow.
 
-## Create a profile
+## Add provider credentials
 
-1. Open **Settings → Model Profiles**.
-2. Select **New**.
-3. Enter a name based on its purpose, such as `prod-review`, `local-ollama`, or `eval-cheap`.
-4. Choose a provider.
-5. Enter the model ID and required credentials. Compatible APIs also need a Base URL.
-6. Save, then validate the connection with a minimal workflow run.
+1. Open **Settings → Models**.
+2. Enter an API key on the row for the provider you want to use.
+3. Settings save automatically.
+4. Create or edit an Agent, then choose a built-in model for that provider under **Model configuration**.
 
-## Use it in an Agent
+Ollama uses an endpoint instead of an API key. The local default endpoint is normally sufficient; enter the applicable address for a remote deployment.
 
-Select an Agent node and open **Model & instructions → Model configuration** in the right inspector, then choose the profile. A model profile defines only *which model to call*. Role, task objective, output format, and tool boundaries belong in node instructions.
+## Usage guidance
 
-## Configuration guidance
+- One provider key can be used by that provider's built-in models.
+- Never put keys in node instructions, workflow inputs, or Python code.
+- Configure an Agent's name, role, instruction, tools, and generation parameters in the node inspector.
+- After switching models, rerun the workflow with the same inputs to confirm the result.
 
-- Use separate profiles for local, development, evaluation, and production work.
-- Never put a key in a node instruction, workflow input, or Python code.
-- After changing a model, temperature, or provider, run the same evaluation suite before publishing.
-- Temperature and Top P are node-level generation controls. Leave them empty for model defaults unless you specifically need stability or diversity.
-
-> **Media placeholder · screenshot `model-profiles/01-profile-list.png`**  
-> Show the Settings profile list with local, evaluation, and production naming examples. All real provider credentials must be redacted.
+![Model configuration in the Agent inspector, showing the built-in catalog grouped by provider.](/media/model-profiles/01-model-settings.png)

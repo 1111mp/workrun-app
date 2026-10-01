@@ -3,7 +3,7 @@ title: Runs, debugging, and traces
 description: "Use the run panel and traces to answer: What happened in this automation run?"
 ---
 
-The run panel streams node status, model messages, tool inputs and outputs, script logs, and traces. When something fails, locate the exact node and event first, then decide whether the prompt, code, schema, tool permission, or model profile needs changing. Every run retains its execution plan, final state, and key events.
+The run panel streams node status, model messages, tool inputs and outputs, script logs, and traces. When something fails, locate the exact node and event first, then decide whether the prompt, code, schema, tool permission, or selected model needs changing. Every run retains its execution plan, final state, and key events.
 
 ## Read the run panel
 

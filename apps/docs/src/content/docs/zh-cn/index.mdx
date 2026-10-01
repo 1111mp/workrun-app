@@ -26,9 +26,12 @@ import WorkflowStudio from '../../../components/workflow-studio.astro';
 
 把 Agent、Python、MCP 工具与人工判断放进一张可读的工作流；每一次运行都留下状态、工具轨迹和评测证据。Workrun 让团队把一次有效的 AI 协作，变成敢于反复运行、持续演进的能力。
 
-> **产品界面素材占位 · 视频 `homepage/workflow-studio.mp4`（45–60 秒）**  
-> 画面：从新建工作流、配置 Agent、运行到 Human Review 暂停和恢复。  
-> 替换本页的静态演示或置于其下方；建议使用真实窗口录制，隐藏密钥、客户数据和内部 URL。
+<div class='homepage-workflow-demo'>
+  <video autoplay muted loop playsinline controls preload="metadata" aria-label="工作流运行演示">
+    <source src="/media/homepage/workflow-run-through.mp4" type="video/mp4" />
+    观看工作流从输入、Agent 执行、人工审核到完成的全过程。
+  </video>
+</div>
 
 ### 配置并非黑盒
 
@@ -64,7 +67,7 @@ import WorkflowStudio from '../../../components/workflow-studio.astro';
   <p class='eyebrow'>从最小闭环开始</p>
   <h2>先让一个 Agent 工作流跑起来。</h2>
   <p>
-    创建模型 Profile，连接 <code>Start → Agent → End</code>
+    添加 API 密钥，连接 <code>Start → Agent → End</code>
     ，输入一次真实任务并查看运行结果。
   </p>
   <LinkButton href='/zh-cn/getting-started/quickstart/'>

@@ -44,7 +44,7 @@ pnpm install
 pnpm app:dev
 ```
 
-首次启动后，在设置中创建模型 Profile，随后新建工作流、添加 `Start → Agent → End`，填写输入并运行即可。模型密钥只加密保存在本机配置中，不会被前端持久化。
+首次启动后，在设置中为 Provider 添加 API Key，随后新建工作流、添加 `Start → Agent → End`，在「更多设置」定义运行输入并运行即可。模型目录由 Workrun 内置，密钥只加密保存在本机配置中，不会被前端持久化。
 
 ### 常用命令
 
@@ -85,7 +85,7 @@ Start → 数据准备（Process） → Agent → Human Review → If/Else → E
 
 ### 2. Agent、工具与模型
 
-- Agent 可配置名称、职责、指令、模型 Profile、结构化输出、工具调用上限和超时；结果可写入指定状态字段，供后续节点和分支使用。
+- Agent 可配置名称、职责、指令、内置模型、结构化输出、工具调用上限和超时；结果可写入指定状态字段，供后续节点和分支使用。
 - 支持 Gemini、OpenAI 与兼容接口、Anthropic、DeepSeek、Groq、Ollama。
 - 本地 Skills 兼容 Agent Skills 的 `SKILL.md` 格式，可渐进加载说明，并限制 Agent 可用工具。
 - `CodeAct Agent` 在受限 Python 运行环境内编写和执行代码，支持迭代次数、工具调用数、时长、内存、目录挂载、环境变量和系统时钟限制。

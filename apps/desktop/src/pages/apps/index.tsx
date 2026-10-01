@@ -440,9 +440,7 @@ function AppItem({
                 ) : (
                   <PlayIcon data-icon='inline-start' />
                 )}
-                {run?.isRunning
-                  ? t('apps.running')
-                  : t('apps.run')}
+                {run?.isRunning ? t('apps.running') : t('apps.run')}
               </Button>
             ) : null}
           </>
@@ -751,13 +749,16 @@ function AppsPage() {
         if (preparationSummaryTimers.current[preparationId] !== undefined) {
           window.clearTimeout(preparationSummaryTimers.current[preparationId]);
         }
-        preparationSummaryTimers.current[preparationId] = window.setTimeout(() => {
-          setPreparationSummaries((current) => {
-            const { [preparationId]: _summary, ...remaining } = current;
-            return remaining;
-          });
-          delete preparationSummaryTimers.current[preparationId];
-        }, 2_000);
+        preparationSummaryTimers.current[preparationId] = window.setTimeout(
+          () => {
+            setPreparationSummaries((current) => {
+              const { [preparationId]: _summary, ...remaining } = current;
+              return remaining;
+            });
+            delete preparationSummaryTimers.current[preparationId];
+          },
+          2_000,
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setPreparations((current) => ({

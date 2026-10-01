@@ -1670,39 +1670,46 @@ export function WorkflowEvaluations({
                                       {t('evaluations.regressionLocation')}
                                     </p>
                                     <p className='text-muted-foreground text-[11px]'>
-                                      {t('evaluations.regressionCasesDescription', {
-                                        count: versionDiff.data.length,
-                                      })}
+                                      {t(
+                                        'evaluations.regressionCasesDescription',
+                                        {
+                                          count: versionDiff.data.length,
+                                        },
+                                      )}
                                     </p>
                                   </div>
                                 </div>
                                 <div className='flex flex-col gap-1.5'>
-                                {versionDiff.data.map((diff) => (
-                                  <button
-                                    type='button'
-                                    key={diff.caseId}
-                                    className='group border-destructive/25 bg-background/80 hover:border-destructive/45 hover:bg-background focus-visible:ring-ring flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow] outline-none hover:shadow-sm focus-visible:ring-2'
-                                    onClick={() => setSelectedVersionDiff(diff)}
-                                  >
-                                    <span className='flex min-w-0 items-center gap-2.5'>
-                                      <CircleAlertIcon className='text-destructive size-4 shrink-0' />
-                                      <span className='min-w-0'>
-                                        <span className='block truncate text-sm font-medium'>
-                                          {diff.name}
-                                        </span>
-                                        <span className='text-muted-foreground mt-0.5 block text-[11px]'>
-                                          {t('evaluations.viewRegressionDetails')}
+                                  {versionDiff.data.map((diff) => (
+                                    <button
+                                      type='button'
+                                      key={diff.caseId}
+                                      className='group border-destructive/25 bg-background/80 hover:border-destructive/45 hover:bg-background focus-visible:ring-ring flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow] outline-none hover:shadow-sm focus-visible:ring-2'
+                                      onClick={() =>
+                                        setSelectedVersionDiff(diff)
+                                      }
+                                    >
+                                      <span className='flex min-w-0 items-center gap-2.5'>
+                                        <CircleAlertIcon className='text-destructive size-4 shrink-0' />
+                                        <span className='min-w-0'>
+                                          <span className='block truncate text-sm font-medium'>
+                                            {diff.name}
+                                          </span>
+                                          <span className='text-muted-foreground mt-0.5 block text-[11px]'>
+                                            {t(
+                                              'evaluations.viewRegressionDetails',
+                                            )}
+                                          </span>
                                         </span>
                                       </span>
-                                    </span>
-                                    <span className='flex shrink-0 items-center gap-2'>
-                                      <Badge variant='destructive'>
-                                        {versionDiffLabel(diff, t)}
-                                      </Badge>
-                                      <ChevronRightIcon className='text-destructive size-4 transition-transform group-hover:translate-x-0.5' />
-                                    </span>
-                                  </button>
-                                ))}
+                                      <span className='flex shrink-0 items-center gap-2'>
+                                        <Badge variant='destructive'>
+                                          {versionDiffLabel(diff, t)}
+                                        </Badge>
+                                        <ChevronRightIcon className='text-destructive size-4 transition-transform group-hover:translate-x-0.5' />
+                                      </span>
+                                    </button>
+                                  ))}
                                 </div>
                               </div>
                             ) : (

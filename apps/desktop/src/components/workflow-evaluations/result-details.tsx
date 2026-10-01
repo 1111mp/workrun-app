@@ -168,8 +168,12 @@ function VersionToolTrajectoryComparison({
     : Array.isArray(expectedValue?.tools)
       ? expectedValue.tools
       : [];
-  const baselineActual = baseline?.actual as Record<string, unknown> | undefined;
-  const candidateActual = candidate?.actual as Record<string, unknown> | undefined;
+  const baselineActual = baseline?.actual as
+    | Record<string, unknown>
+    | undefined;
+  const candidateActual = candidate?.actual as
+    | Record<string, unknown>
+    | undefined;
   const baselineTools = Array.isArray(baselineActual?.toolUses)
     ? baselineActual.toolUses
     : [];
@@ -196,11 +200,15 @@ function VersionToolTrajectoryComparison({
       </div>
       {Array.from({ length: callCount }, (_, index) => (
         <div key={index} className='bg-background/50 rounded-md border'>
-          <div className='flex items-center gap-2 border-b bg-muted/30 px-3 py-2'>
-            <span className='text-muted-foreground font-mono'>#{index + 1}</span>
+          <div className='bg-muted/30 flex items-center gap-2 border-b px-3 py-2'>
+            <span className='text-muted-foreground font-mono'>
+              #{index + 1}
+            </span>
             <span className='font-medium'>
               {toolDisplayName(
-                expectedTools[index] ?? baselineTools[index] ?? candidateTools[index],
+                expectedTools[index] ??
+                  baselineTools[index] ??
+                  candidateTools[index],
                 toolNames,
                 t('evaluations.tool'),
               )}
@@ -267,11 +275,13 @@ function ToolCallSnapshot({
 
 function ToolValue({ label, value }: { label: string; value: unknown }) {
   const text =
-    value === null || value === undefined ? '—' : JSON.stringify(value, null, 2);
+    value === null || value === undefined
+      ? '—'
+      : JSON.stringify(value, null, 2);
   return (
     <div className='min-w-0'>
       <p className='text-muted-foreground mb-1 font-medium'>{label}</p>
-      <pre className='bg-muted/60 max-h-32 overflow-y-auto overflow-x-hidden rounded px-2 py-1.5 font-mono text-[11px] leading-5 wrap-break-word whitespace-pre-wrap'>
+      <pre className='bg-muted/60 max-h-32 overflow-x-hidden overflow-y-auto rounded px-2 py-1.5 font-mono text-[11px] leading-5 wrap-break-word whitespace-pre-wrap'>
         {text}
       </pre>
     </div>
@@ -317,7 +327,10 @@ function VersionToolTrajectoryOutcome({
         Array.isArray(actual?.[key]) && actual[key].length
           ? [
               <div key={key} className='mt-2'>
-                <EvidenceValue label={t(`evaluations.${key}`)} value={actual[key]} />
+                <EvidenceValue
+                  label={t(`evaluations.${key}`)}
+                  value={actual[key]}
+                />
               </div>,
             ]
           : [],
@@ -331,9 +344,7 @@ function toolDisplayName(
   toolNames: Record<string, string>,
   fallback: string,
 ) {
-  const name = stringValue(
-    (tool as Record<string, unknown> | undefined)?.name,
-  );
+  const name = stringValue((tool as Record<string, unknown> | undefined)?.name);
   return (toolNames[name] ?? name) || fallback;
 }
 
@@ -576,7 +587,7 @@ export function EvidenceValue({
   return (
     <div className='min-w-0'>
       <p className='text-muted-foreground mb-1 font-medium'>{label}</p>
-      <div className='bg-muted/60 max-h-36 overflow-y-auto overflow-x-hidden rounded px-2 py-1.5 leading-5'>
+      <div className='bg-muted/60 max-h-36 overflow-x-hidden overflow-y-auto rounded px-2 py-1.5 leading-5'>
         <ReadableValue value={value} />
       </div>
     </div>

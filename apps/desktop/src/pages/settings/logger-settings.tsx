@@ -118,7 +118,9 @@ function LoggerSettings({ form }: { form: UseFormReturn<SettingsForm> }) {
                       <InputGroup className='h-7 w-64'>
                         <InputGroupInput
                           id='otlp_endpoint'
-                          placeholder={t('settings.log.otlpEndpointPlaceholder')}
+                          placeholder={t(
+                            'settings.log.otlpEndpointPlaceholder',
+                          )}
                           value={field.value}
                           onChange={field.onChange}
                         />

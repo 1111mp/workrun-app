@@ -56,10 +56,40 @@ export type EvaluationVersionSummary = {
   totalDurationMs: number;
   estimatedCostMicrousd: number;
 };
-export type EvaluationVersionCaseDiff = { caseId: string; name: string; baselineVerdict?: string | null; candidateVerdict?: string | null; kind: 'added' | 'removed' | 'regressed' | 'fixed' | 'persistent_failure' };
-export type EvaluationCriterionOutcome = { criterion: string; passed: boolean; score: number; threshold: number; expected: unknown; actual: unknown };
-export type EvaluationVersionCriterionDiff = { key: string; baseline?: EvaluationCriterionOutcome | null; candidate?: EvaluationCriterionOutcome | null; kind: 'added' | 'removed' | 'regressed' | 'fixed' | 'persistent_failure' | 'persistent_pass' };
-export type EvaluationVersionCaseCriterionComparison = { caseId: string; name: string; baselineVerdict?: string | null; candidateVerdict?: string | null; criteria: EvaluationVersionCriterionDiff[] };
+export type EvaluationVersionCaseDiff = {
+  caseId: string;
+  name: string;
+  baselineVerdict?: string | null;
+  candidateVerdict?: string | null;
+  kind: 'added' | 'removed' | 'regressed' | 'fixed' | 'persistent_failure';
+};
+export type EvaluationCriterionOutcome = {
+  criterion: string;
+  passed: boolean;
+  score: number;
+  threshold: number;
+  expected: unknown;
+  actual: unknown;
+};
+export type EvaluationVersionCriterionDiff = {
+  key: string;
+  baseline?: EvaluationCriterionOutcome | null;
+  candidate?: EvaluationCriterionOutcome | null;
+  kind:
+    | 'added'
+    | 'removed'
+    | 'regressed'
+    | 'fixed'
+    | 'persistent_failure'
+    | 'persistent_pass';
+};
+export type EvaluationVersionCaseCriterionComparison = {
+  caseId: string;
+  name: string;
+  baselineVerdict?: string | null;
+  candidateVerdict?: string | null;
+  criteria: EvaluationVersionCriterionDiff[];
+};
 export type EvaluationQualityGate = {
   requireEvaluation: boolean;
   minPassRate?: number | null;
@@ -120,7 +150,10 @@ export function deleteEvaluationSuite(id: string) {
 }
 
 export function listEvaluationCases(suiteId: string, includeArchived = false) {
-  return invoke<EvaluationCase[]>('evaluation_case_list', { suiteId, includeArchived });
+  return invoke<EvaluationCase[]>('evaluation_case_list', {
+    suiteId,
+    includeArchived,
+  });
 }
 
 export function createEvaluationCase(request: {
@@ -154,7 +187,9 @@ export function updateEvaluationCase(request: {
 export function deleteEvaluationCase(id: string) {
   return invoke('evaluation_case_delete', { id });
 }
-export function restoreEvaluationCase(id: string) { return invoke('evaluation_case_restore', { id }); }
+export function restoreEvaluationCase(id: string) {
+  return invoke('evaluation_case_restore', { id });
+}
 
 export function reorderEvaluationCases(suiteId: string, ids: string[]) {
   return invoke('evaluation_case_reorder', { suiteId, ids });
@@ -170,7 +205,10 @@ export function createEvaluationRun(request: {
 }
 
 export function retryFailedEvaluationCases(sourceRunId: string, id: string) {
-  return invoke<EvaluationRun>('evaluation_run_retry_failed', { sourceRunId, id });
+  return invoke<EvaluationRun>('evaluation_run_retry_failed', {
+    sourceRunId,
+    id,
+  });
 }
 
 export function cancelEvaluationRun(evaluationRunId: string) {
@@ -194,15 +232,37 @@ export function listEvaluationRuns(suiteId: string) {
 }
 
 export function summarizeEvaluationVersions(suiteId: string) {
-  return invoke<EvaluationVersionSummary[]>('evaluation_version_summary', { suiteId });
+  return invoke<EvaluationVersionSummary[]>('evaluation_version_summary', {
+    suiteId,
+  });
 }
-export function compareEvaluationVersions(suiteId: string, baseline: string, candidate: string) { return invoke<EvaluationVersionCaseDiff[]>('evaluation_version_compare', { suiteId, baseline, candidate }); }
-export function compareEvaluationVersionCaseCriteria(suiteId: string, baseline: string, candidate: string, caseId: string) {
-  return invoke<EvaluationVersionCaseCriterionComparison>('evaluation_version_case_criteria_compare', { suiteId, baseline, candidate, caseId });
+export function compareEvaluationVersions(
+  suiteId: string,
+  baseline: string,
+  candidate: string,
+) {
+  return invoke<EvaluationVersionCaseDiff[]>('evaluation_version_compare', {
+    suiteId,
+    baseline,
+    candidate,
+  });
+}
+export function compareEvaluationVersionCaseCriteria(
+  suiteId: string,
+  baseline: string,
+  candidate: string,
+  caseId: string,
+) {
+  return invoke<EvaluationVersionCaseCriterionComparison>(
+    'evaluation_version_case_criteria_compare',
+    { suiteId, baseline, candidate, caseId },
+  );
 }
 
 export function latestEvaluationRunForWorkflow(workflowId: string) {
-  return invoke<EvaluationRunDetail | null>('evaluation_workflow_latest_run', { workflowId });
+  return invoke<EvaluationRunDetail | null>('evaluation_workflow_latest_run', {
+    workflowId,
+  });
 }
 
 export function latestEvaluationRunsForWorkflowSnapshot(
@@ -216,10 +276,15 @@ export function latestEvaluationRunsForWorkflowSnapshot(
 }
 
 export function getEvaluationQualityGate(workflowId: string) {
-  return invoke<EvaluationQualityGate>('evaluation_quality_gate_get', { workflowId });
+  return invoke<EvaluationQualityGate>('evaluation_quality_gate_get', {
+    workflowId,
+  });
 }
 
-export function updateEvaluationQualityGate(workflowId: string, policy: EvaluationQualityGate) {
+export function updateEvaluationQualityGate(
+  workflowId: string,
+  policy: EvaluationQualityGate,
+) {
   return invoke('evaluation_quality_gate_update', { workflowId, policy });
 }
 
@@ -232,5 +297,17 @@ export function recordEvaluationQualityGateOverride(request: {
 }) {
   return invoke('evaluation_quality_gate_record_override', { request });
 }
-export type QualityGateAudit = { id: string; releaseVersion: string; actor: string; reason: string; gateSnapshot: unknown; evaluationSnapshot: unknown; createdAt: string };
-export function listEvaluationQualityGateAudits(workflowId: string) { return invoke<QualityGateAudit[]>('evaluation_quality_gate_audit_list', { workflowId }); }
+export type QualityGateAudit = {
+  id: string;
+  releaseVersion: string;
+  actor: string;
+  reason: string;
+  gateSnapshot: unknown;
+  evaluationSnapshot: unknown;
+  createdAt: string;
+};
+export function listEvaluationQualityGateAudits(workflowId: string) {
+  return invoke<QualityGateAudit[]>('evaluation_quality_gate_audit_list', {
+    workflowId,
+  });
+}

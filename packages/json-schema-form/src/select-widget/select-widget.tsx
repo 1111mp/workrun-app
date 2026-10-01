@@ -98,6 +98,20 @@ export default function SelectWidget<
       disabled: Array.isArray(enumDisabled) && enumDisabled.includes(enumValue),
     }),
   );
+  // RJSF stores the original enum value (for example, "escalate"), whereas
+  // its select helpers use an encoded DOM value ("1" by default). Keep the
+  // Combobox on that encoded value so it can find the matching item and label.
+  const selectedValue = multiple
+    ? value
+    : value == null
+      ? ''
+      : enumOptionValueEncoder(
+          value,
+          (enumOptions as any)?.findIndex(
+            ({ value: enumValue }: any) => enumValue === value,
+          ) ?? -1,
+          optionValueFormat,
+        );
 
   const hasError = rawErrors.length > 0;
 
@@ -107,10 +121,17 @@ export default function SelectWidget<
         autoHighlight
         multiple={multiple}
         items={items}
-        // itemToStringValue={(item: (typeof items)[number]) => item.label}
+        // Base UI asks for a display label for the encoded selected value.
+        itemToStringLabel={(enumValue) =>
+          items?.find(
+            (item: { value: unknown; label: string }) =>
+              String(item.value) === String(enumValue),
+          )
+            ?.label ?? String(enumValue)
+        }
         disabled={disabled || readonly}
         required={required}
-        value={value ?? ''}
+        value={selectedValue ?? ''}
         onValueChange={(values) => {
           onChange(
             enumOptionValueDecoder(

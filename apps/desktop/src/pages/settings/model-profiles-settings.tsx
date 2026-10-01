@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   Field,
   FieldDescription,
@@ -17,12 +18,12 @@ import {
   SelectLabel,
   SelectTrigger,
 } from '@workspace/ui/components';
-import { useQuery } from '@tanstack/react-query';
 import { ChevronRightIcon } from 'lucide-react';
 import { Controller, type UseFormReturn, FieldArray } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
 import { getModelCatalog } from '@/services/cmd';
+
 import type { SettingsForm } from './settings-schema';
 
 const PROVIDER_SETTING_KEY = {

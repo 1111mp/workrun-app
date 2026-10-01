@@ -46,9 +46,12 @@ function PythonUiRequestDialog() {
   const respond = async (data: unknown) => {
     if (!request || responding) return;
     setResponding(true);
+    // A submitted collect() call can immediately issue a follow-up confirm().
+    // Clear only the request being answered before the IPC round trip, so the
+    // new prompt cannot be erased by this older async handler.
+    setRequest(null);
     try {
       await respondToPythonUiRequest(request, data);
-      setRequest(null);
     } finally {
       setResponding(false);
     }

@@ -31,6 +31,9 @@ export function previewCron(
       occurrences: interval.take(3).map((occurrence) => occurrence.toDate()),
     };
   } catch (error) {
-    return { valid: false, error: error instanceof Error ? error.message : String(error) };
+    return {
+      valid: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }

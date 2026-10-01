@@ -20,7 +20,7 @@ import {
   QuestionnaireTitle,
   Textarea,
 } from '@workspace/ui/components';
-import { ShieldAlertIcon, ShieldCheckIcon } from 'lucide-react';
+import { CircleHelpIcon, ShieldAlertIcon, ShieldCheckIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
@@ -203,33 +203,43 @@ function HumanReviewDialog({
 
   return (
     <AlertDialog open onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent className='max-h-[88vh] w-[min(94vw,72rem)]! max-w-none!'>
-        <AlertDialogHeader className='grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-2 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
-          <AlertDialogMedia className='mb-0 size-8'>
-            <ShieldCheckIcon />
-          </AlertDialogMedia>
-          <div className='min-w-0 space-y-1.5'>
-            <AlertDialogTitle>
-              {typeof payload.title === 'string'
-                ? payload.title
-                : t('approval.review.title')}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {typeof payload.description === 'string'
-                ? payload.description
-                : t('approval.review.description')}
-            </AlertDialogDescription>
-            <p className='text-muted-foreground text-sm'>
-              {t('approval.review.routingDescription')}
-            </p>
+      <AlertDialogContent className='max-h-[80vh] max-w-3xl! gap-0 overflow-hidden p-0'>
+        <AlertDialogHeader className='via-background to-background relative block overflow-hidden border-b bg-linear-to-br from-emerald-500/14 px-7 py-7 pr-16 text-left'>
+          <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(160_84%_39%/0.14)_1px,transparent_1px)] bg-size-[14px_14px]' />
+          <div className='relative flex items-start gap-4'>
+            <AlertDialogMedia className='bg-background/80 mb-0 flex size-11 shrink-0 items-center justify-center rounded-xl border border-emerald-500/20 text-emerald-700 shadow-sm dark:text-emerald-300'>
+              <ShieldCheckIcon className='size-5' />
+            </AlertDialogMedia>
+            <div className='min-w-0'>
+              <AlertDialogTitle className='text-lg tracking-tight'>
+                {typeof payload.title === 'string'
+                  ? payload.title
+                  : t('approval.review.title')}
+              </AlertDialogTitle>
+              <AlertDialogDescription className='mt-1 max-w-3xl leading-5'>
+                {typeof payload.description === 'string'
+                  ? payload.description
+                  : t('approval.review.description')}
+              </AlertDialogDescription>
+              <p className='text-muted-foreground pt-3 text-sm leading-5'>
+                {t('approval.review.routingDescription')}
+              </p>
+            </div>
           </div>
         </AlertDialogHeader>
-        <div className='max-h-[calc(88vh-12rem)] min-h-0 overflow-y-auto'>
-          <section className='bg-muted/20 rounded-lg border p-5'>
+        <div className='max-h-[calc(80vh-14rem)] min-h-0 overflow-y-auto px-7 py-6'>
+          <section className='bg-muted/15 rounded-xl border p-5'>
             <div className='mb-4 flex items-center gap-2'>
-              <Badge variant='secondary'>{t('approval.review.content')}</Badge>
+              <span className='flex size-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'>
+                <ShieldCheckIcon className='size-3.5' />
+              </span>
+              <h2 className='text-sm font-medium'>
+                {t('approval.review.content')}
+              </h2>
               {contentKey ? (
-                <code className='text-xs'>{contentKey}</code>
+                <code className='bg-background rounded-md border px-1.5 py-0.5 text-xs'>
+                  {contentKey}
+                </code>
               ) : null}
             </div>
             {canEdit ? (
@@ -241,25 +251,25 @@ function HumanReviewDialog({
             ) : typeof content === 'string' ? (
               <ReviewMarkdown content={content} />
             ) : (
-              <pre className='bg-muted max-h-[calc(88vh-16rem)] overflow-auto rounded-md p-3 text-xs'>
+              <pre className='bg-background max-h-[calc(80vh-18rem)] overflow-auto rounded-lg border p-4 font-mono text-xs leading-5'>
                 {JSON.stringify(content ?? null, null, 2)}
               </pre>
             )}
           </section>
           {payload.context && typeof payload.context === 'object' ? (
-            <section className='bg-muted/20 mt-4 rounded-lg border p-5'>
+            <section className='bg-muted/15 mt-4 rounded-xl border p-5'>
               <div className='mb-4 flex items-center gap-2'>
                 <Badge variant='secondary'>
                   {t('approval.review.context')}
                 </Badge>
               </div>
-              <pre className='bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs'>
+              <pre className='bg-background max-h-72 overflow-auto rounded-lg border p-4 font-mono text-xs leading-5'>
                 {JSON.stringify(payload.context, null, 2)}
               </pre>
             </section>
           ) : null}
         </div>
-        <AlertDialogFooter>
+        <AlertDialogFooter className='bg-muted/15 mx-0 mb-0 border-t px-7 py-4'>
           <Button
             variant='outline'
             disabled={submitting}
@@ -301,20 +311,29 @@ function AskUserQuestionDialog({
 
   return (
     <AlertDialog open onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {typeof payload.title === 'string'
-              ? payload.title
-              : t('approval.question.title')}
-          </AlertDialogTitle>
-          {typeof payload.description === 'string' ? (
-            <AlertDialogDescription>
-              {payload.description}
-            </AlertDialogDescription>
-          ) : null}
+      <AlertDialogContent className='max-w-2xl! gap-0 overflow-hidden p-0'>
+        <AlertDialogHeader className='via-background to-background relative block overflow-hidden border-b bg-linear-to-br from-violet-500/14 px-7 py-7 pr-16 text-left'>
+          <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(264_80%_60%/0.14)_1px,transparent_1px)] bg-size-[14px_14px]' />
+          <div className='relative flex items-start gap-4'>
+            <AlertDialogMedia className='bg-background/80 mb-0 flex size-11 shrink-0 items-center justify-center rounded-xl border border-violet-500/20 text-violet-700 shadow-sm dark:text-violet-300'>
+              <CircleHelpIcon className='size-5' />
+            </AlertDialogMedia>
+            <div className='min-w-0'>
+              <AlertDialogTitle className='text-lg tracking-tight'>
+                {typeof payload.title === 'string'
+                  ? payload.title
+                  : t('approval.question.title')}
+              </AlertDialogTitle>
+              {typeof payload.description === 'string' ? (
+                <AlertDialogDescription className='mt-1 max-w-xl leading-5'>
+                  {payload.description}
+                </AlertDialogDescription>
+              ) : null}
+            </div>
+          </div>
         </AlertDialogHeader>
         <Questionnaire
+          className='gap-0'
           items={[
             {
               name: 'answer',
@@ -330,28 +349,31 @@ function AskUserQuestionDialog({
             if (typeof answer === 'string') onSubmit({ optionId: answer });
           }}
         >
-          <QuestionnaireItem name='answer' required>
-            <QuestionnaireTitle className='sr-only'>
-              {t('approval.question.availableOptions')}
-            </QuestionnaireTitle>
-            <QuestionnaireChoices>
-              {options.map((option) => (
-                <QuestionnaireChoice
-                  key={option.id as string}
-                  value={option.id as string}
-                >
-                  <span>{option.label as string}</span>
-                  {typeof option.description === 'string' ? (
-                    <QuestionnaireChoiceDescription>
-                      {option.description}
-                    </QuestionnaireChoiceDescription>
-                  ) : null}
-                </QuestionnaireChoice>
-              ))}
-            </QuestionnaireChoices>
-            <QuestionnaireError />
-          </QuestionnaireItem>
-          <QuestionnaireActions>
+          <div className='max-h-[min(58vh,560px)] overflow-y-auto px-7 py-6'>
+            <QuestionnaireItem name='answer' required>
+              <QuestionnaireTitle className='text-muted-foreground text-xs font-medium tracking-[0.14em] uppercase'>
+                {t('approval.question.availableOptions')}
+              </QuestionnaireTitle>
+              <QuestionnaireChoices>
+                {options.map((option) => (
+                  <QuestionnaireChoice
+                    key={option.id as string}
+                    value={option.id as string}
+                    className='bg-muted/15 hover:bg-muted/50 px-4 py-3 data-checked:border-violet-500/40 data-checked:bg-violet-500/8'
+                  >
+                    <span>{option.label as string}</span>
+                    {typeof option.description === 'string' ? (
+                      <QuestionnaireChoiceDescription>
+                        {option.description}
+                      </QuestionnaireChoiceDescription>
+                    ) : null}
+                  </QuestionnaireChoice>
+                ))}
+              </QuestionnaireChoices>
+              <QuestionnaireError />
+            </QuestionnaireItem>
+          </div>
+          <QuestionnaireActions className='bg-muted/15 min-h-0 border-t px-7 py-4'>
             <QuestionnaireSubmit disabled={submitting}>
               {submitting
                 ? t('approval.question.savingAnswer')

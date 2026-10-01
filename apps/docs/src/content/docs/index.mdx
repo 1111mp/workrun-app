@@ -26,8 +26,12 @@ import WorkflowStudio from '../../components/workflow-studio.astro';
 
 Put Agents, Python, MCP tools, and human judgment into a readable workflow. Every run leaves state, tool traces, and evaluation evidence behind. Workrun turns one useful AI collaboration into a capability your team can run again and keep improving.
 
-> **Product media placeholder · video `homepage/workflow-studio.mp4` (45–60 seconds)**  
-> Show a new workflow, Agent configuration, a run, and a Human Review pause and resume. Use a real window recording and hide keys, customer data, and internal URLs.
+<div class='homepage-workflow-demo'>
+  <video autoplay muted loop playsinline controls preload="metadata" aria-label="Workflow run demonstration">
+    <source src="/media/homepage/workflow-run-through.mp4" type="video/mp4" />
+    Watch the workflow run from input through Agent execution, human review, and completion.
+  </video>
+</div>
 
 ### Configuration is not a black box
 
@@ -60,7 +64,7 @@ The workflow structure below shows what should remain visible and inspectable: w
   <p class='eyebrow'>Start with a minimal loop</p>
   <h2>Run one Agent workflow end to end.</h2>
   <p>
-    Create a model profile, connect <code>Start → Agent → End</code>, give it a real task, and inspect the result.
+    Add an API key, connect <code>Start → Agent → End</code>, give it a real task, and inspect the result.
   </p>
   <LinkButton href='/getting-started/quickstart/'>
     Start the quickstart <span aria-hidden='true'>→</span>

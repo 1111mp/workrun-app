@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Avatar,
   AvatarImage,
@@ -6,7 +7,6 @@ import {
   Input,
   Label,
 } from '@workspace/ui/components';
-import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeftIcon, HardDriveIcon, UsersIcon } from 'lucide-react';
 import { type SubmitEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';

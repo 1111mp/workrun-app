@@ -59,8 +59,8 @@ export default defineConfig({
               link: '/getting-started/installation/',
             },
             {
-              label: 'Configure model profiles',
-              translations: { 'zh-CN': '配置模型 Profile' },
+              label: 'Configure model access',
+              translations: { 'zh-CN': '配置模型访问' },
               link: '/getting-started/model-profiles/',
             },
           ],

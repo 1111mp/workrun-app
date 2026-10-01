@@ -127,7 +127,10 @@ function normalizePath(path: string) {
   return `${API_PREFIX}${resourcePath}`;
 }
 
-function getErrorMessage(message: ApiResponse<unknown>['message'], status: number) {
+function getErrorMessage(
+  message: ApiResponse<unknown>['message'],
+  status: number,
+) {
   if (Array.isArray(message)) return message.join(', ');
   return message ?? `Request failed with status ${status}`;
 }
