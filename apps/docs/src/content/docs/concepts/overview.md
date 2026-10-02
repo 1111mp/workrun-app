@@ -83,6 +83,6 @@ Workrun separates “it ran” from “it is ready to release”:
 3. Create an evaluation suite for an Agent workflow, using assertions and tool fixtures for regression checks.
 4. Publish a version in a team workspace, optionally guarded by quality gates.
 
-Evaluation execution currently targets workflows containing Agent nodes only. Workflows with Process, CodeAct Agent, Remote Agent, human nodes, or subworkflows should be verified through normal runs and run history. Team publishing pins referenced Team App versions, linking later runs and historical results to the version that was used.
+Evaluation execution currently rejects workflows containing Process Apps, CodeAct Agents, or Remote Agents; `if_else`, `switch`, and `terminate` do not have this hard restriction. Human nodes need a person to act and are not suited to unattended evaluation; a subworkflow also fails if it references a restricted node. Verify end-to-end flows through normal runs and run history. Team publishing pins referenced Team App versions, linking later runs and historical results to the version that was used.
 
 Workrun's core value is therefore not replacing the model or the code. It gives them explicit orchestration, state, security, recovery, and verification mechanisms.

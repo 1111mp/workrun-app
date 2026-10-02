@@ -1,55 +1,136 @@
 ---
 title: Build your first workflow
-description: Combine a Process, Agent, and branches into automation you can explain.
+description: Build and verify a Process → Agent → branch flow, from customer feedback to human approval.
 ---
 
-Use “customer feedback routing” as an example. Python first performs deterministic cleanup, an Agent classifies and recommends an action, and a rule decides whether a person must review it. This expands the minimal Agent from the [quickstart](/getting-started/quickstart/) into a production-shaped flow.
+This tutorial extends the Agent from the [quickstart](/getting-started/quickstart/) with deterministic data preparation, structured output, conditional routing, and human review. You will build an explainable customer-feedback routing flow: low-priority feedback ends automatically; high-priority feedback waits for a person to decide.
 
 ```text
-Start → Prepare data (Process) → Classify and recommend (Agent) → High risk?
-                                                          ├─ Yes → Human Review → End
-                                                          └─ No ─────────────────→ End
+Start → Normalize feedback (Process) → Classify and recommend (Agent) → Priority is high?
+                                                                    ├─ Yes → Human Review ─┬─ Approved → End
+                                                                    │                     └─ Rejected → End
+                                                                    └─ No ─────────────────→ End
 ```
 
-## Define the state contract first
+Before you begin, configure an API key for at least one Provider under **Settings → Models**. If you have not created a workflow or a `feedback` input yet, complete the [quickstart](/getting-started/quickstart/) first.
 
-Before connecting the canvas, list the fields every step produces and consumes.
+## 1. Write the state contract first
 
-| Node | Reads | Writes | Publish to global state? |
+Do not make downstream nodes infer an answer from free text. First agree on what every step reads and produces. These keys appear in the App schema, Agent output, branch conditions, and review UI.
+
+| Producer | Reads | Writes and publishes to global state | Consumers |
 | --- | --- | --- | --- |
-| Start | — | `feedback` | Yes; later nodes need it. |
-| Prepare data (Process) | `feedback` | `normalized_feedback`, `is_high_risk` | Yes; the Agent and branch need them. |
-| Classify and recommend (Agent) | `normalized_feedback` | `category`, `priority`, `recommendation` | Yes; review and End need them. |
-| Human Review | `recommendation` | `approved` | Yes; the branch or End may need it. |
+| Run input | — | `feedback` (Label: Customer feedback) | Process |
+| Normalize feedback (Process) | `feedback` | `normalized_feedback` (Label: Normalized feedback) | Agent, Human Review |
+| Classify and recommend (Agent) | `normalized_feedback` | `category` (Feedback category), `priority` (Priority), `recommendation` (Recommended action) | If/Else, Human Review |
+| Human Review | `recommendation` and context | Review decision | Approved or rejected output |
 
-On nodes that produce output, enter these keys in **Publish to global state → Published output keys**, separated by commas. Output is node-private by default; downstream nodes cannot assume they can read it until it is published and they have been granted read access.
+Run inputs are already global state. Output from a node stays in that node’s private namespace unless you list it under **Publish to global state → Published output keys**. Published keys can be used by branches, later nodes, and workflow output. This example uses global keys, so it does not need **Allowed readers**; use that setting only when intentionally sharing a node’s private namespace.
 
-## Assign responsibilities
+## 2. Create the normalization Process App
 
-1. **Process:** read input, normalize fields, apply fixed rules, or query internal systems.
-2. **Agent:** make semantic judgments and return fixed fields such as `category`, `priority`, and `recommendation`.
-3. **If/Else or Switch:** branch only on declared state fields.
-4. **Human Review:** give a person decisions that affect customers, funds, permissions, or public content.
+Go to **Apps → New** and create an **App / Process Node** named, for example, “Normalize feedback.” Declare this data contract:
 
-## Configure the branch and review
+| Direction | Label | Key | Type | Required |
+| --- | --- | --- | --- | --- |
+| Input | Customer feedback | `feedback` | string | Yes |
+| Output | Normalized feedback | `normalized_feedback` | string | Yes |
 
-1. Set an **If/Else** condition such as `is_high_risk == true || priority == "high"`.
-2. Connect the “yes” output to **Human Review**, and the “no” output to End.
-3. In **Review request**, set the content key to `recommendation` and context keys to `category, priority, normalized_feedback`.
-4. Enable **Allow editing** if the reviewer should be able to rewrite the recommendation.
-5. Connect both the approved and rejected outputs. Do not silently end a rejection; route it to more information, a rewritten recommendation, or an explicit terminal node.
+Replace the entry-point code with this minimal implementation. It collapses excess whitespace so later nodes always receive the same clean text:
 
-> **Media placeholder · screenshot `workflows/01-state-publication.png`**  
-> Show the Process node’s “Publish to global state” section with multiple output keys entered. Explain that producing output and exposing it to the workflow are separate actions.
+```python
+import json
+import sys
 
-> **Media placeholder · video `workflows/02-branch-and-review.mp4` (45–60 seconds)**  
-> Add If/Else, enter the condition, configure Human Review, then run to a pause and approve it to resume.
+from workrun_sdk import process
 
-## Design notes
 
-- Make each node do one describable job.
-- Define node output before writing prompts and code.
-- Use readable state field names rather than stuffing whole documents into every node.
-- Put side-effecting operations after review and enable human confirmation for Agent tool calls.
+def main() -> None:
+    state = json.loads(sys.stdin.read() or "{}")
+    feedback = " ".join(str(state.get("feedback", "")).split())
+    process.result({"normalized_feedback": feedback})
 
-Run three examples before moving to evaluation: ordinary feedback, clearly high-risk feedback, and feedback with missing information. They become your first [evaluation cases](/quality/evaluations/).
+
+if __name__ == "__main__":
+    main()
+```
+
+Save it, then run it once from the App page and confirm the result contains `normalized_feedback`. For project setup, dependencies, and debugging, see [Use Python Apps](/guides/python-apps/).
+
+## 3. Build and configure the canvas
+
+Create a **Task** workflow; the canvas already contains Start and End. Add **Process**, **Agent**, **If/Else**, and **Human Review** in order, and connect them as shown above. Select Process and choose “Normalize feedback” under **App connection**.
+
+Under **Publish to global state → Published output keys** on Process, enter:
+
+```text
+normalized_feedback
+```
+
+Select the Agent, choose a model from a configured Provider, and paste this schema into **Structured output schema (Advanced)**. It turns the classification into stable fields rather than a prose-only reply:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "category": { "type": "string", "description": "Feedback category" },
+    "priority": { "type": "string", "description": "Priority", "enum": ["low", "medium", "high"] },
+    "recommendation": { "type": "string", "description": "Recommended action" }
+  },
+  "required": ["category", "priority", "recommendation"]
+}
+```
+
+Use clear, testable instructions such as:
+
+```text
+You are a customer-feedback routing assistant. Read normalized_feedback and return category, priority, and recommendation.
+
+Set priority to high for account security, fraud, data exposure, payment anomalies, or when a customer cannot use a core function.
+When information is insufficient, say what is missing. Do not invent facts.
+```
+
+On that Agent, enter the following **Published output keys**:
+
+```text
+category, priority, recommendation
+```
+
+## 4. Route on a stable field and configure review
+
+Select **If/Else** and set a condition for each output:
+
+| Output | Condition |
+| --- | --- |
+| Yes | `priority == "high"` |
+| No | `priority != "high"` |
+
+A condition compares one state field at a time. Do not use `||` or `&&`, and do not match words in the natural-language `recommendation`. The schema limits `priority` to known values, so these two conditions cover every valid result.
+
+Connect “yes” to **Human Review** and “no” to End. In Human Review’s **Review request**:
+
+1. Enter a direct title and explanation, such as “Confirm the high-priority feedback recommendation.”
+2. Set the **content key** to `recommendation`.
+3. Set **context keys** to `category, priority, normalized_feedback`.
+4. Turn on **Allow editing** when the reviewer should be able to revise the recommendation.
+5. For this tutorial, connect both approved and rejected outputs to End.
+
+This means that human review is complete and the run ends regardless of the decision; the decision remains in run history. Only route rejection to another node when it needs follow-up, such as requesting more information, rewriting the recommendation, or notifying someone. Route approval to the node that performs the real side effect. For pause, editing, and checkpoint recovery details, see [Human approval and recovery](/guides/human-in-the-loop/).
+
+## 5. Run three examples and inspect every layer
+
+Save the workflow, select **Run**, and inspect node status and global state in the run panel for each example.
+
+| Input | What you should see |
+| --- | --- |
+| `There is a typo in the page copy.` | Process publishes `normalized_feedback`; the Agent returns `low` or `medium`; the flow takes “no” to End. |
+| `There is an unfamiliar payment on my account. Freeze it immediately.` | The Agent returns `high`; the flow pauses at Human Review; approve or reject to resume from the checkpoint without rerunning earlier nodes. |
+| `It does not work. Please fix it.` | The Agent identifies missing information while still returning complete `category`, `priority`, and `recommendation` fields. |
+
+![Low-priority feedback: If/Else takes the “no” output and reaches End.](/media/build-a-workflow/01-low-priority-to-end.png)
+
+![High-priority feedback: the flow pauses at Human Review and waits for approval or rejection.](/media/build-a-workflow/02-high-priority-human-review.png)
+
+![Insufficient-information feedback: the Agent still returns structured category, priority, and recommendation fields.](/media/build-a-workflow/03-insufficient-information.png)
+
+If a run differs, inspect in this order: the App’s stdout/stderr and `normalized_feedback`; the Agent’s model and schema; whether both producing nodes published their required keys; then the If/Else conditions and outgoing edges. Keep these three inputs as your first [evaluation cases](/quality/evaluations/).

@@ -616,7 +616,7 @@ function SkillEditor({
             </FieldSet>
           </FieldGroup>
         </div>
-        <DialogFooter>
+        <DialogFooter className='mx-0 mb-0'>
           <Button disabled={saving || !valid} onClick={onSave} type='button'>
             {saving && <Spinner data-icon='inline-start' />}
             {t('settings.skills.save')}

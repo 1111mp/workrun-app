@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from workrun_sdk import choice, collect, number, path, text, ui
 
 
@@ -96,6 +98,19 @@ def test_collect_builds_schema_and_ui_schema(monkeypatch) -> None:
             }
         },
     }
+
+
+def test_collect_returns_none_when_cancelled(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "form", lambda **_: None)
+
+    assert collect(fields={"email": text("Email")}) is None
+
+
+def test_collect_rejects_a_non_object_response(monkeypatch) -> None:
+    monkeypatch.setattr(ui, "form", lambda **_: "unexpected")
+
+    with pytest.raises(TypeError, match="expected the form to return a JSON object"):
+        collect(fields={"email": text("Email")})
 
 
 def test_path_builds_a_native_path_picker_field() -> None:

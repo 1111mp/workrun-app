@@ -20,11 +20,69 @@ import WorkflowStudio from '../../../components/workflow-studio.astro';
 
 <HomepageHero />
 
-<div class='homepage-kicker'>WORKFLOW-NATIVE · LOCAL-FIRST · READY TO SHIP</div>
+<div class='homepage-kicker'>APPS + WORKFLOWS · LOCAL-FIRST · READY TO SHIP</div>
 
-## 不止编排。还要让自动化能交付。
+## 从一个 Python App，到一套可交付的自动化。
 
-把 Agent、Python、MCP 工具与人工判断放进一张可读的工作流；每一次运行都留下状态、工具轨迹和评测证据。Workrun 让团队把一次有效的 AI 协作，变成敢于反复运行、持续演进的能力。
+Workrun 不是只能画流程图。你可以先创建一个独立运行的本地 Python 项目，用代码完成一件具体的事；也可以在画布上把 Agent、App、MCP 工具与人工判断编排成可重复运行的流程。两种方式共享同一个运行、调试、评测与发布工作台。
+
+<div class='automation-paths'>
+  <article class='automation-path app-path'>
+    <p class='eyebrow'>APP · 从代码开始</p>
+    <h3>一个独立的 Python 项目，也是一项可运行能力。</h3>
+    <p>
+      每个 App 都是本地 <code>uv</code> 项目，有自己的依赖、入口代码和数据契约。它可以独立运行，处理文件、调用内部系统、弹出表单让人填写，或按计划执行；不需要先建立工作流。
+    </p>
+    <ul>
+      <li>用你熟悉的 Python 写确定性业务逻辑</li>
+      <li>独立测试、审查和版本管理代码与依赖</li>
+      <li>需要时，再接入流程成为 Process 节点或 Agent 工具</li>
+    </ul>
+    <a href='/zh-cn/guides/python-apps/' class='path-link'>构建第一个 Python App <span aria-hidden='true'>→</span></a>
+  </article>
+  <article class='automation-path workflow-path'>
+    <p class='eyebrow'>WORKFLOW · 从协作开始</p>
+    <h3>当任务需要判断、分支与协作，把能力连接起来。</h3>
+    <p>
+      在画布上组合 Agent、Process App、条件、子工作流和人工审核。每次运行都保留节点状态、工具轨迹与结果，复杂自动化依然可读、可检查、可恢复。
+    </p>
+    <ul>
+      <li>清楚定义每一步读取、产出与交给谁判断</li>
+      <li>在暂停、失败和后台运行后从检查点继续</li>
+      <li>用评测、版本对比和质量门安心迭代</li>
+    </ul>
+    <a href='/zh-cn/guides/build-a-workflow/' class='path-link'>构建第一个工作流 <span aria-hidden='true'>→</span></a>
+  </article>
+</div>
+
+## App 不只是节点：先独立完成一件事
+
+无论是数据处理、文件操作、内部系统集成，还是需要人工输入的本地小工具，App 都可以直接从 **Apps** 页面运行。Workrun 负责项目创建、运行记录与运行时交互；Python 代码依然是你自己的代码工程。
+
+<div class='homepage-app-demo'>
+  <video autoplay muted loop playsinline controls preload="metadata" aria-label="独立运行 Python App 的演示">
+    <source src="/media/python-apps/01-standalone-health-information.mp4" type="video/mp4" />
+    观看从 Apps 页面独立运行 App、填写表单并查看结果的全过程。
+  </video>
+</div>
+
+<CardGrid stagger>
+  <Card title='独立运行或定时运行' icon='launch'>
+    从 Apps 页面立即运行本地项目，或为周期性采集、清理与同步配置定时任务。
+  </Card>
+  <Card title='代码控制人与运行时交互' icon='approve-check'>
+    Python 可通过 JSON Schema 请求表单或确认；人提交、拒绝或取消后，代码再决定如何继续。
+  </Card>
+  <Card title='需要时自然进入流程' icon='puzzle'>
+    同一个 App 可作为固定顺序的 Process 节点；Tool App 则让 Agent 按 Schema 按需调用。
+  </Card>
+</CardGrid>
+
+## 当一个 App 不够时，再把它编排进 Workflow
+
+工作流配置不应是黑盒。节点从哪里取数据、由谁判断、何时暂停给人处理，以及一次运行使用的模型和工具，都应该可见、可检查。
+
+<WorkflowStudio />
 
 <div class='homepage-workflow-demo'>
   <video autoplay muted loop playsinline controls preload="metadata" aria-label="工作流运行演示">
@@ -33,44 +91,24 @@ import WorkflowStudio from '../../../components/workflow-studio.astro';
   </video>
 </div>
 
-### 配置并非黑盒
-
-下方是工作流配置的结构示意：节点从哪里取数据、由谁判断、何时暂停给人处理，以及每次运行使用的模型和工具，都应该是可见、可检查的。
-
-<WorkflowStudio />
-
-<CardGrid stagger>
-  <Card title='让 Agent 真正行动' icon='robot'>
-    用 Tool App、MCP Server、Skills 与 A2A Remote Agent 扩展
-    Agent；调用配额、超时和人工确认都在运行时受控。
-  </Card>
-  <Card title='保留代码的确定性' icon='puzzle'>
-    每个 Python App 都是独立的本地 `uv`
-    项目。把数据处理、系统集成和业务规则留在你熟悉的代码工程里。
-  </Card>
-  <Card title='把质量带进发布流程' icon='approve-check'>
-    通过运行记录、OpenTelemetry
-    轨迹、评估集、版本对比和质量门，知道一次改动是否真的更好。
-  </Card>
-</CardGrid>
-
-## 从构想到团队交付，始终在同一个工作台
+## 无论从哪里开始，都在同一个工作台演进
 
 | 你要完成的事   | Workrun 如何帮助你                                      |
 | -------------- | ------------------------------------------------------- |
-| 组合能力       | 在画布上连接 Agent、Process、分支、子工作流和人工节点。 |
+| 组合能力       | 独立运行 App，或在画布上连接 Agent、Process、分支、子工作流和人工节点。 |
 | 可靠运行       | 节点状态隔离；暂停、失败与后台运行可从检查点恢复。      |
 | 看清发生了什么 | 逐节点查看模型消息、工具调用、脚本日志和 Trace。        |
 | 安心迭代       | 用评估集验证工作流变化，并在发布前设置质量门。          |
 
 <div class='next-step'>
-  <p class='eyebrow'>从最小闭环开始</p>
-  <h2>先让一个 Agent 工作流跑起来。</h2>
+  <p class='eyebrow'>选择你的起点</p>
+  <h2>先跑一个 App，或先连起一个工作流。</h2>
   <p>
-    添加 API 密钥，连接 <code>Start → Agent → End</code>
-    ，输入一次真实任务并查看运行结果。
+    写代码解决一件确定的事时，创建 Python App；需要让 Agent、工具和人协作时，连接
+    <code>Start → Agent → End</code>。以后随时可以让两者相连。
   </p>
-  <LinkButton href='/zh-cn/getting-started/quickstart/'>
-    开始快速教程 <span aria-hidden='true'>→</span>
+  <LinkButton href='/zh-cn/guides/python-apps/'>
+    构建 Python App <span aria-hidden='true'>→</span>
   </LinkButton>
+  <a href='/zh-cn/getting-started/quickstart/' class='next-step-link'>开始工作流快速教程 <span aria-hidden='true'>→</span></a>
 </div>

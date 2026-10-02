@@ -6,7 +6,7 @@ import atexit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
-from typing import Literal
+from typing import Literal, cast
 
 from ._client import WorkrunClient
 from ._protocol import JsonObject, JsonValue
@@ -197,7 +197,7 @@ def collect(
     description: str | None = None,
     submit_label: str | None = None,
     cancel_label: str | None = None,
-) -> JsonValue:
+) -> JsonObject | None:
     """Collect named user inputs without manually constructing JSON Schema.
 
     Returns a dictionary of submitted values, or ``None`` if the user cancels.
@@ -248,7 +248,7 @@ def collect(
         ui_schema["ui:field"] = "LayoutGridField"
         ui_schema["ui:layoutGrid"] = {"ui:row": {"children": layout_rows}}
 
-    return form(
+    result = form(
         schema=schema,
         ui_schema=ui_schema or None,
         title=title,
@@ -256,6 +256,11 @@ def collect(
         submit_label=submit_label,
         cancel_label=cancel_label,
     )
+    if result is None:
+        return None
+    if not isinstance(result, dict) or not all(isinstance(key, str) for key in result):
+        raise TypeError("collect() expected the form to return a JSON object")
+    return cast(JsonObject, result)
 
 
 def _layout_row(field_names: Sequence[str]) -> JsonObject:

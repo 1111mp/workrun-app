@@ -20,11 +20,69 @@ import WorkflowStudio from '../../components/workflow-studio.astro';
 
 <HomepageHero />
 
-<div class='homepage-kicker'>WORKFLOW-NATIVE · LOCAL-FIRST · READY TO SHIP</div>
+<div class='homepage-kicker'>APPS + WORKFLOWS · LOCAL-FIRST · READY TO SHIP</div>
 
-## More than orchestration. Automation that can deliver.
+## From one Python App to automation your team can deliver.
 
-Put Agents, Python, MCP tools, and human judgment into a readable workflow. Every run leaves state, tool traces, and evaluation evidence behind. Workrun turns one useful AI collaboration into a capability your team can run again and keep improving.
+Workrun is not only a workflow canvas. Start with an independent local Python project that does one concrete job, or compose Agents, Apps, MCP tools, and human judgment on a canvas into a repeatable process. Both paths use the same workspace for running, debugging, evaluating, and publishing.
+
+<div class='automation-paths'>
+  <article class='automation-path app-path'>
+    <p class='eyebrow'>APP · START WITH CODE</p>
+    <h3>One independent Python project can be a runnable capability.</h3>
+    <p>
+      Every App is a local <code>uv</code> project with its own dependencies, entry-point code, and data contract. Run it on its own for file work, internal integrations, or human input; a workflow is optional.
+    </p>
+    <ul>
+      <li>Write deterministic business logic in the Python you know</li>
+      <li>Test, review, and version its code and dependencies independently</li>
+      <li>Later, use it as a Process node or an Agent tool when it belongs in a flow</li>
+    </ul>
+    <a href='/guides/python-apps/' class='path-link'>Build your first Python App <span aria-hidden='true'>→</span></a>
+  </article>
+  <article class='automation-path workflow-path'>
+    <p class='eyebrow'>WORKFLOW · START WITH COLLABORATION</p>
+    <h3>Connect capabilities when a task needs judgment, branches, and people.</h3>
+    <p>
+      Compose Agents, Process Apps, conditions, subworkflows, and human review on a canvas. Node state, tool traces, and results stay visible, so complex automation remains inspectable and resumable.
+    </p>
+    <ul>
+      <li>Define what each step reads, produces, and hands to a decision maker</li>
+      <li>Resume from checkpoints after pauses, failures, or background runs</li>
+      <li>Iterate safely with evaluations, version comparison, and quality gates</li>
+    </ul>
+    <a href='/guides/build-a-workflow/' class='path-link'>Build your first workflow <span aria-hidden='true'>→</span></a>
+  </article>
+</div>
+
+## An App is more than a node: run it independently first
+
+For data processing, file operations, internal integrations, or a local tool that needs input from a person, an App can run directly from **Apps**. Workrun creates and runs the project, preserves run history, and handles runtime interactions; the Python remains your codebase.
+
+<div class='homepage-app-demo'>
+  <video autoplay muted loop playsinline controls preload="metadata" aria-label="Independent Python App run demonstration">
+    <source src="/media/python-apps/01-standalone-health-information.mp4" type="video/mp4" />
+    Watch an App run from the Apps page, collect form input, and show its result.
+  </video>
+</div>
+
+<CardGrid stagger>
+  <Card title='Run on demand or on a schedule' icon='launch'>
+    Run a local project directly from Apps, or schedule recurring collection, cleanup, and synchronization work.
+  </Card>
+  <Card title='Let code control runtime interaction' icon='approve-check'>
+    Python can request a JSON-Schema form or confirmation. After a person submits, rejects, or cancels, the code decides what happens next.
+  </Card>
+  <Card title='Join a flow when needed' icon='puzzle'>
+    The same App can become a fixed-position Process node; a Tool App lets an Agent call it on demand through a schema.
+  </Card>
+</CardGrid>
+
+## When one App is not enough, compose it in a Workflow
+
+Workflow configuration should not be a black box. It should remain visible and inspectable: where a node reads data, who makes a decision, when a human takes over, and which model and tools a run used.
+
+<WorkflowStudio />
 
 <div class='homepage-workflow-demo'>
   <video autoplay muted loop playsinline controls preload="metadata" aria-label="Workflow run demonstration">
@@ -33,40 +91,24 @@ Put Agents, Python, MCP tools, and human judgment into a readable workflow. Ever
   </video>
 </div>
 
-### Configuration is not a black box
-
-The workflow structure below shows what should remain visible and inspectable: where a node reads data, who makes a decision, when a human takes over, and which model and tools a run used.
-
-<WorkflowStudio />
-
-<CardGrid stagger>
-  <Card title='Let Agents take action' icon='robot'>
-    Extend Agents with Tool Apps, MCP servers, Skills, and A2A Remote Agents. Call limits, timeouts, and human confirmation are controlled at runtime.
-  </Card>
-  <Card title='Keep code deterministic' icon='puzzle'>
-    Every Python App is an independent local `uv` project. Keep data processing, integrations, and business rules in the codebase you know.
-  </Card>
-  <Card title='Bring quality into publishing' icon='approve-check'>
-    Use run records, OpenTelemetry traces, evaluation suites, version comparisons, and quality gates to know whether a change is actually better.
-  </Card>
-</CardGrid>
-
-## From idea to team delivery, in one workspace
+## Whichever path you start with, evolve in one workspace
 
 | What you need to do | How Workrun helps |
 | --- | --- |
-| Compose capabilities | Connect Agents, Processes, branches, subworkflows, and human nodes on a canvas. |
+| Compose capabilities | Run an App independently, or connect Agents, Processes, branches, subworkflows, and human nodes on a canvas. |
 | Run reliably | Isolated node state plus checkpoint recovery for pauses, failures, and background runs. |
 | See what happened | Inspect model messages, tool calls, script logs, and traces node by node. |
 | Iterate safely | Validate workflow changes with evaluation suites and quality gates before publishing. |
 
 <div class='next-step'>
-  <p class='eyebrow'>Start with a minimal loop</p>
-  <h2>Run one Agent workflow end to end.</h2>
+  <p class='eyebrow'>Choose your starting point</p>
+  <h2>Run one App first, or connect one workflow.</h2>
   <p>
-    Add an API key, connect <code>Start → Agent → End</code>, give it a real task, and inspect the result.
+    Create a Python App when code should solve one deterministic job. Connect
+    <code>Start → Agent → End</code> when Agents, tools, and people need to collaborate. You can bring the two together whenever you need to.
   </p>
-  <LinkButton href='/getting-started/quickstart/'>
-    Start the quickstart <span aria-hidden='true'>→</span>
+  <LinkButton href='/guides/python-apps/'>
+    Build a Python App <span aria-hidden='true'>→</span>
   </LinkButton>
+  <a href='/getting-started/quickstart/' class='next-step-link'>Start the workflow quickstart <span aria-hidden='true'>→</span></a>
 </div>

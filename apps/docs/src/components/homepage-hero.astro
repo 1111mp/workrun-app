@@ -3,19 +3,19 @@
 const isEnglish = Astro.currentLocale === 'en';
 const copy = isEnglish
   ? {
-      workspace: 'Workrun / Workflows',
+      workspace: 'Workrun / Apps + Workflows',
       saved: 'Saved',
-      headline: 'Bring judgment and delivery onto one canvas.',
+      headline: 'Start with code. Compose when the work grows.',
       workflow: 'Order cancellation: risk routing and regression evaluation',
-      note: 'Workflow editor in action: agents, conditional routing, and human review collaborate on one canvas.',
+      note: 'Workflow editor in action: Apps, agents, conditional routing, and human review collaborate on one canvas.',
       signals: [
+        {
+          label: 'Python Apps',
+          detail: 'Independent local uv projects',
+        },
         {
           label: 'Local-first',
           detail: 'Your workspace stays on your machine',
-        },
-        {
-          label: 'Checkpoint resume',
-          detail: 'Pause for human review, then continue',
         },
         {
           label: 'Evaluation-ready',
@@ -24,14 +24,14 @@ const copy = isEnglish
       ],
     }
   : {
-      workspace: 'Workrun / 工作流',
+      workspace: 'Workrun / App + 工作流',
       saved: '已保存',
-      headline: '在一张画布上，完成从判断到交付。',
+      headline: '先用代码完成，再把协作编排起来。',
       workflow: '订单取消：风险路由与回归评测',
-      note: '工作流编辑器实拍：Agent、条件路由与人工审核在同一画布中协作。',
+      note: '工作流编辑器实拍：App、Agent、条件路由与人工审核在同一画布中协作。',
       signals: [
+        { label: 'Python App', detail: '独立的本地 uv 项目' },
         { label: '本地优先', detail: '工作区与凭据保留在你的设备上' },
-        { label: '检查点恢复', detail: '人工审核暂停后，从原处继续' },
         { label: '评测就绪', detail: '发布前验证每一次改动' },
       ],
     };

@@ -314,6 +314,70 @@
 	color: var(--sl-color-text-accent);
 }
 
+/* The homepage makes the product's two genuine entry points explicit: a local
+ * Python App can stand alone, while a workflow coordinates capabilities. */
+.automation-paths {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1rem;
+	margin: 2.5rem 0 4.5rem;
+}
+
+.automation-path {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	padding: clamp(1.25rem, 3vw, 2rem);
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.85rem;
+	background: color-mix(in srgb, var(--sl-color-bg) 86%, transparent);
+	box-shadow: 0 22px 45px -42px var(--sl-color-black);
+}
+
+.automation-path::before {
+	content: '';
+	position: absolute;
+	inset: 0.75rem auto 0.75rem 0;
+	width: 2px;
+	border-radius: 99px;
+	background: var(--sl-color-text-accent);
+}
+
+.automation-path.workflow-path::before { background: #37a6c8; }
+.automation-path h3 { max-width: 24ch; margin: 0.6rem 0 0.85rem; font-size: clamp(1.15rem, 2.2vw, 1.5rem); line-height: 1.28; }
+.automation-path > p:not(.eyebrow) { margin: 0; line-height: 1.6; }
+.automation-path ul { margin: 1rem 0 1.5rem; padding-left: 1.2rem; font-size: 0.9rem; line-height: 1.58; }
+.automation-path li + li { margin-top: 0.35rem; }
+.path-link,
+.next-step-link { font-weight: 600; text-decoration: none; }
+.path-link { margin-top: auto; }
+.next-step-link { display: inline-flex; margin: 1rem 0 0 1rem; }
+.path-link span,
+.next-step-link span { display: inline-block; transition: transform 0.16s ease; }
+.path-link:hover span,
+.next-step-link:hover span { transform: translateX(0.2rem); }
+
+.homepage-app-demo {
+	position: relative;
+	margin: 2rem 0 2.5rem;
+	overflow: hidden;
+	border: 1px solid color-mix(in srgb, var(--sl-color-hairline) 58%, #7d61ff);
+	border-radius: 1rem;
+	background:
+		radial-gradient(circle at 12% 8%, rgb(46 167 133 / 19%), transparent 26rem),
+		linear-gradient(136deg, #07111c 0%, #0d1422 100%);
+	box-shadow: 0 38px 95px -58px #0a0525;
+}
+
+.homepage-app-demo video {
+	display: block;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	background: #0a111b;
+	object-fit: contain;
+}
+
 /* Give the live recording the same framed product-surface treatment as the
  * hero preview, without overlays that would hide the workflow's run state. */
 .homepage-workflow-demo {
@@ -344,11 +408,22 @@
 	box-shadow: 0 38px 85px -60px rgb(65 51 143 / 48%);
 }
 
+:root[data-theme='light'] .homepage-app-demo {
+	border-color: #c7c9f4;
+	background:
+		radial-gradient(circle at 12% 8%, rgb(46 167 133 / 13%), transparent 26rem),
+		linear-gradient(136deg, #f7f8ff 0%, #f4f4fb 100%);
+	box-shadow: 0 38px 85px -60px rgb(65 51 143 / 48%);
+}
+
 @media (max-width: 42rem) {
+	.automation-paths { grid-template-columns: 1fr; margin-block: 1.75rem 3.25rem; }
+	.next-step-link { margin-left: 0; }
 	.homepage-workflow-demo {
 		margin-block: 1.5rem 3.25rem;
 		border-radius: 0.7rem;
 	}
+	.homepage-app-demo { margin-block: 1.5rem 2rem; border-radius: 0.7rem; }
 }
 
 .workflow-studio {

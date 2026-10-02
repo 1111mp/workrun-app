@@ -645,13 +645,20 @@ function McpServerDialog({
 
   const testConnection = useMutation({
     mutationFn: testMcpServerConnection,
-    onSuccess: (result, request) =>
-      setTestResult({ signature: JSON.stringify(request), result }),
-    onError: (error, request) =>
-      setTestResult({
-        signature: JSON.stringify(request),
-        error: error instanceof Error ? error.message : String(error),
-      }),
+    onSuccess: (result, request) => {
+      setTestResult({ signature: JSON.stringify(request), result });
+      toast.success(t('mcp.dialog.connectionSuccessful'), {
+        toasterId: 'global',
+      });
+    },
+    onError: (error, request) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setTestResult({ signature: JSON.stringify(request), error: message });
+      toast.error(t('mcp.dialog.connectionFailed'), {
+        description: message,
+        toasterId: 'global',
+      });
+    },
     onSettled: () => onDiagnosticsUpdated(),
   });
 
@@ -1029,7 +1036,7 @@ function McpServerDialog({
             </FieldGroup>
           </div>
         ) : null}
-        <DialogFooter>
+        <DialogFooter className='mx-0 mb-0'>
           <Button
             variant='outline'
             disabled={testConnection.isPending || !canTest}
