@@ -213,7 +213,7 @@ mod tests {
         })
         .add_edge(START, "review")
         .add_edge("after_review", END);
-        let edges = vec![WorkflowEdge {
+        let edges = [WorkflowEdge {
             source: "review".to_string(),
             target: "after_review".to_string(),
             source_handle: Some("approved".to_string()),

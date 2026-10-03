@@ -42,13 +42,11 @@ impl RunHistoryStore {
 
     pub async fn last_sequence(id: &str) -> Result<i64> {
         let pool = DBManager::global().pool()?;
-        Ok(
-            sqlx::query_scalar::<_, i64>("SELECT last_sequence FROM run_records WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&pool)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("run record was not found: {id}"))?,
-        )
+        sqlx::query_scalar::<_, i64>("SELECT last_sequence FROM run_records WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&pool)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("run record was not found: {id}"))
     }
 }
 

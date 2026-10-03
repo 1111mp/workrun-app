@@ -2,7 +2,7 @@ use super::events::terminate_process_tree;
 use super::workflow::workflow_session_from_runtime;
 
 #[cfg(test)]
-mod tests {
+mod test_cases {
     #[cfg(unix)]
     use super::terminate_process_tree;
     use super::workflow_session_from_runtime;

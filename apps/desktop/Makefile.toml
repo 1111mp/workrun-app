@@ -13,11 +13,13 @@ skip_crate_env_info = true
 [tasks.rust-fmt]
 description = "Format all Rust source files using rustfmt"
 install_crate = "rustfmt"
+cwd = "apps/desktop"
 command = "cargo"
 args = ["fmt", "--", "--emit=files"]
 
 [tasks.rust-clippy]
 description = "Run Clippy lints for all targets and features, deny all warnings"
+cwd = "apps/desktop"
 command = "cargo"
 args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
 
@@ -46,7 +48,7 @@ if eq ${has_rust.code} 1
 end
 
 # frontend checks
-has_frontend = exec git diff --cached --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.css" "*.html"
+has_frontend = exec git diff --cached --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.md" "*.css" "*.html"
 if eq ${has_frontend.code} 1
   cm_run_task lint-staged
 end
@@ -57,13 +59,13 @@ description = "Pre-push hook: run clippy for Rust and type checking for frontend
 script_runner = "@duckscript"
 script = '''
 # rust related changes
-has_rust = exec git diff --cached --quiet -- "*.rs" Cargo.toml Cargo.lock
+has_rust = exec git diff @{u}..HEAD --quiet -- "*.rs" Cargo.toml Cargo.lock
 if eq ${has_rust.code} 1
   cm_run_task rust-clippy
 end
 
 # frontend related changes
-has_frontend = exec git diff --cached --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.css" "*.html"
+has_frontend = exec git diff @{u}..HEAD --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.css" "*.html"
 if eq ${has_frontend.code} 1
   cm_run_task typecheck
 end

@@ -88,16 +88,16 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatc
         let log_max_count = patch.app_log_max_count.unwrap_or(8);
         Logger::global().update_log_config(log_max_size, log_max_count).await?;
     }
-    if update_flags.contains(UpdateFlags::INITIALIZE_WORKSPACE) {
-        if let Some(workspace_mode) = &patch.workspace_mode {
-            let scope = match workspace_mode {
-                crate::config::WorkspaceMode::Team => dirs::default_team_workspace_scope(),
-                crate::config::WorkspaceMode::Personal => dirs::WorkspaceScope::Personal,
-            };
-            dirs::initialize_active_workspace_scope(scope);
-            init::ensure_active_workspace_directories().await?;
-            Config::reload_workspace().await;
-        }
+    if update_flags.contains(UpdateFlags::INITIALIZE_WORKSPACE)
+        && let Some(workspace_mode) = &patch.workspace_mode
+    {
+        let scope = match workspace_mode {
+            crate::config::WorkspaceMode::Team => dirs::default_team_workspace_scope(),
+            crate::config::WorkspaceMode::Personal => dirs::WorkspaceScope::Personal,
+        };
+        dirs::initialize_active_workspace_scope(scope);
+        init::ensure_active_workspace_directories().await?;
+        Config::reload_workspace().await;
     }
 
     Ok(())

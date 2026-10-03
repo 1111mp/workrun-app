@@ -21,8 +21,5 @@ pub async fn python_ui_respond(request: PythonUiResponseRequest) -> CmdResult {
         "type": "ui.response",
         "data": request.data,
     });
-    IpcServer::global()
-        .send(&request.run_id, Value::from(message))
-        .await
-        .stringify_err()
+    IpcServer::global().send(&request.run_id, message).await.stringify_err()
 }

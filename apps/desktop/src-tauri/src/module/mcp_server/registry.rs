@@ -455,11 +455,11 @@ impl McpServerRegistry {
             .load()
             .await
             .map_err(|error| anyhow::anyhow!("OAuth credential storage failed: {error}"))?
+            && refreshed.token_received_at != credentials.token_received_at
         {
-            if refreshed.token_received_at != credentials.token_received_at {
-                feat::store_oauth_credentials(&definition.id, refreshed).await?;
-            }
+            feat::store_oauth_credentials(&definition.id, refreshed).await?;
         }
+
         Ok(access_token)
     }
 }

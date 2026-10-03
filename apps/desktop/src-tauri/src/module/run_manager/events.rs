@@ -40,32 +40,6 @@ fn failed_node(error: &anyhow::Error) -> Option<String> {
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_the_failed_node_from_an_adk_error_chain() {
-        let error = anyhow::Error::new(adk_rust::graph::GraphError::NodeExecutionFailed {
-            node: "send-report".to_string(),
-            message: "network unavailable".to_string(),
-        });
-        let failed_node = failed_node(&error);
-
-        assert_eq!(failed_node.as_deref(), Some("send-report"));
-    }
-
-    #[test]
-    fn extracts_a_custom_workflow_event_type() {
-        let event = json!({
-            "type": "custom",
-            "event_type": "agent.model_call",
-        });
-
-        assert_eq!(workflow_event_type(&event), Some("agent.model_call"));
-    }
-}
-
 pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<bool> {
     let mut sequence = RunHistoryStore::last_sequence(&run_id).await? + 1;
     let mut has_pending_action = false;
@@ -547,4 +521,30 @@ fn pending_action(event: &Value) -> Option<(crate::module::run_history::PendingA
         _ => return None,
     };
     Some((kind, object.get("data")?.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_the_failed_node_from_an_adk_error_chain() {
+        let error = anyhow::Error::new(adk_rust::graph::GraphError::NodeExecutionFailed {
+            node: "send-report".to_string(),
+            message: "network unavailable".to_string(),
+        });
+        let failed_node = failed_node(&error);
+
+        assert_eq!(failed_node.as_deref(), Some("send-report"));
+    }
+
+    #[test]
+    fn extracts_a_custom_workflow_event_type() {
+        let event = json!({
+            "type": "custom",
+            "event_type": "agent.model_call",
+        });
+
+        assert_eq!(workflow_event_type(&event), Some("agent.model_call"));
+    }
 }

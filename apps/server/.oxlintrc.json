@@ -1,0 +1,24 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+
+  // 子配置不会自动与根配置合并，显式继承以保留仓库统一规则。
+  "extends": ["../../.oxlintrc.json"],
+
+  // NestJS 是 Node 服务，不需要 React 规则。
+  "plugins": ["oxc", "typescript", "unicorn"],
+
+  "env": {
+    "builtin": true,
+    "node": true,
+    "browser": false,
+    "shared-node-browser": false,
+    "vitest": true
+  },
+
+  "ignorePatterns": ["dist/**", "coverage/**"],
+
+  "rules": {
+    // Nest DTO 常为 class 实例；向 Mongoose create() 展开为普通对象是有意的。
+    "typescript/no-misused-spread": "off"
+  }
+}

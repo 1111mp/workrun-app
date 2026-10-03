@@ -140,7 +140,7 @@ pub struct TeamSettings {
 
 /// Workrun configuration
 /// ### `workrun.yaml` schema
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct IWorkrun {
     /// Selected during first-run onboarding. `None` means onboarding is still required.
     pub workspace_mode: Option<WorkspaceMode>,
@@ -211,29 +211,6 @@ pub struct WorkrunPatch {
     pub enable_silent_start: Option<bool>,
     pub auto_check_update: Option<bool>,
     pub auto_log_clean: Option<i32>,
-}
-
-impl Default for IWorkrun {
-    fn default() -> Self {
-        Self {
-            workspace_mode: None,
-            onboarding_completed: false,
-            local_profile: None,
-            team: None,
-            provider_credentials: Vec::new(),
-            summary_model_profile_id: None,
-            app_log_level: None,
-            app_log_max_size: None,
-            app_log_max_count: None,
-            otlp_endpoint: None,
-            locale: None,
-            theme: None,
-            enable_auto_launch: None,
-            enable_silent_start: None,
-            auto_check_update: None,
-            auto_log_clean: None,
-        }
-    }
 }
 
 impl IWorkrun {

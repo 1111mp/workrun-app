@@ -9,10 +9,10 @@ impl RunHistoryStore {
     pub async fn list(query: RunHistoryQuery) -> Result<RunHistoryPage> {
         let pool = DBManager::global().pool()?;
         let page_size = query.page_size.unwrap_or(30).clamp(1, 100);
-        if let Some(cursor) = &query.cursor {
-            if cursor.id.trim().is_empty() || cursor.started_at.trim().is_empty() {
-                bail!("run history cursor requires an id and started_at");
-            }
+        if let Some(cursor) = &query.cursor
+            && (cursor.id.trim().is_empty() || cursor.started_at.trim().is_empty())
+        {
+            bail!("run history cursor requires an id and started_at");
         }
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
         sql.push(RUN_RECORD_SUMMARY_COLUMNS)
@@ -135,10 +135,10 @@ async fn list_timeline_from_pool(
     query: RunHistoryTimelineQuery,
 ) -> Result<RunHistoryTimelinePage> {
     let page_size = query.page_size.unwrap_or(30).clamp(1, 100);
-    if let Some(cursor) = &query.cursor {
-        if cursor.id.trim().is_empty() || cursor.kind.trim().is_empty() || cursor.activity_at.trim().is_empty() {
-            bail!("run history timeline cursor requires id, kind, and activity_at");
-        }
+    if let Some(cursor) = &query.cursor
+        && (cursor.id.trim().is_empty() || cursor.kind.trim().is_empty() || cursor.activity_at.trim().is_empty())
+    {
+        bail!("run history timeline cursor requires id, kind, and activity_at");
     }
 
     // Keep this union in SQLite so filtering and paging apply to one stable

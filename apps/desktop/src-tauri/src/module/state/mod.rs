@@ -1,4 +1,5 @@
 //! Access-controlled workflow state. Policy belongs to a whole node namespace.
+#![allow(unused)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -491,6 +492,8 @@ pub enum StateAction {
     Read,
     Write,
     Delete,
+    // The runtime policy-update API is retained but not yet wired into a workflow.
+    #[allow(dead_code)]
     EditPolicy,
 }
 impl std::fmt::Display for StateAction {

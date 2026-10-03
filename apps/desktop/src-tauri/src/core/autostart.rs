@@ -37,6 +37,7 @@ pub async fn update_launch() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn is_binary_admin() -> bool {
     #[cfg(not(windows))]
     unsafe {

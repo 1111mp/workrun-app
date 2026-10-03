@@ -15,7 +15,7 @@ impl ProcessNodeRegistry {
         progress: Channel<feat::ProcessNodeCreateProgress>,
     ) -> Result<()> {
         validate_process_node_definition(definition)?;
-        let project_path = Self::project_path(&definition)?;
+        let project_path = Self::project_path(definition)?;
         match tokio::fs::metadata(&project_path).await {
             Ok(_) => bail!(
                 "Process Node project directory already exists: {}",

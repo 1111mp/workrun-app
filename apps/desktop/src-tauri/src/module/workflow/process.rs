@@ -10,7 +10,7 @@ pub(super) fn add_process_node(
     graph.add_node(ProcessWorkflowNode {
         id: node.id.clone(),
         process_node_id: string_data(node, "processNodeId").unwrap_or_default(),
-        name: string_data(node, "name").unwrap_or_else(|| node.id.clone()),
+        display_name: string_data(node, "name").unwrap_or_else(|| node.id.clone()),
         on_event,
         state,
         global_keys: state_config.global_keys,
@@ -21,7 +21,7 @@ pub(super) fn add_process_node(
 struct ProcessWorkflowNode {
     id: String,
     process_node_id: String,
-    name: String,
+    display_name: String,
     on_event: Option<Channel<StreamEvent>>,
     state: SharedWorkflowState,
     global_keys: BTreeSet<String>,
@@ -63,7 +63,7 @@ impl Node for ProcessWorkflowNode {
                         StreamEvent::custom(
                             &self.id,
                             "process.output",
-                            json!({ "name": self.name, "stream": stream, "data": data }),
+                            json!({ "name": self.display_name, "stream": stream, "data": data }),
                         ),
                     );
                 }

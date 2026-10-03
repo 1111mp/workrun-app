@@ -65,17 +65,11 @@ pub struct IMcpServer {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IMcpServers {
     #[serde(default)]
     servers: Vec<IMcpServer>,
-}
-
-impl Default for IMcpServers {
-    fn default() -> Self {
-        Self { servers: vec![] }
-    }
 }
 
 impl IMcpServers {
@@ -90,7 +84,7 @@ impl IMcpServers {
             },
             Err(err) => {
                 logging!(error, Type::Config, "{err}");
-                return Self::default();
+                Self::default()
             },
         }
     }

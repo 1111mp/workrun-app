@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "workrun",
-  "version": "0.1.0",
+  "productName": "Workrun",
+  "version": "0.1.0-rc.1",
   "identifier": "io.github.1111mp.workrun",
   "build": {
     "beforeDevCommand": "pnpm prebuild && pnpm ui:dev",
@@ -38,15 +38,20 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources", "resources/migrations/*", "icons/icon.png"],
+    "resources": [
+      "resources",
+      "resources/migrations/*",
+      "resources/python-wheels/*",
+      "icons/icon.png"
+    ],
     "externalBin": ["binaries/uv"],
     "publisher": "Workrun",
     "copyright": "MIT License",
     "licenseFile": "../LICENSE",
     "license": "MIT",
     "category": "Productivity",
-    "shortDescription": "",
-    "longDescription": "",
+    "shortDescription": "A local-first visual AI automation platform.",
+    "longDescription": "Build, run, evaluate, and publish reusable AI workflows with agents, Python apps, and MCP tools.",
     "createUpdaterArtifacts": true
   },
   "plugins": {

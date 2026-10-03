@@ -60,7 +60,7 @@ pub async fn cancel_running_app(run_id: &str) -> Result<()> {
     // overwrites a completed result.
     let status = RunHistoryStore::inspect(run_id).await?.summary.status;
     if status == "running" {
-        complete_app_cancellation(&run_id).await?;
+        complete_app_cancellation(run_id).await?;
     }
     Ok(())
 }

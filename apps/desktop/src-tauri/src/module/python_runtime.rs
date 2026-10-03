@@ -608,6 +608,7 @@ impl PythonRuntime {
     /// The script must resolve to a file inside the project directory. A
     /// non-zero script exit is represented in the returned result, rather than
     /// being turned into a runtime setup error.
+    #[allow(unused)]
     pub async fn run_python(
         environment: &ManagedVenv,
         script_path: &Path,

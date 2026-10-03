@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "io.github.1111mp.workrun",
+  "bundle": {
+    "targets": ["nsis"],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "webviewInstallMode": {
+        "silent": true,
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "displayLanguageSelector": true,
+        "languages": ["SimpChinese", "English"],
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine"
+      }
+    }
+  }
+}

@@ -111,6 +111,18 @@ pub(super) enum ManagedToolExecutor {
     Mcp(Arc<dyn Tool>),
 }
 
+pub(super) struct ManagedToolConfig {
+    pub(super) agent_node_id: String,
+    pub(super) on_event: Option<Channel<StreamEvent>>,
+    pub(super) tool_calls: Arc<AtomicU32>,
+    pub(super) tool_trace: Arc<Mutex<Vec<Value>>>,
+    pub(super) state: SharedWorkflowState,
+    pub(super) state_bindings: Vec<ToolStateBinding>,
+    pub(super) max_tool_calls: u32,
+    pub(super) timeout_seconds: u64,
+    pub(super) execution_profile: WorkflowExecutionProfile,
+}
+
 pub(super) struct ManagedTool {
     definition: ToolDefinition,
     executor: ManagedToolExecutor,
@@ -126,59 +138,19 @@ pub(super) struct ManagedTool {
 }
 
 impl ManagedTool {
-    pub(super) fn new(
-        definition: ToolDefinition,
-        executor: ManagedToolExecutor,
-        agent_node_id: String,
-        on_event: Option<Channel<StreamEvent>>,
-        tool_calls: Arc<AtomicU32>,
-        tool_trace: Arc<Mutex<Vec<Value>>>,
-        state: SharedWorkflowState,
-        state_bindings: Vec<ToolStateBinding>,
-        max_tool_calls: u32,
-        timeout_seconds: u64,
-    ) -> Self {
-        Self::new_with_profile(
-            definition,
-            executor,
-            agent_node_id,
-            on_event,
-            tool_calls,
-            tool_trace,
-            state,
-            state_bindings,
-            max_tool_calls,
-            timeout_seconds,
-            WorkflowExecutionProfile::Production,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new_with_profile(
-        definition: ToolDefinition,
-        executor: ManagedToolExecutor,
-        agent_node_id: String,
-        on_event: Option<Channel<StreamEvent>>,
-        tool_calls: Arc<AtomicU32>,
-        tool_trace: Arc<Mutex<Vec<Value>>>,
-        state: SharedWorkflowState,
-        state_bindings: Vec<ToolStateBinding>,
-        max_tool_calls: u32,
-        timeout_seconds: u64,
-        execution_profile: WorkflowExecutionProfile,
-    ) -> Self {
+    pub(super) fn new(definition: ToolDefinition, executor: ManagedToolExecutor, config: ManagedToolConfig) -> Self {
         Self {
             definition,
             executor,
-            agent_node_id,
-            on_event,
-            tool_calls,
-            tool_trace,
-            state,
-            state_bindings,
-            max_tool_calls,
-            timeout_seconds,
-            execution_profile,
+            agent_node_id: config.agent_node_id,
+            on_event: config.on_event,
+            tool_calls: config.tool_calls,
+            tool_trace: config.tool_trace,
+            state: config.state,
+            state_bindings: config.state_bindings,
+            max_tool_calls: config.max_tool_calls,
+            timeout_seconds: config.timeout_seconds,
+            execution_profile: config.execution_profile,
         }
     }
 }

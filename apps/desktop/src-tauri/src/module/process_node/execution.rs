@@ -186,10 +186,10 @@ fn apply_input_defaults(input: &Value, schemas: &BTreeMap<String, Value>) -> Res
         .as_object_mut()
         .context("Process Node input must be a JSON object")?;
     for (name, schema) in schemas {
-        if !state.contains_key(name) {
-            if let Some(default) = schema.get("default") {
-                state.insert(name.clone(), default.clone());
-            }
+        if !state.contains_key(name)
+            && let Some(default) = schema.get("default")
+        {
+            state.insert(name.clone(), default.clone());
         }
     }
     Ok(input)

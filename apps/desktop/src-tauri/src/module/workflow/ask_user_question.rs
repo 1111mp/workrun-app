@@ -230,7 +230,7 @@ mod tests {
             })
             .add_edge(START, "choose-target")
             .add_edge("after-production", END);
-        let edges = vec![WorkflowEdge {
+        let edges = [WorkflowEdge {
             source: "choose-target".to_string(),
             target: "after-production".to_string(),
             source_handle: Some("option:production".to_string()),

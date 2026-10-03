@@ -1,9 +1,9 @@
 {
   "name": "workrun-app",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "private": true,
-  "type": "module",
   "author": "The1111mp@outlook.com",
+  "type": "module",
   "scripts": {
     "app:dev": "turbo dev --filter workrun",
     "server:dev": "turbo dev --filter workrun-server",
@@ -24,12 +24,17 @@
     "lucide-react": "^1.48.0"
   },
   "devDependencies": {
+    "@actions/github": "^9.1.1",
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "cross-env": "^10.1.0",
+    "fs-extra": "^11.4.1",
     "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
     "oxfmt": "^0.70.0",
     "oxlint": "^1.85.0",
     "oxlint-tsgolint": "^7.0.2003",

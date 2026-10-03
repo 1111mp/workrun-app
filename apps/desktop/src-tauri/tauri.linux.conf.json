@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "io.github.1111mp.workrun",
+  "bundle": {
+    "targets": ["deb", "rpm"],
+    "linux": {
+      "deb": {
+        "depends": ["openssl", "libayatana-appindicator3-1"],
+        "desktopTemplate": "./templates/workrun.desktop",
+        "provides": ["workrun"],
+        "conflicts": ["workrun"],
+        "replaces": ["workrun"]
+      },
+      "rpm": {
+        "depends": ["openssl", "libayatana-appindicator-gtk3"],
+        "desktopTemplate": "./templates/workrun.desktop",
+        "provides": ["workrun"],
+        "conflicts": ["workrun"],
+        "obsoletes": ["workrun"]
+      }
+    }
+  }
+}
