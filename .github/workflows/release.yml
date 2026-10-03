@@ -3,7 +3,7 @@ name: Release Build
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 permissions: write-all
 env:
@@ -12,7 +12,7 @@ env:
   HUSKY: 0
 concurrency:
   # only allow per workflow per commit (and not pr) to run at a time
-  group: '${{ github.workflow }} - ${{ github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} - ${{ github.head_ref || github.ref }}"
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -72,8 +72,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: 'Workrun ${{ github.ref_name }}'
-          body: 'Draft release, will be updated later.'
+          name: "Workrun ${{ github.ref_name }}"
+          body: "Draft release, will be updated later."
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
           prerelease: ${{ contains(github.ref_name, '-rc') }}
@@ -138,7 +138,7 @@ jobs:
           - [64-bit](${{ env.DOWNLOAD_URL }}/Workrun-${{ env.VERSION }}-1.x86_64.rpm) | [ARM64](${{ env.DOWNLOAD_URL }}/Workrun-${{ env.VERSION }}-1.aarch64.rpm) | [ARMv7](${{ env.DOWNLOAD_URL }}/Workrun-${{ env.VERSION }}-1.armhfp.rpm)
 
           ### FAQ
-          - [FAQ](https://github.com/1111mp/workrun-app/issues/7)
+          - [FAQ](https://workrun-docs.pages.dev/getting-started/troubleshooting)
 
           ---
 
@@ -162,7 +162,7 @@ jobs:
           - [64位](${{ env.DOWNLOAD_URL }}/Workrun-${{ env.VERSION }}-1.x86_64.rpm) | [ARM64](${{ env.DOWNLOAD_URL }}/Workrun-${{ env.VERSION }}-1.aarch64.rpm) | [ARMv7](${{ env.DOWNLOAD_URL }}/Workrun-${{ env.VERSION }}-1.armhfp.rpm)
 
           ### FAQ
-          - [常见问题](https://github.com/1111mp/workrun-app/issues/7)
+          - [常见问题](https://workrun-docs.pages.dev/zh-cn/getting-started/troubleshooting)
 
           Created at ${{ env.BUILDTIME }}.
           EOF
@@ -222,7 +222,7 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.99.0'
+          toolchain: "1.99.0"
           targets: ${{ matrix.target }}
 
       - name: Add Rust Target
@@ -232,8 +232,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
-          prefix-key: 'v1-rust'
-          key: 'rust-shared-stable-${{ matrix.os }}-${{ matrix.target }}'
+          prefix-key: "v1-rust"
+          key: "rust-shared-stable-${{ matrix.os }}-${{ matrix.target }}"
           workspaces: |
             apps/desktop -> target
           cache-all-crates: true
@@ -248,7 +248,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v7
         with:
-          node-version: '24.21.0'
+          node-version: "24.21.0"
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
@@ -268,14 +268,14 @@ jobs:
       - name: Tauri Build
         uses: tauri-apps/tauri-action@v1.0.0
         env:
-          NODE_OPTIONS: '--max_old_space_size=4096'
+          NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.prepare_release.outputs.release_id }}
           tagName: ${{ github.ref_name }}
-          releaseBody: 'Draft release, will be updated later.'
+          releaseBody: "Draft release, will be updated later."
           tauriScript: pnpm --filter workrun tauri
           args: --target ${{ matrix.target }}
           uploadUpdaterJson: true
@@ -321,7 +321,7 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.99.0'
+          toolchain: "1.99.0"
           targets: ${{ matrix.target }}
 
       - name: Add Rust Target
@@ -331,8 +331,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
-          prefix-key: 'v1-rust'
-          key: 'rust-shared-stable-${{ matrix.os }}-${{ matrix.target }}'
+          prefix-key: "v1-rust"
+          key: "rust-shared-stable-${{ matrix.os }}-${{ matrix.target }}"
           workspaces: |
             apps/desktop -> target
           cache-all-crates: true
@@ -341,7 +341,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v7
         with:
-          node-version: '24.21.0'
+          node-version: "24.21.0"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -358,7 +358,7 @@ jobs:
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
 
-      - name: 'Setup for linux'
+      - name: "Setup for linux"
         run: |-
           sudo ls -lR /etc/apt/
 
@@ -388,14 +388,14 @@ jobs:
             patchelf:${{ matrix.arch }} \
             librsvg2-dev:${{ matrix.arch }}
 
-      - name: 'Install aarch64 tools'
+      - name: "Install aarch64 tools"
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt install -y \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu
 
-      - name: 'Install armv7 tools'
+      - name: "Install armv7 tools"
         if: matrix.target == 'armv7-unknown-linux-gnueabihf'
         run: |
           sudo apt install -y \
@@ -414,7 +414,7 @@ jobs:
           fi
           pnpm --filter workrun build --target ${{ matrix.target }}
         env:
-          NODE_OPTIONS: '--max_old_space_size=4096'
+          NODE_OPTIONS: "--max_old_space_size=4096"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
@@ -455,7 +455,7 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.99.0'
+          toolchain: "1.99.0"
           targets: ${{ matrix.target }}
 
       - name: Add Rust Target
@@ -465,8 +465,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
-          prefix-key: 'v1-rust'
-          key: 'rust-shared-stable-${{ matrix.os }}-${{ matrix.target }}'
+          prefix-key: "v1-rust"
+          key: "rust-shared-stable-${{ matrix.os }}-${{ matrix.target }}"
           workspaces: |
             apps/desktop -> target
           cache-all-crates: true
@@ -475,7 +475,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v7
         with:
-          node-version: '24.21.0'
+          node-version: "24.21.0"
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
@@ -496,7 +496,7 @@ jobs:
       - name: Tauri build
         uses: tauri-apps/tauri-action@v1.0.0
         env:
-          NODE_OPTIONS: '--max_old_space_size=4096'
+          NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -549,7 +549,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v7
         with:
-          node-version: '24.21.0'
+          node-version: "24.21.0"
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
@@ -576,7 +576,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v7
         with:
-          node-version: '24.21.0'
+          node-version: "24.21.0"
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
@@ -602,7 +602,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v7
         with:
-          node-version: '24.21.0'
+          node-version: "24.21.0"
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm

@@ -63,6 +63,11 @@ export default defineConfig({
               translations: { 'zh-CN': '配置模型访问' },
               link: '/getting-started/model-profiles/',
             },
+            {
+              label: 'FAQs and troubleshooting',
+              translations: { 'zh-CN': '常见问题与故障排查' },
+              link: '/getting-started/troubleshooting/',
+            },
           ],
         },
         {
