@@ -13,6 +13,7 @@ export default defineConfig({
         en: 'Workrun Docs',
       },
       description: 'A local-first workspace for AI automation.',
+      favicon: '/icon.ico',
       locales: {
         root: { label: 'English', lang: 'en' },
         'zh-cn': { label: '简体中文', lang: 'zh-CN' },
