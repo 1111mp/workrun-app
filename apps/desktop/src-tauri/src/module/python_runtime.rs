@@ -19,7 +19,7 @@ use std::{
     process::Stdio,
     sync::Arc,
 };
-use tauri::{AppHandle, Manager as _, ipc::Channel};
+use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -146,11 +146,10 @@ impl PythonRuntime {
         }
     }
 
-    fn sdk_wheels_dir(app: &AppHandle) -> Result<PathBuf> {
-        let resource_dir = app
-            .path()
-            .resource_dir()
-            .context("failed to resolve application resource directory")?;
+    fn sdk_wheels_dir() -> Result<PathBuf> {
+        let resource_dir = dirs::app_resources_dir()?;
+        // Tauri keeps the configured `resources/` directory when copying it
+        // into an application bundle.
         let wheels_dir = resource_dir.join(SDK_WHEELS_DIR);
         if wheels_dir.is_dir() {
             return Ok(wheels_dir);
@@ -360,7 +359,7 @@ impl PythonRuntime {
     /// Add the bundled Workrun Python SDK as a project dependency without creating an environment.
     pub async fn add_workrun_sdk_dependency(project_path: &Path) -> Result<()> {
         let app = handle::Handle::app_handle();
-        let sdk_wheels_dir = Self::sdk_wheels_dir(app)?;
+        let sdk_wheels_dir = Self::sdk_wheels_dir()?;
         let output = Self::uv_command(app)?
             .arg("add")
             .arg("--no-sync")
@@ -566,7 +565,7 @@ impl PythonRuntime {
         let used_existing_lockfile = lockfile_path.is_file();
         let environment = Self::ensure_venv(app, &project_path, requested_version).await?;
         let sdk_mode = Self::sdk_mode()?;
-        let sdk_wheels_dir = Self::sdk_wheels_dir(app)?;
+        let sdk_wheels_dir = Self::sdk_wheels_dir()?;
 
         let output = Self::uv_command(app)?
             .arg("sync")
