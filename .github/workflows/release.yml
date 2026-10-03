@@ -269,6 +269,7 @@ jobs:
         uses: tauri-apps/tauri-action@v1.0.0
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
+          WORKRUN_TAURI_TARGET: ${{ matrix.target }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -415,6 +416,7 @@ jobs:
           pnpm --filter workrun build --target ${{ matrix.target }}
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
+          WORKRUN_TAURI_TARGET: ${{ matrix.target }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
@@ -497,6 +499,7 @@ jobs:
         uses: tauri-apps/tauri-action@v1.0.0
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
+          WORKRUN_TAURI_TARGET: ${{ matrix.target }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

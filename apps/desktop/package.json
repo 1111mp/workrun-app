@@ -46,6 +46,7 @@
     "@workspace/json-schema-form": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@xyflow/react": "^12.12.0",
+    "adm-zip": "^0.6.1",
     "ajv-errors": "^3.0.0",
     "better-auth": "^1.7.6",
     "cron-parser": "^5.10.1",

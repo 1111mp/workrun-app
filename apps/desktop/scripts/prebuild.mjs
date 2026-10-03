@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import AdmZip from 'adm-zip';
 import { extract as extractTar } from 'tar';
 
 // Deliberately pin uv: it is shipped in every Workrun application bundle.
@@ -37,6 +38,7 @@ const TARGETS = {
   'i686-pc-windows-msvc': { platform: 'win32', archive: 'zip' },
   'x86_64-pc-windows-msvc': { platform: 'win32', archive: 'zip' },
   'aarch64-unknown-linux-gnu': { platform: 'linux', archive: 'tar.gz' },
+  'armv7-unknown-linux-gnueabihf': { platform: 'linux', archive: 'tar.gz' },
   'i686-unknown-linux-gnu': { platform: 'linux', archive: 'tar.gz' },
   'x86_64-unknown-linux-gnu': { platform: 'linux', archive: 'tar.gz' },
 };
@@ -72,16 +74,18 @@ async function download(url) {
 }
 
 async function extractArchive(archivePath, destination, archiveType) {
-  if (archiveType !== 'tar.gz') {
-    throw new Error(`Unsupported archive type: ${archiveType}`);
-  }
-
   try {
-    await extractTar({
-      file: archivePath,
-      cwd: destination,
-      gzip: true,
-    });
+    if (archiveType === 'zip') {
+      new AdmZip(archivePath).extractAllTo(destination, true);
+    } else if (archiveType === 'tar.gz') {
+      await extractTar({
+        file: archivePath,
+        cwd: destination,
+        gzip: true,
+      });
+    } else {
+      throw new Error(`Unsupported archive type: ${archiveType}`);
+    }
   } catch (error) {
     throw new Error(`Unable to extract ${basename(archivePath)}: ${error}`);
   }
