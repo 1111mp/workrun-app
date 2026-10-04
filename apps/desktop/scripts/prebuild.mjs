@@ -8,7 +8,6 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -127,7 +126,10 @@ console.log(
   `Downloading uv ${UV_VERSION} for ${triple}${FORCE ? ' (forced)' : ''}…`,
 );
 
-const tempDir = await mkdtemp(join(tmpdir(), 'workrun-uv-'));
+await mkdir(BINARIES_DIR, { recursive: true });
+// Keep staging on the destination filesystem: Windows CI's temp directory
+// and checkout can be on different drives, where rename fails with EXDEV.
+const tempDir = await mkdtemp(join(BINARIES_DIR, '.workrun-uv-'));
 try {
   const [archive, checksumFile] = await Promise.all([
     download(archiveUrl),
@@ -152,7 +154,6 @@ try {
   if (!sourceBinary)
     throw new Error(`The uv archive did not contain uv${extension}`);
 
-  await mkdir(BINARIES_DIR, { recursive: true });
   const stagedPath = join(tempDir, sidecarName);
   await writeFile(stagedPath, await readFile(sourceBinary), { mode: 0o755 });
   await rm(sidecarPath, { force: true });
