@@ -310,7 +310,10 @@ export class AppService {
   }
 
   async findPublishedCatalogApp(_viewerId: string, id: string) {
-    const app = await this.appModel.findOne({ id, isDelete: false }).lean();
+    // This query does not populate ownerId, so the reference remains an ObjectId.
+    const app = await this.appModel
+      .findOne({ id, isDelete: false })
+      .lean<Omit<App, 'ownerId'> & { ownerId: Types.ObjectId }>();
     const release = app
       ? await this.appVersionModel
           .findOne({ appId: id, version: app.version, status: 'published' })
@@ -319,7 +322,7 @@ export class AppService {
     if (!release || !app)
       throw new NotFoundException(`Published App ${id} was not found`);
 
-    const isOwner = app.ownerId.toString() === _viewerId;
+    const isOwner = app.ownerId.toHexString() === _viewerId;
     // Owners need their editable server draft; everyone else receives the
     // immutable release snapshot so unpublished changes stay private.
     return {
@@ -329,7 +332,7 @@ export class AppService {
       updatedAt: release.publishedAt,
       publishedAt: release.publishedAt,
       catalogVersionId: release.id,
-      ownerId: app.ownerId.toString(),
+      ownerId: app.ownerId.toHexString(),
     };
   }
 
@@ -344,7 +347,9 @@ export class AppService {
     releaseId: string,
   ) {
     const [app, release] = await Promise.all([
-      this.appModel.findOne({ id: appId, isDelete: false }).lean(),
+      this.appModel
+        .findOne({ id: appId, isDelete: false })
+        .lean<Omit<App, 'ownerId'> & { ownerId: Types.ObjectId }>(),
       this.appVersionModel
         .findOne({ id: releaseId, appId, status: 'published' })
         .lean(),
@@ -369,7 +374,7 @@ export class AppService {
       updatedAt: release.publishedAt,
       publishedAt: release.publishedAt,
       catalogVersionId: release.id,
-      ownerId: app.ownerId.toString(),
+      ownerId: app.ownerId.toHexString(),
       archiveSha256: resource.sha256,
     };
   }

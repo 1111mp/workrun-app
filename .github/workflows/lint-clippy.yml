@@ -55,7 +55,26 @@ jobs:
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: 'pnpm'
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile --filter workrun...
+
+      # Cargo does not run Tauri CLI's beforeBuildCommand, which prepares uv.
+      - name: Prepare uv sidecar
+        run: node apps/desktop/scripts/prebuild.mjs ${{ matrix.target }}
+
       - name: Ensure resources python-wheels directory exists
+        shell: bash
         working-directory: apps/desktop/src-tauri
         run: |
           mkdir -p resources/python-wheels

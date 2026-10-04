@@ -35,7 +35,7 @@ export class StaticFSService implements CommonFSService {
     this.db = db;
 
     if (!redundant) {
-      this.db.collection(bucketName).createIndexes([
+      void this.db.collection(bucketName).createIndexes([
         {
           key: { md5: 1 },
         },

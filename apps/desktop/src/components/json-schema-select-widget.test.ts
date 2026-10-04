@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import Form from '@workspace/json-schema-form';
 import { customizeValidator } from '@rjsf/validator-ajv8';
+import Form from '@workspace/json-schema-form';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -91,8 +91,9 @@ describe('JSON Schema select widget', () => {
       trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')]
-      .find((element) => element.textContent?.includes('升级给人工客服'));
+    const option = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((element) => element.textContent?.includes('升级给人工客服'));
     expect(option).toBeDefined();
 
     await act(async () => {
@@ -100,7 +101,8 @@ describe('JSON Schema select widget', () => {
     });
 
     expect(changedValue).toBe('escalate');
-    expect(document.querySelector<HTMLInputElement>('input[role="combobox"]')?.value)
-      .toBe('升级给人工客服');
+    expect(
+      document.querySelector<HTMLInputElement>('input[role="combobox"]')?.value,
+    ).toBe('升级给人工客服');
   });
 });

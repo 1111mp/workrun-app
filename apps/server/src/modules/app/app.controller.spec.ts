@@ -22,7 +22,7 @@ describe('AppController', () => {
 
   it('passes the authenticated user and body when creating an app', () => {
     const dto = { name: 'Process data', kind: 'tool' as const };
-    controller.create(session, dto);
+    void controller.create(session, dto);
 
     expect(appService.create).toHaveBeenCalledWith('user-1', dto);
   });
@@ -39,8 +39,8 @@ describe('AppController', () => {
     };
     const archive = { buffer: Buffer.from('archive') } as Express.Multer.File;
 
-    controller.createVersion(session, 'app-1', dto);
-    controller.uploadSourceArchive(
+    void controller.createVersion(session, 'app-1', dto);
+    void controller.uploadSourceArchive(
       session,
       'app-1',
       'version-1',
@@ -63,7 +63,7 @@ describe('AppController', () => {
   });
 
   it('checks a version against the authenticated app owner', () => {
-    controller.hasVersion(session, 'app-1', '1.2.3');
+    void controller.hasVersion(session, 'app-1', '1.2.3');
 
     expect(appService.hasVersion).toHaveBeenCalledWith(
       'user-1',
@@ -77,8 +77,8 @@ describe('AppController', () => {
       pageSize: 20,
       cursor: 'app-1',
     };
-    controller.findAll(session, query);
-    controller.findOne(session, 'app-1');
+    void controller.findAll(session, query);
+    void controller.findOne(session, 'app-1');
 
     expect(appService.findAll).toHaveBeenCalledWith('user-1', query);
     expect(appService.findOne).toHaveBeenCalledWith('user-1', 'app-1');
@@ -86,8 +86,8 @@ describe('AppController', () => {
 
   it('passes updates and deletes to the service with the app id', () => {
     const dto = { name: 'Renamed app' };
-    controller.update(session, 'app-1', dto);
-    controller.remove(session, 'app-1');
+    void controller.update(session, 'app-1', dto);
+    void controller.remove(session, 'app-1');
 
     expect(appService.update).toHaveBeenCalledWith('user-1', 'app-1', dto);
     expect(appService.remove).toHaveBeenCalledWith('user-1', 'app-1');

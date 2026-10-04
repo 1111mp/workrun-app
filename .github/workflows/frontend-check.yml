@@ -64,14 +64,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: steps.check_frontend.outputs.frontend == 'true'
 
-      - name: Run Prettier check
+      # Path filters gate execution; Turbo filters limit which packages are checked.
+      - name: Run formatting check
         if: steps.check_frontend.outputs.frontend == 'true'
-        run: pnpm format
+        run: pnpm format --filter=workrun --filter=workrun-docs --filter=@workspace/ui --filter=@workspace/json-schema-form
 
       - name: Run Oxlint
         if: steps.check_frontend.outputs.frontend == 'true'
-        run: pnpm oxlint
+        run: pnpm oxlint --filter=workrun --filter=workrun-docs --filter=@workspace/ui --filter=@workspace/json-schema-form
 
       - name: Run TypeScript typecheck
         if: steps.check_frontend.outputs.frontend == 'true'
-        run: pnpm typecheck
+        run: pnpm typecheck --filter=workrun --filter=workrun-docs --filter=@workspace/ui --filter=@workspace/json-schema-form
