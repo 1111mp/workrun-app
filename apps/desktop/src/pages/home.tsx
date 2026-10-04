@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@workspace/ui/components';
+import { cn } from '@workspace/ui/lib/utils';
 import {
   AppWindowIcon,
   BookOpenIcon,
@@ -115,11 +116,16 @@ function HomeLayout() {
     <div className='flex h-dvh min-h-0 flex-col overflow-hidden'>
       <header
         data-tauri-drag-region={OS_PLATFORM !== 'win32'}
-        className='flex h-12 shrink-0 items-center gap-1 border-b pr-2 pl-20'
+        className={cn(
+          'flex h-12 shrink-0 items-center gap-1 border-b px-2',
+          OS_PLATFORM === 'darwin' && 'pl-20',
+        )}
       >
-        <span data-tauri-drag-region className='mr-3 text-sm font-semibold'>
-          Workrun
-        </span>
+        {OS_PLATFORM === 'darwin' && (
+          <span data-tauri-drag-region className='mr-3 text-sm font-semibold'>
+            Workrun
+          </span>
+        )}
         <nav
           aria-label={t('navigation.label')}
           className='flex items-center gap-1'

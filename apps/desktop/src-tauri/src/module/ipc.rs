@@ -1,10 +1,8 @@
 //! Application-wide local IPC transport for SDK and extension processes.
 
-use crate::{
-    core::handle,
-    logging, singleton,
-    utils::{dirs, logging::Type},
-};
+#[cfg(unix)]
+use crate::utils::dirs;
+use crate::{core::handle, logging, singleton, utils::logging::Type};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::Value;
@@ -37,6 +35,7 @@ pub struct IpcSession {
     sessions: Arc<Mutex<HashMap<String, IpcSessionEntry>>>,
     #[cfg(any(unix, windows))]
     connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
+    closed: bool,
 }
 
 #[derive(Debug)]
@@ -46,14 +45,52 @@ struct IpcSessionEntry {
 }
 
 impl IpcSession {
-    pub async fn close(self) {
+    pub async fn close(mut self) {
         self.sessions.lock().await.remove(&self.id);
         #[cfg(any(unix, windows))]
         self.connections.lock().await.remove(&self.id);
+        self.closed = true;
+        publish_session_closed(self.id.clone());
     }
 
     pub fn try_receive(&mut self) -> Option<Value> {
         self.receiver.try_recv().ok()
+    }
+}
+
+impl Drop for IpcSession {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        // Workflow cancellation drops its App future without reaching close().
+        // Revoke its credentials and discard any forms still queued in the UI.
+        let id = self.id.clone();
+        let sessions = Arc::clone(&self.sessions);
+        #[cfg(any(unix, windows))]
+        let connections = Arc::clone(&self.connections);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                sessions.lock().await.remove(&id);
+                #[cfg(any(unix, windows))]
+                connections.lock().await.remove(&id);
+                publish_session_closed(id);
+            });
+        }
+    }
+}
+
+fn publish_session_closed(session_id: String) {
+    let Some(app) = crate::APP_HANDLE.get() else {
+        return;
+    };
+    let emit_app = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Err(error) = emit_app.emit("ipc-session-closed", serde_json::json!({"sessionId": session_id})) {
+            log::warn!("failed to emit IPC session closure: {error}");
+        }
+    }) {
+        log::warn!("failed to schedule IPC session closure: {error}");
     }
 }
 
@@ -219,6 +256,7 @@ impl IpcServer {
             sessions: Arc::clone(&self.sessions),
             #[cfg(any(unix, windows))]
             connections: Arc::clone(&self.connections),
+            closed: false,
         })
     }
 
@@ -250,11 +288,9 @@ async fn handle_connection(
     let hello = receive_message(&mut stream).await?;
     let (session_id, message_sender) = authenticate_hello(&hello, &sessions).await?;
     let (reader, writer) = tokio::io::split(stream);
-    connections
-        .lock()
-        .await
-        .insert(session_id.clone(), Arc::new(Mutex::new(writer)));
-    handle_messages(reader, session_id, message_sender, connections).await
+    let writer = Arc::new(Mutex::new(writer));
+    register_connection(&session_id, Arc::clone(&writer), &connections).await?;
+    handle_messages(reader, session_id, message_sender, writer, connections).await
 }
 
 #[cfg(unix)]
@@ -267,12 +303,24 @@ async fn handle_connection(
     let (session_id, message_sender) = authenticate_hello(&hello, &sessions).await?;
 
     let (mut reader, writer) = stream.into_split();
-    connections
-        .lock()
-        .await
-        .insert(session_id.clone(), Arc::new(Mutex::new(writer)));
+    let writer = Arc::new(Mutex::new(writer));
+    register_connection(&session_id, Arc::clone(&writer), &connections).await?;
 
-    handle_messages(&mut reader, session_id, message_sender, connections).await
+    handle_messages(&mut reader, session_id, message_sender, writer, connections).await
+}
+
+#[cfg(any(unix, windows))]
+async fn register_connection(
+    session_id: &str,
+    writer: IpcWriter,
+    connections: &Arc<Mutex<HashMap<String, IpcWriter>>>,
+) -> Result<()> {
+    let mut connections = connections.lock().await;
+    if connections.contains_key(session_id) {
+        bail!("IPC session already has an active connection: {session_id}");
+    }
+    connections.insert(session_id.to_owned(), writer);
+    Ok(())
 }
 
 #[cfg(any(unix, windows))]
@@ -300,40 +348,71 @@ async fn handle_messages<R>(
     mut reader: R,
     session_id: String,
     message_sender: mpsc::Sender<Value>,
+    writer: IpcWriter,
     connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
 ) -> Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let app_handle = handle::Handle::app_handle();
-    while let Ok(message) = receive_message(&mut reader).await {
-        // A run owner can await structured messages (such as process.result)
-        // while the webview continues to receive the same event for UI work.
-        let _ = message_sender.try_send(message.clone());
-        if matches!(
-            message.get("type").and_then(Value::as_str),
-            Some("process.result") | Some("tool.result")
-        ) {
-            let id = required_string(&message, "id")?;
-            let accepted_type = format!(
-                "{}.accepted",
-                message.get("type").and_then(Value::as_str).expect("matched type")
-            );
-            IpcServer::global()
-                .send(&session_id, serde_json::json!({ "id": id, "type": accepted_type }))
-                .await?;
+    let result = async {
+        while let Ok(message) = receive_message(&mut reader).await {
+            // A run owner can await structured messages (such as process.result)
+            // while the webview continues to receive the same event for UI work.
+            enqueue_result(&message_sender, &message)?;
+            if matches!(
+                message.get("type").and_then(Value::as_str),
+                Some("process.result") | Some("tool.result")
+            ) {
+                let id = required_string(&message, "id")?;
+                let accepted_type = format!(
+                    "{}.accepted",
+                    message.get("type").and_then(Value::as_str).expect("matched type")
+                );
+                IpcServer::global()
+                    .send(&session_id, serde_json::json!({ "id": id, "type": accepted_type }))
+                    .await?;
+            }
+            let emit_app = app_handle.clone();
+            let emit_session_id = session_id.clone();
+            app_handle
+                .run_on_main_thread(move || {
+                    if let Err(error) = emit_app.emit(
+                        IPC_EVENT_MESSAGE,
+                        IpcMessageEvent {
+                            session_id: emit_session_id,
+                            message,
+                        },
+                    ) {
+                        log::warn!("failed to emit IPC message: {error}");
+                    }
+                })
+                .context("failed to emit IPC message")?;
         }
-        app_handle
-            .emit(
-                IPC_EVENT_MESSAGE,
-                IpcMessageEvent {
-                    session_id: session_id.clone(),
-                    message,
-                },
-            )
-            .context("failed to emit IPC message")?;
+        Ok(())
     }
-    connections.lock().await.remove(&session_id);
+    .await;
+    let mut connections = connections.lock().await;
+    if connections
+        .get(&session_id)
+        .is_some_and(|active| Arc::ptr_eq(active, &writer))
+    {
+        connections.remove(&session_id);
+    }
+    result
+}
+
+fn enqueue_result(sender: &mpsc::Sender<Value>, message: &Value) -> Result<()> {
+    // UI requests are consumed by the renderer, not the result collector.
+    // Never fill its bounded queue with forms, or acknowledge a lost result.
+    if matches!(
+        message.get("type").and_then(Value::as_str),
+        Some("process.result") | Some("tool.result")
+    ) {
+        sender
+            .try_send(message.clone())
+            .context("IPC result queue is unavailable")?;
+    }
     Ok(())
 }
 
@@ -377,4 +456,214 @@ fn required_string(message: &Value, field: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| anyhow::anyhow!("IPC message is missing string field {field}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn authenticates_each_session_with_its_own_token() {
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        for id in ["a", "b"] {
+            let (messages, _receiver) = mpsc::channel(16);
+            sessions.lock().await.insert(
+                id.to_owned(),
+                IpcSessionEntry {
+                    token: format!("token-{id}"),
+                    messages,
+                },
+            );
+        }
+        for id in ["a", "b"] {
+            assert_eq!(
+                authenticate_hello(
+                    &json!({"type":"hello", "runId":id, "token":format!("token-{id}")}),
+                    &sessions
+                )
+                .await
+                .unwrap()
+                .0,
+                id
+            );
+        }
+        assert!(
+            authenticate_hello(&json!({"type":"hello", "runId":"a", "token":"token-b"}), &sessions)
+                .await
+                .is_err()
+        );
+        assert!(
+            authenticate_hello(&json!({"type":"ui.request", "runId":"a", "token":"token-a"}), &sessions)
+                .await
+                .is_err()
+        );
+        sessions.lock().await.remove("a");
+        assert!(
+            authenticate_hello(&json!({"type":"hello", "runId":"a", "token":"token-a"}), &sessions)
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn form_requests_cannot_displace_a_structured_result() {
+        let (sender, mut receiver) = mpsc::channel(16);
+        for index in 0..100 {
+            enqueue_result(&sender, &json!({"type":"ui.request", "id":index})).unwrap();
+        }
+        let result = json!({"type":"process.result", "data":{"ok":true}});
+        enqueue_result(&sender, &result).unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), result);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_full_result_queue_is_reported_instead_of_acknowledged() {
+        let (sender, _receiver) = mpsc::channel(1);
+        let result = json!({"type":"tool.result", "data":{}});
+        enqueue_result(&sender, &result).unwrap();
+        assert!(enqueue_result(&sender, &result).is_err());
+    }
+
+    #[tokio::test]
+    async fn dropping_an_app_session_revokes_its_credentials() {
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let (messages, receiver) = mpsc::channel(16);
+        sessions.lock().await.insert(
+            "cancelled".into(),
+            IpcSessionEntry {
+                token: "token".into(),
+                messages,
+            },
+        );
+        let session = IpcSession {
+            id: "cancelled".into(),
+            token: "token".into(),
+            endpoint: "test".into(),
+            receiver,
+            sessions: Arc::clone(&sessions),
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            closed: false,
+        };
+        drop(session);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while sessions.lock().await.contains_key("cancelled") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn rejects_a_second_connection_using_the_same_session() {
+        use tokio::net::windows::named_pipe::ServerOptions;
+        let mut writers = Vec::new();
+        for _ in 0..2 {
+            let endpoint = format!(r"\\.\pipe\workrun-register-test-{}", uuid::Uuid::new_v4());
+            let pipe = ServerOptions::new().create(&endpoint).unwrap();
+            let (_, writer) = tokio::io::split(pipe);
+            writers.push(Arc::new(Mutex::new(writer)));
+        }
+        let connections = Arc::new(Mutex::new(HashMap::new()));
+        register_connection("a", Arc::clone(&writers[0]), &connections)
+            .await
+            .unwrap();
+        assert!(
+            register_connection("a", Arc::clone(&writers[1]), &connections)
+                .await
+                .is_err()
+        );
+        assert!(Arc::ptr_eq(connections.lock().await.get("a").unwrap(), &writers[0]));
+    }
+
+    #[tokio::test]
+    async fn framed_messages_survive_fragmentation_and_unicode() {
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, mut reader) = tokio::io::duplex(8);
+        let message = json!({"type":"ui.request", "title":"填写健康信息", "data":"x".repeat(8192)});
+        let expected = message.clone();
+        let task = tokio::spawn(async move {
+            let payload = serde_json::to_vec(&message).unwrap();
+            let frame = [(payload.len() as u32).to_be_bytes().as_slice(), &payload].concat();
+            for bytes in frame.chunks(3) {
+                writer.write_all(bytes).await.unwrap();
+            }
+        });
+        assert_eq!(receive_message(&mut reader).await.unwrap(), expected);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_and_truncated_frames() {
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        writer.write_u32((MAX_MESSAGE_SIZE + 1) as u32).await.unwrap();
+        assert!(
+            receive_message(&mut reader)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds")
+        );
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        writer.write_u32(10).await.unwrap();
+        writer.write_all(b"{}").await.unwrap();
+        drop(writer);
+        assert!(receive_message(&mut reader).await.is_err());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn concurrent_python_apps_receive_only_their_own_out_of_order_responses() {
+        use tokio::net::windows::named_pipe::ServerOptions;
+        let endpoint = format!(r"\\.\pipe\workrun-rust-test-{}", uuid::Uuid::new_v4());
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let mut servers = Vec::new();
+        let mut clients = Vec::new();
+        let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packages/python-sdk");
+        let python = sdk.join(".venv/Scripts/python.exe");
+        for id in ["a", "b"] {
+            let (sender, _receiver) = mpsc::channel(16);
+            sessions.lock().await.insert(
+                id.into(),
+                IpcSessionEntry {
+                    token: format!("token-{id}"),
+                    messages: sender,
+                },
+            );
+            let mut pipe = ServerOptions::new().create(&endpoint).unwrap();
+            let sessions = Arc::clone(&sessions);
+            servers.push(tokio::spawn(async move {
+                pipe.connect().await.unwrap();
+                let hello = receive_message(&mut pipe).await.unwrap();
+                let (session_id, _) = authenticate_hello(&hello, &sessions).await.unwrap();
+                let mut requests = Vec::new();
+                for _ in 0..12 { requests.push(receive_message(&mut pipe).await.unwrap()); }
+                for request in requests.iter().rev() {
+                    send_message(&mut pipe, &json!({"id":request["id"], "type":"ui.response", "data":{"session":session_id,"title":request["title"]}})).await.unwrap();
+                }
+                let result = receive_message(&mut pipe).await.unwrap();
+                assert_eq!(result["type"], "process.result");
+                send_message(&mut pipe, &json!({"id":result["id"], "type":"process.result.accepted"})).await.unwrap();
+            }));
+            clients.push(tokio::process::Command::new(&python).env("PYTHONPATH", sdk.join("src"))
+                .arg("-c").arg("import sys\nfrom concurrent.futures import ThreadPoolExecutor\nfrom workrun_sdk._client import WorkrunClient\nwith WorkrunClient(sys.argv[1], 'token-'+sys.argv[2], sys.argv[2]) as client:\n def request(i):\n  return client.request_interaction(schema={'type':'object'}, title=str(i))\n with ThreadPoolExecutor(max_workers=12) as pool:\n  assert list(pool.map(request, range(12))) == [{'session':sys.argv[2], 'title':str(i)} for i in range(12)]\n client.emit({'type':'process.result','data':{'ok':True}})\n")
+                .arg(&endpoint).arg(id).kill_on_drop(true).spawn().unwrap());
+        }
+        for mut client in clients {
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(10), client.wait())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .success()
+            );
+        }
+        for server in servers {
+            server.await.unwrap();
+        }
+    }
 }

@@ -19,6 +19,14 @@ export type PythonUiRequestEvent = {
 
 const IPC_MESSAGE = 'ipc-message';
 
+export function onPythonIpcSessionClosed(
+  handler: (sessionId: string) => void,
+): Promise<UnlistenFn> {
+  return listen<{ sessionId: string }>('ipc-session-closed', ({ payload }) =>
+    handler(payload.sessionId),
+  );
+}
+
 export function respondToPythonUiRequest(
   request: Pick<PythonUiRequestEvent, 'runId' | 'requestId'>,
   data: unknown,

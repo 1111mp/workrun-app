@@ -1,3 +1,4 @@
+#[allow(unused)]
 use crate::{
     config::BaseConfig,
     core::handle,
@@ -11,9 +12,6 @@ use tauri::{Theme, WebviewWindow, window::Color};
 const DARK_BACKGROUND_COLOR: Color = Color(0, 0, 0, 255); // #000000
 const LIGHT_BACKGROUND_COLOR: Color = Color(255, 255, 255, 255); // #ffffff
 
-#[cfg(target_os = "linux")]
-const DEFAULT_DECORATIONS: bool = false;
-#[cfg(not(target_os = "linux"))]
 const DEFAULT_DECORATIONS: bool = true;
 
 pub async fn build_new_window() -> Result<WebviewWindow, String> {
@@ -74,11 +72,6 @@ pub async fn build_new_window() -> Result<WebviewWindow, String> {
             .hidden_title(true)
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .traffic_light_position(tauri::LogicalPosition::new(11.0, 16.0));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        builder = builder.title("");
     }
 
     if let Some(theme) = resolved_theme {

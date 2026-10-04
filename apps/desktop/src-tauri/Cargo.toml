@@ -105,3 +105,5 @@ default = []
 tauri-dev = []
 tokio-trace = ["console-subscriber"]
 tracing = []
+# Only for Windows MSVC test harnesses; keep disabled in application builds.
+windows-test-manifest = []

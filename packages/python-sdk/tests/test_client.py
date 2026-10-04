@@ -25,6 +25,11 @@ from workrun_sdk._protocol import (
     send_message,
 )
 
+requires_unix_socket = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"),
+    reason="Unix-domain sockets are unavailable on this platform",
+)
+
 
 def serve_once(
     path: Path, response: JsonObject
@@ -50,8 +55,9 @@ def serve_once(
     return thread, received
 
 
+@requires_unix_socket
 def test_request_interaction_returns_matching_response() -> None:
-    with tempfile.TemporaryDirectory(prefix="wr-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="wr-") as directory:
         endpoint = Path(directory) / "workrun.sock"
         thread, received = serve_once(
             endpoint, {"type": "ui.response", "data": {"name": "Ada"}}
@@ -75,8 +81,9 @@ def test_request_interaction_returns_matching_response() -> None:
         assert received[1]["cancelLabel"] == "Back"
 
 
+@requires_unix_socket
 def test_request_interaction_raises_when_cancelled() -> None:
-    with tempfile.TemporaryDirectory(prefix="wr-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="wr-") as directory:
         endpoint = Path(directory) / "workrun.sock"
         thread, _ = serve_once(endpoint, {"type": "ui.cancel", "reason": "run stopped"})
 
@@ -88,8 +95,9 @@ def test_request_interaction_raises_when_cancelled() -> None:
         assert not thread.is_alive()
 
 
+@requires_unix_socket
 def test_concurrent_requests_are_dispatched_by_id() -> None:
-    endpoint = Path(tempfile.mkdtemp(prefix="wr-", dir="/tmp")) / "workrun.sock"
+    endpoint = Path(tempfile.mkdtemp(prefix="wr-")) / "workrun.sock"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(endpoint))
     listener.listen(1)
