@@ -10,6 +10,7 @@ mod codeact_agent;
 mod guardrails;
 mod human_review;
 mod process;
+mod remote_agent;
 mod routing;
 mod state_bridge;
 mod subworkflow;
@@ -23,6 +24,7 @@ use codeact_agent::*;
 use guardrails::*;
 use human_review::*;
 use process::*;
+use remote_agent::*;
 use routing::*;
 use state_bridge::*;
 use subworkflow::*;
@@ -56,7 +58,6 @@ use adk_rust::{
         openai::{OpenAIClient, OpenAIConfig},
     },
     prelude::{Content, Event, Llm, LlmAgentBuilder, Tool, ToolContext},
-    server::RemoteA2aAgent,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use futures::StreamExt;
@@ -717,9 +718,7 @@ pub(super) async fn compile_with_path(
 
     for node in &executable {
         graph = match node.kind.as_str() {
-            // A2A is a first-class ADK Agent. Wrapping it in AgentNode makes
-            // the remote call a real graph execution step, not a side effect
-            // performed by the Tauri command.
+            // The v1.0.1 adapter participates in the same scoped State boundary.
             "remote_agent" => graph.add_node(remote_a2a_graph_node(
                 node,
                 on_event.clone(),

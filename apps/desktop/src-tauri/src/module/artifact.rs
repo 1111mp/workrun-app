@@ -66,6 +66,12 @@ impl ArtifactStore {
     }
 
     pub fn save_bytes(&self, name: &str, bytes: &[u8]) -> Result<ArtifactRef> {
+        self.save_bytes_with_mime(name, bytes, None)
+    }
+
+    /// Keep a remote media type for formats without a recognizable header.
+    /// Known binary signatures take precedence over external labels.
+    pub fn save_bytes_with_mime(&self, name: &str, bytes: &[u8], mime: Option<&str>) -> Result<ArtifactRef> {
         if bytes.len() as u64 > MAX_FILE_BYTES {
             bail!("Resource exceeds the 512 MiB limit");
         }
@@ -73,10 +79,21 @@ impl ArtifactStore {
         let filename = Path::new(name).file_name().context("Invalid resource filename")?;
         let source = temporary.path().join(filename);
         fs::write(&source, bytes)?;
-        self.import(&source)
+        self.import_with_mime(&source, mime)
     }
 
     pub fn import(&self, source: &Path) -> Result<ArtifactRef> {
+        self.import_with_mime(source, None)
+    }
+
+    fn import_with_mime(&self, source: &Path, mime: Option<&str>) -> Result<ArtifactRef> {
+        if let Some(mime) = mime {
+            let mut header = [0u8; 16];
+            let count = fs::File::open(source)?.read(&mut header)?;
+            validate_media_type(&header[..count], mime)?;
+        }
+        let normalized_mime = mime.map(|m| m.split(';').next().unwrap_or(m).trim().to_ascii_lowercase());
+        let mime = normalized_mime.as_deref();
         let mut input = fs::File::open(source).context("Cannot open resource file")?;
         let metadata = input.metadata()?;
         if metadata.len() > MAX_FILE_BYTES {
@@ -119,7 +136,10 @@ impl ArtifactStore {
                 kind: "artifact".into(),
                 id,
                 version: 1,
-                mime_type: detect_mime(&header, &name).into(),
+                mime_type: mime
+                    .filter(|m| *m != "application/octet-stream")
+                    .unwrap_or_else(|| detect_mime(&header, &name))
+                    .into(),
                 name,
                 size,
             };
@@ -234,6 +254,30 @@ pub fn references(value: &Value) -> Result<Vec<ArtifactRef>> {
     Ok(result)
 }
 
+pub fn validate_media_type(header: &[u8], mime: &str) -> Result<()> {
+    if mime.len() > 255 || !mime.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
+        bail!("Invalid resource media type");
+    }
+    let essence = mime.split(';').next().unwrap_or(mime).trim().to_ascii_lowercase();
+    let Some((kind, subtype)) = essence.split_once('/') else {
+        bail!("Invalid resource media type");
+    };
+    let token = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&b))
+    };
+    if !token(kind) || !token(subtype) {
+        bail!("Invalid resource media type");
+    }
+    let detected = detect_mime(header, "");
+    if detected != "application/octet-stream" && detected != essence && essence != "application/octet-stream" {
+        bail!("Resource media type does not match its binary signature");
+    }
+    Ok(())
+}
+
 fn detect_mime(header: &[u8], name: &str) -> &'static str {
     if header.starts_with(b"%PDF-") {
         return "application/pdf";
@@ -268,6 +312,36 @@ fn detect_mime(header: &[u8], name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_media_types_are_preserved_and_known_signatures_validated() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(directory.path().join("artifacts"));
+        let json = store
+            .save_bytes_with_mime("result", b"{}", Some("application/json"))
+            .unwrap();
+        assert_eq!(json.mime_type, "application/json");
+        assert_eq!(fs::read(store.resolve(&json).unwrap()).unwrap(), b"{}");
+        let pdf = store
+            .save_bytes_with_mime("result", b"%PDF-example", Some("application/octet-stream"))
+            .unwrap();
+        assert_eq!(pdf.mime_type, "application/pdf");
+        let parameterized = store
+            .save_bytes_with_mime("result", b"%PDF-example", Some("application/PDF; charset=binary"))
+            .unwrap();
+        assert_eq!(parameterized.mime_type, "application/pdf");
+        assert!(validate_media_type(b"", "application/").is_err());
+        assert!(
+            store
+                .save_bytes_with_mime("wrong.png", b"%PDF-example", Some("image/png"))
+                .is_err()
+        );
+        assert!(
+            store
+                .save_bytes_with_mime("result", b"{}", Some("application/json\n"))
+                .is_err()
+        );
+    }
+
     #[test]
     fn external_pdf_preview_uses_a_copy_with_a_pdf_extension() {
         let temporary = tempfile::tempdir().unwrap();

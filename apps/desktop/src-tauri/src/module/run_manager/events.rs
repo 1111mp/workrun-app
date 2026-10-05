@@ -547,4 +547,13 @@ mod tests {
 
         assert_eq!(workflow_event_type(&event), Some("agent.model_call"));
     }
+    #[test]
+    fn pending_review_action_retains_attachment_references() {
+        let payload = json!({"nodeId": "review", "attachments": [{"$type": "artifact", "id": "file-id", "version": 1, "name": "report.pdf", "mimeType": "application/pdf", "size": 42}]});
+        let (kind, action) =
+            pending_action(&json!({"type": "custom", "event_type": "workflow.human_review_required", "data": payload}))
+                .unwrap();
+        assert_eq!(kind.as_str(), "human_review");
+        assert_eq!(action, payload);
+    }
 }

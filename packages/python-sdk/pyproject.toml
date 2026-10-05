@@ -12,6 +12,7 @@ Repository = "https://github.com/1111mp/workrun-app"
 
 [dependency-groups]
 dev = [
+  "pypdf>=6.19.0",
   "pytest>=8.0",
 ]
 

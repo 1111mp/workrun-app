@@ -41,7 +41,7 @@ pub(super) fn process_tool_definition(node: IProcessNode) -> Result<ToolDefiniti
     })
 }
 
-fn object_schema(properties: &BTreeMap<String, Value>) -> Value {
+pub(super) fn object_schema(properties: &BTreeMap<String, Value>) -> Value {
     let required = properties
         .iter()
         .filter_map(|(name, schema)| (!is_optional_field(schema)).then_some(name))

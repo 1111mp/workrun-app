@@ -454,8 +454,18 @@ function CodeActRuntimeFields({
         </FieldGroup>
       </InspectorSection>
       <InspectorSection
+        title={t('workflowEditor.inspector.codeActResources')}
+        description={t('workflowEditor.inspector.codeActResourcesDescription')}
+      >
+        <FieldDescription>
+          {t('workflowEditor.inspector.codeActResourcesLimits')}
+        </FieldDescription>
+      </InspectorSection>
+      <InspectorSection
         title='Filesystem mounts'
-        description='Mount only directories this agent needs. Paths outside these mounts are denied by Monty.'
+        description={t(
+          'workflowEditor.inspector.codeActExtraMountsDescription',
+        )}
       >
         <FieldGroup className='gap-3'>
           {mounts.map((mount, index) => (
@@ -1050,6 +1060,36 @@ function WorkflowNodeInspector({
                 type='url'
                 value={getText(data, 'url')}
                 onChange={(url) => updateData({ url })}
+              />
+              <TextareaField
+                id='remote-agent-attachments'
+                label={t('workflowEditor.artifacts.paths')}
+                description={t(
+                  'workflowEditor.artifacts.remotePathsDescription',
+                )}
+                value={getStringArray(data, 'attachmentPaths').join('\n')}
+                onChange={(value) =>
+                  updateData({
+                    attachmentPaths: value
+                      .split('\n')
+                      .map((path) => path.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+              <TextField
+                id='remote-agent-timeout'
+                type='number'
+                label={t('workflowEditor.artifacts.remoteTimeout')}
+                description={t(
+                  'workflowEditor.artifacts.remoteTimeoutDescription',
+                )}
+                value={String(getNumber(data, 'timeoutSeconds') || 120)}
+                onChange={(value) =>
+                  updateData({
+                    timeoutSeconds: value === '' ? undefined : Number(value),
+                  })
+                }
               />
             </InspectorSection>
           </FieldGroup>
@@ -1662,6 +1702,22 @@ function WorkflowNodeInspector({
                     contextKeys: value
                       .split(',')
                       .map((key) => key.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+              <TextareaField
+                id='human-review-attachments'
+                label={t('workflowEditor.inspector.reviewAttachmentPaths')}
+                description={t(
+                  'workflowEditor.inspector.reviewAttachmentPathsDescription',
+                )}
+                value={getStringArray(data, 'attachmentPaths').join('\n')}
+                onChange={(value) =>
+                  updateData({
+                    attachmentPaths: value
+                      .split('\n')
+                      .map((path) => path.trim())
                       .filter(Boolean),
                   })
                 }
@@ -2546,7 +2602,7 @@ function TextField({
   label: string;
   description?: string;
   value: string;
-  type?: 'text' | 'url';
+  type?: 'text' | 'url' | 'number';
   placeholder?: string;
   disabled?: boolean;
   onChange: (value: string) => void;

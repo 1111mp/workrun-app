@@ -129,6 +129,10 @@ field optional in an App's data contract, add the Workrun schema extension:
 
 ### Workflow files
 
+A complete PDF Workflow App, its input/output schemas, and setup instructions
+are available in [examples/pdf-process](examples/pdf-process/README.md). It
+generates a PDF snapshot and page-numbered text file without calling a model.
+
 Configure a Workflow input as **File** or **Multiple files**. Files travel as
 JSON references, never as paths or base64 data in State. For a Process or Tool
 App, declare the corresponding field as an object (or an array of objects).

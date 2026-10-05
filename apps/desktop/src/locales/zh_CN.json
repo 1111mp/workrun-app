@@ -484,6 +484,7 @@
       "description": "请在允许工作流继续前查看上下文。",
       "routingDescription": "批准和拒绝会分别沿对应的工作流输出继续。未连接的输出会停止本次运行。",
       "content": "审核内容",
+      "attachments": "审核附件",
       "context": "补充上下文",
       "reject": "拒绝",
       "savingDecision": "正在保存决定…",
@@ -702,6 +703,10 @@
       }
     },
     "artifacts": {
+      "remotePathsDescription": "每行一个可见 State 路径。通过 A2A v1.0.1 发送实际文件内容，最多 10 个文件、合计 20 MiB。留空仅发送文本。",
+      "remoteTimeout": "请求超时（秒）",
+      "remoteTimeoutDescription": "包含服务发现、远程处理和文件传输。默认 120，范围 1–600。",
+
       "closePreview": "关闭预览",
       "zoomIn": "放大",
       "zoomOut": "缩小",
@@ -863,7 +868,7 @@
       "connection": "连接",
       "connectionDescription": "Workrun 为此节点调用的远程端点。",
       "serviceUrl": "服务 URL",
-      "serviceUrlDescription": "用于调用远程智能体服务的 HTTPS 端点。",
+      "serviceUrlDescription": "A2A v1.0.1 服务基础 URL。通过 /.well-known/agent-card.json 发现同源 JSONRPC 接口。",
       "appIdentityDescription": "设置此应用在工作流画布上的标识信息。",
       "appConnection": "应用连接",
       "appConnectionDescription": "选择此工作流节点要运行的已安装应用。",
@@ -960,6 +965,8 @@
       "contentKey": "内容键",
       "contentKeyDescription": "向审核者展示的工作流状态值。",
       "contextKeys": "上下文键",
+      "reviewAttachmentPaths": "附件 State 路径",
+      "reviewAttachmentPathsDescription": "可选，每行填写一个节点可读的平铺 State 路径，例如 processedPdf 或 artifacts。审核内容和上下文中的文件会自动展示。",
       "contextKeysDescription": "显示在审核内容下方的、以逗号分隔的只读状态键。",
       "allowEditing": "允许编辑",
       "allowEditingDescription": "批准时将编辑后的文本写回此内容键。",
@@ -1001,6 +1008,10 @@
       "toolTimeoutDescription": "每次工具应用调用允许的秒数。",
       "selectModelProfile": "选择模型配置",
       "mountAccess": "挂载 {{index}} 的访问权限",
+      "codeActResources": "资源文件",
+      "codeActResourcesDescription": "节点可见的 State 资源自动映射至只读 /artifacts，文件路径可从 /artifacts/manifest.json 读取。写入 /outputs 的文件会保存至此节点 State 的 artifacts 字段。",
+      "codeActResourcesLimits": "输入和输出各最多 100 个文件、合计 512 MiB。需要第三方库的 PDF 解析等操作请调用 Process 工具。",
+      "codeActExtraMountsDescription": "可选的额外目录。/artifacts 和 /outputs 为保留路径；Monty 不允许访问挂载目录以外的路径。",
       "mountReadOnly": "只读",
       "mountReadWrite": "读写",
       "nodes": {

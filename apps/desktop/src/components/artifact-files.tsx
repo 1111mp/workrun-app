@@ -1,4 +1,11 @@
-import { Button, FieldDescription, Spinner } from '@workspace/ui/components';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  FieldDescription,
+  Spinner,
+} from '@workspace/ui/components';
 import { DownloadIcon, EyeIcon, PaperclipIcon, XIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -23,14 +30,18 @@ export function ArtifactFiles({
   onChange,
   multiple = false,
   disabled = false,
+  modalPreview = false,
 }: {
   value: unknown;
   onChange?: (value: ArtifactRef | ArtifactRef[] | undefined) => void;
   multiple?: boolean;
   disabled?: boolean;
+  /** Register previews as nested dialogs when this list is inside a modal. */
+  modalPreview?: boolean;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
+  const [previewRoot, setPreviewRoot] = useState<HTMLDivElement | null>(null);
   const [preview, setPreview] = useState<{
     reference: ArtifactRef;
     url: string;
@@ -58,6 +69,27 @@ export function ArtifactFiles({
       setBusy(false);
     }
   }
+  // Mount inside the child dialog so the parent approval's focus trap does
+  // not treat lightbox controls as outside the modal and block interaction.
+  const lightbox = (
+    <Lightbox
+      portal={modalPreview ? { root: previewRoot } : undefined}
+      open={Boolean(preview)}
+      close={() => setPreview(undefined)}
+      slides={slides}
+      plugins={[Video, Zoom]}
+      carousel={{ finite: true }}
+      video={{ controls: true, playsInline: true, autoPlay: false }}
+      render={{ buttonPrev: () => null, buttonNext: () => null }}
+      labels={{
+        Close: t('workflowEditor.artifacts.closePreview'),
+        Lightbox:
+          preview?.reference.name ?? t('workflowEditor.artifacts.preview'),
+        'Zoom in': t('workflowEditor.artifacts.zoomIn'),
+        'Zoom out': t('workflowEditor.artifacts.zoomOut'),
+      }}
+    />
+  );
   return (
     <div className='flex flex-col gap-2'>
       {onChange && (
@@ -149,24 +181,25 @@ export function ArtifactFiles({
           )}
         </div>
       ))}
-      <Lightbox
-        open={Boolean(preview)}
-        close={() => setPreview(undefined)}
-        slides={slides}
-        plugins={[Video, Zoom]}
-        carousel={{ finite: true }}
-        video={{ controls: true, playsInline: true, autoPlay: false }}
-        render={{ buttonPrev: () => null, buttonNext: () => null }}
-        labels={{
-          Close: t('workflowEditor.artifacts.closePreview'),
-          Lightbox:
-            preview?.reference.name ?? t('workflowEditor.artifacts.preview'),
-          'Zoom in': t('workflowEditor.artifacts.zoomIn'),
-          'Zoom out': t('workflowEditor.artifacts.zoomOut'),
-          Loading: t('workflowEditor.artifacts.loading'),
-          Error: t('workflowEditor.artifacts.previewError'),
-        }}
-      />
+      {modalPreview ? (
+        <Dialog
+          open={Boolean(preview)}
+          onOpenChange={(open) => !open && setPreview(undefined)}
+        >
+          <DialogContent
+            ref={setPreviewRoot}
+            showCloseButton={false}
+            className='top-0 left-0 h-dvh w-screen max-w-none translate-x-0 translate-y-0 rounded-none p-0 data-closed:animate-none data-open:animate-none sm:max-w-none'
+          >
+            <DialogTitle className='sr-only'>
+              {preview?.reference.name ?? t('workflowEditor.artifacts.preview')}
+            </DialogTitle>
+            {previewRoot && lightbox}
+          </DialogContent>
+        </Dialog>
+      ) : (
+        lightbox
+      )}
     </div>
   );
 }

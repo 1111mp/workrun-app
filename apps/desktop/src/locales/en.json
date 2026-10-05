@@ -495,6 +495,7 @@
       "description": "Review the workflow context before allowing it to continue.",
       "routingDescription": "Approval and rejection follow their matching workflow outputs. An unconnected output stops this run.",
       "content": "Review content",
+      "attachments": "Attachments",
       "context": "Additional context",
       "reject": "Reject",
       "savingDecision": "Saving decision…",
@@ -714,6 +715,10 @@
       }
     },
     "artifacts": {
+      "remotePathsDescription": "One visible State path per line. A2A v1.0.1 sends inline file bytes; maximum 10 files and 20 MiB in total. Leave empty to send text only.",
+      "remoteTimeout": "Request timeout (seconds)",
+      "remoteTimeoutDescription": "Includes discovery, remote processing and file transfer. Default 120; range 1–600.",
+
       "closePreview": "Close preview",
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out",
@@ -876,7 +881,7 @@
       "connection": "Connection",
       "connectionDescription": "The remote endpoint Workrun invokes for this node.",
       "serviceUrl": "Service URL",
-      "serviceUrlDescription": "The HTTPS endpoint used to invoke the remote agent service.",
+      "serviceUrlDescription": "A2A v1.0.1 service base URL. Discovery uses /.well-known/agent-card.json; requires a same-origin JSONRPC interface.",
       "appIdentityDescription": "How this app is identified on the workflow canvas.",
       "appConnection": "App connection",
       "appConnectionDescription": "Choose the installed app this workflow node will run.",
@@ -973,6 +978,8 @@
       "contentKey": "Content key",
       "contentKeyDescription": "The workflow state value shown to the reviewer.",
       "contextKeys": "Context keys",
+      "reviewAttachmentPaths": "Attachment State paths",
+      "reviewAttachmentPathsDescription": "Optional, one visible flat State path per line, e.g. processedPdf or artifacts. Files in review content and context appear automatically.",
       "contextKeysDescription": "Comma-separated read-only state keys shown below the review content.",
       "allowEditing": "Allow editing",
       "allowEditingDescription": "Write the edited text back to this content key when approved.",
@@ -1014,6 +1021,10 @@
       "toolTimeoutDescription": "Seconds allowed for each Tool App call.",
       "selectModelProfile": "Select a model profile",
       "mountAccess": "Mount {{index}} access",
+      "codeActResources": "Resource files",
+      "codeActResourcesDescription": "Visible State resources are mapped read-only under /artifacts. Read /artifacts/manifest.json for file paths. Files written under /outputs are saved to this node’s artifacts State field.",
+      "codeActResourcesLimits": "Up to 100 files and 512 MiB total in each directory. Use Process tools for third-party libraries such as PDF parsing.",
+      "codeActExtraMountsDescription": "Optional additional directories. /artifacts and /outputs are reserved; paths outside all mounts are denied by Monty.",
       "mountReadOnly": "Read only",
       "mountReadWrite": "Read/write",
       "nodes": {

@@ -144,6 +144,8 @@ type WorkflowCodeActAgentNode = WorkflowBaseNode & {
 
 // ---------- Remote Agent Node ----------
 type WorkflowRemoteAgentNodeData = WorkflowNodeStateConfig & {
+  attachmentPaths?: string[];
+  timeoutSeconds?: number;
   name: string;
   url: string;
   description: string;
@@ -258,6 +260,8 @@ type WorkflowHumanReviewNodeData = WorkflowNodeStateConfig & {
   editable?: boolean;
   /** Additional read-only state values shown with the review content. */
   contextKeys?: string[];
+  /** Visible flat State paths selecting additional files for the reviewer. */
+  attachmentPaths?: string[];
 };
 type WorkflowHumanReviewNode = WorkflowBaseNode & {
   type: 'human_review';

@@ -392,45 +392,13 @@ pub(super) fn instrumented_model(
     })
 }
 
-pub(super) fn remote_a2a_graph_node(
-    node: &WorkflowNode,
-    on_event: Option<Channel<StreamEvent>>,
-    state: SharedWorkflowState,
-    state_config: WorkflowNodeStateConfig,
-) -> Result<StreamingAgentNode> {
-    let url = string_data(node, "url")
-        .filter(|url| !url.trim().is_empty())
-        .ok_or_else(|| anyhow!("remote_agent node `{}` needs data.url", node.id))?;
-    let description = string_data(node, "description").unwrap_or_default();
-    let remote = RemoteA2aAgent::builder(node.id.clone())
-        .description(description)
-        .agent_url(url.clone())
-        .build()
-        .map_err(|error| anyhow!("remote_agent node `{}` is invalid: {error}", node.id))?;
-    let id = node.id.clone();
-    Ok(StreamingAgentNode::new(
-        AdkAgentNode::new(Arc::new(remote)).with_input_mapper(agent_input_mapper(Arc::clone(&state), id.clone())),
-        StreamingAgentNodeConfig {
-            id,
-            kind: "remote_agent".to_string(),
-            endpoint_or_model: url,
-            on_event,
-            tool_trace: None,
-            output_key: None,
-            output_schema: None,
-            state,
-            global_keys: state_config.global_keys,
-            sensitive_fields: state_config.sensitive_fields,
-        },
-    ))
-}
-
 /// ADK 2.0 executes this node once through `execute_stream`. Cache the agent
 /// events from that run, then emit the corresponding workflow trace and state
 /// updates without issuing another model request.
 pub(super) struct StreamingAgentNode {
     id: String,
     inner: AdkAgentNode,
+    codeact_workspace: Option<Arc<super::codeact_agent::CodeActWorkspace>>,
     kind: String,
     endpoint_or_model: String,
     on_event: Option<Channel<StreamEvent>>,
@@ -448,6 +416,7 @@ impl StreamingAgentNode {
         Self {
             id: config.id,
             inner,
+            codeact_workspace: None,
             kind: config.kind,
             endpoint_or_model: config.endpoint_or_model,
             on_event: config.on_event,
@@ -459,6 +428,11 @@ impl StreamingAgentNode {
             global_keys: config.global_keys,
             sensitive_fields: config.sensitive_fields,
         }
+    }
+
+    pub(super) fn with_codeact_workspace(mut self, workspace: Arc<super::codeact_agent::CodeActWorkspace>) -> Self {
+        self.codeact_workspace = Some(workspace);
+        self
     }
 
     fn cache_key(context: &NodeContext) -> (String, usize) {
@@ -523,6 +497,14 @@ impl Node for StreamingAgentNode {
             },
         )
         .map_err(|error| graph_node_error(&self.id, error))?;
+        if let Some(workspace) = &self.codeact_workspace {
+            let workspace = Arc::clone(workspace);
+            let artifacts = tokio::task::spawn_blocking(move || workspace.collect())
+                .await
+                .map_err(|error| graph_node_error(&self.id, error))?
+                .map_err(|error| graph_node_error(&self.id, error))?;
+            updates.insert("artifacts".into(), artifacts);
+        }
         let values = updates
             .iter()
             .filter(|(key, _)| !key.starts_with("workflow."))
@@ -541,6 +523,12 @@ impl Node for StreamingAgentNode {
             )
             .map_err(|error| graph_node_error(&self.id, error))?;
         updates.extend(global_updates);
+        if self.codeact_workspace.is_some() {
+            self.state
+                .lock()
+                .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
+                .set_codeact_files(&self.id, None);
+        }
         Ok(NodeOutput::new().with_updates(updates))
     }
 
@@ -563,10 +551,26 @@ impl Node for StreamingAgentNode {
             return Box::pin(async_stream::stream! { yield Err(error); });
         }
         let key = Self::cache_key(context);
-        let stream = self.inner.execute_stream(context);
         let node = self;
 
         Box::pin(async_stream::stream! {
+            if let Some(workspace) = &node.codeact_workspace {
+                let input = match node.state.lock().ok().and_then(|state| state.agent_input(&node.id).ok()) {
+                    Some(input) => input,
+                    None => { yield Err(graph_node_error(&node.id, "CodeAct input unavailable")); return; }
+                };
+                let snapshot = node.state.lock().ok().and_then(|state| state.codeact_files(&node.id));
+                let workspace = Arc::clone(workspace);
+                let prepared = tokio::task::spawn_blocking(move || {
+                    workspace.prepare(&input, snapshot.as_ref())
+                }).await;
+                match prepared {
+                    Ok(Ok(())) => {},
+                    Ok(Err(error)) => { yield Err(graph_node_error(&node.id, error)); return; },
+                    Err(error) => { yield Err(graph_node_error(&node.id, error)); return; },
+                }
+            }
+            let stream = node.inner.execute_stream(context);
             tokio::pin!(stream);
 
             let mut events = Vec::new();
@@ -581,6 +585,20 @@ impl Node for StreamingAgentNode {
                         if matches!(event, StreamEvent::NodeInterrupt { .. }) {
                             // The executor converts this into a persisted graph pause. Do not
                             // run the post-processing path after a confirmation request.
+                            if let Some(workspace) = &node.codeact_workspace {
+                                let workspace = Arc::clone(workspace);
+                                let snapshot = tokio::task::spawn_blocking(move || {
+                                    workspace.snapshot()
+                                }).await;
+                                match snapshot {
+                                    Ok(Ok(files)) => {
+                                        let saved = node.state.lock().map(|mut state| state.set_codeact_files(&node.id, Some(files))).map_err(|_| graph_node_error(&node.id, "workflow state lock is poisoned"));
+                                        if let Err(error) = saved { yield Err(error); return; }
+                                    },
+                                    Ok(Err(error)) => { yield Err(graph_node_error(&node.id, error)); return; },
+                                    Err(error) => { yield Err(graph_node_error(&node.id, error)); return; },
+                                }
+                            }
                             yield Ok(event);
                             return;
                         }
