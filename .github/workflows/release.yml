@@ -226,7 +226,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Add Rust Target
-        run: rustup target add ${{ matrix.target }}
+        working-directory: apps/desktop
+        run: |
+          rustup target add ${{ matrix.target }}
+          rustup show active-toolchain
+          rustup target list --installed
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -326,7 +330,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Add Rust Target
-        run: rustup target add ${{ matrix.target }}
+        working-directory: apps/desktop
+        run: |
+          rustup target add ${{ matrix.target }}
+          rustup show active-toolchain
+          rustup target list --installed
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -461,7 +469,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Add Rust Target
-        run: rustup target add ${{ matrix.target }}
+        working-directory: apps/desktop
+        run: |
+          rustup target add ${{ matrix.target }}
+          rustup show active-toolchain
+          rustup target list --installed
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
