@@ -63,11 +63,17 @@ function AboutSettings() {
 
 function CheckForUpdatesItem() {
   const [loading, setLoading] = useState<boolean>(false);
+  const availableUpdate = useUpdaterStore((s) => s.update);
 
   const { t } = useTranslation();
 
   const checkForUpdates = async () => {
     if (loading) return;
+
+    if (availableUpdate) {
+      useUpdaterStore.getState().setOpen(true);
+      return;
+    }
 
     setLoading(true);
     try {
@@ -77,10 +83,11 @@ function CheckForUpdatesItem() {
         store.setUpdate(update);
         store.setOpen(true);
       } else {
-        toast.success(t('updater.upToDate'));
+        toast.success(t('updater.upToDate'), { toasterId: 'global' });
       }
     } catch {
       toast.error(t('updater.failedToCheck'), {
+        toasterId: 'global',
         description: t('updater.checkFailedDescription'),
       });
     } finally {
@@ -100,7 +107,9 @@ function CheckForUpdatesItem() {
       </ItemContent>
       <ItemActions>
         <span className='text-muted-foreground'>
-          {t('settings.about.checkNow')}
+          {availableUpdate
+            ? t('updater.available')
+            : t('settings.about.checkNow')}
         </span>
         {loading ? <Spinner /> : <ChevronRightIcon className='size-4' />}
       </ItemActions>

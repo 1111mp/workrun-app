@@ -7,6 +7,7 @@ import './styles/global.css';
 import App from '@/app';
 import { applyTheme } from '@/lib/utils';
 import { getAppInitialData } from '@/services/init';
+import { checkForStartupUpdate } from '@/services/updater';
 
 void (async () => {
   const [config, sysTheme] = await getAppInitialData();
@@ -20,4 +21,6 @@ void (async () => {
       <App />
     </QueryClientProvider>,
   );
+
+  void checkForStartupUpdate(config);
 })();

@@ -227,6 +227,7 @@ function McpServersPage() {
     },
     onError: (error) =>
       toast.error(t('mcp.saveFailed'), {
+        toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       }),
   });
@@ -243,16 +244,19 @@ function McpServersPage() {
   const authorize = useMutation({
     mutationFn: authorizeMcpServer,
     onSuccess: () => {
-      toast.info(t('mcp.authorizationOpened'));
+      toast.info(t('mcp.authorizationOpened'), { toasterId: 'global' });
       void refresh();
     },
     onError: (error) =>
-      toast.error(error instanceof Error ? error.message : String(error)),
+      toast.error(error instanceof Error ? error.message : String(error), {
+        toasterId: 'global',
+      }),
   });
   const reconnect = useMutation({
     mutationFn: reconnectMcpServer,
     onError: (error) =>
       toast.error(t('mcp.reconnectFailed'), {
+        toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       }),
     onSettled: () => void refresh(),
@@ -263,7 +267,7 @@ function McpServersPage() {
       setDeleting(null);
       void refresh();
     },
-    onError: (error) => toast.error(String(error)),
+    onError: (error) => toast.error(String(error), { toasterId: 'global' }),
   });
 
   return (

@@ -65,6 +65,7 @@ function HomeLayout() {
   const userInfo = useWorkrunStore(useShallow(selectWorkspaceUserInfo));
   const workspaceMode = useWorkrunStore((s) => s.config?.workspace_mode);
   const serverUrl = useWorkrunStore((s) => s.config?.team?.server_url);
+  const availableUpdate = useUpdaterStore((s) => s.update);
   const queryClient = useQueryClient();
 
   const navigate = useNavigate();
@@ -76,6 +77,11 @@ function HomeLayout() {
 
   const checkForUpdates = async () => {
     if (checkingForUpdates) return;
+
+    if (availableUpdate) {
+      useUpdaterStore.getState().setOpen(true);
+      return;
+    }
 
     setCheckingForUpdates(true);
     try {
@@ -156,6 +162,7 @@ function HomeLayout() {
               <Button
                 variant='ghost'
                 size='sm'
+                className='relative'
                 aria-label={t('navigation.accountMenu')}
               >
                 <Avatar size='sm'>
@@ -166,6 +173,12 @@ function HomeLayout() {
                     <User />
                   </AvatarFallback>
                 </Avatar>
+                {availableUpdate ? (
+                  <span
+                    className='ring-background absolute top-1 right-1 size-1.5 rounded-full bg-red-500 ring-2'
+                    aria-label={t('updater.available')}
+                  />
+                ) : null}
               </Button>
             }
           />
@@ -212,7 +225,14 @@ function HomeLayout() {
                 />
                 {checkingForUpdates
                   ? t('navigation.checkingForUpdates')
-                  : t('navigation.checkForUpdates')}
+                  : availableUpdate
+                    ? t('updater.available')
+                    : t('navigation.checkForUpdates')}
+                {availableUpdate ? (
+                  <span className='ml-auto rounded-sm bg-red-500! px-1 py-0.5 text-[10px] leading-none font-semibold text-white!'>
+                    NEW
+                  </span>
+                ) : null}
               </DropdownMenuItem>
               {workspaceMode === 'team' ? (
                 <>

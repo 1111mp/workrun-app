@@ -143,6 +143,7 @@ function RunWorkspace() {
       .then(openRun)
       .catch((error: unknown) => {
         toast.error('Could not retry failed workflow', {
+          toasterId: 'global',
           description: error instanceof Error ? error.message : String(error),
         });
       });
