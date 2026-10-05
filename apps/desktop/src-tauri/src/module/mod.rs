@@ -1,3 +1,4 @@
+pub mod artifact;
 pub mod chat_session;
 pub mod evaluation;
 pub mod ipc;

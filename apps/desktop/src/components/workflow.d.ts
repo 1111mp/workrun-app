@@ -19,7 +19,13 @@ type WorkflowNodeType =
 
 type WorkflowMode = 'task' | 'chat';
 
-type WorkflowInputType = 'string' | 'textarea' | 'number' | 'boolean';
+type WorkflowInputType =
+  | 'string'
+  | 'textarea'
+  | 'number'
+  | 'boolean'
+  | 'file'
+  | 'files';
 
 /** A parameter accepted by one workflow run. Values are never stored here. */
 type WorkflowInput = {
@@ -82,6 +88,8 @@ type WorkflowSettings = {
 type WorkflowAgentNodeData = WorkflowNodeStateConfig & {
   name: string;
   modelProfileId: string;
+  /** Dot-separated paths in this node’s visible State, injected as model attachments. */
+  attachmentPaths?: string[];
   description: string;
   instruction: string;
   /** Optional state key that receives the agent's complete final text. */

@@ -19,6 +19,9 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
+  Field,
+  FieldGroup,
+  FieldLabel,
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
@@ -66,9 +69,12 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
+import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
+import { ArtifactFiles } from '@/components/artifact-files';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
+import { artifactReferences } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
 import type {
   WorkflowRunExecution,
@@ -85,6 +91,7 @@ type WorkflowOutputPanelProps = {
   onRunAgain: () => void;
   onClose: () => void;
   isChat?: boolean;
+  fileInputs?: WorkflowInput[];
   onSend?: (initialState: Record<string, unknown>) => void;
   readOnly?: boolean;
   spans?: RunSpan[];
@@ -358,6 +365,7 @@ function StateSection({
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
+        <ArtifactFiles value={value} />
         <pre className='bg-muted/60 max-h-80 overflow-auto border-t px-3 py-2.5 font-mono text-xs leading-5'>
           {JSON.stringify(value, null, 2)}
         </pre>
@@ -2005,12 +2013,18 @@ function WorkflowRunOutput({
   onClose,
   isChat = false,
   onSend,
+  fileInputs = [],
   readOnly = false,
   spans = [],
   spansByTurn = {},
 }: WorkflowOutputPanelProps) {
   const { t } = useTranslation();
   const [message, setMessage] = useState('');
+  const [fileValues, setFileValues] = useState<Record<string, unknown>>({});
+  const filesForInput = (key: string) =>
+    key in fileValues
+      ? fileValues[key]
+      : recordValue(run.finalState?.global)?.[key];
   const animatedChatResponseIds = useRef(new Set<string>());
   const [presentedChatResponses, setPresentedChatResponses] = useState<
     Set<string>
@@ -2116,7 +2130,20 @@ function WorkflowRunOutput({
     event.preventDefault();
     const content = message.trim();
     if (!content || readOnly || chatIsBusy || !onSend) return;
-    onSend({ input: content });
+    const attachments: Record<string, unknown> = {};
+    for (const field of fileInputs) {
+      const files = artifactReferences(filesForInput(field.key));
+      if (field.required && files.length === 0) {
+        toast.error(
+          `${field.label}: ${t('workflowEditor.artifacts.required')}`,
+          { toasterId: 'global' },
+        );
+        return;
+      }
+      if (files.length)
+        attachments[field.key] = field.type === 'file' ? files[0] : files;
+    }
+    onSend({ ...attachments, input: content });
     setMessage('');
   };
 
@@ -2177,6 +2204,11 @@ function WorkflowRunOutput({
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 p-4'>
                 {!isChat && <RunModelUsage spans={sessionSpans} />}
+                {run.finalState && (
+                  <MessageScrollerItem messageId='run-files'>
+                    <ArtifactFiles value={run.finalState} />
+                  </MessageScrollerItem>
+                )}
                 {!isChat && execution.length > 0 && (
                   <MessageScrollerItem messageId='execution-start'>
                     <div>
@@ -2434,7 +2466,30 @@ function WorkflowRunOutput({
               {rerunLabel(run.status, t)}
             </Button>
           )}
-          <form className='w-full' onSubmit={sendMessage}>
+          <form className='flex w-full flex-col gap-3' onSubmit={sendMessage}>
+            {fileInputs.length > 0 && (
+              <FieldGroup>
+                {fileInputs.map((field) => (
+                  <Field key={field.id}>
+                    <FieldLabel>{field.label}</FieldLabel>
+                    <ArtifactFiles
+                      value={filesForInput(field.key)}
+                      multiple={field.type === 'files'}
+                      disabled={readOnly || chatIsBusy}
+                      onChange={
+                        readOnly
+                          ? undefined
+                          : (value) =>
+                              setFileValues((current) => ({
+                                ...current,
+                                [field.key]: value ?? null,
+                              }))
+                      }
+                    />
+                  </Field>
+                ))}
+              </FieldGroup>
+            )}
             <InputGroup className='h-auto'>
               <InputGroupTextarea
                 aria-label={t('workflowEditor.output.message')}

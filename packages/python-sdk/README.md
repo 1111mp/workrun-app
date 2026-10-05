@@ -126,3 +126,44 @@ field optional in an App's data contract, add the Workrun schema extension:
   "locale": { "type": "string", "x-workrun-optional": true }
 }
 ```
+
+### Workflow files
+
+Configure a Workflow input as **File** or **Multiple files**. Files travel as
+JSON references, never as paths or base64 data in State. For a Process or Tool
+App, declare the corresponding field as an object (or an array of objects).
+
+```python
+import json
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from workrun_sdk import artifacts, process
+
+inputs = json.load(sys.stdin)
+source = artifacts.path(inputs["document"])
+with TemporaryDirectory() as directory:
+    report = Path(directory) / "report.pdf"
+    report.write_bytes(source.read_bytes())  # Replace with your PDF processing.
+    process.result({"report": artifacts.save(report)})
+```
+
+`artifacts.path(reference)` returns a private file copy valid for the current
+process session. `artifacts.read(reference)` returns its bytes. Reads require a
+reference received in the process input or created by that process.
+`artifacts.save(path)` snapshots a generated file and returns a reference that
+can be passed to downstream nodes. These operations require a Workrun host;
+resource failures raise `WorkrunConnectionError`.
+
+Snapshots are immutable and local to the active workspace. Each save creates a
+new ID at version 1. The original file can change or disappear without changing
+a run's resource. Individual files are limited to 512 MiB.
+
+In a local Agent's **Model attachment paths**, enter one path per line using the
+Agent's flat visible input, e.g. `document` or `report`. Grant the Agent read
+access to the producing Process node when consuming its output. Attachments
+must be explicitly selected; text alone containing a reference does not send
+the binary content to the model. Use a vision-capable model for images. PDF
+input currently requires the Gemini adapter. Model attachments total at most
+20 MiB. Video files can be passed to Process nodes; direct video model analysis
+is not implemented yet.

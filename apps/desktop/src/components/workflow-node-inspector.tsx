@@ -69,6 +69,8 @@ const workflowOutputTypeLabels: Record<WorkflowInputType, string> = {
   textarea: 'Long text',
   number: 'Number',
   boolean: 'Yes / no',
+  file: 'File',
+  files: 'Multiple files',
 };
 
 const modelProviderLabels: Record<ModelDefinition['provider'], string> = {
@@ -794,6 +796,22 @@ function WorkflowNodeInspector({
                 onChange={(instruction) => updateData({ instruction })}
                 className='min-h-36 font-mono text-xs'
               />
+              {!isCodeActAgent && (
+                <TextareaField
+                  id='agent-attachments'
+                  label={t('workflowEditor.artifacts.paths')}
+                  description={t('workflowEditor.artifacts.pathsDescription')}
+                  value={getStringArray(data, 'attachmentPaths').join('\n')}
+                  onChange={(value) =>
+                    updateData({
+                      attachmentPaths: value
+                        .split('\n')
+                        .map((path) => path.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              )}
               {!isCodeActAgent && !getText(data, 'outputSchema').trim() && (
                 <TextField
                   id='agent-output-key'
@@ -1841,8 +1859,8 @@ function WorkflowNodeInspector({
       open={node !== null}
       modal={false}
       disablePointerDismissal
-      defaultHorizontalSnapPoint='31rem'
-      horizontalSnapPoints={['31rem', '48rem', '64rem']}
+      defaultHorizontalSnapPoint='48rem'
+      horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
       swipeDirection='right'
       onOpenChange={(open) => {
         if (!open) {

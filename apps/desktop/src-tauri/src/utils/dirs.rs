@@ -56,6 +56,10 @@ impl WorkspacePaths {
         self.root.join("runtime")
     }
 
+    pub fn artifacts_dir(&self) -> PathBuf {
+        self.root.join("artifacts")
+    }
+
     pub fn process_nodes_dir(&self) -> PathBuf {
         self.root.join("process-nodes")
     }
@@ -225,6 +229,11 @@ pub fn db_migration_dir() -> Result<PathBuf> {
 /// runtime dir
 pub fn runtime_dir() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.runtime_dir())
+}
+
+/// Immutable resource snapshots owned by the active workspace.
+pub fn artifacts_dir() -> Result<PathBuf> {
+    Ok(active_workspace_paths()?.artifacts_dir())
 }
 
 /// Root directory for locally managed Process Node projects.

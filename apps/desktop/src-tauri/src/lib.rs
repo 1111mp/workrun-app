@@ -89,6 +89,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // app
             cmd::app::restart_app,
+            cmd::artifact::artifact_pick,
+            cmd::artifact::artifact_export,
+            cmd::artifact::artifact_preview,
+            cmd::artifact::artifact_open_pdf,
             // workrun
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,

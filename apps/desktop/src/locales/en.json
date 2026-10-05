@@ -708,8 +708,25 @@
         "string": "Short text",
         "textarea": "Long text",
         "number": "Number",
-        "boolean": "Yes / no"
+        "boolean": "Yes / no",
+        "file": "File",
+        "files": "Multiple files"
       }
+    },
+    "artifacts": {
+      "closePreview": "Close preview",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "loading": "Loading",
+      "previewError": "Unable to preview this file",
+
+      "openPdf": "Open PDF in the default application",
+      "preview": "Preview file",
+      "required": "Please choose a file",
+      "choose": "Choose files (up to 512 MiB)",
+      "remove": "Remove file",
+      "paths": "Model attachment paths",
+      "pathsDescription": "One visible State path per line, e.g. document or images. Images are supported; PDF currently requires Gemini."
     },
     "undo": "Undo",
     "redo": "Redo",

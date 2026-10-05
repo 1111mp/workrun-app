@@ -104,6 +104,7 @@ impl ProcessNodeRegistry {
         let sync = PythonRuntime::sync_dependencies(&node.project_path, &python_version).await?;
         let mut ipc = IpcServer::global().create_session().await?;
         let input = apply_input_defaults(input, &node.definition.inputs)?;
+        ipc.grant_artifacts(&input).await?;
         let input = serde_json::to_vec(&input).context("failed to serialize input for Process Node")?;
         let logs = Arc::new(Mutex::new((String::new(), String::new())));
         let captured_logs = Arc::clone(&logs);
@@ -143,6 +144,10 @@ impl ProcessNodeRegistry {
                 })
         } else {
             Ok(Value::Null)
+        };
+        let result = match result {
+            Ok(value) => ipc.validate_artifact_result(&value).await.map(|_| value),
+            Err(error) => Err(error),
         };
         ipc.close().await;
         let execution = execution?;

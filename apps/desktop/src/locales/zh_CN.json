@@ -696,8 +696,25 @@
         "string": "短文本",
         "textarea": "长文本",
         "number": "数字",
-        "boolean": "是 / 否"
+        "boolean": "是 / 否",
+        "file": "文件",
+        "files": "多个文件"
       }
+    },
+    "artifacts": {
+      "closePreview": "关闭预览",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "loading": "加载中",
+      "previewError": "无法预览此文件",
+
+      "openPdf": "使用系统默认应用打开 PDF",
+      "preview": "预览文件",
+      "required": "请选择文件",
+      "choose": "选择文件（最大 512 MiB）",
+      "remove": "移除文件",
+      "paths": "模型附件来源",
+      "pathsDescription": "每行填写一个可读 State 路径，例如 document 或 images。支持图片；PDF 目前仅支持 Gemini。"
     },
     "undo": "撤销",
     "redo": "重做",

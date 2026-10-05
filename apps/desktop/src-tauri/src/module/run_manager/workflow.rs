@@ -72,6 +72,18 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
             )?;
         }
     }
+    if let Some(schema) = request.dsl.get("inputSchema") {
+        crate::module::artifact::validate_input(schema, &request.initial_state)?;
+    }
+    let store = crate::module::artifact::ArtifactStore::active()?;
+    let references = crate::module::artifact::references(&request.initial_state)?;
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        for reference in references {
+            store.resolve(&reference)?;
+        }
+        Ok(())
+    })
+    .await??;
     // Persist the immutable Team App coordinates separately from the executable
     // local IDs. Replay and cache cleanup must not infer these from a mutable catalog.
     let release_or_draft = request

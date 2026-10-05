@@ -51,6 +51,8 @@ function WorkflowSettingsPanel({
     { label: t('workflowEditor.settings.types.textarea'), value: 'textarea' },
     { label: t('workflowEditor.settings.types.number'), value: 'number' },
     { label: t('workflowEditor.settings.types.boolean'), value: 'boolean' },
+    { label: t('workflowEditor.settings.types.file'), value: 'file' },
+    { label: t('workflowEditor.settings.types.files'), value: 'files' },
   ];
   const updateInput = (inputId: string, patch: Partial<WorkflowInput>) => {
     const current = settings.inputSchema.fields.find(
@@ -186,7 +188,8 @@ function WorkflowSettingsPanel({
       open={open}
       onOpenChange={onOpenChange}
       swipeDirection='right'
-      horizontalSnapPoints={['31rem', '48rem', '64rem']}
+      defaultHorizontalSnapPoint='48rem'
+      horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
     >
       <DrawerContent className='gap-0 sm:[--drawer-content-width:36rem]'>
         <DrawerHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>

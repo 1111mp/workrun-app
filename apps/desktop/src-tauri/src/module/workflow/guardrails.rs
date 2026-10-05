@@ -215,7 +215,17 @@ fn redact_updates(updates: HashMap<String, Value>) -> HashMap<String, Value> {
 fn redact_json_in_place(value: &mut Value) {
     match value {
         Value::Object(object) => {
+            let artifact = object.get("$type").and_then(Value::as_str) == Some("artifact")
+                && object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
             for (key, value) in object {
+                // Opaque identity is not user content. PII detection can otherwise
+                // mutate UUID digits and break persisted resource references.
+                if artifact && key == "id" {
+                    continue;
+                }
                 if is_sensitive_key(key) && !value.is_null() {
                     *value = Value::String(SECRET_REDACTION.to_string());
                 } else {
@@ -528,5 +538,18 @@ mod tests {
             panic!("expected custom event")
         };
         assert_eq!(data["input"]["email"], "[EMAIL REDACTED]");
+    }
+}
+
+#[cfg(test)]
+mod artifact_redaction_tests {
+    use super::*;
+    #[test]
+    fn preserves_resource_identity_while_redacting_its_display_name() {
+        let input = serde_json::json!({"$type":"artifact", "id":"12345678-1234-4234-8234-138001380000", "version":1, "name":"alice@example.com.pdf", "mimeType":"application/pdf", "size":42});
+        let visible = redact_json(&input);
+        assert_eq!(visible["id"], input["id"]);
+        assert_ne!(visible["name"], input["name"]);
+        assert_eq!(visible["mimeType"], input["mimeType"]);
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use adk_rust::prelude::Part;
 
 #[derive(Debug, Deserialize)]
 struct SkillReference {
@@ -59,6 +60,8 @@ pub(super) async fn add_local_agent_node(
         .into_iter()
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("agent node `{id}` references unknown model `{profile_id}`"))?;
+    let attachment_paths = string_array_data(node, "attachmentPaths")?;
+    let provider = model.provider.clone();
     let label = format!("{}/{}", model.id, model.model);
     let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
     let mut agent = LlmAgentBuilder::new(id.clone())
@@ -68,6 +71,44 @@ pub(super) async fn add_local_agent_node(
         .input_guardrails(input_guardrails())
         .output_guardrails(output_guardrails())
         .tool_guardrails(tool_guardrails());
+    if !attachment_paths.is_empty() {
+        let store = crate::module::artifact::ArtifactStore::active()?;
+        let attachment_state = Arc::clone(&state);
+        let attachment_node_id = id.clone();
+        agent = agent.before_model_callback(Box::new(move |_, mut request| {
+            let store = store.clone();
+            let input = attachment_state
+                .lock()
+                .map_err(|_| "workflow state lock is poisoned".to_string())
+                .and_then(|state| {
+                    state
+                        .agent_input(&attachment_node_id)
+                        .map_err(|error| error.to_string())
+                });
+            let paths = attachment_paths.clone();
+            let provider = provider.clone();
+            Box::pin(async move {
+                let input = input.map_err(adk_rust::AdkError::agent)?;
+                let parts = tokio::task::spawn_blocking(move || attachment_parts(&store, &input, &paths, &provider))
+                    .await
+                    .map_err(|error| adk_rust::AdkError::agent(error.to_string()))?
+                    .map_err(|error| adk_rust::AdkError::agent(error.to_string()))?;
+                let content = request
+                    .contents
+                    .iter_mut()
+                    .rev()
+                    .find(|content| content.role == "user")
+                    .ok_or_else(|| adk_rust::AdkError::agent("No user content for model attachments"))?;
+                // Tool loops may call the model repeatedly with the same conversation.
+                for part in parts {
+                    if !content.parts.contains(&part) {
+                        content.parts.push(part);
+                    }
+                }
+                Ok(adk_rust::BeforeModelResult::Continue(request))
+            })
+        }));
+    }
     if let Some(temperature) = temperature {
         agent = agent.temperature(temperature);
     }
@@ -657,6 +698,32 @@ pub(super) fn agent_output_updates(
         ("workflow.node".to_string(), event.clone()),
         ("workflow.trace".to_string(), event),
     ]);
+    if !tool_confirmation_denied {
+        let mut artifacts = Vec::new();
+        for part in events
+            .iter()
+            .filter_map(|event| event.content())
+            .filter(|content| matches!(content.role.as_str(), "model" | "assistant"))
+            .flat_map(|content| &content.parts)
+        {
+            if let Part::InlineData { mime_type, data, .. } = part {
+                let extension = match mime_type.as_str() {
+                    "image/png" => "png",
+                    "image/jpeg" => "jpg",
+                    "image/webp" => "webp",
+                    "application/pdf" => "pdf",
+                    "video/mp4" => "mp4",
+                    _ => "bin",
+                };
+                let reference = crate::module::artifact::ArtifactStore::active()?
+                    .save_bytes(&format!("generated-{}.{}", artifacts.len() + 1, extension), data)?;
+                artifacts.push(serde_json::to_value(reference)?);
+            }
+        }
+        if !artifacts.is_empty() {
+            updates.insert("artifacts".into(), Value::Array(artifacts));
+        }
+    }
     let output_content = context.output_key.map(|_| {
         messages
             .iter()
@@ -922,5 +989,107 @@ mod usage_snapshot_tests {
         assert_eq!(emitted[0]["event_type"], "agent.model_call");
         assert_eq!(emitted[0]["data"]["model"], "gemini-test");
         assert!(emitted[0]["data"]["durationMs"].is_i64());
+    }
+}
+
+fn attachment_parts(
+    store: &crate::module::artifact::ArtifactStore,
+    input: &Value,
+    paths: &[String],
+    provider: &crate::config::ModelProvider,
+) -> Result<Vec<Part>> {
+    use crate::config::ModelProvider;
+    let mut selected = Vec::new();
+    for path in paths {
+        let value = path
+            .split('.')
+            .try_fold(input, |value, segment| value.get(segment))
+            .ok_or_else(|| anyhow!("Attachment State path `{path}` is missing or inaccessible"))?;
+        let references = crate::module::artifact::references(value)?;
+        if references.is_empty() {
+            bail!("Attachment State path `{path}` contains no files");
+        }
+        for reference in references {
+            if !selected.contains(&reference) {
+                selected.push(reference);
+            }
+        }
+    }
+    let mut total = 0u64;
+    let mut parts = Vec::new();
+    for reference in selected {
+        let supported = match reference.mime_type.as_str() {
+            "image/png" | "image/jpeg" | "image/webp" | "image/gif" => matches!(
+                provider,
+                ModelProvider::Gemini
+                    | ModelProvider::OpenAi
+                    | ModelProvider::OpenAiStrict
+                    | ModelProvider::Anthropic
+                    | ModelProvider::Ollama
+            ),
+            "application/pdf" => matches!(provider, ModelProvider::Gemini),
+            _ => false,
+        };
+        if !supported {
+            bail!(
+                "Model adapter does not support attachment type {}. Use a Process Node to extract text or frames first.",
+                reference.mime_type
+            );
+        }
+        total += reference.size;
+        if total > 20 * 1024 * 1024 {
+            bail!("Model attachments exceed the 20 MiB request limit");
+        }
+        let data = std::fs::read(store.resolve(&reference)?)?;
+        parts.push(Part::inline_data(reference.mime_type, data));
+    }
+    Ok(parts)
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+    #[test]
+    fn attachment_paths_use_only_visible_input_and_enforce_adapter_support() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = crate::module::artifact::ArtifactStore::new(temp.path().join("store"));
+        let reference = store.save_bytes("report.pdf", b"%PDF-report").unwrap();
+        let input = json!({"document": reference});
+        assert!(
+            attachment_parts(
+                &store,
+                &input,
+                &["document".into()],
+                &crate::config::ModelProvider::Gemini
+            )
+            .is_ok()
+        );
+        assert!(
+            attachment_parts(
+                &store,
+                &input,
+                &["document".into()],
+                &crate::config::ModelProvider::OpenAi
+            )
+            .is_err()
+        );
+        assert!(
+            attachment_parts(
+                &store,
+                &input,
+                &["private".into()],
+                &crate::config::ModelProvider::Gemini
+            )
+            .is_err()
+        );
+        assert!(
+            attachment_parts(
+                &store,
+                &json!({"document":"[SENSITIVE REDACTED]"}),
+                &["document".into()],
+                &crate::config::ModelProvider::Gemini
+            )
+            .is_err()
+        );
     }
 }

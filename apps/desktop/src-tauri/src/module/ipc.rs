@@ -42,9 +42,59 @@ pub struct IpcSession {
 struct IpcSessionEntry {
     token: String,
     messages: mpsc::Sender<Value>,
+    artifacts: Option<ArtifactAccess>,
+}
+
+#[derive(Debug, Clone)]
+struct ArtifactAccess {
+    store: crate::module::artifact::ArtifactStore,
+    references: Vec<crate::module::artifact::ArtifactRef>,
+    copies: Arc<tempfile::TempDir>,
+}
+
+impl ArtifactAccess {
+    fn allows(&self, reference: &crate::module::artifact::ArtifactRef) -> bool {
+        self.references.iter().any(|allowed| {
+            allowed.id == reference.id
+                && allowed.version == reference.version
+                && allowed.size == reference.size
+                && allowed.mime_type == reference.mime_type
+                && allowed.kind == reference.kind
+        })
+    }
 }
 
 impl IpcSession {
+    pub async fn grant_artifacts(&self, input: &Value) -> Result<()> {
+        let access = ArtifactAccess {
+            store: crate::module::artifact::ArtifactStore::active()?,
+            references: crate::module::artifact::references(input)?,
+            copies: Arc::new(tempfile::tempdir()?),
+        };
+        self.sessions
+            .lock()
+            .await
+            .get_mut(&self.id)
+            .context("IPC session has closed")?
+            .artifacts = Some(access);
+        Ok(())
+    }
+
+    pub async fn validate_artifact_result(&self, value: &Value) -> Result<()> {
+        let references = crate::module::artifact::references(value)?;
+        let sessions = self.sessions.lock().await;
+        let access = sessions
+            .get(&self.id)
+            .and_then(|entry| entry.artifacts.as_ref())
+            .context("IPC resource access is missing")?;
+        for reference in references {
+            if !access.allows(&reference) {
+                bail!("Process returned an unauthorized resource");
+            }
+        }
+        Ok(())
+    }
+
     pub async fn close(mut self) {
         self.sessions.lock().await.remove(&self.id);
         #[cfg(any(unix, windows))]
@@ -240,6 +290,7 @@ impl IpcServer {
             IpcSessionEntry {
                 token: token.clone(),
                 messages,
+                artifacts: None,
             },
         );
         let endpoint = self
@@ -357,6 +408,20 @@ where
     let app_handle = handle::Handle::app_handle();
     let result = async {
         while let Ok(message) = receive_message(&mut reader).await {
+            if message
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.starts_with("artifact."))
+            {
+                let id = required_string(&message, "id")?;
+                let response = artifact_request(&session_id, &message).await;
+                let response = match response {
+                    Ok(data) => serde_json::json!({"id": id, "type": "artifact.response", "data": data}),
+                    Err(error) => serde_json::json!({"id": id, "type": "artifact.error", "error": error.to_string()}),
+                };
+                IpcServer::global().send(&session_id, response).await?;
+                continue;
+            }
             // A run owner can await structured messages (such as process.result)
             // while the webview continues to receive the same event for UI work.
             enqueue_result(&message_sender, &message)?;
@@ -473,6 +538,7 @@ mod tests {
                 IpcSessionEntry {
                     token: format!("token-{id}"),
                     messages,
+                    artifacts: None,
                 },
             );
         }
@@ -535,6 +601,7 @@ mod tests {
             IpcSessionEntry {
                 token: "token".into(),
                 messages,
+                artifacts: None,
             },
         );
         let session = IpcSession {
@@ -632,6 +699,7 @@ mod tests {
                 IpcSessionEntry {
                     token: format!("token-{id}"),
                     messages: sender,
+                    artifacts: None,
                 },
             );
             let mut pipe = ServerOptions::new().create(&endpoint).unwrap();
@@ -665,5 +733,127 @@ mod tests {
         for server in servers {
             server.await.unwrap();
         }
+    }
+}
+
+async fn artifact_request(session_id: &str, message: &Value) -> Result<Value> {
+    let access = IpcServer::global()
+        .sessions
+        .lock()
+        .await
+        .get(session_id)
+        .and_then(|entry| entry.artifacts.clone())
+        .context("This process has no resource capability")?;
+    let kind = required_string(message, "type")?;
+    match kind.as_str() {
+        "artifact.read" => {
+            let reference: crate::module::artifact::ArtifactRef = serde_json::from_value(
+                message
+                    .get("reference")
+                    .cloned()
+                    .context("Missing resource reference")?,
+            )?;
+            if !access.allows(&reference) {
+                bail!("Resource is not part of this process's authorized input");
+            }
+            tokio::task::spawn_blocking(move || -> Result<Value> {
+                let source = access.store.resolve(&reference)?;
+                // SDK consumers receive a private copy, never the immutable original.
+                let destination = access
+                    .copies
+                    .path()
+                    .join(format!("{}-{}", reference.id, Uuid::new_v4()));
+                std::fs::copy(source, &destination)?;
+                Ok(serde_json::json!({"path": destination}))
+            })
+            .await?
+        },
+        "artifact.save" => {
+            let path = std::path::PathBuf::from(required_string(message, "path")?);
+            let reference = tokio::task::spawn_blocking(move || access.store.import(&path)).await??;
+            let mut sessions = IpcServer::global().sessions.lock().await;
+            let access = sessions
+                .get_mut(session_id)
+                .and_then(|entry| entry.artifacts.as_mut())
+                .context("IPC session has closed")?;
+            access.references.push(reference.clone());
+            Ok(serde_json::to_value(reference)?)
+        },
+        _ => bail!("Unknown resource operation"),
+    }
+}
+
+#[cfg(test)]
+mod artifact_capability_tests {
+    use super::*;
+    #[tokio::test]
+    async fn artifact_ipc_round_trip_returns_private_copies_and_denies_ungranted_reads() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = crate::module::artifact::ArtifactStore::new(temporary.path().join("store"));
+        let private = store.save_bytes("private.pdf", b"%PDF-private").unwrap();
+        let source = temporary.path().join("report.pdf");
+        std::fs::write(&source, b"%PDF-report").unwrap();
+        let access = ArtifactAccess {
+            store: store.clone(),
+            references: Vec::new(),
+            copies: Arc::new(tempfile::tempdir().unwrap()),
+        };
+        let server = IpcServer::global();
+        let id = Uuid::new_v4().to_string();
+        let (messages, _receiver) = mpsc::channel(16);
+        server.sessions.lock().await.insert(
+            id.clone(),
+            IpcSessionEntry {
+                token: "test".into(),
+                messages,
+                artifacts: Some(access),
+            },
+        );
+        let result = artifact_request(&id, &serde_json::json!({"type":"artifact.save", "path":source}))
+            .await
+            .unwrap();
+        let reference: crate::module::artifact::ArtifactRef = serde_json::from_value(result.clone()).unwrap();
+        let loaded = artifact_request(&id, &serde_json::json!({"type":"artifact.read", "reference":result}))
+            .await
+            .unwrap();
+        let copied = std::path::PathBuf::from(loaded["path"].as_str().unwrap());
+        assert_eq!(std::fs::read(&copied).unwrap(), b"%PDF-report");
+        std::fs::write(copied, b"consumer changed copy").unwrap();
+        assert_eq!(
+            std::fs::read(store.resolve(&reference).unwrap()).unwrap(),
+            b"%PDF-report"
+        );
+        assert!(
+            artifact_request(&id, &serde_json::json!({"type":"artifact.read", "reference":private}))
+                .await
+                .is_err()
+        );
+        server.sessions.lock().await.remove(&id);
+        assert!(
+            artifact_request(&id, &serde_json::json!({"type":"artifact.read", "reference":reference}))
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn process_capability_rejects_other_resources_and_forged_metadata() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = crate::module::artifact::ArtifactStore::new(temporary.path().join("store"));
+        let file = store.save_bytes("allowed.pdf", b"%PDF-allowed").unwrap();
+        let other = store.save_bytes("private.pdf", b"%PDF-private").unwrap();
+        let access = ArtifactAccess {
+            store,
+            references: vec![file.clone()],
+            copies: Arc::new(tempfile::tempdir().unwrap()),
+        };
+        assert!(access.allows(&file));
+        assert!(!access.allows(&other));
+        let mut forged = file.clone();
+        forged.size = 1;
+        assert!(!access.allows(&forged));
+        let mut visible = file;
+        visible.name = "[EMAIL REDACTED].pdf".into();
+        assert!(access.allows(&visible));
     }
 }

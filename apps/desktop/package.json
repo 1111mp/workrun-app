@@ -65,6 +65,7 @@
     "semver": "^7.8.5",
     "shiki": "^4.4.3",
     "sonner": "^2.0.8",
+    "yet-another-react-lightbox": "^3.32.2",
     "zod": "^4.6.5",
     "zod-validation-error": "^5.0.0",
     "zundo": "^2.3.0",
