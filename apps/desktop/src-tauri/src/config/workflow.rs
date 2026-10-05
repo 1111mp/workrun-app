@@ -15,16 +15,10 @@ pub struct IWorkflow {
     pub document: Value,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IWorkflows {
     pub workflows: Vec<IWorkflow>,
-}
-
-impl Default for IWorkflows {
-    fn default() -> Self {
-        Self { workflows: vec![] }
-    }
 }
 
 impl IWorkflows {
@@ -39,7 +33,7 @@ impl IWorkflows {
             },
             Err(err) => {
                 logging!(error, Type::Config, "{err}");
-                return Self::default();
+                Self::default()
             },
         }
     }

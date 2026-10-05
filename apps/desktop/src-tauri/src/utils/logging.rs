@@ -3,6 +3,7 @@ use std::fmt;
 use flexi_logger::{DeferredNow, filter::LogLineFilter};
 use log::Record;
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum Type {
     Cmd,
@@ -84,6 +85,7 @@ pub struct ModuleFilter<'a> {
 }
 
 impl<'a> ModuleFilter<'a> {
+    #[allow(unused)]
     pub fn new(block: Vec<&'a str>, exclude: Option<Vec<&'a str>>) -> Self {
         Self { block, exclude }
     }

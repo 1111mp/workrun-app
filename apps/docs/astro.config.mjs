@@ -13,6 +13,7 @@ export default defineConfig({
         en: 'Workrun Docs',
       },
       description: 'A local-first workspace for AI automation.',
+      favicon: '/icon.ico',
       locales: {
         root: { label: 'English', lang: 'en' },
         'zh-cn': { label: '简体中文', lang: 'zh-CN' },
@@ -62,6 +63,11 @@ export default defineConfig({
               label: 'Configure model access',
               translations: { 'zh-CN': '配置模型访问' },
               link: '/getting-started/model-profiles/',
+            },
+            {
+              label: 'FAQs and troubleshooting',
+              translations: { 'zh-CN': '常见问题与故障排查' },
+              link: '/getting-started/troubleshooting/',
             },
           ],
         },

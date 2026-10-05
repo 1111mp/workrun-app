@@ -1,8 +1,8 @@
 {
   "name": "workrun-server",
-  "version": "0.0.1",
-  "description": "Workrun backend API server built with NestJS, MongoDB, and Better Auth.",
+  "version": "0.1.0",
   "private": true,
+  "description": "Workrun backend API server built with NestJS, MongoDB, and Better Auth.",
   "license": "MIT",
   "scripts": {
     "build": "nest build",
@@ -11,9 +11,10 @@
     "start:debug": "cross-env NODE_ENV=development nest start --debug --watch",
     "start:prod": "cross-env NODE_ENV=production node dist/main",
     "oxlint": "oxlint src test --type-aware",
-    "oxlint:fix": "oxlint src test --fix",
+    "oxlint:fix": "oxlint src test --type-aware --fix",
     "format": "oxfmt --check src",
     "format:write": "oxfmt --write src",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",

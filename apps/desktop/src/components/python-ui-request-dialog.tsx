@@ -14,45 +14,91 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import ajvErrors from 'ajv-errors';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 
 const validator = customizeValidator({ extenderFn: ajvErrors });
 
 import {
   onPythonUiRequest,
+  onPythonIpcSessionClosed,
   respondToPythonUiRequest,
   type PythonUiRequestEvent,
 } from '@/services/python-ipc';
 
 /** Renders an IPC interaction using the same JSON Schema and uiSchema contract as RJSF. */
 function PythonUiRequestDialog() {
-  const [request, setRequest] = useState<PythonUiRequestEvent | null>(null);
+  const [requests, setRequests] = useState<PythonUiRequestEvent[]>([]);
+  const request = requests[0];
+  const responseInFlight = useRef(false);
+  const closedSessions = useRef(new Set<string>());
   const [responding, setResponding] = useState(false);
   const [liveValidationRequestId, setLiveValidationRequestId] = useState<
     string | null
   >(null);
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
+    let unlistenClosed: (() => void) | undefined;
     void onPythonUiRequest((request) => {
-      setRequest(request);
+      if (disposed || closedSessions.current.has(request.runId)) return;
+      setRequests((current) =>
+        current.some(
+          (item) =>
+            item.runId === request.runId &&
+            item.requestId === request.requestId,
+        )
+          ? current
+          : [...current, request],
+      );
     }).then((dispose) => {
-      unlisten = dispose;
+      if (disposed) dispose();
+      else unlisten = dispose;
+    });
+    void onPythonIpcSessionClosed((sessionId) => {
+      closedSessions.current.add(sessionId);
+      if (!disposed)
+        setRequests((current) =>
+          current.filter((item) => item.runId !== sessionId),
+        );
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenClosed = dispose;
     });
 
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlisten?.();
+      unlistenClosed?.();
+    };
   }, []);
 
   const respond = async (data: unknown) => {
-    if (!request || responding) return;
+    if (!request || responseInFlight.current) return;
+    responseInFlight.current = true;
     setResponding(true);
     // A submitted collect() call can immediately issue a follow-up confirm().
     // Clear only the request being answered before the IPC round trip, so the
     // new prompt cannot be erased by this older async handler.
-    setRequest(null);
+    setRequests((current) =>
+      current.filter(
+        (item) =>
+          item.runId !== request.runId || item.requestId !== request.requestId,
+      ),
+    );
     try {
       await respondToPythonUiRequest(request, data);
+    } catch (error) {
+      if (!closedSessions.current.has(request.runId)) {
+        setRequests((current) => [request, ...current]);
+      }
+      toast.error('Could not submit the form', {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
     } finally {
+      responseInFlight.current = false;
       setResponding(false);
     }
   };

@@ -13,6 +13,19 @@ uv build
 uv run pytest
 ```
 
+Desktop Rust library tests on Windows MSVC require Common Controls v6 in the
+test executable. After preparing this SDK's test environment, run from the
+repository root:
+
+```bash
+cargo test --manifest-path apps/desktop/Cargo.toml -p workrun --lib --features windows-test-manifest
+```
+
+Keep `windows-test-manifest` disabled for normal Desktop builds. macOS and Linux
+do not need this feature; their build scripts do not emit Windows manifest flags.
+`--all-features` also enables the test manifest on Windows MSVC; use default
+features when building the application for distribution.
+
 The distribution name is `workrun-sdk`; its Python import package is
 `workrun_sdk`.
 
@@ -56,6 +69,30 @@ data, arrays, or custom RJSF UI options, use `form()` with JSON Schema.
 
 Workrun injects `WORKRUN_IPC_ENDPOINT`, `WORKRUN_IPC_TOKEN`, and
 `WORKRUN_RUN_ID` into scripts it launches.
+
+### Concurrent requests
+
+The SDK shares one IPC client across `collect()`, `form()`, `confirm()`, and
+result helpers in a Python process. Multiple threads can call these helpers
+concurrently: writes are serialized to preserve message boundaries, and one
+reader matches responses to request IDs, including responses arriving out of
+order. Each call blocks only its calling thread until its response arrives.
+
+Separate App runs have separate session IDs and tokens. Desktop queues their
+forms in arrival order and displays one form at a time. Ending an App session
+removes its queued forms; losing the connection fails pending SDK requests.
+One session accepts one active connection, so child processes should not create
+independent SDK clients with credentials inherited from their parent.
+
+The Desktop scheduler currently allows two top-level Apps to execute at once,
+within a total limit of four top-level App/Workflow runs. Further runs remain
+queued. Workflow-internal Apps execute as part of their workflow rather than
+consuming another top-level App slot.
+
+IPC frames are limited to 1 MiB each. User interaction calls have no automatic
+timeout. Pending forms are held in the current renderer and are not restored
+after a full renderer reload. Cancelling an App during dependency preparation
+currently waits for that preparation operation to return before completing.
 
 ### Tool Apps
 

@@ -4,12 +4,7 @@ use crate::{feat, module::state::NodeStateUpdate};
 pub(super) fn add_subworkflow_node(
     graph: StateGraph,
     node: &WorkflowNode,
-    config: &IWorkrun,
-    on_event: Option<Channel<StreamEvent>>,
-    state: SharedWorkflowState,
-    state_config: WorkflowNodeStateConfig,
-    workflow_path: Vec<String>,
-    execution_profile: WorkflowExecutionProfile,
+    context: SubworkflowNodeConfig,
 ) -> Result<StateGraph> {
     let workflow_id = string_data(node, "workflowId")
         .filter(|id| !id.trim().is_empty())
@@ -17,14 +12,23 @@ pub(super) fn add_subworkflow_node(
     Ok(graph.add_node(SubworkflowNode {
         id: node.id.clone(),
         workflow_id,
-        config: config.clone(),
-        on_event,
-        state,
-        global_keys: state_config.global_keys,
-        sensitive_fields: state_config.sensitive_fields,
-        workflow_path,
-        execution_profile,
+        config: context.config,
+        on_event: context.on_event,
+        state: context.state,
+        global_keys: context.state_config.global_keys,
+        sensitive_fields: context.state_config.sensitive_fields,
+        workflow_path: context.workflow_path,
+        execution_profile: context.execution_profile,
     }))
+}
+
+pub(super) struct SubworkflowNodeConfig {
+    pub(super) config: IWorkrun,
+    pub(super) on_event: Option<Channel<StreamEvent>>,
+    pub(super) state: SharedWorkflowState,
+    pub(super) state_config: WorkflowNodeStateConfig,
+    pub(super) workflow_path: Vec<String>,
+    pub(super) execution_profile: WorkflowExecutionProfile,
 }
 
 struct SubworkflowNode {

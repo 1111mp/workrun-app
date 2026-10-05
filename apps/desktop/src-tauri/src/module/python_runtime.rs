@@ -19,7 +19,7 @@ use std::{
     process::Stdio,
     sync::Arc,
 };
-use tauri::{AppHandle, Manager as _, ipc::Channel};
+use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -43,6 +43,10 @@ pub struct PythonRuntime;
 #[cfg(windows)]
 struct WindowsJob(windows::Win32::Foundation::HANDLE);
 
+// A Windows HANDLE may be closed from a thread other than the one that created it.
+#[cfg(windows)]
+unsafe impl Send for WindowsJob {}
+
 #[cfg(windows)]
 impl Drop for WindowsJob {
     fn drop(&mut self) {
@@ -56,6 +60,16 @@ impl Drop for WindowsJob {
 
 #[cfg(windows)]
 static WINDOWS_JOBS: Lazy<Mutex<HashMap<u32, WindowsJob>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(windows)]
+struct WindowsJobRegistration(u32);
+
+#[cfg(windows)]
+impl Drop for WindowsJobRegistration {
+    fn drop(&mut self) {
+        WINDOWS_JOBS.lock().remove(&self.0);
+    }
+}
 
 /// A Python interpreter installed and owned by Workrun.
 #[derive(Debug, Serialize)]
@@ -146,11 +160,10 @@ impl PythonRuntime {
         }
     }
 
-    fn sdk_wheels_dir(app: &AppHandle) -> Result<PathBuf> {
-        let resource_dir = app
-            .path()
-            .resource_dir()
-            .context("failed to resolve application resource directory")?;
+    fn sdk_wheels_dir() -> Result<PathBuf> {
+        let resource_dir = dirs::app_resources_dir()?;
+        // Tauri keeps the configured `resources/` directory when copying it
+        // into an application bundle.
         let wheels_dir = resource_dir.join(SDK_WHEELS_DIR);
         if wheels_dir.is_dir() {
             return Ok(wheels_dir);
@@ -360,7 +373,7 @@ impl PythonRuntime {
     /// Add the bundled Workrun Python SDK as a project dependency without creating an environment.
     pub async fn add_workrun_sdk_dependency(project_path: &Path) -> Result<()> {
         let app = handle::Handle::app_handle();
-        let sdk_wheels_dir = Self::sdk_wheels_dir(app)?;
+        let sdk_wheels_dir = Self::sdk_wheels_dir()?;
         let output = Self::uv_command(app)?
             .arg("add")
             .arg("--no-sync")
@@ -566,7 +579,7 @@ impl PythonRuntime {
         let used_existing_lockfile = lockfile_path.is_file();
         let environment = Self::ensure_venv(app, &project_path, requested_version).await?;
         let sdk_mode = Self::sdk_mode()?;
-        let sdk_wheels_dir = Self::sdk_wheels_dir(app)?;
+        let sdk_wheels_dir = Self::sdk_wheels_dir()?;
 
         let output = Self::uv_command(app)?
             .arg("sync")
@@ -608,6 +621,7 @@ impl PythonRuntime {
     /// The script must resolve to a file inside the project directory. A
     /// non-zero script exit is represented in the returned result, rather than
     /// being turned into a runtime setup error.
+    #[allow(unused)]
     pub async fn run_python(
         environment: &ManagedVenv,
         script_path: &Path,
@@ -735,7 +749,7 @@ impl PythonRuntime {
             .with_context(|| format!("failed to execute Python script {}", script_path.display()))?;
         let child_pid = child.id();
         #[cfg(windows)]
-        Self::assign_windows_job(&child)?;
+        let job_registration = Self::assign_windows_job(&child)?;
         if let (Some(on_started), Some(pid)) = (on_started, child_pid) {
             on_started(pid);
         }
@@ -757,18 +771,22 @@ impl PythonRuntime {
             Ok::<(), anyhow::Error>(())
         };
 
+        let wait = async {
+            let status = child.wait().await;
+            // Descendants can inherit stdout/stderr. Close the Job as soon as
+            // the entrypoint exits, before waiting for those pipes to drain.
+            #[cfg(windows)]
+            drop(job_registration);
+            status
+        };
         let (status, stdin_result, stdout_result, stderr_result) = tokio::join!(
-            child.wait(),
+            wait,
             stdin_writer,
             forward_output(stdout, PythonOutputStream::Stdout, Arc::clone(&on_output)),
             forward_output(stderr, PythonOutputStream::Stderr, on_output),
         );
         let status =
             status.with_context(|| format!("failed while executing Python script {}", script_path.display()))?;
-        #[cfg(windows)]
-        if let Some(pid) = child_pid {
-            WINDOWS_JOBS.lock().remove(&pid);
-        }
         stdout_result?;
         stderr_result?;
         stdin_result?;
@@ -780,13 +798,13 @@ impl PythonRuntime {
     }
 
     #[cfg(windows)]
-    fn assign_windows_job(child: &tokio::process::Child) -> Result<()> {
+    fn assign_windows_job(child: &tokio::process::Child) -> Result<WindowsJobRegistration> {
         use std::os::windows::io::RawHandle;
         use windows::Win32::{
             Foundation::HANDLE,
             System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JobObjectExtendedLimitInformation, SetInformationJobObject,
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
             },
         };
 
@@ -794,22 +812,22 @@ impl PythonRuntime {
             .id()
             .context("Python process exited before Job Object assignment")?;
         let raw_handle = child.raw_handle().context("Python process handle is unavailable")?;
-        let job = unsafe { CreateJobObjectW(None, None) }.context("failed to create Python Job Object")?;
-        let mut limits = JOB_OBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        let job = WindowsJob(unsafe { CreateJobObjectW(None, None) }.context("failed to create Python Job Object")?);
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         unsafe {
             SetInformationJobObject(
-                job,
+                job.0,
                 JobObjectExtendedLimitInformation,
-                Some(&limits as *const _ as _),
+                &limits as *const _ as _,
                 std::mem::size_of_val(&limits) as u32,
             )
             .context("failed to configure Python Job Object")?;
-            AssignProcessToJobObject(job, HANDLE(raw_handle as RawHandle as *mut _))
+            AssignProcessToJobObject(job.0, HANDLE(raw_handle as RawHandle as *mut _))
                 .context("failed to assign Python process to Job Object")?;
         }
-        WINDOWS_JOBS.lock().insert(pid, WindowsJob(job));
-        Ok(())
+        WINDOWS_JOBS.lock().insert(pid, job);
+        Ok(WindowsJobRegistration(pid))
     }
 }
 
@@ -855,5 +873,130 @@ mod tests {
                 "{version} should be rejected"
             );
         }
+    }
+
+    #[cfg(windows)]
+    struct TestProject(super::ManagedVenv);
+
+    #[cfg(windows)]
+    impl TestProject {
+        fn new(script: &str) -> Self {
+            let python = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../packages/python-sdk/.venv/Scripts/python.exe");
+            assert!(python.is_file(), "prepare the Python SDK test environment first");
+            let path = std::env::temp_dir().join(format!("workrun-runtime-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            let path = dunce::canonicalize(path).unwrap();
+            std::fs::write(path.join("main.py"), script).unwrap();
+            Self(super::ManagedVenv {
+                project_path: path.clone(),
+                environment_path: path,
+                executable_path: python.clone(),
+                python: super::ManagedPython {
+                    requested_version: "3.12".into(),
+                    executable_path: python,
+                    version: "test".into(),
+                },
+            })
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0.project_path);
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn streams_large_stdout_stderr_and_stdin_without_deadlock() {
+        use super::*;
+        let project = TestProject::new(
+            "import sys\nsys.stdout.write('o' * 200000)\nsys.stdout.flush()\nsys.stderr.write('e' * 200000)\nsys.stderr.flush()\nassert len(sys.stdin.buffer.read()) == 200000\n",
+        );
+        let counts = Arc::new(parking_lot::Mutex::new((0, 0)));
+        let captured = Arc::clone(&counts);
+        let input = vec![b'i'; 200000];
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            PythonRuntime::run_python_streaming_with_env_and_stdin(
+                &project.0,
+                std::path::Path::new("main.py"),
+                &[],
+                &[],
+                Some(&input),
+                Arc::new(move |chunk| {
+                    let mut count = captured.lock();
+                    match chunk.stream {
+                        PythonOutputStream::Stdout => count.0 += chunk.data.len(),
+                        PythonOutputStream::Stderr => count.1 += chunk.data.len(),
+                    }
+                }),
+                None,
+            ),
+        )
+        .await
+        .expect("streaming blocked")
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(*counts.lock(), (200000, 200000));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn parent_exit_closes_descendants_and_inherited_output_pipes() {
+        use super::*;
+        let project = TestProject::new(
+            "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\nprint('parent completed', flush=True)\n",
+        );
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            PythonRuntime::run_python_streaming_with_env_and_stdin(
+                &project.0,
+                std::path::Path::new("main.py"),
+                &[],
+                &[],
+                None,
+                Arc::new(|_| {}),
+                None,
+            ),
+        )
+        .await
+        .expect("descendant held output pipes open")
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn cancellation_terminates_running_python_and_releases_the_job() {
+        use super::*;
+        let project = Arc::new(TestProject::new("import time\ntime.sleep(30)\n"));
+        let task_project = Arc::clone(&project);
+        let (started, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            PythonRuntime::run_python_streaming_with_env_and_stdin(
+                &task_project.0,
+                std::path::Path::new("main.py"),
+                &[],
+                &[],
+                None,
+                Arc::new(|_| {}),
+                Some(Arc::new(move |pid| {
+                    let _ = started.send(pid);
+                })),
+            )
+            .await
+        });
+        let pid = receiver.recv().await.unwrap();
+        PythonRuntime::terminate_process_tree(pid);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_ne!(result.exit_code, Some(0));
+        assert!(!WINDOWS_JOBS.lock().contains_key(&pid));
     }
 }

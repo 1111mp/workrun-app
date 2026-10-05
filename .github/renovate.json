@@ -1,0 +1,72 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
+  "baseBranchPatterns": ["dev"],
+  "timezone": "Asia/Shanghai",
+  "enabledManagers": ["cargo", "npm", "github-actions"],
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 3,
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**",
+    "shared/**"
+  ],
+  "rangeStrategy": "replace",
+  "semanticCommits": "enabled",
+  "npm": {
+    "minimumReleaseAge": "24 hours"
+  },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "matchPackageNames": ["*"],
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "Disable node/pnpm version updates",
+      "matchPackageNames": ["node", "pnpm"],
+      "matchDepTypes": ["engines", "packageManager"],
+      "enabled": false
+    },
+    {
+      "description": "The only Rust workspace is the Tauri desktop app, so keep its Cargo updates isolated from JavaScript changes.",
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["apps/desktop/**"],
+      "groupName": "desktop cargo dependencies"
+    },
+    {
+      "description": "One pnpm lockfile serves the root, apps, and packages workspaces; update them together to preserve a consistent dependency graph.",
+      "matchManagers": ["npm"],
+      "groupName": "pnpm workspace dependencies"
+    },
+    {
+      "description": "pnpm deduplication applies only to the JavaScript workspace lockfile, not Cargo artifacts.",
+      "matchManagers": ["npm"],
+      "postUpdateOptions": ["pnpmDedupe"]
+    },
+    {
+      "description": "Group all GitHub Actions updates into a single PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "matchDatasources": ["github-actions"],
+      "matchPackageNames": ["ubuntu-22.04", "ubuntu-24.04"],
+      "enabled": false
+    }
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "description": "Refresh both pnpm-lock.yaml and the desktop Cargo.lock monthly, including Git-sourced Cargo dependencies.",
+    "schedule": ["* 0-4 1 * *"],
+    "automerge": true
+  }
+}

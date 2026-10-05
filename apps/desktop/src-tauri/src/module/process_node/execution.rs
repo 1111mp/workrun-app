@@ -186,10 +186,10 @@ fn apply_input_defaults(input: &Value, schemas: &BTreeMap<String, Value>) -> Res
         .as_object_mut()
         .context("Process Node input must be a JSON object")?;
     for (name, schema) in schemas {
-        if !state.contains_key(name) {
-            if let Some(default) = schema.get("default") {
-                state.insert(name.clone(), default.clone());
-            }
+        if !state.contains_key(name)
+            && let Some(default) = schema.get("default")
+        {
+            state.insert(name.clone(), default.clone());
         }
     }
     Ok(input)
@@ -200,14 +200,17 @@ const MAX_WORKFLOW_LOG_CHARS: usize = 200_000;
 fn append_output(current: &mut String, chunk: &str) {
     current.push_str(chunk);
     if current.len() > MAX_WORKFLOW_LOG_CHARS {
-        let keep_from = current.len() - MAX_WORKFLOW_LOG_CHARS;
+        let mut keep_from = current.len() - MAX_WORKFLOW_LOG_CHARS;
+        while !current.is_char_boundary(keep_from) {
+            keep_from += 1;
+        }
         current.replace_range(..keep_from, "[Earlier output truncated]\n");
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::apply_input_defaults;
+    use super::{MAX_WORKFLOW_LOG_CHARS, append_output, apply_input_defaults};
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -221,5 +224,13 @@ mod tests {
         let result = apply_input_defaults(&json!({"branch": "release"}), &schemas).unwrap();
 
         assert_eq!(result, json!({"branch": "release", "limit": 250}));
+    }
+
+    #[test]
+    fn truncates_large_unicode_logs_at_a_character_boundary() {
+        let mut logs = String::new();
+        append_output(&mut logs, &"中".repeat(MAX_WORKFLOW_LOG_CHARS));
+        assert!(logs.starts_with("[Earlier output truncated]\n"));
+        assert!(logs.ends_with('中'));
     }
 }

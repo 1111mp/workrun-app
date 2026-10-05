@@ -434,53 +434,6 @@ fn stale_scoped_team_releases(replacement: &IProcessNode, installed: Vec<IProces
         .collect()
 }
 
-#[cfg(test)]
-mod installation_scope_tests {
-    use super::stale_scoped_team_releases;
-    use crate::config::{IProcessNode, ProcessNodeKind, ProcessNodePublicationStatus, ToolExecutionPolicy};
-    use crate::module::tool_registry::ToolRiskLevel;
-    use std::collections::BTreeMap;
-
-    fn node(id: &str, remote_app_id: &str, release_id: &str, scope: &str) -> IProcessNode {
-        IProcessNode {
-            id: id.into(),
-            name: "App".into(),
-            description: String::new(),
-            version: "1.0.0".into(),
-            created_at: String::new(),
-            updated_at: String::new(),
-            entry: "main.py".into(),
-            project_root: None,
-            kind: ProcessNodeKind::Workflow,
-            tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
-            tool_risk_level: ToolRiskLevel::Low,
-            tool_permissions: Vec::new(),
-            inputs: BTreeMap::new(),
-            outputs: BTreeMap::new(),
-            publication_status: ProcessNodePublicationStatus::Published,
-            remote_app_id: Some(remote_app_id.into()),
-            remote_release_id: Some(release_id.into()),
-            remote_archive_sha256: Some("sha".into()),
-            team_installation_scope: Some(scope.into()),
-        }
-    }
-
-    #[test]
-    fn replacing_a_release_only_cleans_its_app_in_the_same_workflow_scope() {
-        let replacement = node("new", "app-a", "release-2", "release-workflow-a");
-        let stale = stale_scoped_team_releases(
-            &replacement,
-            vec![
-                node("old", "app-a", "release-1", "release-workflow-a"),
-                node("other-workflow", "app-a", "release-1", "release-workflow-b"),
-                node("other-app", "app-b", "release-1", "release-workflow-a"),
-            ],
-        );
-
-        assert_eq!(stale.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(), ["old"]);
-    }
-}
-
 fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive> {
     let gitignore = load_gitignore(project_path)?;
     let archive_path = std::env::temp_dir().join(format!("workrun-source-{}.tar.gz", Uuid::now_v7()));
@@ -726,4 +679,51 @@ fn workflow_uses_process_node(document: &serde_json::Value, id: &str) -> bool {
                     .filter_map(serde_json::Value::as_str)
                     .any(|tool_id| tool_id == id)
         })
+}
+
+#[cfg(test)]
+mod installation_scope_tests {
+    use super::stale_scoped_team_releases;
+    use crate::config::{IProcessNode, ProcessNodeKind, ProcessNodePublicationStatus, ToolExecutionPolicy};
+    use crate::module::tool_registry::ToolRiskLevel;
+    use std::collections::BTreeMap;
+
+    fn node(id: &str, remote_app_id: &str, release_id: &str, scope: &str) -> IProcessNode {
+        IProcessNode {
+            id: id.into(),
+            name: "App".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            entry: "main.py".into(),
+            project_root: None,
+            kind: ProcessNodeKind::Workflow,
+            tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
+            tool_risk_level: ToolRiskLevel::Low,
+            tool_permissions: Vec::new(),
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            publication_status: ProcessNodePublicationStatus::Published,
+            remote_app_id: Some(remote_app_id.into()),
+            remote_release_id: Some(release_id.into()),
+            remote_archive_sha256: Some("sha".into()),
+            team_installation_scope: Some(scope.into()),
+        }
+    }
+
+    #[test]
+    fn replacing_a_release_only_cleans_its_app_in_the_same_workflow_scope() {
+        let replacement = node("new", "app-a", "release-2", "release-workflow-a");
+        let stale = stale_scoped_team_releases(
+            &replacement,
+            vec![
+                node("old", "app-a", "release-1", "release-workflow-a"),
+                node("other-workflow", "app-a", "release-1", "release-workflow-b"),
+                node("other-app", "app-b", "release-1", "release-workflow-a"),
+            ],
+        );
+
+        assert_eq!(stale.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(), ["old"]);
+    }
 }

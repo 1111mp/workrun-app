@@ -8,16 +8,16 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import AdmZip from 'adm-zip';
 import { extract as extractTar } from 'tar';
 
 // Deliberately pin uv: it is shipped in every Workrun application bundle.
 // Update this value in a dedicated dependency-update change, then let this
 // script fetch and verify the corresponding official release artifact.
-const UV_VERSION = '0.12.19';
+const UV_VERSION = '0.12.22';
 const RELEASE_BASE = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
 const BINARIES_DIR = fileURLToPath(
   new URL('../src-tauri/binaries/', import.meta.url),
@@ -37,6 +37,7 @@ const TARGETS = {
   'i686-pc-windows-msvc': { platform: 'win32', archive: 'zip' },
   'x86_64-pc-windows-msvc': { platform: 'win32', archive: 'zip' },
   'aarch64-unknown-linux-gnu': { platform: 'linux', archive: 'tar.gz' },
+  'armv7-unknown-linux-gnueabihf': { platform: 'linux', archive: 'tar.gz' },
   'i686-unknown-linux-gnu': { platform: 'linux', archive: 'tar.gz' },
   'x86_64-unknown-linux-gnu': { platform: 'linux', archive: 'tar.gz' },
 };
@@ -72,16 +73,18 @@ async function download(url) {
 }
 
 async function extractArchive(archivePath, destination, archiveType) {
-  if (archiveType !== 'tar.gz') {
-    throw new Error(`Unsupported archive type: ${archiveType}`);
-  }
-
   try {
-    await extractTar({
-      file: archivePath,
-      cwd: destination,
-      gzip: true,
-    });
+    if (archiveType === 'zip') {
+      new AdmZip(archivePath).extractAllTo(destination, true);
+    } else if (archiveType === 'tar.gz') {
+      await extractTar({
+        file: archivePath,
+        cwd: destination,
+        gzip: true,
+      });
+    } else {
+      throw new Error(`Unsupported archive type: ${archiveType}`);
+    }
   } catch (error) {
     throw new Error(`Unable to extract ${basename(archivePath)}: ${error}`);
   }
@@ -123,7 +126,10 @@ console.log(
   `Downloading uv ${UV_VERSION} for ${triple}${FORCE ? ' (forced)' : ''}…`,
 );
 
-const tempDir = await mkdtemp(join(tmpdir(), 'workrun-uv-'));
+await mkdir(BINARIES_DIR, { recursive: true });
+// Keep staging on the destination filesystem: Windows CI's temp directory
+// and checkout can be on different drives, where rename fails with EXDEV.
+const tempDir = await mkdtemp(join(BINARIES_DIR, '.workrun-uv-'));
 try {
   const [archive, checksumFile] = await Promise.all([
     download(archiveUrl),
@@ -148,7 +154,6 @@ try {
   if (!sourceBinary)
     throw new Error(`The uv archive did not contain uv${extension}`);
 
-  await mkdir(BINARIES_DIR, { recursive: true });
   const stagedPath = join(tempDir, sidecarName);
   await writeFile(stagedPath, await readFile(sourceBinary), { mode: 0o755 });
   await rm(sidecarPath, { force: true });

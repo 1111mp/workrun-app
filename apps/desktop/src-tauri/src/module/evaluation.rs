@@ -1073,8 +1073,7 @@ impl EvaluationStore {
             };
             let rows = sqlx::query("SELECT evaluation_case_id, case_snapshot_json, verdict FROM evaluation_case_results WHERE evaluation_run_id = ?")
                 .bind(run_id).fetch_all(&pool).await?;
-            Ok(rows
-                .into_iter()
+            rows.into_iter()
                 .map(|row| {
                     let id: String = row.try_get("evaluation_case_id")?;
                     let snapshot: Value =
@@ -1091,7 +1090,7 @@ impl EvaluationStore {
                         ),
                     ))
                 })
-                .collect::<Result<HashMap<_, _>, sqlx::Error>>()?)
+                .collect::<Result<HashMap<_, _>, sqlx::Error>>()
         };
         let before = read_cases(baseline_run).await?;
         let after = read_cases(candidate_run).await?;
@@ -2971,7 +2970,7 @@ mod tests {
         let score = score(&expectation, observation).unwrap();
         assert!(!score.passed);
         assert_eq!(score.criteria[0].actual["presentFields"][0]["path"], "$.customer.email");
-        assert!(score.criteria[0].actual.to_string().contains("customer@example.com") == false);
+        assert!(!score.criteria[0].actual.to_string().contains("customer@example.com"));
     }
 
     #[test]

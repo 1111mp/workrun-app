@@ -68,7 +68,7 @@ export class MongoGridFS {
         finalPath = `${tmpdir()}/${options.filename}`;
       } else {
         if (options.filename === true) {
-          finalPath = `${tmpdir()}/${object._id}`;
+          finalPath = `${tmpdir()}/${object._id as unknown as string}`;
         } else {
           finalPath = uniqueFilename(tmpdir());
         }

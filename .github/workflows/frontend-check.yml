@@ -1,0 +1,78 @@
+name: Frontend Check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  HUSKY: 0
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check frontend changes
+        id: check_frontend
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            frontend:
+              - 'apps/desktop/src/**'
+              - 'apps/docs/src/**'
+              - 'packages/ui/src/**'
+              - 'packages/json-schema-form/src/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+              - '.oxlintrc.json'
+              - 'apps/desktop/tsconfig.json'
+              - 'apps/desktop/tsconfig.app.json'
+              - 'apps/desktop/tsconfig.node.json'
+              - 'apps/desktop/vite.config.*'
+              - 'apps/docs/tsconfig.json'
+              - 'packages/ui/tsconfig.json'
+              - 'packages/json-schema-form/tsconfig.json'
+
+      - name: Skip if no frontend changes
+        if: steps.check_frontend.outputs.frontend != 'true'
+        run: echo "No frontend changes, skipping frontend checks."
+
+      - name: Install pnpm
+        if: steps.check_frontend.outputs.frontend == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        if: steps.check_frontend.outputs.frontend == 'true'
+        with:
+          node-version: '24.21.0'
+          cache: 'pnpm'
+
+      - name: Restore pnpm cache
+        if: steps.check_frontend.outputs.frontend == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ~/.pnpm-store
+          key: "pnpm-shared-stable-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}"
+          restore-keys: |
+            pnpm-shared-stable-${{ runner.os }}-
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.check_frontend.outputs.frontend == 'true'
+
+      # Path filters gate execution; Turbo filters limit which packages are checked.
+      - name: Run formatting check
+        if: steps.check_frontend.outputs.frontend == 'true'
+        run: pnpm format --filter=workrun --filter=workrun-docs --filter=@workspace/ui --filter=@workspace/json-schema-form
+
+      - name: Run Oxlint
+        if: steps.check_frontend.outputs.frontend == 'true'
+        run: pnpm oxlint --filter=workrun --filter=workrun-docs --filter=@workspace/ui --filter=@workspace/json-schema-form
+
+      - name: Run TypeScript typecheck
+        if: steps.check_frontend.outputs.frontend == 'true'
+        run: pnpm typecheck --filter=workrun --filter=workrun-docs --filter=@workspace/ui --filter=@workspace/json-schema-form

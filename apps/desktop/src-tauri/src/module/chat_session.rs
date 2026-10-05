@@ -226,18 +226,17 @@ impl ChatSessionStore {
             });
             let event: Option<String> = sqlx::query_scalar("SELECT event_json FROM run_events WHERE run_id = ? AND json_extract(event_json, '$.type') = 'message' AND json_extract(event_json, '$.is_final') = 1 ORDER BY sequence DESC LIMIT 1")
                 .bind(&run_id).fetch_optional(&pool).await?;
-            if let Some(event) = event {
-                if let Some(content) = serde_json::from_str::<Value>(&event)
+            if let Some(event) = event
+                && let Some(content) = serde_json::from_str::<Value>(&event)
                     .ok()
                     .and_then(|value| value.get("content").and_then(Value::as_str).map(str::to_owned))
                     .filter(|content| !content.trim().is_empty())
-                {
-                    messages.push(ConversationMessage {
-                        sequence,
-                        role: "assistant".to_string(),
-                        content,
-                    });
-                }
+            {
+                messages.push(ConversationMessage {
+                    sequence,
+                    role: "assistant".to_string(),
+                    content,
+                });
             }
         }
         Ok(messages)
@@ -550,8 +549,10 @@ mod tests {
 
     #[test]
     fn internal_summary_model_uses_its_explicit_workrun_setting() {
-        let mut config = IWorkrun::default();
-        config.summary_model_profile_id = Some("openai-gpt-5.6-luna".to_string());
+        let config = IWorkrun {
+            summary_model_profile_id: Some("openai-gpt-5.6-luna".to_string()),
+            ..Default::default()
+        };
 
         let model = internal_summary_model(&config).unwrap();
 

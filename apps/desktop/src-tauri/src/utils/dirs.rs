@@ -302,6 +302,23 @@ fn is_path_component(value: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+#[allow(unused)]
+#[async_trait]
+pub trait PathBufExec {
+    async fn remove_if_exists(&self) -> Result<()>;
+}
+
+#[async_trait]
+impl PathBufExec for PathBuf {
+    async fn remove_if_exists(&self) -> Result<()> {
+        if self.exists() {
+            tokio::fs::remove_file(self).await?;
+            logging!(info, Type::File, "Removed file: {:?}", self);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,22 +371,5 @@ mod tests {
             )
             .is_err()
         );
-    }
-}
-
-#[allow(unused)]
-#[async_trait]
-pub trait PathBufExec {
-    async fn remove_if_exists(&self) -> Result<()>;
-}
-
-#[async_trait]
-impl PathBufExec for PathBuf {
-    async fn remove_if_exists(&self) -> Result<()> {
-        if self.exists() {
-            tokio::fs::remove_file(self).await?;
-            logging!(info, Type::File, "Removed file: {:?}", self);
-        }
-        Ok(())
     }
 }

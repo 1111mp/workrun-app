@@ -24,6 +24,11 @@ export default defineConfig(async ({ mode }) => ({
     tailwindcss(),
   ],
 
+  build: {
+    emptyOutDir: true,
+    outDir: '../dist',
+  },
+
   define: {
     OS_ARCH: `"${process.arch}"`,
     OS_PLATFORM: `"${process.platform}"`,

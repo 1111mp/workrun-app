@@ -184,10 +184,10 @@ fn apply_session_state(initial_state: &mut Value, saved_state: &Value, fields: &
     // The configured allowlist is the only bridge across runs. Conversation
     // text is separate prompt context and must never silently become State.
     for key in fields {
-        if !input.contains_key(key) {
-            if let Some(value) = saved.get(key) {
-                input.insert(key.clone(), value.clone());
-            }
+        if !input.contains_key(key)
+            && let Some(value) = saved.get(key)
+        {
+            input.insert(key.clone(), value.clone());
         }
     }
     Ok(())

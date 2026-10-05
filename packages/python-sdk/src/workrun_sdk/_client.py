@@ -52,7 +52,7 @@ def _open_windows_named_pipe(endpoint: str) -> BinaryIO:
 
 @final
 class WorkrunClient:
-    """One serial connection to the desktop host for a single script run."""
+    """One shared connection that dispatches concurrent requests by ID."""
 
     def __init__(self, endpoint: str, token: str, run_id: str) -> None:
         self._endpoint = endpoint
@@ -158,7 +158,7 @@ class WorkrunClient:
                     "cancelLabel": cancel_label,
                 }
             )
-        except (OSError, ProtocolError) as error:
+        except (OSError, ProtocolError, ValueError) as error:
             with self._pending_lock:
                 _ = self._pending.pop(request_id, None)
             raise WorkrunConnectionError(
@@ -176,7 +176,7 @@ class WorkrunClient:
             self._pending[request_id] = future
         try:
             self._send({**message, "id": request_id})
-        except (OSError, ProtocolError) as error:
+        except (OSError, ProtocolError, ValueError) as error:
             with self._pending_lock:
                 _ = self._pending.pop(request_id, None)
             raise WorkrunConnectionError("failed to send host event") from error
@@ -197,7 +197,7 @@ class WorkrunClient:
         while True:
             try:
                 message = receive_message(connection)
-            except (OSError, ProtocolError):
+            except (OSError, ProtocolError, ValueError):
                 self._connection_lost(connection)
                 return
             request_id = message.get("id")

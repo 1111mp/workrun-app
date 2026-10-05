@@ -565,7 +565,11 @@ pub async fn compile(
     config: &IWorkrun,
     on_event: Option<Channel<StreamEvent>>,
 ) -> Result<CompiledWorkflow> {
-    let path = (!dsl.id.is_empty()).then(|| vec![dsl.id.clone()]).unwrap_or_default();
+    let path = if !dsl.id.is_empty() {
+        vec![dsl.id.clone()]
+    } else {
+        Default::default()
+    };
     compile_with_path(dsl, config, on_event, path, WorkflowExecutionProfile::Production).await
 }
 
@@ -576,7 +580,11 @@ pub async fn compile_for_evaluation(
     on_event: Option<Channel<StreamEvent>>,
     profile: EvaluationExecutionProfile,
 ) -> Result<CompiledWorkflow> {
-    let path = (!dsl.id.is_empty()).then(|| vec![dsl.id.clone()]).unwrap_or_default();
+    let path = if !dsl.id.is_empty() {
+        vec![dsl.id.clone()]
+    } else {
+        Default::default()
+    };
     compile_with_path(
         dsl,
         config,
@@ -732,12 +740,14 @@ pub(super) async fn compile_with_path(
             "subworkflow" => add_subworkflow_node(
                 graph,
                 node,
-                config,
-                on_event.clone(),
-                Arc::clone(&state),
-                node_state_config(node, &executable_ids)?,
-                workflow_path.clone(),
-                execution_profile.clone(),
+                SubworkflowNodeConfig {
+                    config: config.clone(),
+                    on_event: on_event.clone(),
+                    state: Arc::clone(&state),
+                    state_config: node_state_config(node, &executable_ids)?,
+                    workflow_path: workflow_path.clone(),
+                    execution_profile: execution_profile.clone(),
+                },
             )?,
             "terminate" => add_terminate_node(graph, node, on_event.clone()),
             // Build the LLM only at execution time. This keeps `compile` pure
@@ -1421,7 +1431,19 @@ mod tests {
             "result": {"uppercase": "HELLO"},
         })];
 
-        let updates = agent_output_updates(&[], "agent", "agent", "model", None, &tool_calls, None, None).unwrap();
+        let updates = agent_output_updates(
+            &[],
+            AgentOutputContext {
+                node_id: "agent",
+                kind: "agent",
+                endpoint_or_model: "model",
+                on_event: None,
+                tool_calls: &tool_calls,
+                output_key: None,
+                output_schema: None,
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             updates["workflow.trace"]["toolCalls"],
@@ -1442,13 +1464,15 @@ mod tests {
 
         let updates = agent_output_updates(
             &[event],
-            "weather-agent",
-            "agent",
-            "model",
-            None,
-            &[],
-            Some("weather_info"),
-            None,
+            AgentOutputContext {
+                node_id: "weather-agent",
+                kind: "agent",
+                endpoint_or_model: "model",
+                on_event: None,
+                tool_calls: &[],
+                output_key: Some("weather_info"),
+                output_schema: None,
+            },
         )
         .unwrap();
 
@@ -1464,13 +1488,15 @@ mod tests {
 
         let updates = agent_output_updates(
             &[first, second],
-            "agent",
-            "agent",
-            "model",
-            None,
-            &[],
-            Some("answer"),
-            None,
+            AgentOutputContext {
+                node_id: "agent",
+                kind: "agent",
+                endpoint_or_model: "model",
+                on_event: None,
+                tool_calls: &[],
+                output_key: Some("answer"),
+                output_schema: None,
+            },
         )
         .unwrap();
 
@@ -1488,13 +1514,15 @@ mod tests {
 
         let updates = agent_output_updates(
             &[event],
-            "agent",
-            "agent",
-            "model",
-            None,
-            &[],
-            None,
-            Some(&json!({"type": "object", "properties": {"summary": {}, "score": {}}})),
+            AgentOutputContext {
+                node_id: "agent",
+                kind: "agent",
+                endpoint_or_model: "model",
+                on_event: None,
+                tool_calls: &[],
+                output_key: None,
+                output_schema: Some(&json!({"type": "object", "properties": {"summary": {}, "score": {}}})),
+            },
         )
         .unwrap();
 

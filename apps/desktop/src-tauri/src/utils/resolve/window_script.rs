@@ -8,7 +8,13 @@ pub fn build_window_initial_script(workrun_settings: &str, resolved_theme: &str)
     format!(
         r##"
         window.__WORKRUN_PLATFORM__ = "tauri";
-        document.documentElement.dataset.platform = "tauri";
+        if (document.documentElement) {{
+            document.documentElement.dataset.platform = "tauri";
+        }} else {{
+            document.addEventListener('DOMContentLoaded', () => {{
+                document.documentElement.dataset.platform = "tauri";
+            }}, {{ once: true }});
+        }}
         window.__WORKRUN_INITIAL_SETTINGS__ = {workrun_settings};
         window.__WORKRUN_INITIAL_THEME__ = "{resolved_theme}";
         {script}

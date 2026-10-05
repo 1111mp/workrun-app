@@ -1,10 +1,16 @@
 # Workrun
 
-> 本地优先的 AI 自动化桌面平台：用可视化工作流组合 Agent、Python App 与 MCP 工具，并把运行、评估和发布放在同一个工作台。
+**English** | [简体中文](README-zh_CN.md)
 
-Workrun 面向想把一次性的 AI 对话沉淀为可复用自动化能力的开发者和团队。它将用户输入、模型推理、确定性代码、外部工具和人工审批组织为可执行工作流；你可以在画布上搭建流程，也可以维护完整的本地 Python 项目，并在每次运行后检查结果、轨迹和质量。
+> A local-first AI automation workbench: run Python apps independently, or build visual workflows with agents, apps, MCP tools, and human review, then schedule, evaluate, and publish them.
 
-项目仍在快速迭代。本文的“已实现”内容以当前代码为准；尚未交付的方向列于文末。
+Workrun helps developers and teams turn one-off AI conversations into reusable automation. It brings user input, model reasoning, deterministic code, external tools, and human approval into executable workflows. Build on a visual canvas or maintain a complete local Python project, then inspect results, traces, and quality after each run.
+
+Start with a standalone Python app for data processing, file operations, or system integration, then connect it to a workflow as a Process node or an agent tool. Personal mode requires no login. Team mode uses a self-hosted Workrun Server to share assets and published versions, while execution stays on the desktop.
+
+**[Documentation](https://workrun-docs.pages.dev/) · [中文文档](https://workrun-docs.pages.dev/zh-cn/) · [Download](https://github.com/1111mp/workrun-app/releases/latest) · [5-minute quickstart](https://workrun-docs.pages.dev/getting-started/quickstart/)**
+
+Workrun is evolving rapidly. This README summarizes current capabilities; see the official documentation for detailed instructions and limitations.
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/525a19ce-a28b-4671-8e31-0f3ba5539069" width="24%" alt="Workrun workflow list" />
@@ -20,116 +26,141 @@ Workrun 面向想把一次性的 AI 对话沉淀为可复用自动化能力的�
   <img src="https://github.com/user-attachments/assets/f1a946e2-0c5f-4259-95a3-07b9e04b1765" width="24%" alt="Workrun app editor" />
 </p>
 
-## 你可以用 Workrun 做什么
+## What you can do with Workrun
 
-- 将 Agent、Python App、MCP 工具、条件分支和人工操作组合成可视化工作流。
-- 管理可编辑的 Python 项目：既可作为工作流中的 Process 节点，也可作为 Agent 按需调用的 Tool App。
-- 在运行面板查看节点状态、模型输出、工具调用、脚本日志和 OpenTelemetry 轨迹；失败后可从检查点重试。
-- 用评估集批量回归工作流，比较版本结果，并以质量门约束发布。
-- 在团队服务中发布带版本的工作流和 App；已发布工作流会固定引用对应版本的 Team App，保证复现性。
+- Run Python projects directly from Apps, using forms, input collection, and confirmation dialogs for local tasks.
+- Compose agents, Python apps, MCP tools, conditional branches, and human decisions into visual workflows.
+- Schedule apps and workflows with timezone-aware Cron, and inspect upcoming triggers and run history.
+- Manage editable Python projects as workflow Process nodes or Tool Apps that agents call on demand.
+- Inspect node status, model output, tool calls, script logs, and OpenTelemetry traces; retry failed runs from checkpoints.
+- Run regression evaluations, compare version results, and enforce release quality gates.
+- Publish versioned workflows and apps through the team service. Published workflows pin their Team App dependencies for reproducibility.
 
-## 快速开始
+## Quick start
 
-### 前置条件
+### Download and install
+
+Visit [GitHub Releases](https://github.com/1111mp/workrun-app/releases/latest) and select the installer for your operating system and CPU architecture. Available platforms and installation instructions are listed on the release page. End users do not need Node.js, pnpm, or Rust.
+
+On first launch, choose a personal or team workspace. In personal mode, complete your profile to get started. Team mode requires a Workrun Server URL and login.
+
+- **Start with an app:** create a local Python project in Apps, edit its code, and run it directly. See the [Python app guide](https://workrun-docs.pages.dev/guides/python-apps/).
+- **Start with a workflow:** configure a provider API key in **Settings → Models** (an endpoint for Ollama), connect `Start → Agent → End`, choose the corresponding model for the agent, and define inputs in **More settings → Run inputs** before running. See the [quickstart](https://workrun-docs.pages.dev/getting-started/quickstart/).
+
+### Run from source: prerequisites
 
 - Node.js 24+
-- pnpm 12（仓库锁定 `pnpm@12.5.1`）
-- Rust 工具链与对应平台的 Tauri 构建依赖
-- Python App 开发需要网络，以便 `uv` 下载 Python 与依赖；发行包会携带 `uv` sidecar
+- pnpm 12 (pinned to `pnpm@12.6.0` in this repository)
+- Rust toolchain and the Tauri build dependencies for your platform
+- Network access for Python app development so `uv` can download Python and dependencies; release packages include a `uv` sidecar
 
-### 启动桌面端
+### Start desktop development
 
 ```bash
 pnpm install
 pnpm app:dev
 ```
 
-首次启动后，在设置中为 Provider 添加 API Key，随后新建工作流、添加 `Start → Agent → End`，在「更多设置」定义运行输入并运行即可。模型目录由 Workrun 内置，密钥只加密保存在本机配置中，不会被前端持久化。
+Workrun includes a built-in model catalog; there is no need to create model profiles or enter model IDs manually. Provider credentials are encrypted locally. See [installation and prerequisites](https://workrun-docs.pages.dev/getting-started/installation/) for full setup instructions.
 
-### 常用命令
+### Common commands
 
 ```bash
-# 桌面端开发 / 仅启动前端
+# Desktop development / frontend only
 pnpm app:dev
 pnpm ui:dev
 
-# 检查
+# Checks
 pnpm typecheck
 pnpm oxlint
 pnpm format
 pnpm test
 
-# 团队服务（需 MongoDB 和认证环境变量）
+# Documentation development / build
+pnpm docs:dev
+pnpm docs:build
+
+# Team service (requires MongoDB and authentication environment variables)
 pnpm server:dev
 ```
 
-团队服务至少需要 `MONGODB_URI`；认证配置见 `apps/server/src/env.validation.ts`。Python SDK 的开发与使用说明见 [packages/python-sdk/README.md](packages/python-sdk/README.md)。
+Team service environment variables are defined in [apps/server/.env.example](apps/server/.env.example) and [env.validation.ts](apps/server/src/env.validation.ts), including `MONGODB_URI`, `BETTER_AUTH_SECRET`, `SERVER_BASE_URL`, and `BETTER_AUTH_URL`. See [team publishing and deployment preparation](https://workrun-docs.pages.dev/team/publishing/) for deployment guidance. Python SDK development and usage instructions are in [packages/python-sdk/README.md](packages/python-sdk/README.md).
 
-## 核心能力
+## Core capabilities
 
-### 1. 工作流：从画布到可恢复执行
+### 1. Workflows: from canvas to resumable execution
 
-工作流支持任务与对话两种模式。画布提供 `Start`、`End`、`Agent`、`CodeAct Agent`、`Remote Agent`、`Process`、`If/Else`、`Switch`、`Human Review`、`Ask User Question`、`Subworkflow`、`Terminate` 和 `Group` 节点；`Group` 仅用于布局。
+Workflows support task and conversation modes. The canvas provides `Start`, `End`, `Agent`, `CodeAct Agent`, `Remote Agent`, `Process`, `If/Else`, `Switch`, `Human Review`, `Ask User Question`, `Subworkflow`, `Terminate`, and `Group` nodes. `Group` is for layout only.
 
-- 运行前会验证图结构、分支和输入/输出 JSON Schema，并编译为 Rust 执行图。
-- `Subworkflow` 会传递上下文与暂停恢复信息，并阻止自引用、循环引用和过深嵌套；`Terminate` 可结束整次运行。
-- 人工审核和提问会将执行状态写入本地 SQLite 检查点。用户提交结果后从暂停点继续，而非重跑已完成节点。
-- 失败的后台运行可从检查点重试；运行记录保留执行计划、最终状态和关键事件。
+- Graph structure, branches, and input/output JSON Schemas are validated before compilation into a Rust execution graph.
+- `Subworkflow` propagates context and pause/resume information while preventing self-references, cycles, and excessive nesting. `Terminate` can end the entire run.
+- Human review and questions persist execution state in local SQLite checkpoints. After the user responds, execution resumes from the pause point without rerunning completed nodes.
+- Failed background runs can be retried from checkpoints, currently requiring exactly one pending node. Run records retain the execution plan, final state, and key events.
 
 ```text
-Start → 数据准备（Process） → Agent → Human Review → If/Else → End
-                                  │             │
-                                  │             └─ 审批后从检查点恢复
-                                  └─ Tool App / MCP 工具调用
+Start → Data preparation (Process) → Agent → Human Review → If/Else → End
+                                      │           │
+                                      │           └─ Resume from checkpoint after review
+                                      └─ Tool App / MCP tool calls
 ```
 
-### 2. Agent、工具与模型
+### 2. Agents, tools, and models
 
-- Agent 可配置名称、职责、指令、内置模型、结构化输出、工具调用上限和超时；结果可写入指定状态字段，供后续节点和分支使用。
-- 支持 Gemini、OpenAI 与兼容接口、Anthropic、DeepSeek、Groq、Ollama。
-- 本地 Skills 兼容 Agent Skills 的 `SKILL.md` 格式，可渐进加载说明，并限制 Agent 可用工具。
-- `CodeAct Agent` 在受限 Python 运行环境内编写和执行代码，支持迭代次数、工具调用数、时长、内存、目录挂载、环境变量和系统时钟限制。
-- `Remote Agent` 通过 A2A（Agent-to-Agent）协议成为工作流中的一个执行节点。
-- 工具可以来自本地 Tool App 或 MCP Server；可要求每次人工确认，拒绝会反馈给 Agent 以便调整方案。
+- Configure an agent's name, role, instructions, built-in model, structured output, tool call limits, and timeout. Results can be written to a designated state field for downstream nodes and branches.
+- Supports Gemini, OpenAI and compatible APIs, Anthropic, DeepSeek, Groq, and Ollama.
+- Local skills support the Agent Skills `SKILL.md` format, with progressive loading of instructions and restrictions on available tools.
+- `CodeAct Agent` writes and executes code in a restricted Python runtime, with controls for iterations, tool calls, duration, memory, directory mounts, environment variables, and system clock access.
+- `Remote Agent` integrates a remote agent as a workflow node through the A2A (Agent-to-Agent) protocol.
+- Tools can come from local Tool Apps or MCP servers. Calls can require human approval; rejections are returned to the agent so it can adjust its approach.
 
-### 3. Python App：保留代码工程化体验
+### 3. Python apps: keep the code as a project
 
-每个 App 都是可自由编辑的本地 `uv` Python 项目，拥有自己的 `pyproject.toml`、锁文件、虚拟环境和入口脚本。桌面端负责创建环境、同步依赖和显示 stdout/stderr，但不会把业务代码塞进节点配置。
+Apps run independently from the Apps page, without a workflow. They can also be scheduled or connected to workflows. Each app is an editable local `uv` Python project with its own `pyproject.toml`, lockfile, virtual environment, and entry script. The desktop manages environments, synchronizes dependencies, and displays stdout/stderr while keeping business logic in your project files.
 
-| 类型               | 在工作流中的角色                   | 适用场景                           |
-| ------------------ | ---------------------------------- | ---------------------------------- |
-| App / Process Node | 读取完整工作流状态，返回结构化结果 | 数据处理、系统集成、确定性业务规则 |
-| Tool App           | 由 Agent 按 JSON Schema 参数调用   | 查询、计算、文件或服务操作         |
+| Type               | Role                                                                               | Use cases                                                         |
+| ------------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| App / Process Node | Run independently, or read authorized workflow state and return structured results | Data processing, system integration, deterministic business rules |
+| Tool App           | Called by an agent with JSON Schema parameters                                     | Queries, calculations, file or service operations                 |
 
-- Process App 通过 `workrun_sdk.process.result(...)` 返回结果。
-- Python SDK 还提供 `form()`、`collect()`、`confirm()` 等 API，可经受令牌保护的本地 IPC 向桌面端请求表单或确认。
-- 本地 App 不是沙箱：只运行你信任的代码，并按实际权限范围审查项目。
+- Process apps return results through `workrun_sdk.process.result(...)`.
+- The Python SDK also provides `form()`, `collect()`, and `confirm()` APIs to request forms or confirmation from the desktop over token-protected local IPC.
+- Local apps are not sandboxed: run trusted code and review projects according to their actual permissions.
 
-### 4. MCP Server：接入已有工具生态
+### 4. MCP servers: connect existing tools
 
-可注册本地 `stdio` 或远程 Streamable HTTP MCP Server，测试连接、启停、重连并查看已发现工具。远程服务支持无认证、Bearer Token 和 OAuth；凭据仅以加密形式保存在本机。已启用 Server 中的工具可以被 Agent 选择，并同样受超时、调用额度、审批和运行追踪约束。
+Register local `stdio` or remote Streamable HTTP MCP servers, test connections, start or stop them, reconnect, and inspect discovered tools. Remote servers support no authentication, Bearer Tokens, and OAuth; credentials are stored encrypted locally. Agents can select tools from enabled servers, subject to timeouts, call limits, approval, and run tracing.
 
-### 5. 状态、安全与可观察性
+### 5. State, security, and observability
 
-- 节点拥有隔离的状态命名空间；只有显式发布的字段才能共享，读取权限逐节点授予。
-- 输入和节点输出可声明为敏感；检查点原始状态加密保存，对模型、工具和界面默认提供脱敏视图。
-- 内置输入、输出和工具护栏：限制长度，脱敏常见 PII、中国大陆手机号和身份证号，并阻止凭据或认证秘密进入工具参数。
-- 运行面板流式展示节点状态、模型消息、工具输入输出、脚本日志和轨迹。可配置 OTLP/gRPC collector，将诊断 Trace 导出到外部可观测性系统。
+- Nodes have isolated state namespaces. Only explicitly published fields are shared, and read access is granted per node.
+- Inputs and node outputs can be marked sensitive. Raw checkpoint state is encrypted, while models, tools, and the UI receive redacted views by default.
+- Built-in input, output, and tool guardrails enforce length limits, redact common PII including mainland Chinese mobile numbers and national ID numbers, and block credentials or authentication secrets from tool arguments.
+- The run panel streams node status, model messages, tool inputs and outputs, script logs, and traces. Configure an OTLP/gRPC collector to export diagnostic traces to an external observability system.
 
-### 6. 评估、回归与发布质量
+### 6. Evaluations, regression checks, and release quality
 
-工作流编辑器内置 Evaluation lab，用评估集验证工作流变更：
+The workflow editor includes an Evaluation lab for validating workflow changes:
 
-- 创建、导入、排序、归档和恢复评估用例，批量执行用例并查看每项结果与失败原因。
-- 对比两个版本的用例判定与评分标准，识别新增失败、回归和修复；失败用例可单独重试。
-- 为工作流配置质量门，在发布前要求指定评估条件；必要时可记录带理由的人工豁免审计。
-- 评估会保存对应工作流快照，避免把草稿变更误认为已发布版本的结果。
+- Create, import, reorder, archive, and restore evaluation cases; run them in batches and inspect individual results and failure reasons.
+- Compare case verdicts and scoring criteria across two versions to identify new failures, regressions, and fixes. Failed cases can be retried individually.
+- Configure quality gates that require evaluation conditions before publishing. When needed, record a manual waiver with a reason for auditing.
+- Evaluations retain the corresponding workflow snapshot, keeping draft changes distinct from published-version results.
 
-### 7. 团队工作区与版本化资产
+Evaluation execution currently does not support workflows containing Process, CodeAct Agent, or Remote Agent nodes, including references through subworkflows. Human nodes require manual handling. Validate complete flows with normal runs and run history. See [evaluations, regression checks, and quality gates](https://workrun-docs.pages.dev/quality/evaluations/).
 
-桌面端可连接 NestJS 团队服务并登录。团队成员可以浏览和运行已发布的工作流，也可发布带语义版本的 Workflow 与 App。工作流发布时会校验引用；Team App 以不可变 release 固定到工作流版本，运行时按该 release 安装隔离副本，从而让历史运行和回归结果可复现。
+### 7. Scheduled runs
 
-## 架构概览
+- Apps and workflows support persistent, timezone-aware five-field Cron schedules. Preview upcoming triggers and edit, pause, or resume schedules.
+- Schedules execute only while the Workrun desktop application is open. Missed triggers are not replayed after downtime. A trigger is skipped when the same target is already queued, running, or waiting for input, preventing overlapping execution.
+- Local workflows use their latest saved definitions; team workflows pin published versions. Workflows containing Human Review or Ask User Question nodes cannot be saved as scheduled tasks.
+
+See the [scheduled runs guide](https://workrun-docs.pages.dev/guides/scheduled-runs/).
+
+### 8. Team workspaces and versioned assets
+
+Personal and team workspaces are independent; switching modes does not automatically share personal assets. The desktop connects to a self-hosted NestJS team service with authentication. The service manages identity, shared assets, and published versions, while workflows and Python apps still execute on each member's desktop. Members can browse and run published workflows and publish semantically versioned workflows and apps. Publishing validates references and pins immutable Team App releases to the workflow version. At runtime, the desktop installs isolated copies of those releases so historical runs and regression results remain reproducible.
+
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -145,41 +176,42 @@ flowchart LR
   UI <--> Team[NestJS team service]
 ```
 
-| 区域       | 位置                                       | 作用                                                      |
-| ---------- | ------------------------------------------ | --------------------------------------------------------- |
-| 桌面应用   | `apps/desktop`                             | React UI、React Flow 画布、运行面板、设置与团队体验       |
-| 本地运行时 | `apps/desktop/src-tauri`                   | Rust 工作流编译/执行、状态与检查点、Python/MCP 管理、遥测 |
-| 团队服务   | `apps/server`                              | NestJS、认证、团队 App / Workflow / 文件 API 与发布版本   |
-| Python SDK | `packages/python-sdk`                      | App 结果协议和本地 IPC 表单/确认 API                      |
-| 共享包     | `packages/ui`、`packages/json-schema-form` | UI 基础组件与 JSON Schema 表单                            |
+| Area            | Location                                   | Purpose                                                                                      |
+| --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| Desktop app     | `apps/desktop`                             | React UI, React Flow canvas, run panel, settings, and team experience                        |
+| Local runtime   | `apps/desktop/src-tauri`                   | Rust workflow compilation/execution, state and checkpoints, Python/MCP management, telemetry |
+| Team service    | `apps/server`                              | NestJS, authentication, team app/workflow/file APIs, and published versions                  |
+| Documentation   | `apps/docs`                                | Astro / Starlight documentation in English and Chinese, tutorials, and demo media            |
+| Python SDK      | `packages/python-sdk`                      | App result protocol and local IPC form/confirmation APIs                                     |
+| Shared packages | `packages/ui`, `packages/json-schema-form` | UI primitives and JSON Schema forms                                                          |
 
-## 演示
+## Demos
 
-### Python App：创建与运行
+### Python app: create and run
 
 <a href="https://github.com/1111mp/workrun-app/releases/download/resources/app.mp4">
-  <img src="https://github.com/user-attachments/assets/fc876517-b695-49f3-bdfa-e4c43ec5085c" width="860" alt="点击查看 Python App 演示视频" />
+  <img src="https://github.com/user-attachments/assets/fc876517-b695-49f3-bdfa-e4c43ec5085c" width="860" alt="Watch the Python app demo" />
 </a>
 
-### Workflow：配置并运行 Health Agent
+### Workflow: configure and run a Health Agent
 
 <a href="https://github.com/1111mp/workrun-app/releases/download/resources/workflow.mp4">
-  <img src="https://github.com/user-attachments/assets/1658cfdf-faeb-4365-891d-54133622b015" width="860" alt="点击查看 Workflow 演示视频" />
+  <img src="https://github.com/user-attachments/assets/1658cfdf-faeb-4365-891d-54133622b015" width="860" alt="Watch the workflow demo" />
 </a>
 
-## 项目状态与路线图
+## Project status and roadmap
 
-已具备本地工作流、App/MCP 集成、运行恢复、评估、遥测，以及团队发布和运行已发布工作流的基础能力。以下方向仍在持续完善，不应视为既有承诺：
+Workrun currently provides standalone apps, local workflows, app/MCP integration, scheduling, run recovery, evaluations, telemetry, and team publishing and execution of published workflows. The following areas are still being developed and are not delivery commitments:
 
-- 更完整的资产同步、导入导出、模板和市场发现体验。
-- 更丰富的节点、连接器、运行控制与可复现调试信息。
-- 更成熟的权限、插件机制和跨平台运行时体验。
-- 团队协作下更细粒度的版本、权限和发布流程。
+- More complete asset synchronization, import/export, templates, and marketplace discovery.
+- More nodes, connectors, run controls, and reproducible debugging information.
+- More mature permissions, plugin mechanisms, and runtime support across platforms.
+- Finer-grained versioning, permissions, and publishing processes for team collaboration.
 
-## 参与贡献
+## Contributing
 
-欢迎围绕工作流节点与运行时、模型和工具集成、桌面端体验、Python SDK、评估体系、示例流程和文档贡献改进。较大的设计变更建议先通过 Issue 讨论。
+Contributions are welcome across workflow nodes and runtime, model and tool integrations, desktop experience, the Python SDK, evaluations, example workflows, and documentation. For substantial design changes, please open an issue for discussion first.
 
 ## License
 
-本项目采用 [LICENSE](LICENSE) 中的许可证。
+This project is licensed under the terms in [LICENSE](LICENSE).

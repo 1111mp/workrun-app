@@ -561,7 +561,7 @@ mod tests {
                 }
             })
             .add_edge(START, "route");
-        let edges = vec![WorkflowEdge {
+        let edges = [WorkflowEdge {
             source: "route".to_string(),
             target: "selected".to_string(),
             source_handle: Some("true".to_string()),

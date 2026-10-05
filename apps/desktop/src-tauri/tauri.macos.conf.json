@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "io.github.1111mp.workrun",
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "macOS": {
+      "dmg": {
+        "background": "images/background.png",
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        },
+        "windowSize": {
+          "height": 440,
+          "width": 660
+        },
+        "windowPosition": {
+          "x": 200,
+          "y": 180
+        }
+      },
+      "frameworks": [],
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null,
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

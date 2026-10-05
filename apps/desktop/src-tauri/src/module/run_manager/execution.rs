@@ -191,19 +191,19 @@ async fn execute_workflow(
             .send(serde_json::to_value(event)?)
             .map_err(|_| anyhow::anyhow!("workflow event writer stopped"))?;
     }
-    if !result.interrupted {
-        if let Some(session_id) = chat_session_id.as_deref() {
-            let global = result.state.get("global").and_then(Value::as_object);
-            let updates = global
-                .map(|global| {
-                    session_state_fields
-                        .iter()
-                        .filter_map(|key| global.get(key).cloned().map(|value| (key.clone(), value)))
-                        .collect()
-                })
-                .unwrap_or_default();
-            crate::module::chat_session::ChatSessionStore::merge_state(session_id, &updates).await?;
-        }
+    if !result.interrupted
+        && let Some(session_id) = chat_session_id.as_deref()
+    {
+        let global = result.state.get("global").and_then(Value::as_object);
+        let updates = global
+            .map(|global| {
+                session_state_fields
+                    .iter()
+                    .filter_map(|key| global.get(key).cloned().map(|value| (key.clone(), value)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        crate::module::chat_session::ChatSessionStore::merge_state(session_id, &updates).await?;
     }
     drop(events);
     let has_pending_action = writer.await??;

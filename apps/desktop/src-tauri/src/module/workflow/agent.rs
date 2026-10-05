@@ -87,18 +87,20 @@ pub(super) async fn add_local_agent_node(
             ToolSource::Process => ManagedToolExecutor::Process,
             ToolSource::Mcp => ManagedToolExecutor::Mcp(crate::feat::resolve_mcp_tool(&tool.id).await?.1),
         };
-        let managed_tool: Arc<dyn Tool> = Arc::new(ManagedTool::new_with_profile(
+        let managed_tool: Arc<dyn Tool> = Arc::new(ManagedTool::new(
             tool,
             executor,
-            id.clone(),
-            on_event.clone(),
-            Arc::clone(&tool_calls),
-            Arc::clone(&tool_trace),
-            Arc::clone(&state),
-            tool_bindings,
-            max_tool_calls,
-            tool_timeout_seconds.into(),
-            execution_profile.clone(),
+            ManagedToolConfig {
+                agent_node_id: id.clone(),
+                on_event: on_event.clone(),
+                tool_calls: Arc::clone(&tool_calls),
+                tool_trace: Arc::clone(&tool_trace),
+                state: Arc::clone(&state),
+                state_bindings: tool_bindings,
+                max_tool_calls,
+                timeout_seconds: tool_timeout_seconds.into(),
+                execution_profile: execution_profile.clone(),
+            },
         ));
         managed_tools.insert(tool_id, managed_tool);
     }
@@ -123,16 +125,18 @@ pub(super) async fn add_local_agent_node(
     let agent = agent.build()?;
     Ok(graph.add_node(StreamingAgentNode::new(
         AdkAgentNode::new(Arc::new(agent)).with_input_mapper(agent_input_mapper(Arc::clone(&state), id.clone())),
-        id,
-        "agent",
-        label,
-        on_event,
-        Some(tool_trace),
-        output_key,
-        output_schema,
-        state,
-        state_config.global_keys,
-        state_config.sensitive_fields,
+        StreamingAgentNodeConfig {
+            id,
+            kind: "agent".to_string(),
+            endpoint_or_model: label,
+            on_event,
+            tool_trace: Some(tool_trace),
+            output_key,
+            output_schema,
+            state,
+            global_keys: state_config.global_keys,
+            sensitive_fields: state_config.sensitive_fields,
+        },
     )))
 }
 
@@ -365,16 +369,18 @@ pub(super) fn remote_a2a_graph_node(
     let id = node.id.clone();
     Ok(StreamingAgentNode::new(
         AdkAgentNode::new(Arc::new(remote)).with_input_mapper(agent_input_mapper(Arc::clone(&state), id.clone())),
-        id,
-        "remote_agent",
-        url,
-        on_event,
-        None,
-        None,
-        None,
-        state,
-        state_config.global_keys,
-        state_config.sensitive_fields,
+        StreamingAgentNodeConfig {
+            id,
+            kind: "remote_agent".to_string(),
+            endpoint_or_model: url,
+            on_event,
+            tool_trace: None,
+            output_key: None,
+            output_schema: None,
+            state,
+            global_keys: state_config.global_keys,
+            sensitive_fields: state_config.sensitive_fields,
+        },
     ))
 }
 
@@ -397,32 +403,20 @@ pub(super) struct StreamingAgentNode {
 }
 
 impl StreamingAgentNode {
-    pub(super) fn new(
-        inner: AdkAgentNode,
-        id: String,
-        kind: impl Into<String>,
-        endpoint_or_model: impl Into<String>,
-        on_event: Option<Channel<StreamEvent>>,
-        tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
-        output_key: Option<String>,
-        output_schema: Option<Value>,
-        state: SharedWorkflowState,
-        global_keys: BTreeSet<String>,
-        sensitive_fields: BTreeSet<String>,
-    ) -> Self {
+    pub(super) fn new(inner: AdkAgentNode, config: StreamingAgentNodeConfig) -> Self {
         Self {
-            id,
+            id: config.id,
             inner,
-            kind: kind.into(),
-            endpoint_or_model: endpoint_or_model.into(),
-            on_event,
+            kind: config.kind,
+            endpoint_or_model: config.endpoint_or_model,
+            on_event: config.on_event,
             streamed_events: Mutex::new(HashMap::new()),
-            tool_trace,
-            output_key,
-            output_schema,
-            state,
-            global_keys,
-            sensitive_fields,
+            tool_trace: config.tool_trace,
+            output_key: config.output_key,
+            output_schema: config.output_schema,
+            state: config.state,
+            global_keys: config.global_keys,
+            sensitive_fields: config.sensitive_fields,
         }
     }
 
@@ -438,6 +432,19 @@ impl StreamingAgentNode {
         cache.insert(key, events);
         Ok(())
     }
+}
+
+pub(super) struct StreamingAgentNodeConfig {
+    pub(super) id: String,
+    pub(super) kind: String,
+    pub(super) endpoint_or_model: String,
+    pub(super) on_event: Option<Channel<StreamEvent>>,
+    pub(super) tool_trace: Option<Arc<Mutex<Vec<Value>>>>,
+    pub(super) output_key: Option<String>,
+    pub(super) output_schema: Option<Value>,
+    pub(super) state: SharedWorkflowState,
+    pub(super) global_keys: BTreeSet<String>,
+    pub(super) sensitive_fields: BTreeSet<String>,
 }
 
 #[async_trait::async_trait]
@@ -464,13 +471,15 @@ impl Node for StreamingAgentNode {
             .unwrap_or_default();
         let mut updates = agent_output_updates(
             &events,
-            &self.id,
-            &self.kind,
-            &self.endpoint_or_model,
-            self.on_event.as_ref(),
-            &tool_calls,
-            self.output_key.as_deref(),
-            self.output_schema.as_ref(),
+            AgentOutputContext {
+                node_id: &self.id,
+                kind: &self.kind,
+                endpoint_or_model: &self.endpoint_or_model,
+                on_event: self.on_event.as_ref(),
+                tool_calls: &tool_calls,
+                output_key: self.output_key.as_deref(),
+                output_schema: self.output_schema.as_ref(),
+            },
         )
         .map_err(|error| graph_node_error(&self.id, error))?;
         let values = updates
@@ -612,13 +621,7 @@ fn tool_confirmation_was_denied(events: &[adk_rust::Event]) -> bool {
 
 pub(super) fn agent_output_updates(
     events: &[adk_rust::Event],
-    node_id: &str,
-    kind: &str,
-    endpoint_or_model: &str,
-    on_event: Option<&Channel<StreamEvent>>,
-    tool_calls: &[Value],
-    output_key: Option<&str>,
-    output_schema: Option<&Value>,
+    context: AgentOutputContext<'_>,
 ) -> Result<HashMap<String, Value>> {
     let tool_confirmation_denied = tool_confirmation_was_denied(events);
     // A denied tool call is returned to the model as a function response. Do
@@ -634,27 +637,27 @@ pub(super) fn agent_output_updates(
         .into_iter()
         .collect::<Vec<_>>();
     let mut event = json!({
-        "nodeId": node_id,
-        "type": kind,
-        "endpointOrModel": endpoint_or_model,
+        "nodeId": context.node_id,
+        "type": context.kind,
+        "endpointOrModel": context.endpoint_or_model,
         "messages": messages,
     });
-    if !tool_calls.is_empty() {
-        event["toolCalls"] = redact_json(&Value::Array(tool_calls.to_vec()));
+    if !context.tool_calls.is_empty() {
+        event["toolCalls"] = redact_json(&Value::Array(context.tool_calls.to_vec()));
     }
     let event = redact_json(&event);
-    if let Some(on_event) = on_event {
+    if let Some(on_event) = context.on_event {
         send_guarded_event(
             on_event,
-            StreamEvent::custom(node_id, "workflow.node_result", event.clone()),
+            StreamEvent::custom(context.node_id, "workflow.node_result", event.clone()),
         );
     }
     let mut updates = HashMap::from([
-        ("workflow.last_node".to_string(), json!(node_id)),
+        ("workflow.last_node".to_string(), json!(context.node_id)),
         ("workflow.node".to_string(), event.clone()),
         ("workflow.trace".to_string(), event),
     ]);
-    let output_content = output_key.map(|_| {
+    let output_content = context.output_key.map(|_| {
         messages
             .iter()
             .filter_map(|message| message.get("content").and_then(Value::as_str))
@@ -663,10 +666,10 @@ pub(super) fn agent_output_updates(
     if !messages.is_empty() {
         updates.insert("messages".to_string(), Value::Array(messages));
     }
-    if let (Some(output_key), Some(content)) = (output_key, output_content) {
+    if let (Some(output_key), Some(content)) = (context.output_key, output_content) {
         updates.insert(output_key.to_string(), Value::String(content));
     }
-    if output_schema.is_some() {
+    if context.output_schema.is_some() {
         let structured = serde_json::from_str::<Value>(&raw_response)
             .map_err(|error| anyhow!("structured Agent output is not valid JSON: {error}"))?;
         let values = structured
@@ -678,6 +681,16 @@ pub(super) fn agent_output_updates(
         updates.extend(values.clone());
     }
     Ok(updates)
+}
+
+pub(super) struct AgentOutputContext<'a> {
+    pub(super) node_id: &'a str,
+    pub(super) kind: &'a str,
+    pub(super) endpoint_or_model: &'a str,
+    pub(super) on_event: Option<&'a Channel<StreamEvent>>,
+    pub(super) tool_calls: &'a [Value],
+    pub(super) output_key: Option<&'a str>,
+    pub(super) output_schema: Option<&'a Value>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -706,9 +719,11 @@ impl WorkrunUsageSnapshot {
         Self {
             input_tokens,
             output_tokens,
-            total_tokens: total_tokens_estimated
-                .then_some(input_tokens + output_tokens)
-                .unwrap_or(reported_total_tokens),
+            total_tokens: if total_tokens_estimated {
+                input_tokens + output_tokens
+            } else {
+                reported_total_tokens
+            },
             total_tokens_estimated,
             cache_read_tokens: usage.cache_read_input_token_count.map(|value| value.max(0) as i64),
             cache_write_tokens: usage.cache_creation_input_token_count.map(|value| value.max(0) as i64),

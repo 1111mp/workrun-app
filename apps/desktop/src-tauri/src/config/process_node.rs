@@ -90,17 +90,11 @@ pub struct IProcessNode {
 }
 
 /// The persisted Process Node catalog.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IProcessNodes {
     #[serde(default)]
     nodes: Vec<IProcessNode>,
-}
-
-impl Default for IProcessNodes {
-    fn default() -> Self {
-        Self { nodes: vec![] }
-    }
 }
 
 impl IProcessNodes {

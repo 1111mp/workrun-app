@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import socket
+from time import sleep
 from typing import BinaryIO, TypeAlias, cast
 
 MAX_MESSAGE_SIZE = 1_048_576
@@ -68,13 +71,36 @@ def _receive_exactly(connection: IpcConnection, size: int) -> bytes:
         chunk = (
             connection.recv(remaining)
             if isinstance(connection, socket.socket)
-            else connection.read(remaining)
+            else _read_pipe(connection, remaining)
         )
         if not chunk:
             raise ProtocolError("IPC connection closed before the message was complete")
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
+
+
+def _read_pipe(connection: BinaryIO, size: int) -> bytes:
+    if os.name == "nt" and isinstance(connection, io.FileIO):
+        import _winapi
+        import msvcrt
+
+        # A blocking ReadFile on a synchronous Windows handle also blocks
+        # writes on that handle. Only read bytes already present, so the SDK's
+        # response thread cannot prevent the main thread sending ui.request.
+        while True:
+            if connection.closed:
+                raise OSError("Workrun IPC connection was closed")
+            try:
+                handle = msvcrt.get_osfhandle(connection.fileno())
+            except ValueError as error:
+                # close() may race with the reader between polling attempts.
+                raise OSError("Workrun IPC connection was closed") from error
+            available, _ = _winapi.PeekNamedPipe(handle, 0)
+            if available:
+                return connection.read(min(size, available))
+            sleep(0.01)
+    return connection.read(size)
 
 
 def _send_all(connection: IpcConnection, payload: bytes) -> None:

@@ -1,0 +1,69 @@
+name: Server Check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  HUSKY: 0
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check server changes
+        id: check_server
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            server:
+              - 'apps/server/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+              - '.oxlintrc.json'
+              - '.github/workflows/server-check.yml'
+
+      - name: Skip if no server changes
+        if: steps.check_server.outputs.server != 'true'
+        run: echo "No server changes, skipping server checks."
+
+      - name: Install pnpm
+        if: steps.check_server.outputs.server == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        if: steps.check_server.outputs.server == 'true'
+        with:
+          node-version: '24.21.0'
+          cache: 'pnpm'
+
+      - name: Restore pnpm cache
+        if: steps.check_server.outputs.server == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ~/.pnpm-store
+          key: "pnpm-shared-stable-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}"
+          restore-keys: |
+            pnpm-shared-stable-${{ runner.os }}-
+
+      - run: pnpm install --frozen-lockfile
+        if: steps.check_server.outputs.server == 'true'
+
+      # Path filters gate execution; Turbo filters limit which packages are checked.
+      - name: Run formatting check
+        if: steps.check_server.outputs.server == 'true'
+        run: pnpm format --filter=workrun-server
+
+      - name: Run Oxlint
+        if: steps.check_server.outputs.server == 'true'
+        run: pnpm oxlint --filter=workrun-server
+
+      - name: Run TypeScript typecheck
+        if: steps.check_server.outputs.server == 'true'
+        run: pnpm typecheck --filter=workrun-server

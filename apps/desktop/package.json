@@ -1,6 +1,6 @@
 {
   "name": "workrun",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,9 @@
     "preview": "vite preview",
     "prebuild": "node scripts/prebuild.mjs && node scripts/build-python-sdk.mjs",
     "tauri": "tauri",
+    "updater": "node scripts/updater.mjs",
+    "updater-fixed-webview2": "node scripts/updater-fixed-webview2.mjs",
+    "set-updater-channel": "node scripts/set-updater-channel.mjs",
     "oxlint": "oxlint src scripts --type-aware",
     "oxlint:fix": "oxlint src scripts --fix",
     "format": "oxfmt --check src",
@@ -43,6 +46,7 @@
     "@workspace/json-schema-form": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@xyflow/react": "^12.12.0",
+    "adm-zip": "^0.6.1",
     "ajv-errors": "^3.0.0",
     "better-auth": "^1.7.6",
     "cron-parser": "^5.10.1",

@@ -60,6 +60,7 @@ pub struct WorkflowStateCheckpointer {
 impl WorkflowStateBridge {
     /// Import the run input into the public global namespace. The new workflow
     /// contract requires an object because every input field is a global key.
+    #[allow(unused)]
     pub fn from_initial_state(initial_state: Value) -> Result<Self> {
         Self::from_initial_state_with_policy(initial_state, BTreeSet::new(), BTreeSet::new())
     }
@@ -169,6 +170,7 @@ impl WorkflowStateBridge {
     /// Apply one node's result. Only keys explicitly configured for publication
     /// reach global state; every other key remains in the node namespace. The
     /// returned values must be mirrored into ADK state for graph routing.
+    #[allow(unused)]
     pub fn apply_node_update(
         &mut self,
         node_id: &str,
@@ -214,16 +216,19 @@ impl WorkflowStateBridge {
     }
 
     /// Give a workflow node its restricted State view.
+    #[allow(unused)]
     pub fn node_state(&mut self, node_id: impl Into<String>) -> NodeState<'_> {
         self.raw_state.node(node_id)
     }
 
     /// Give trusted workflow infrastructure its full State view.
+    #[allow(unused)]
     pub fn runtime_state(&mut self) -> RuntimeState<'_> {
         self.raw_state.runtime()
     }
 
     /// Global-only output for graph synchronization and narrow API consumers.
+    #[allow(unused)]
     pub fn public_output(&mut self) -> Value {
         self.visible_state.runtime().global_snapshot()
     }

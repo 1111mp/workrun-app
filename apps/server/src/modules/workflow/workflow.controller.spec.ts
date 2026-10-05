@@ -25,14 +25,14 @@ describe('WorkflowController', () => {
 
   it('passes the authenticated user and document when creating a workflow', () => {
     const dto = { document: { nodes: [], edges: [], settings: {} } };
-    controller.create(session, dto);
+    void controller.create(session, dto);
 
     expect(workflowService.create).toHaveBeenCalledWith('user-1', dto);
   });
 
   it('scopes reads to the authenticated user', () => {
-    controller.findAll(session);
-    controller.findOne(session, 'workflow-1');
+    void controller.findAll(session);
+    void controller.findOne(session, 'workflow-1');
 
     expect(workflowService.findAll).toHaveBeenCalledWith('user-1');
     expect(workflowService.findOne).toHaveBeenCalledWith(
@@ -43,8 +43,8 @@ describe('WorkflowController', () => {
 
   it('passes updates and deletes to the service with the workflow id', () => {
     const dto = { document: { nodes: [], edges: [], settings: {} } };
-    controller.update(session, 'workflow-1', dto);
-    controller.remove(session, 'workflow-1');
+    void controller.update(session, 'workflow-1', dto);
+    void controller.remove(session, 'workflow-1');
 
     expect(workflowService.update).toHaveBeenCalledWith(
       'user-1',
@@ -56,10 +56,10 @@ describe('WorkflowController', () => {
 
   it('publishes versions and exposes published workflows to the team', () => {
     const dto = { version: '1.0.0', releaseNote: 'Initial release' };
-    controller.publish(session, 'workflow-1', dto);
-    controller.findReleases(session, 'workflow-1');
-    controller.findPublishedCatalog(session);
-    controller.findPublished(session, 'workflow-1');
+    void controller.publish(session, 'workflow-1', dto);
+    void controller.findReleases(session, 'workflow-1');
+    void controller.findPublishedCatalog(session);
+    void controller.findPublished(session, 'workflow-1');
 
     expect(workflowService.publish).toHaveBeenCalledWith(
       'user-1',

@@ -90,30 +90,35 @@ pub(super) async fn add_codeact_agent_node(
         agent = agent.tool(Arc::new(ManagedTool::new(
             tool,
             executor,
-            id.clone(),
-            on_event.clone(),
-            Arc::clone(&tool_calls),
-            Arc::clone(&tool_trace),
-            Arc::clone(&state),
-            tool_bindings,
-            max_tool_calls,
-            tool_timeout_seconds.into(),
+            ManagedToolConfig {
+                agent_node_id: id.clone(),
+                on_event: on_event.clone(),
+                tool_calls: Arc::clone(&tool_calls),
+                tool_trace: Arc::clone(&tool_trace),
+                state: Arc::clone(&state),
+                state_bindings: tool_bindings,
+                max_tool_calls,
+                timeout_seconds: tool_timeout_seconds.into(),
+                execution_profile: WorkflowExecutionProfile::Production,
+            },
         )));
     }
 
     let agent = agent.build()?;
     Ok(graph.add_node(StreamingAgentNode::new(
         AdkAgentNode::new(Arc::new(agent)).with_input_mapper(agent_input_mapper(Arc::clone(&state), id.clone())),
-        id,
-        "codeact_agent",
-        label,
-        on_event,
-        Some(tool_trace),
-        None,
-        output_schema,
-        state,
-        state_config.global_keys,
-        state_config.sensitive_fields,
+        StreamingAgentNodeConfig {
+            id,
+            kind: "codeact_agent".to_string(),
+            endpoint_or_model: label,
+            on_event,
+            tool_trace: Some(tool_trace),
+            output_key: None,
+            output_schema,
+            state,
+            global_keys: state_config.global_keys,
+            sensitive_fields: state_config.sensitive_fields,
+        },
     )))
 }
 
