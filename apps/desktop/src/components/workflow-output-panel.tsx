@@ -53,7 +53,6 @@ import {
   DatabaseIcon,
   Globe2Icon,
   Layers3Icon,
-  RotateCcwIcon,
   TerminalIcon,
 } from 'lucide-react';
 import {
@@ -73,6 +72,10 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { ArtifactFiles } from '@/components/artifact-files';
+import {
+  RemoteTasksPanel,
+  RemoteTaskRerunButton,
+} from '@/components/remote-tasks';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
 import { artifactReferences } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
@@ -1717,6 +1720,7 @@ function LiveWorkflowTaskOutput({
 }: Omit<WorkflowOutputPanelProps, 'run' | 'isRunning' | 'isChat' | 'onSend'>) {
   const { t } = useTranslation();
   const {
+    runId,
     status,
     startedAt,
     endedAt,
@@ -1728,6 +1732,7 @@ function LiveWorkflowTaskOutput({
     thoughtIds,
   } = useWorkflowRunStore(
     useShallow((state) => ({
+      runId: state.projection.runId,
       status: state.projection.status,
       startedAt: state.projection.startedAt,
       endedAt: state.projection.endedAt,
@@ -1852,6 +1857,17 @@ function LiveWorkflowTaskOutput({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 px-4 py-4'>
+                <MessageScrollerItem messageId='remote-tasks'>
+                  <RemoteTasksPanel
+                    key={runId}
+                    runId={runId}
+                    isActive={
+                      status === 'running' ||
+                      (status === 'interrupted' && !error)
+                    }
+                    nodeName={displayNodeName}
+                  />
+                </MessageScrollerItem>
                 {executionIds.length > 0 ? (
                   <MessageScrollerItem
                     messageId='execution-start'
@@ -1988,10 +2004,14 @@ function LiveWorkflowTaskOutput({
       </div>
       <DrawerFooter className='flex-row justify-end'>
         {!readOnly ? (
-          <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
-            <RotateCcwIcon data-icon='inline-start' />
-            {rerunLabel(status, t)}
-          </Button>
+          <RemoteTaskRerunButton
+            key={runId}
+            runId={runId}
+            disabled={isRunning}
+            onRunAgain={onRunAgain}
+            localFailed={status === 'failed' || Boolean(error)}
+            label={rerunLabel(status, t)}
+          />
         ) : null}
         <Button variant='outline' onClick={copyAll}>
           <ClipboardIcon data-icon='inline-start' />
@@ -2203,6 +2223,16 @@ function WorkflowRunOutput({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 p-4'>
+                <MessageScrollerItem messageId='remote-tasks'>
+                  <RemoteTasksPanel
+                    key={run.runId}
+                    runId={run.runId}
+                    isActive={
+                      isRunning || (run.status === 'interrupted' && !run.error)
+                    }
+                    nodeName={displayNodeName}
+                  />
+                </MessageScrollerItem>
                 {!isChat && <RunModelUsage spans={sessionSpans} />}
                 {run.finalState && (
                   <MessageScrollerItem messageId='run-files'>
@@ -2457,14 +2487,14 @@ function WorkflowRunOutput({
       {isChat ? (
         <DrawerFooter>
           {!readOnly && run.status === 'failed' && (
-            <Button
-              variant='outline'
+            <RemoteTaskRerunButton
+              key={run.runId}
+              runId={run.runId}
               disabled={chatIsBusy}
-              onClick={onRunAgain}
-            >
-              <RotateCcwIcon data-icon='inline-start' />
-              {rerunLabel(run.status, t)}
-            </Button>
+              onRunAgain={onRunAgain}
+              localFailed={run.status === 'failed' || Boolean(run.error)}
+              label={rerunLabel(run.status, t)}
+            />
           )}
           <form className='flex w-full flex-col gap-3' onSubmit={sendMessage}>
             {fileInputs.length > 0 && (
@@ -2526,10 +2556,14 @@ function WorkflowRunOutput({
       ) : (
         <DrawerFooter className='flex-row justify-end'>
           {!readOnly && (
-            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
-              <RotateCcwIcon data-icon='inline-start' />
-              {rerunLabel(run.status, t)}
-            </Button>
+            <RemoteTaskRerunButton
+              key={run.runId}
+              runId={run.runId}
+              disabled={isRunning}
+              onRunAgain={onRunAgain}
+              localFailed={run.status === 'failed' || Boolean(run.error)}
+              label={rerunLabel(run.status, t)}
+            />
           )}
           <Button variant='outline' disabled={!output} onClick={copyAll}>
             <ClipboardIcon data-icon='inline-start' />

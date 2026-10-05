@@ -92,6 +92,7 @@ export function workflowRunView(
   projection: WorkflowRunProjection,
 ): WorkflowRunView {
   return {
+    runId: projection.runId,
     status: projection.status,
     startedAt: projection.startedAt,
     endedAt: projection.endedAt,

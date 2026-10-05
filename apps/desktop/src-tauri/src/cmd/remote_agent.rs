@@ -102,3 +102,30 @@ pub async fn remote_agent_test_connection(
         .await
         .stringify_err()
 }
+
+#[tauri::command]
+pub async fn remote_tasks_list(run_id: String) -> CmdResult<Vec<crate::module::workflow::RemoteTaskRecord>> {
+    let pool = crate::core::db::DBManager::global().pool().stringify_err()?;
+    crate::module::workflow::list_remote_tasks(&pool, &run_id)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn remote_task_manage(
+    id: String,
+    operation: crate::module::workflow::RemoteTaskOperation,
+) -> CmdResult<crate::module::workflow::RemoteTaskRecord> {
+    let config = BaseConfig::workrun().await.data_arc();
+    crate::module::workflow::remote_task_operation(&id, operation, &config)
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn remote_task_warnings(workflow_id: String) -> CmdResult<Vec<crate::module::workflow::RemoteTaskRecord>> {
+    let pool = crate::core::db::DBManager::global().pool().stringify_err()?;
+    crate::module::workflow::remote_task_warnings(&pool, &workflow_id)
+        .await
+        .stringify_err()
+}

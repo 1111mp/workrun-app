@@ -66,9 +66,11 @@ fail before service discovery.
   node explicitly. Remote human interaction and persistent remote-task resume
   are not implemented in this phase.
 - Timeout covers discovery, transfer and processing (default 120, range 1–600
-  seconds). Dropping/timing out a call stops local I/O and attempts `CancelTask`
-  for a known task, with a separate 3-second limit. Remote cancellation is best
-  effort, not a guarantee that a remote server stops its work.
+  seconds). Disconnection, timeout and failed local execution stop local I/O and
+  preserve remote task tracking; they do not automatically cancel remote work.
+  Explicitly cancelling a workflow attempts remote cancellation independently.
+  A confirmed response determines the remote state; requesting cancellation is
+  not a guarantee that the server stops its work.
 - Input and output each allow 10 files / 20 MiB combined decoded bytes. Individual
   JSON/SSE and accumulated output are bounded to 32 MiB; SSE wire traffic to
   64 MiB. Names cannot contain directory separators. Known binary signatures
@@ -84,7 +86,7 @@ invalid Part/base64/name/media type, and file count/size limits.
 
 The opt-in native HTTP test uses a real loopback server. It verifies Agent Card
 discovery, exact v1 request fields and headers, tenant routing, fragmented SSE,
-replay IDs, non-streaming Task results, polling, timeout `CancelTask`, URL
+replay IDs, non-streaming Task results, polling, timeout tracking, explicit `CancelTask`, URL
 rejection, actual Graph execution, durable PDF outputs and authorized downstream
 State. The same test launches the shipped Python fixture and verifies PDF, image
 and video byte round trips. Run:
@@ -167,3 +169,83 @@ fixture in all three modes. UI tests verify write-only save, reference-only
 workflow patches, metadata edits without key replacement, deletion and connection
 errors. Unit tests verify encrypted YAML round trips, safe public summaries,
 origin/type/missing-reference checks, header injection and requirement semantics.
+
+### Recovery within a running node
+
+Once a streaming response supplies a task ID, a dropped connection or truncated
+SSE event switches to GetTask polling for that same task. Polling requests ask
+for the latest history message and use a full task snapshot, replacing partial
+streamed artifacts even when the snapshot has no artifacts. Input messages and
+files are submitted only once.
+
+Discovery and GetTask retry connection/body failures, timeouts and HTTP
+429/500/502/503/504 up to three times, waiting 1, 2 and 4 seconds. Authentication
+errors and malformed protocol responses fail immediately. All retries and
+polling share the existing node timeout. Timeout or connection loss leaves an
+independent tracking record whose last known state remains available.
+
+If submission disconnects before a task ID is received, its outcome is unknown.
+Workrun reports this and does not resubmit automatically. This phase uses
+GetTask rather than SubscribeToTask, so streaming progress is not restored.
+Executing a node again creates new remote work. Task identities are persisted
+for independent inspection after restart, without resuming the original graph.
+
+The native integration test additionally covers authenticated stream truncation,
+partial SSE events, polling retry success/exhaustion, polling authentication
+failure, malformed SSE, unknown submission outcomes and removal of partial
+artifacts by a final snapshot. It verifies exactly one submission per run.
+
+## Independent remote task tracking
+
+Native managed runs persist a record immediately before submission, including
+its message ID and node/run association. Exact task IDs, endpoint, tenant and
+credential reference are encrypted with the existing local encryption key.
+Public records expose only redacted task IDs, service origin, timestamps, last
+known state, and collected text/artifact references. Input bytes and remote
+base64 snapshots are not copied into this table. Failed discovery creates no
+submission record. A submission with no returned task ID remains unknown.
+
+Open the original run's output or its history entry and expand **Remote tasks**.
+After local execution ends, **Query status** reads the original task,
+**Collect result** imports a completed task's files, and **Cancel remote task**
+requests cancellation with confirmation. These actions never change the original
+run's status, write graph State, or execute downstream nodes. Repeated collection
+reuses the saved local result instead of downloading/importing it again.
+Missing/inaccessible tasks and refused cancellations are handled explicitly.
+Active local runs cannot be independently managed; their own polling retains
+ownership. Manual operations have a separate 20-second timeout.
+
+Opening the run form warns about unresolved tasks from earlier failed,
+interrupted or cancelled runs of the same workflow, including completed remote
+work whose local run failed. A rerun checks the original run's tasks again and
+warns before creating potentially repeated work. The existing workflow retry
+mechanism is unchanged and does not attach to the old remote task. The remote
+service must provide business idempotency to guarantee no repeated effects.
+
+### Manual timeout and restart acceptance
+
+Start a fixture which keeps the remote task after closing its stream:
+
+```sh
+python3 apps/desktop/examples/a2a-v1/server.py --port 8088 \
+  --delay-seconds 30 --disconnect-stream
+```
+
+Use the single-node workflow above, with a request timeout of 2 seconds.
+
+1. Submit a small PDF. The workflow fails locally; its remote task shows an
+   unknown outcome and a last known working state. There is one submission.
+2. Query its status: it should still be working. Do not execute the node again.
+3. After 30 seconds, query again: it should be completed. Collect the result,
+   preview/export the copied PDF, and compare bytes with the input. The original
+   workflow remains failed and no downstream node executes.
+4. Repeat, then restart Workrun while leaving the fixture running. Open the
+   original history entry: querying and collecting the same task should work.
+5. Repeat and cancel the remote task before 30 seconds. Query again: it remains
+   cancelled. Cancellation of an already completed task is refused, without
+   falsely marking it cancelled.
+6. Open this workflow's run form: earlier unresolved/completed remote tasks
+   whose local runs failed should produce a warning and link to the original run.
+
+The fixture holds tasks in memory, so keep it running during the Workrun restart
+check. It does not model durable server storage or business idempotency.

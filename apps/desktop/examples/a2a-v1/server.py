@@ -7,7 +7,9 @@ import argparse
 import base64
 import json
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock
 from typing import cast
 
 MAX_BYTES = 20 * 1024 * 1024
@@ -17,6 +19,10 @@ class FixtureHTTPServer(ThreadingHTTPServer):
     auth_kind: str = "none"
     secret: str = ""
     key_header: str = "X-API-Key"
+    delay_seconds: float = 0
+    disconnect_stream: bool = False
+    tasks: dict
+    tasks_lock: Lock
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -110,6 +116,42 @@ class Handler(BaseHTTPRequestHandler):
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
         method = request.get("method")
+        server = cast(FixtureHTTPServer, self.server)
+        if method in ("GetTask", "CancelTask"):
+            task_id = request.get("params", {}).get("id")
+            with server.tasks_lock:
+                entry = server.tasks.get(task_id)
+                if entry is None:
+                    error = {"code": -32001, "message": "Task not found"}
+                    result = None
+                else:
+                    # Completion is independent of the HTTP connection. A cancelled
+                    # task stays cancelled even after its original deadline passes.
+                    if (
+                        entry["task"]["status"]["state"] == "TASK_STATE_WORKING"
+                        and time.monotonic() >= entry["readyAt"]
+                    ):
+                        entry["task"] = entry["result"]
+                    if method == "CancelTask":
+                        if entry["task"]["status"]["state"] != "TASK_STATE_WORKING":
+                            error = {
+                                "code": -32002,
+                                "message": "Task is not cancelable",
+                            }
+                            result = None
+                        else:
+                            entry["task"]["status"] = {"state": "TASK_STATE_CANCELED"}
+                            result = entry["task"]
+                            error = None
+                    else:
+                        result = entry["task"]
+                        error = None
+            self.reply(
+                envelope(result)
+                if error is None
+                else {"jsonrpc": "2.0", "id": request_id, "error": error}
+            )
+            return
         if method not in ("SendMessage", "SendStreamingMessage"):
             self.reply(
                 {
@@ -117,7 +159,7 @@ class Handler(BaseHTTPRequestHandler):
                     "id": request_id,
                     "error": {
                         "code": -32601,
-                        "message": "Fixture supports send operations only",
+                        "message": "Unsupported fixture operation",
                     },
                 }
             )
@@ -184,8 +226,19 @@ class Handler(BaseHTTPRequestHandler):
             "status": status,
             "artifacts": artifacts,
         }
+        working = {
+            "id": task["id"],
+            "contextId": task["contextId"],
+            "status": {"state": "TASK_STATE_WORKING"},
+        }
+        with server.tasks_lock:
+            server.tasks[task["id"]] = {
+                "task": working if server.delay_seconds else task,
+                "result": task,
+                "readyAt": time.monotonic() + server.delay_seconds,
+            }
         if method == "SendMessage":
-            self.reply(envelope({"task": task}))
+            self.reply(envelope({"task": working if server.delay_seconds else task}))
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -220,7 +273,37 @@ class Handler(BaseHTTPRequestHandler):
                 }
             }
         )
-        for event in events:
+        for index, event in enumerate(events):
+            if index == 1:
+                if server.disconnect_stream:
+                    self.close_connection = True
+                    return
+                time.sleep(server.delay_seconds)
+                with server.tasks_lock:
+                    cancelled = (
+                        server.tasks[task["id"]]["task"]["status"]["state"]
+                        == "TASK_STATE_CANCELED"
+                    )
+                if cancelled:
+                    self.wfile.write(
+                        (
+                            "data: "
+                            + json.dumps(
+                                envelope(
+                                    {
+                                        "statusUpdate": {
+                                            "taskId": task["id"],
+                                            "contextId": task["contextId"],
+                                            "status": {"state": "TASK_STATE_CANCELED"},
+                                        }
+                                    }
+                                )
+                            )
+                            + "\n\n"
+                        ).encode()
+                    )
+                    self.wfile.flush()
+                    return
             self.wfile.write(
                 (
                     "data: " + json.dumps(envelope(event), ensure_ascii=False) + "\n\n"
@@ -234,7 +317,11 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8088)
     parser.add_argument("--auth", choices=["none", "bearer", "apiKey"], default="none")
     parser.add_argument("--header", default="X-API-Key")
+    parser.add_argument("--delay-seconds", type=float, default=0)
+    parser.add_argument("--disconnect-stream", action="store_true")
     args = parser.parse_args()
+    if args.delay_seconds < 0:
+        parser.error("--delay-seconds must be nonnegative")
     secret = os.environ.get("WORKRUN_A2A_TEST_SECRET", "")
     if args.auth != "none" and not secret:
         parser.error("Set WORKRUN_A2A_TEST_SECRET for authenticated fixtures")
@@ -242,5 +329,9 @@ if __name__ == "__main__":
     server.auth_kind = args.auth
     server.key_header = args.header
     server.secret = secret
+    server.delay_seconds = args.delay_seconds
+    server.disconnect_stream = args.disconnect_stream
+    server.tasks = {}
+    server.tasks_lock = Lock()
     print(f"A2A fixture: http://127.0.0.1:{server.server_port}", flush=True)
     server.serve_forever()

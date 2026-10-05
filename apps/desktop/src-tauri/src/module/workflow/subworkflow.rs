@@ -101,7 +101,14 @@ impl Node for SubworkflowNode {
         .await
         .map_err(|error| graph_node_error(&self.id, error))?;
         let result = child
-            .run_stream(input, &thread_id, resume, None, |_| {})
+            .run_stream_tracked(
+                input,
+                &thread_id,
+                resume,
+                None,
+                context.config.metadata.get("workrun.run_id").and_then(Value::as_str),
+                |_| {},
+            )
             .await
             .map_err(|error| graph_node_error(&self.id, error))?;
         if result.interrupted {

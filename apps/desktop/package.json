@@ -19,7 +19,7 @@
     "oxlint:fix": "oxlint src scripts --fix",
     "format": "oxfmt --check src",
     "format:write": "oxfmt --write src",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b",
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {

@@ -12,6 +12,7 @@ mod human_review;
 mod process;
 mod remote_agent;
 mod remote_auth;
+mod remote_tasks;
 mod routing;
 mod state_bridge;
 mod subworkflow;
@@ -25,9 +26,14 @@ use codeact_agent::*;
 use guardrails::*;
 use human_review::*;
 use process::*;
-pub(crate) use remote_agent::test_remote_connection;
 use remote_agent::*;
+pub(crate) use remote_agent::{
+    RemoteTaskOperation, cancel_remote_tasks_for_run, remote_task_operation, test_remote_connection,
+};
 pub(crate) use remote_auth::{RemoteAuthentication, validate_remote_secret};
+pub(crate) use remote_tasks::{
+    RemoteTaskRecord, list_remote_tasks, mark_remote_tasks_interrupted, remote_task_warnings,
+};
 use routing::*;
 use state_bridge::*;
 use subworkflow::*;
@@ -405,6 +411,22 @@ impl CompiledWorkflow {
         thread_id: &str,
         resume: bool,
         tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+        on_event: F,
+    ) -> Result<WorkflowRunResult>
+    where
+        F: FnMut(StreamEvent),
+    {
+        self.run_stream_tracked(initial_state, thread_id, resume, tool_confirmation, None, on_event)
+            .await
+    }
+
+    pub(crate) async fn run_stream_tracked<F>(
+        self,
+        initial_state: State,
+        thread_id: &str,
+        resume: bool,
+        tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+        run_id: Option<&str>,
         mut on_event: F,
     ) -> Result<WorkflowRunResult>
     where
@@ -454,7 +476,7 @@ impl CompiledWorkflow {
         };
         let stream = self.graph.stream_with_run_config(
             initial_state,
-            ExecutionConfig::new(thread_id),
+            ExecutionConfig::new(thread_id).with_metadata("workrun.run_id", json!(run_id)),
             StreamMode::Messages,
             run_config,
         );

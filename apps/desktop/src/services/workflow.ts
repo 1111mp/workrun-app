@@ -322,6 +322,7 @@ export type WorkflowRunTurn = {
 };
 
 export type WorkflowRunView = {
+  runId?: string;
   status: WorkflowRunStatus;
   startedAt?: number;
   endedAt?: number;

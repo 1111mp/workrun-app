@@ -1,5 +1,6 @@
 //! A2A v1.0.1 JSON-RPC boundary. Binary resources stay outside State and traces.
 use super::remote_auth::RemoteAuth;
+use super::remote_tasks::{RemoteConnection, RemoteTaskTracker};
 use super::*;
 use crate::module::artifact::{ArtifactStore, references};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -14,6 +15,9 @@ const MAX_EVENT: usize = 32 * 1024 * 1024;
 pub(super) struct RemoteAgentNode {
     id: String,
     auth: RemoteAuth,
+    authentication: Option<RemoteAuthentication>,
+    #[cfg(test)]
+    tracking_storage: Option<(sqlx::SqlitePool, Vec<u8>)>,
     store: Option<ArtifactStore>,
     url: Url,
     paths: Vec<String>,
@@ -49,6 +53,9 @@ pub(super) fn remote_a2a_graph_node(
     Ok(RemoteAgentNode {
         id: node.id.clone(),
         auth,
+        authentication,
+        #[cfg(test)]
+        tracking_storage: None,
         store: None,
         url,
         paths: string_array_data(node, "attachmentPaths")?,
@@ -159,7 +166,7 @@ fn endpoint(card: &Value, base: &Url) -> Result<(Url, Option<String>, bool)> {
 
 async fn bounded_body(mut response: Response, context: &NodeContext) -> Result<Vec<u8>> {
     if !response.status().is_success() {
-        bail!("A2A HTTP request failed with status {}", response.status());
+        return Err(HttpStatus(response.status().as_u16()).into());
     }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
@@ -170,6 +177,68 @@ async fn bounded_body(mut response: Response, context: &NodeContext) -> Result<V
         context.report_progress();
     }
     Ok(body)
+}
+
+const READ_RETRIES: usize = 3;
+
+#[derive(Debug)]
+struct HttpStatus(u16);
+impl std::fmt::Display for HttpStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "A2A HTTP request failed with status {}", self.0)
+    }
+}
+impl std::error::Error for HttpStatus {}
+
+#[derive(Debug)]
+struct InterruptedStream;
+impl std::fmt::Display for InterruptedStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("A2A stream ended in a partial SSE event")
+    }
+}
+impl std::error::Error for InterruptedStream {}
+
+fn transient(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<HttpStatus>()
+        .is_some_and(|status| matches!(status.0, 429 | 500 | 502 | 503 | 504))
+        || error.is::<InterruptedStream>()
+        || error.chain().any(|cause| {
+            cause
+                .downcast_ref::<tauri_plugin_http::reqwest::Error>()
+                .is_some_and(|e| e.is_connect() || e.is_request() || e.is_timeout() || e.is_body() || e.is_decode())
+        })
+}
+
+// Only discovery and GetTask are replayed. A failed message submission can
+// already have created remote work, so replaying it would require an explicit
+// server idempotency guarantee that discovery does not currently provide.
+async fn read_with_retry(client: &Client, url: &Url, params: Option<&Value>, context: &NodeContext) -> Result<Vec<u8>> {
+    for attempt in 0..=READ_RETRIES {
+        if attempt > 0 {
+            context.report_progress();
+            tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
+        }
+        let read = async {
+            let request = match params {
+                Some(params) => client.post(url.clone()).json(params),
+                None => client.get(url.clone()),
+            };
+            let response = request.header("A2A-Version", "1.0").send().await?;
+            if matches!(response.status().as_u16(), 429 | 500 | 502 | 503 | 504) {
+                return Err(HttpStatus(response.status().as_u16()).into());
+            }
+            bounded_body(response, context).await
+        }
+        .await;
+        match read {
+            Ok(body) => return Ok(body),
+            Err(error) if transient(&error) && attempt < READ_RETRIES => {},
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded read retry loop returns on its last attempt")
 }
 
 fn rpc_result(value: Value, id: &str) -> Result<Value> {
@@ -192,6 +261,8 @@ fn rpc_result(value: Value, id: &str) -> Result<Value> {
 struct RemoteResult {
     task_id: Option<String>,
     complete: bool,
+    remote_state: Option<String>,
+    tracking: Option<RemoteTaskTracker>,
     response: Vec<Value>,
     artifacts: BTreeMap<String, Value>,
 }
@@ -210,7 +281,27 @@ impl RemoteResult {
         Ok(())
     }
 
+    async fn accept_tracked(&mut self, value: Value, auth: &RemoteAuth) -> Result<()> {
+        let accepted = self.accept(value);
+        if let Some(tracking) = &mut self.tracking {
+            tracking
+                .observe(
+                    self.task_id.as_deref(),
+                    self.remote_state.as_deref(),
+                    self.task_id.as_ref().map(|id| auth.redact(id)),
+                )
+                .await?;
+        }
+        accepted
+    }
+
     fn status(&mut self, status: &Value) -> Result<()> {
+        let state = status
+            .get("state")
+            .and_then(Value::as_str)
+            .context("A2A task state missing")?;
+        remote_tasks::task_state(state)?;
+        self.remote_state = Some(state.to_string());
         match status
             .get("state")
             .and_then(Value::as_str)
@@ -257,6 +348,7 @@ impl RemoteResult {
         } else if let Some(message) = result.get("message") {
             self.response = message_parts(message)?;
             self.complete = true;
+            self.remote_state = Some("TASK_STATE_COMPLETED".to_string());
         } else if let Some(update) = result.get("statusUpdate") {
             self.task_id(update, "taskId")?;
             self.status(update.get("status").context("A2A task status missing")?)?;
@@ -380,52 +472,12 @@ fn message_parts(message: &Value) -> Result<Vec<Value>> {
         .clone())
 }
 
-// Dropping a graph future stops local I/O. If a remote task was already
-// allocated, ask the server to stop it too, without delaying local cancellation.
-struct RemoteCallGuard {
-    client: Client,
-    url: Url,
-    tenant: Option<String>,
-    task: Arc<Mutex<Option<String>>>,
-    completed: bool,
-}
-
-impl Drop for RemoteCallGuard {
-    fn drop(&mut self) {
-        if self.completed {
-            return;
-        }
-        let Some(task) = self.task.lock().ok().and_then(|t| t.clone()) else {
-            return;
-        };
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let client = self.client.clone();
-        let url = self.url.clone();
-        let tenant = self.tenant.clone();
-        runtime.spawn(async move {
-            let mut params = json!({"id":task});
-            if let Some(tenant) = tenant {
-                params["tenant"] = json!(tenant);
-            }
-            let request =
-                json!({"jsonrpc":"2.0","id":uuid::Uuid::new_v4().to_string(),"method":"CancelTask","params":params});
-            let _ = tokio::time::timeout(
-                Duration::from_secs(3),
-                client.post(url).header("A2A-Version", "1.0").json(&request).send(),
-            )
-            .await;
-        });
-    }
-}
-
 async fn receive_stream(
     mut response: Response,
     id: &str,
     context: &NodeContext,
     output: &mut RemoteResult,
-    task: &Mutex<Option<String>>,
+    auth: &RemoteAuth,
 ) -> Result<()> {
     if !response.status().is_success() {
         bail!("A2A HTTP stream failed with status {}", response.status());
@@ -459,9 +511,9 @@ async fn receive_stream(
             if line.is_empty() {
                 if !data.is_empty() {
                     if event_id.as_ref().is_none_or(|id| seen.insert(id.clone())) {
-                        let accepted = output.accept(rpc_result(serde_json::from_slice(&data)?, id)?);
-                        *task.lock().map_err(|_| anyhow!("A2A task lock unavailable"))? = output.task_id.clone();
-                        accepted?;
+                        output
+                            .accept_tracked(rpc_result(serde_json::from_slice(&data)?, id)?, auth)
+                            .await?;
                     }
                     data.clear();
                     if output.complete {
@@ -486,19 +538,28 @@ async fn receive_stream(
         }
     }
     if !data.is_empty() || !buffer.is_empty() {
-        bail!("A2A stream ended in a partial SSE event");
+        return Err(InterruptedStream.into());
     }
     Ok(())
 }
 
 impl RemoteAgentNode {
+    fn tracking_storage(&self) -> Result<(sqlx::SqlitePool, Vec<u8>)> {
+        #[cfg(test)]
+        if let Some(storage) = &self.tracking_storage {
+            return Ok(storage.clone());
+        }
+        Ok((
+            crate::core::db::DBManager::global().pool()?,
+            crate::utils::dirs::get_encryption_key()?,
+        ))
+    }
+
     async fn run(&self, context: &NodeContext, store: &ArtifactStore, input: &Value) -> Result<RemoteResult> {
         let parts = input_parts(input, &self.paths, store)?;
         let client = self.auth.client()?;
         let card_url = self.url.join("/.well-known/agent-card.json")?;
-        let card: Value = serde_json::from_slice(
-            &bounded_body(client.get(card_url).header("A2A-Version", "1.0").send().await?, context).await?,
-        )?;
+        let card: Value = serde_json::from_slice(&read_with_retry(&client, &card_url, None, context).await?)?;
         self.auth.validate_card(&card)?;
         let (url, tenant, streaming) = endpoint(&card, &self.url)?;
         let modes = card
@@ -528,15 +589,35 @@ impl RemoteAgentNode {
                 bail!("Remote A2A agent does not advertise input type {mime}");
             }
         }
-        let mut guard = RemoteCallGuard {
-            client: client.clone(),
-            url: url.clone(),
-            tenant: tenant.clone(),
-            task: Arc::new(Mutex::new(None)),
-            completed: false,
-        };
         let id = uuid::Uuid::new_v4().to_string();
-        let mut params = json!({"message":{"messageId":uuid::Uuid::new_v4().to_string(),"role":"ROLE_USER","parts":parts},
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let tracking = if let Some(run_id) = context.config.metadata.get("workrun.run_id").and_then(Value::as_str) {
+            let (pool, key) = self.tracking_storage()?;
+            Some(
+                RemoteTaskTracker::begin(
+                    pool,
+                    key,
+                    run_id,
+                    &self.id,
+                    &message_id,
+                    RemoteConnection {
+                        service_url: self.url.to_string(),
+                        endpoint: url.to_string(),
+                        tenant: tenant.clone(),
+                        authentication: self.authentication.clone(),
+                        task_id: None,
+                    },
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let mut result = RemoteResult {
+            tracking,
+            ..Default::default()
+        };
+        let mut params = json!({"message":{"messageId":message_id,"role":"ROLE_USER","parts":parts},
             "configuration":{"historyLength":0,"returnImmediately":false}});
         if let Some(tenant) = &tenant {
             params["tenant"] = json!(tenant);
@@ -555,17 +636,35 @@ impl RemoteAgentNode {
             )
             .json(&request)
             .send()
-            .await?;
-        let mut result = RemoteResult::default();
+            .await
+            .context("A2A submission outcome is unknown; the message was not resubmitted")?;
         if streaming {
-            receive_stream(response, &id, context, &mut result, &guard.task).await?;
+            if let Err(error) = receive_stream(response, &id, context, &mut result, &self.auth).await {
+                if !transient(&error) {
+                    return Err(error);
+                }
+                if result.task_id.is_none() {
+                    return Err(error.context("A2A submission outcome is unknown; no task ID was received and the message was not resubmitted"));
+                }
+                // The remote task belongs to this run. Keep its ID and recover
+                // from a full Task snapshot instead of replaying SSE append events.
+                if let Some(channel) = &self.on_event {
+                    send_guarded_event(
+                        channel,
+                        StreamEvent::custom(&self.id, "workflow.remote_reconnecting", json!({"nodeId":self.id})),
+                    );
+                }
+                context.report_progress();
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         } else {
-            result.accept(rpc_result(
-                serde_json::from_slice(&bounded_body(response, context).await?)?,
+            result.accept_tracked(rpc_result(
+                serde_json::from_slice(&bounded_body(response, context).await.context(
+                    "A2A submission outcome is unknown; no task ID was received and the message was not resubmitted",
+                )?)?,
                 &id,
-            )?)?;
+            )?, &self.auth).await?;
         }
-        *guard.task.lock().map_err(|_| anyhow!("A2A task lock unavailable"))? = result.task_id.clone();
         // A server may return a nonterminal Task despite blocking configuration.
         // Poll the same task; never resend the original message and its files.
         while !result.complete {
@@ -575,22 +674,25 @@ impl RemoteAgentNode {
                 .context("A2A incomplete response has no task ID")?;
             tokio::time::sleep(Duration::from_millis(250)).await;
             let id = uuid::Uuid::new_v4().to_string();
-            let mut params = json!({"id":task,"historyLength":0});
+            let mut params = json!({"id":task,"historyLength":1});
             if let Some(tenant) = &tenant {
                 params["tenant"] = json!(tenant);
             }
             let request = json!({"jsonrpc":"2.0","id":id,"method":"GetTask","params":params});
-            let response = client
-                .post(url.clone())
-                .header("A2A-Version", "1.0")
-                .json(&request)
-                .send()
-                .await?;
-            let task = rpc_result(serde_json::from_slice(&bounded_body(response, context).await?)?, &id)?;
-            // GetTask returns Task directly, unlike SendMessage's union wrapper.
-            result.accept(json!({"task":task}))?;
+            let task = rpc_result(
+                serde_json::from_slice(&read_with_retry(&client, &url, Some(&request), context).await?)?,
+                &id,
+            )?;
+            // Snapshots replace partial streamed artifacts, including when the
+            // authoritative snapshot omits artifacts. Never append recovered files.
+            let mut snapshot = RemoteResult {
+                task_id: result.task_id.clone(),
+                tracking: result.tracking.take(),
+                ..Default::default()
+            };
+            snapshot.accept_tracked(json!({"task":task}), &self.auth).await?;
+            result = snapshot;
         }
-        guard.completed = true;
         Ok(result)
     }
 }
@@ -624,7 +726,12 @@ impl Node for RemoteAgentNode {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let response = redact_text(&self.auth.redact(&response));
-            let values = json!({"response":response,"messages":[{"role":"assistant","content":response}],"artifacts":artifacts,"remoteTaskId":remote.task_id.map(|id| self.auth.redact(&id))});
+            let values = json!({"response":response,"messages":[{"role":"assistant","content":response}],"artifacts":artifacts,"remoteTaskId":remote.task_id.as_ref().map(|id| self.auth.redact(id))});
+            if let Some(tracking) = &remote.tracking {
+                tracking
+                    .save_result(&redact_json(&json!({"response": response, "artifacts": artifacts})))
+                    .await?;
+            }
             let updates = self
                 .state
                 .lock()
@@ -654,6 +761,149 @@ impl Node for RemoteAgentNode {
         work.await
             .map_err(|error: anyhow::Error| graph_node_error(&self.id, self.auth.redact(&error.to_string())))
     }
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum RemoteTaskOperation {
+    Query,
+    Fetch,
+    Cancel,
+}
+
+// Serialize operations for one record, without holding a database transaction
+// over network I/O. Repeated fetches reuse the locally collected result.
+static REMOTE_TASK_OPERATIONS: std::sync::LazyLock<parking_lot::Mutex<HashSet<String>>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashSet::new()));
+struct TaskOperationGuard(String);
+impl Drop for TaskOperationGuard {
+    fn drop(&mut self) {
+        REMOTE_TASK_OPERATIONS.lock().remove(&self.0);
+    }
+}
+
+pub(crate) async fn remote_task_operation(
+    id: &str,
+    operation: RemoteTaskOperation,
+    config: &IWorkrun,
+) -> Result<remote_tasks::RemoteTaskRecord> {
+    let pool = crate::core::db::DBManager::global().pool()?;
+    let key = crate::utils::dirs::get_encryption_key()?;
+    let store = ArtifactStore::active()?;
+    remote_task_operation_in_pool(pool, key, &store, id, operation, config, None).await
+}
+
+async fn remote_task_operation_in_pool(
+    pool: sqlx::SqlitePool,
+    key: Vec<u8>,
+    store: &ArtifactStore,
+    id: &str,
+    operation: RemoteTaskOperation,
+    config: &IWorkrun,
+    test_auth: Option<RemoteAuth>,
+) -> Result<remote_tasks::RemoteTaskRecord> {
+    if !REMOTE_TASK_OPERATIONS.lock().insert(id.to_string()) {
+        bail!("Remote task operation already in progress");
+    }
+    let _guard = TaskOperationGuard(id.to_string());
+    let (run_id, run_status): (String, String) = sqlx::query_as(
+        "SELECT t.run_id, r.status FROM remote_tasks t JOIN run_records r ON r.id = t.run_id WHERE t.id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&pool)
+    .await?
+    .context("Remote task record not found")?;
+    if matches!(run_status.as_str(), "queued" | "running" | "waiting_for_input") {
+        bail!("Wait until the local run has ended before managing its remote task");
+    }
+    let current = remote_tasks::list_remote_tasks(&pool, &run_id)
+        .await?
+        .into_iter()
+        .find(|record| record.id == id)
+        .context("Remote task record not found")?;
+    if operation == RemoteTaskOperation::Fetch && current.result.is_some() {
+        return Ok(current);
+    }
+    let mut tracking = RemoteTaskTracker::load(pool.clone(), key, id).await?;
+    let connection = &tracking.connection;
+    let task_id = connection
+        .task_id
+        .clone()
+        .context("Submission outcome is unknown: no remote task ID was received; automatic resubmission is disabled")?;
+    let base = Url::parse(&connection.service_url)?;
+    let url = Url::parse(&connection.endpoint)?;
+    validate_url(&base)?;
+    validate_url(&url)?;
+    if base.origin() != url.origin() {
+        bail!("Saved A2A endpoint has a different origin");
+    }
+    let auth = test_auth
+        .map(Ok)
+        .unwrap_or_else(|| RemoteAuth::resolve(connection.authentication.as_ref(), &connection.service_url, config))?;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        let client = auth.client()?;
+        let context = NodeContext::new(State::new(), ExecutionConfig::new("remote-task-operation"), 0);
+        let rpc_id = uuid::Uuid::new_v4().to_string();
+        let mut params = json!({"id":task_id});
+        if operation != RemoteTaskOperation::Cancel { params["historyLength"] = json!(1); }
+        if let Some(tenant) = &tracking.connection.tenant { params["tenant"] = json!(tenant); }
+        let request = json!({"jsonrpc":"2.0","id":rpc_id,"method":if operation == RemoteTaskOperation::Cancel {"CancelTask"} else {"GetTask"},"params":params});
+        let body = if operation == RemoteTaskOperation::Cancel {
+            bounded_body(client.post(url).header("A2A-Version", "1.0").json(&request).send().await?, &context).await
+        } else { read_with_retry(&client, &url, Some(&request), &context).await };
+        let body = match body {
+            Err(error) if error.downcast_ref::<HttpStatus>().is_some_and(|status| status.0 == 404) => {
+                sqlx::query("UPDATE remote_tasks SET status = 'not_found', updated_at = ?, last_checked_at = ? WHERE id = ?")
+                    .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
+                return Ok(());
+            },
+            body => body?,
+        };
+        let envelope: Value = serde_json::from_slice(&body)?;
+        // Check envelope identity before recognizing the protocol's task-not-found error.
+        if envelope["jsonrpc"] == "2.0" && envelope["id"] == rpc_id && envelope.pointer("/error/code").and_then(Value::as_i64) == Some(-32001) {
+            sqlx::query("UPDATE remote_tasks SET status = 'not_found', updated_at = ?, last_checked_at = ? WHERE id = ?")
+                .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
+            return Ok(());
+        }
+        let task = rpc_result(envelope, &rpc_id)?;
+        if task["id"].as_str() != Some(task_id.as_str()) { bail!("A2A response changed task ID"); }
+        let state = task.pointer("/status/state").and_then(Value::as_str).context("A2A task state missing")?;
+        tracking.observe(Some(&task_id), Some(state), current.task_id.clone()).await?;
+        if operation == RemoteTaskOperation::Fetch {
+            if state != "TASK_STATE_COMPLETED" { bail!("Remote task has not completed; no result was collected"); }
+            let mut remote = RemoteResult { task_id: Some(task_id.clone()), ..Default::default() };
+            remote.accept(json!({"task":task}))?;
+            let (response, files) = remote.output()?;
+            let artifacts = files.iter().map(|(name, mime, bytes)| store.save_bytes_with_mime(&auth.redact(name), bytes, mime.as_deref()).and_then(|reference| Ok(serde_json::to_value(reference)?))).collect::<Result<Vec<_>>>()?;
+            tracking.save_result(&redact_json(&json!({"response":auth.redact(&response),"artifacts":artifacts}))).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.context("Remote task operation timed out").and_then(|result| result);
+    result.map_err(|error| anyhow!("{}", auth.redact(&error.to_string())))?;
+    remote_tasks::list_remote_tasks(&pool, &run_id)
+        .await?
+        .into_iter()
+        .find(|record| record.id == id)
+        .context("Remote task record not found")
+}
+
+pub(crate) async fn cancel_remote_tasks_for_run(run_id: &str) -> Result<()> {
+    let pool = crate::core::db::DBManager::global().pool()?;
+    let config = BaseConfig::workrun().await.data_arc();
+    for record in remote_tasks::list_remote_tasks(&pool, run_id).await? {
+        if record.task_id.is_some()
+            && matches!(
+                record.status.as_str(),
+                "unknown" | "submitted" | "working" | "input_required" | "auth_required"
+            )
+        {
+            // The workflow is already locally cancelled. Remote cancellation is
+            // best effort; its confirmed state remains independently inspectable.
+            let _ = remote_task_operation(&record.id, RemoteTaskOperation::Cancel, &config).await;
+        }
+    }
+    Ok(())
 }
 
 /// A read-only check: discover the card and validate transport/authentication.
@@ -692,6 +942,23 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = ArtifactStore::new(directory.path().join("artifacts"));
         (directory, store)
+    }
+
+    #[test]
+    fn retries_are_limited_to_transport_failures() {
+        assert!(transient(&anyhow::Error::new(HttpStatus(503)).context("query")));
+        assert!(transient(&InterruptedStream.into()));
+        assert!(!transient(&anyhow!("A2A HTTP request failed with status 401")));
+        assert!(!transient(&anyhow!("A2A response exceeds the wire size limit")));
+        let malformed = serde_json::from_str::<Value>("{invalid}").unwrap_err();
+        assert!(!transient(&malformed.into()));
+        assert!(!transient(
+            &rpc_result(
+                json!({"jsonrpc":"2.0","id":"request","error":{"code":-32602}}),
+                "request"
+            )
+            .unwrap_err()
+        ));
     }
 
     #[test]
@@ -850,7 +1117,51 @@ mod tests {
                     json!({"securitySchemes":{"auth":{"apiKeySecurityScheme":{"location":"header","name":"X-API-Key"}}},"securityRequirements":[{"schemes":{"auth":{}}}]})
                 },
             };
-            for mode in ["stream", "send", "poll", "timeout", "uri", "unauthorized", "forbidden"] {
+            for mode in [
+                "stream",
+                "send",
+                "poll",
+                "timeout",
+                "uri",
+                "unauthorized",
+                "forbidden",
+                "disconnect",
+                "discovery_retry",
+                "partial",
+                "query_retry",
+                "query_close",
+                "recovery_timeout",
+                "query_401",
+                "exhaust",
+                "unknown",
+                "malformed",
+                "no_artifacts",
+                "manual_cancel",
+                "manual_notfound",
+                "manual_http404",
+                "manual_refuse",
+            ] {
+                let recovery = matches!(
+                    mode,
+                    "disconnect"
+                        | "discovery_retry"
+                        | "partial"
+                        | "query_retry"
+                        | "query_close"
+                        | "query_401"
+                        | "recovery_timeout"
+                        | "exhaust"
+                        | "unknown"
+                        | "malformed"
+                        | "no_artifacts"
+                        | "manual_cancel"
+                        | "manual_notfound"
+                        | "manual_http404"
+                        | "manual_refuse"
+                );
+                if recovery && auth_kind != Some(RemoteCredentialKind::ApiKey) {
+                    continue;
+                }
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let url = format!("http://{}", listener.local_addr().unwrap());
                 let calls = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -886,8 +1197,9 @@ mod tests {
                             }
                             let (content_type, body) = if header.starts_with("get ") {
                                 assert!(header.starts_with("get /.well-known/agent-card.json "));
+                                calls.lock().unwrap().push(json!({"method":"Discovery"}));
                                 let mut card = json!({"supportedInterfaces":[{"url":format!("{base}/rpc"),"protocolBinding":"JSONRPC","protocolVersion":"1.0","tenant":"team"}],
-                                "capabilities":{"streaming":matches!(mode,"stream"|"timeout")},"defaultInputModes":["text/plain","application/pdf"]});
+                                "capabilities":{"streaming":matches!(mode,"stream"|"timeout") || recovery},"defaultInputModes":["text/plain","application/pdf"]});
                                 if !security.is_null() {
                                     card["securitySchemes"] = security["securitySchemes"].clone();
                                     card["securityRequirements"] = security["securityRequirements"].clone();
@@ -914,15 +1226,27 @@ mod tests {
                                 assert_eq!(rpc["params"]["tenant"], "team");
                                 calls.lock().unwrap().push(rpc.clone());
                                 let method = rpc["method"].as_str().unwrap();
-                                let task = json!({"id":"task-1","status":{"state":"TASK_STATE_COMPLETED","message":{"role":"ROLE_AGENT","parts":[{"text":"reply test-secret"}]}},"artifacts":[{"artifactId":"pdf","name":"processed.pdf",
+                                let mut task = json!({"id":"task-1","status":{"state":"TASK_STATE_COMPLETED","message":{"role":"ROLE_AGENT","parts":[{"text":"reply test-secret"}]}},"artifacts":[{"artifactId":"pdf","name":"processed.pdf",
                                 "parts":[{"raw":STANDARD.encode(b"%PDF-generated"),"filename":"processed-test-secret.pdf","mediaType":"application/pdf"}]}]});
+                                if mode == "no_artifacts" {
+                                    task.as_object_mut().unwrap().remove("artifacts");
+                                }
                                 let reply =
                                     |result: Value| json!({"jsonrpc":"2.0","id":rpc["id"],"result":result}).to_string();
                                 if method == "CancelTask" {
                                     assert_eq!(rpc["params"]["id"], "task-1");
-                                    ("application/json", reply(task))
+                                    if mode == "manual_refuse" {
+                                        ("application/json", json!({"jsonrpc":"2.0","id":rpc["id"],"error":{"code":-32002,"message":"refused test-secret"}}).to_string())
+                                    } else {
+                                        task["status"]["state"] = json!("TASK_STATE_CANCELED");
+                                        ("application/json", reply(task))
+                                    }
                                 } else if method == "GetTask" {
-                                    ("application/json", reply(task))
+                                    if mode == "manual_notfound" {
+                                        ("application/json", json!({"jsonrpc":"2.0","id":rpc["id"],"error":{"code":-32001,"message":"missing test-secret"}}).to_string())
+                                    } else {
+                                        ("application/json", reply(task))
+                                    }
                                 } else {
                                     assert_eq!(rpc["params"]["message"]["role"], "ROLE_USER");
                                     assert_eq!(
@@ -931,12 +1255,28 @@ mod tests {
                                             .unwrap(),
                                         b"%PDF-original"
                                     );
-                                    if matches!(mode, "stream" | "timeout") {
+                                    if matches!(mode, "stream" | "timeout") || recovery {
                                         assert_eq!(method, "SendStreamingMessage");
                                         let initial = reply(
                                             json!({"task":{"id":"task-1","status":{"state":"TASK_STATE_WORKING"}}}),
                                         );
-                                        let body = if mode == "timeout" {
+                                        let body = if mode.starts_with("manual_") {
+                                            format!("data: {initial}\r\n\r\n")
+                                        } else if recovery {
+                                            let partial = reply(
+                                                json!({"artifactUpdate":{"taskId":"task-1","artifact":{"artifactId":"pdf","parts":[{"raw":STANDARD.encode(b"%PDF-partial"),"filename":"partial.pdf","mediaType":"application/pdf"}]}}}),
+                                            );
+                                            if mode == "unknown" {
+                                                "data: {".to_string()
+                                            } else if mode == "malformed" {
+                                                format!("data: {initial}\n\ndata: {{invalid}}\n\n")
+                                            } else {
+                                                format!(
+                                                    "data: {initial}\n\ndata: {partial}\n\n{}",
+                                                    if mode == "partial" { "data: {" } else { "" }
+                                                )
+                                            }
+                                        } else if mode == "timeout" {
                                             format!("data: {initial}\r\n\r\n")
                                         } else {
                                             let update = reply(
@@ -964,18 +1304,60 @@ mod tests {
                                 }
                             };
                             let declared = body.len()
-                                + if mode == "timeout" && content_type == "text/event-stream" {
+                                + if (matches!(
+                                    mode,
+                                    "timeout"
+                                        | "recovery_timeout"
+                                        | "disconnect"
+                                        | "query_retry"
+                                        | "query_401"
+                                        | "exhaust"
+                                        | "unknown"
+                                        | "no_artifacts"
+                                ) || mode.starts_with("manual_"))
+                                    && content_type == "text/event-stream"
+                                {
                                     100
                                 } else {
                                     0
                                 };
-                            let status = if mode == "unauthorized" {
+                            let query_count = calls
+                                .lock()
+                                .unwrap()
+                                .iter()
+                                .filter(|r| r["method"] == "GetTask")
+                                .count();
+                            let is_query = header.starts_with("post ")
+                                && calls.lock().unwrap().last().is_some_and(|r| r["method"] == "GetTask");
+                            let discovery_retry = mode == "discovery_retry"
+                                && header.starts_with("get ")
+                                && calls
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .filter(|r| r["method"] == "Discovery")
+                                    .count()
+                                    == 1;
+                            let status = if mode == "manual_http404" && is_query {
+                                "404 Not Found"
+                            } else if discovery_retry
+                                || (is_query
+                                    && (matches!(mode, "exhaust" | "recovery_timeout")
+                                        || mode == "query_retry" && query_count == 1))
+                            {
+                                "503 Service Unavailable"
+                            } else if (is_query && mode == "query_401") || mode == "unauthorized" {
                                 "401 Unauthorized"
                             } else if mode == "forbidden" {
                                 "403 Forbidden"
                             } else {
                                 "200 OK"
                             };
+                            // Close before response headers to exercise request transport errors,
+                            // separately from a valid transient HTTP status.
+                            if mode == "query_close" && is_query && query_count == 1 {
+                                return;
+                            }
                             let response = format!(
                                 "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n{body}"
                             );
@@ -985,7 +1367,8 @@ mod tests {
                                 }
                                 tokio::task::yield_now().await;
                             }
-                            if mode == "timeout" && content_type == "text/event-stream" {
+                            if (mode == "timeout" || mode.starts_with("manual_")) && content_type == "text/event-stream"
+                            {
                                 tokio::time::sleep(Duration::from_secs(2)).await;
                             }
                         });
@@ -1004,13 +1387,24 @@ mod tests {
                         ..Default::default()
                     },
                 );
+                let task_pool = remote_tasks::test_pool().await;
                 let node = RemoteAgentNode {
                     id: "remote".into(),
                     auth: RemoteAuth::testing(auth_kind.clone()),
+                    authentication: None,
+                    tracking_storage: Some((task_pool.clone(), vec![42; 32])),
                     store: Some(store.clone()),
                     url: Url::parse(&url).unwrap(),
                     paths: vec!["document".into()],
-                    timeout: Duration::from_secs(1),
+                    timeout: Duration::from_secs(if mode.starts_with("manual_") {
+                        1
+                    } else if mode == "recovery_timeout" {
+                        2
+                    } else if recovery {
+                        15
+                    } else {
+                        1
+                    }),
                     state: Arc::clone(&bridge),
                     state_config: WorkflowNodeStateConfig::default(),
                     on_event: None,
@@ -1021,16 +1415,43 @@ mod tests {
                     .add_edge("remote", END)
                     .compile()
                     .unwrap();
-                let result = graph.invoke(State::new(), ExecutionConfig::new("a2a-http")).await;
-                if mode == "timeout" {
+                let result = graph
+                    .invoke(
+                        State::new(),
+                        ExecutionConfig::new("a2a-http").with_metadata("workrun.run_id", json!("run-1")),
+                    )
+                    .await;
+                if matches!(mode, "timeout" | "recovery_timeout") || mode.starts_with("manual_") {
                     assert!(result.err().unwrap().to_string().contains("timed out"));
-                    for _ in 0..20 {
-                        if calls.lock().unwrap().iter().any(|r| r["method"] == "CancelTask") {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    assert!(!calls.lock().unwrap().iter().any(|r| r["method"] == "CancelTask"));
+                    assert_eq!(
+                        calls
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|r| r["method"] == "SendStreamingMessage")
+                            .count(),
+                        1
+                    );
+                } else if matches!(mode, "query_401" | "exhaust" | "unknown" | "malformed") {
+                    let error = result.err().unwrap().to_string();
+                    if mode == "unknown" {
+                        assert!(error.contains("outcome is unknown"));
                     }
-                    assert!(calls.lock().unwrap().iter().any(|r| r["method"] == "CancelTask"));
+                    let calls = calls.lock().unwrap();
+                    assert_eq!(
+                        calls.iter().filter(|r| r["method"] == "SendStreamingMessage").count(),
+                        1
+                    );
+                    assert_eq!(
+                        calls.iter().filter(|r| r["method"] == "GetTask").count(),
+                        match mode {
+                            "exhaust" => 4,
+                            "query_401" => 1,
+                            _ => 0,
+                        }
+                    );
+                    assert_eq!(calls.iter().filter(|r| r["method"] == "CancelTask").count(), 0);
                 } else if matches!(mode, "unauthorized" | "forbidden") {
                     let error = result.err().unwrap().to_string();
                     assert!(error.contains(if mode == "unauthorized" { "401" } else { "403" }));
@@ -1059,14 +1480,205 @@ mod tests {
                         assert!(!serde_json::to_string(&input).unwrap().contains("test-secret"));
                     }
                     let files = references(&input["artifacts"]).unwrap();
-                    assert_eq!(files.len(), 1);
-                    assert_eq!(
-                        std::fs::read(store.resolve(&files[0]).unwrap()).unwrap(),
-                        b"%PDF-generated"
-                    );
-                    assert_eq!(files[0].mime_type, "application/pdf");
+                    assert_eq!(files.len(), if mode == "no_artifacts" { 0 } else { 1 });
+                    if mode != "no_artifacts" {
+                        assert_eq!(
+                            std::fs::read(store.resolve(&files[0]).unwrap()).unwrap(),
+                            b"%PDF-generated"
+                        );
+                        assert_eq!(files[0].mime_type, "application/pdf");
+                    }
+                    if recovery {
+                        let calls = calls.lock().unwrap();
+                        assert_eq!(
+                            calls.iter().filter(|r| r["method"] == "SendStreamingMessage").count(),
+                            1
+                        );
+                        assert_eq!(
+                            calls.iter().filter(|r| r["method"] == "GetTask").count(),
+                            if matches!(mode, "query_retry" | "query_close") {
+                                2
+                            } else {
+                                1
+                            }
+                        );
+                        assert!(!calls.iter().any(|r| r["method"] == "CancelTask"));
+                        if mode == "discovery_retry" {
+                            assert_eq!(calls.iter().filter(|r| r["method"] == "Discovery").count(), 2);
+                        }
+                    }
                     if mode == "poll" {
                         assert!(calls.lock().unwrap().iter().any(|r| r["method"] == "GetTask"));
+                    }
+                }
+                for _ in 0..20 {
+                    let records = remote_tasks::list_remote_tasks(&task_pool, "run-1").await.unwrap();
+                    if records
+                        .first()
+                        .is_none_or(|record| !matches!(record.status.as_str(), "working" | "submitted"))
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                let records = remote_tasks::list_remote_tasks(&task_pool, "run-1").await.unwrap();
+                if let Some(record) = records.first() {
+                    if mode == "timeout" {
+                        assert_eq!(record.status, "unknown");
+                        assert_eq!(record.task_id.as_deref(), Some("task-1"));
+                        // Running workflows cannot be managed independently.
+                        assert!(
+                            remote_task_operation_in_pool(
+                                task_pool.clone(),
+                                vec![42; 32],
+                                &store,
+                                &record.id,
+                                RemoteTaskOperation::Query,
+                                &IWorkrun::default(),
+                                Some(RemoteAuth::testing(auth_kind.clone()))
+                            )
+                            .await
+                            .is_err()
+                        );
+                        sqlx::query("UPDATE run_records SET status = 'failed' WHERE id = 'run-1'")
+                            .execute(&task_pool)
+                            .await
+                            .unwrap();
+                        let query = remote_task_operation_in_pool(
+                            task_pool.clone(),
+                            vec![42; 32],
+                            &store,
+                            &record.id,
+                            RemoteTaskOperation::Query,
+                            &IWorkrun::default(),
+                            Some(RemoteAuth::testing(auth_kind.clone())),
+                        )
+                        .await
+                        .unwrap();
+                        assert_eq!(query.status, "completed");
+                        assert!(query.result.is_none());
+                        let fetched = remote_task_operation_in_pool(
+                            task_pool.clone(),
+                            vec![42; 32],
+                            &store,
+                            &record.id,
+                            RemoteTaskOperation::Fetch,
+                            &IWorkrun::default(),
+                            Some(RemoteAuth::testing(auth_kind.clone())),
+                        )
+                        .await
+                        .unwrap();
+                        let files = references(&fetched.result.as_ref().unwrap()["artifacts"]).unwrap();
+                        assert_eq!(
+                            std::fs::read(store.resolve(&files[0]).unwrap()).unwrap(),
+                            b"%PDF-generated"
+                        );
+                        let query_count = calls
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|r| r["method"] == "GetTask")
+                            .count();
+                        let fetched_again = remote_task_operation_in_pool(
+                            task_pool.clone(),
+                            vec![42; 32],
+                            &store,
+                            &record.id,
+                            RemoteTaskOperation::Fetch,
+                            &IWorkrun::default(),
+                            Some(RemoteAuth::testing(auth_kind.clone())),
+                        )
+                        .await
+                        .unwrap();
+                        assert_eq!(fetched.result, fetched_again.result);
+                        assert_eq!(
+                            calls
+                                .lock()
+                                .unwrap()
+                                .iter()
+                                .filter(|r| r["method"] == "GetTask")
+                                .count(),
+                            query_count
+                        );
+                        let status: String = sqlx::query_scalar("SELECT status FROM run_records WHERE id = 'run-1'")
+                            .fetch_one(&task_pool)
+                            .await
+                            .unwrap();
+                        assert_eq!(status, "failed");
+                    } else if mode.starts_with("manual_") {
+                        assert_eq!(record.status, "unknown");
+                        sqlx::query("UPDATE run_records SET status = 'failed' WHERE id = 'run-1'")
+                            .execute(&task_pool)
+                            .await
+                            .unwrap();
+                        let operation = if matches!(mode, "manual_notfound" | "manual_http404") {
+                            RemoteTaskOperation::Query
+                        } else {
+                            RemoteTaskOperation::Cancel
+                        };
+                        let result = remote_task_operation_in_pool(
+                            task_pool.clone(),
+                            vec![42; 32],
+                            &store,
+                            &record.id,
+                            operation,
+                            &IWorkrun::default(),
+                            Some(RemoteAuth::testing(auth_kind.clone())),
+                        )
+                        .await;
+                        if mode == "manual_refuse" {
+                            let error = result.err().unwrap().to_string();
+                            assert!(error.contains("-32002"));
+                            assert!(!error.contains("test-secret"));
+                            assert_eq!(
+                                remote_tasks::list_remote_tasks(&task_pool, "run-1").await.unwrap()[0].status,
+                                "unknown"
+                            );
+                        } else {
+                            assert_eq!(
+                                result.unwrap().status,
+                                if mode == "manual_cancel" {
+                                    "canceled"
+                                } else {
+                                    "not_found"
+                                }
+                            );
+                        }
+                        let calls = calls.lock().unwrap();
+                        assert_eq!(
+                            calls
+                                .iter()
+                                .filter(|call| call["method"] == "SendStreamingMessage")
+                                .count(),
+                            1
+                        );
+                        assert_eq!(
+                            calls.iter().filter(|call| call["method"] == "CancelTask").count(),
+                            usize::from(operation == RemoteTaskOperation::Cancel)
+                        );
+                    } else if mode == "unknown" {
+                        assert!(record.task_id.is_none());
+                        assert_eq!(record.status, "unknown");
+                        sqlx::query("UPDATE run_records SET status = 'failed' WHERE id = 'run-1'")
+                            .execute(&task_pool)
+                            .await
+                            .unwrap();
+                        let calls_before = calls.lock().unwrap().len();
+                        let error = remote_task_operation_in_pool(
+                            task_pool.clone(),
+                            vec![42; 32],
+                            &store,
+                            &record.id,
+                            RemoteTaskOperation::Query,
+                            &IWorkrun::default(),
+                            Some(RemoteAuth::testing(auth_kind.clone())),
+                        )
+                        .await
+                        .err()
+                        .unwrap()
+                        .to_string();
+                        assert!(error.contains("no remote task ID"));
+                        assert_eq!(calls.lock().unwrap().len(), calls_before);
                     }
                 }
                 server.abort();
@@ -1081,10 +1693,11 @@ mod tests {
                 let _ = self.0.wait();
             }
         }
-        for auth_kind in [
-            None,
-            Some(RemoteCredentialKind::Bearer),
-            Some(RemoteCredentialKind::ApiKey),
+        for (auth_kind, delayed) in [
+            (None, false),
+            (Some(RemoteCredentialKind::Bearer), false),
+            (Some(RemoteCredentialKind::ApiKey), false),
+            (Some(RemoteCredentialKind::ApiKey), true),
         ] {
             let mut fixture = Fixture(
                 std::process::Command::new("python3")
@@ -1099,6 +1712,8 @@ mod tests {
                             Some(RemoteCredentialKind::ApiKey) => "apiKey",
                         },
                     ])
+                    .args(["--delay-seconds", if delayed { "1.5" } else { "0" }])
+                    .args(if delayed { vec!["--disconnect-stream"] } else { vec![] })
                     .env("WORKRUN_A2A_TEST_SECRET", "test-secret")
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::null())
@@ -1125,8 +1740,10 @@ mod tests {
             let node = RemoteAgentNode {
                 id: "fixture".into(),
                 auth: RemoteAuth::testing(auth_kind.clone()),
+                authentication: None,
+                tracking_storage: None,
                 store: Some(store.clone()),
-                url,
+                url: url.clone(),
                 paths: vec!["documents".into()],
                 timeout: Duration::from_secs(5),
                 state: Arc::new(Mutex::new(
@@ -1145,6 +1762,72 @@ mod tests {
                 assert_eq!(data, original);
                 let saved = store.save_bytes_with_mime(name, data, mime.as_deref()).unwrap();
                 assert_eq!(std::fs::read(store.resolve(&saved).unwrap()).unwrap(), original);
+            }
+            if delayed {
+                let client = RemoteAuth::testing(auth_kind).client().unwrap();
+                let rpc_id = uuid::Uuid::new_v4().to_string();
+                let rpc = json!({"jsonrpc":"2.0","id":rpc_id,"method":"GetTask","params":{"id":result.task_id,"historyLength":1}});
+                let body = client
+                    .post(url.join("/a2a").unwrap())
+                    .header("A2A-Version", "1.0")
+                    .json(&rpc)
+                    .send()
+                    .await
+                    .unwrap();
+                let completed = rpc_result(
+                    serde_json::from_slice(&bounded_body(body, &context).await.unwrap()).unwrap(),
+                    &rpc_id,
+                )
+                .unwrap();
+                assert_eq!(completed["status"]["state"], "TASK_STATE_COMPLETED");
+                assert_eq!(completed["artifacts"].as_array().unwrap().len(), 3);
+                let rpc_id = uuid::Uuid::new_v4().to_string();
+                let rpc = json!({"jsonrpc":"2.0","id":rpc_id,"method":"SendMessage","params":{"message":{"messageId":uuid::Uuid::new_v4().to_string(),"role":"ROLE_USER","parts":input_parts(&input, &["documents".into()], &store).unwrap()}}});
+                let body = client
+                    .post(url.join("/a2a").unwrap())
+                    .header("A2A-Version", "1.0")
+                    .json(&rpc)
+                    .send()
+                    .await
+                    .unwrap();
+                let working = rpc_result(
+                    serde_json::from_slice(&bounded_body(body, &context).await.unwrap()).unwrap(),
+                    &rpc_id,
+                )
+                .unwrap()["task"]
+                    .clone();
+                assert_eq!(working["status"]["state"], "TASK_STATE_WORKING");
+                let rpc_id = uuid::Uuid::new_v4().to_string();
+                let rpc = json!({"jsonrpc":"2.0","id":rpc_id,"method":"CancelTask","params":{"id":working["id"]}});
+                let body = client
+                    .post(url.join("/a2a").unwrap())
+                    .header("A2A-Version", "1.0")
+                    .json(&rpc)
+                    .send()
+                    .await
+                    .unwrap();
+                let cancelled = rpc_result(
+                    serde_json::from_slice(&bounded_body(body, &context).await.unwrap()).unwrap(),
+                    &rpc_id,
+                )
+                .unwrap();
+                assert_eq!(cancelled["status"]["state"], "TASK_STATE_CANCELED");
+                tokio::time::sleep(Duration::from_millis(1600)).await;
+                let rpc_id = uuid::Uuid::new_v4().to_string();
+                let rpc = json!({"jsonrpc":"2.0","id":rpc_id,"method":"GetTask","params":{"id":working["id"]}});
+                let body = client
+                    .post(url.join("/a2a").unwrap())
+                    .header("A2A-Version", "1.0")
+                    .json(&rpc)
+                    .send()
+                    .await
+                    .unwrap();
+                let cancelled = rpc_result(
+                    serde_json::from_slice(&bounded_body(body, &context).await.unwrap()).unwrap(),
+                    &rpc_id,
+                )
+                .unwrap();
+                assert_eq!(cancelled["status"]["state"], "TASK_STATE_CANCELED");
             }
         }
     }

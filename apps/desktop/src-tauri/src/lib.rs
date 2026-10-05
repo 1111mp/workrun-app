@@ -97,6 +97,9 @@ pub fn run() {
             cmd::remote_agent::remote_credential_save,
             cmd::remote_agent::remote_credential_delete,
             cmd::remote_agent::remote_agent_test_connection,
+            cmd::remote_agent::remote_tasks_list,
+            cmd::remote_agent::remote_task_manage,
+            cmd::remote_agent::remote_task_warnings,
             // workrun
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,

@@ -139,11 +139,12 @@ async fn execute_workflow(
             None => workflow_module::compile(dsl, &config, Some(node_events)).await?,
         };
         let event_sender = events.clone();
-        let run = compiled.run_stream(
+        let run = compiled.run_stream_tracked(
             initial_state,
             &session.thread_id,
             resume,
             tool_confirmation,
+            Some(run_id),
             move |event| {
                 if let StreamEvent::Done { total_steps: steps, .. } = event {
                     // `run_stream` emits ADK's internal graph state here. Hold
@@ -180,7 +181,12 @@ async fn execute_workflow(
             }),
         )
         .await?;
-        return finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await;
+        let finished = finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await;
+        let cancelled_run_id = run_id.to_string();
+        tokio::spawn(async move {
+            let _ = workflow_module::cancel_remote_tasks_for_run(&cancelled_run_id).await;
+        });
+        return finished;
     };
     if let Some(total_steps) = terminal_steps.lock().take() {
         let event = StreamEvent::Done {

@@ -38,3 +38,46 @@ export function testRemoteConnection(
 ) {
   return invoke<void>('remote_agent_test_connection', { url, authentication });
 }
+
+export type RemoteTask = {
+  id: string;
+  runId: string;
+  nodeId: string;
+  messageId: string;
+  serviceOrigin: string;
+  taskId?: string | null;
+  status: string;
+  lastKnownState?: string | null;
+  result?: { response: string; artifacts: unknown[] } | null;
+  createdAt: string;
+  updatedAt: string;
+  lastCheckedAt?: string | null;
+};
+
+export function listRemoteTasks(runId: string) {
+  return invoke<RemoteTask[]>('remote_tasks_list', { runId });
+}
+
+export function manageRemoteTask(
+  id: string,
+  operation: 'query' | 'fetch' | 'cancel',
+) {
+  return invoke<RemoteTask>('remote_task_manage', { id, operation });
+}
+
+export function remoteTaskMayRepeat(task: RemoteTask, localFailed = false) {
+  return (
+    [
+      'unknown',
+      'submitted',
+      'working',
+      'input_required',
+      'auth_required',
+    ].includes(task.status) ||
+    (task.status === 'completed' && (localFailed || !task.result))
+  );
+}
+
+export function listRemoteTaskWarnings(workflowId: string) {
+  return invoke<RemoteTask[]>('remote_task_warnings', { workflowId });
+}
