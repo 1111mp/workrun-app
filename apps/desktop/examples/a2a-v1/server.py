@@ -6,19 +6,44 @@ Run: python3 apps/desktop/examples/a2a-v1/server.py --port 8088
 import argparse
 import base64
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
 MAX_BYTES = 20 * 1024 * 1024
 
 
+class FixtureHTTPServer(ThreadingHTTPServer):
+    auth_kind: str = "none"
+    secret: str = ""
+    key_header: str = "X-API-Key"
+
+
 class Handler(BaseHTTPRequestHandler):
+    def authenticated(self):
+        # This handler is registered with FixtureHTTPServer below.
+        server = cast(FixtureHTTPServer, self.server)
+        kind = server.auth_kind
+        if kind == "none":
+            return True
+        expected = f"Bearer {server.secret}" if kind == "bearer" else server.secret
+        header = "Authorization" if kind == "bearer" else server.key_header
+        if self.headers.get(header) == expected:
+            return True
+        self.send_response(401)
+        self.send_header("Content-Length", "0")
+        if kind == "bearer":
+            self.send_header("WWW-Authenticate", 'Bearer realm="workrun-fixture"')
+        self.end_headers()
+        return False
+
     def do_GET(self):
+        if not self.authenticated():
+            return
         if self.path != "/.well-known/agent-card.json":
             self.send_error(404)
             return
-        # The handler is registered with ThreadingHTTPServer below.
-        port = cast(ThreadingHTTPServer, self.server).server_port
+        port = cast(FixtureHTTPServer, self.server).server_port
         self.reply(
             {
                 "name": "Workrun resource fixture",
@@ -66,6 +91,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        if not self.authenticated():
+            return
         if self.path != "/a2a":
             self.send_error(404)
             return
@@ -205,7 +232,15 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8088)
+    parser.add_argument("--auth", choices=["none", "bearer", "apiKey"], default="none")
+    parser.add_argument("--header", default="X-API-Key")
     args = parser.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    secret = os.environ.get("WORKRUN_A2A_TEST_SECRET", "")
+    if args.auth != "none" and not secret:
+        parser.error("Set WORKRUN_A2A_TEST_SECRET for authenticated fixtures")
+    server = FixtureHTTPServer(("127.0.0.1", args.port), Handler)
+    server.auth_kind = args.auth
+    server.key_header = args.header
+    server.secret = secret
     print(f"A2A fixture: http://127.0.0.1:{server.server_port}", flush=True)
     server.serve_forever()

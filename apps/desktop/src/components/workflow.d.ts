@@ -144,6 +144,7 @@ type WorkflowCodeActAgentNode = WorkflowBaseNode & {
 
 // ---------- Remote Agent Node ----------
 type WorkflowRemoteAgentNodeData = WorkflowNodeStateConfig & {
+  authentication?: import('@/services/remote-agent').RemoteAuthentication;
   attachmentPaths?: string[];
   timeoutSeconds?: number;
   name: string;

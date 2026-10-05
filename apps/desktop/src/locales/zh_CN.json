@@ -501,6 +501,33 @@
     }
   },
   "workflowEditor": {
+    "remoteAuth": {
+      "enterUrl": "请先填写有效的服务 URL。其他源地址的凭据会显示，但不可选择。",
+      "originMismatch": "这些凭据绑定了其他服务源地址。请使用匹配的协议、主机和端口，或为当前服务新建凭据。",
+
+      "title": "认证",
+      "mode": "认证方式",
+      "none": "无认证",
+      "description": "使用本机保存的凭据。Workflow 仅保存凭据 ID，凭据绑定当前服务的源地址。",
+      "credential": "已保存的凭据",
+      "select": "选择凭据",
+      "missing": "凭据不存在或绑定其他源地址，请选择或新建本机凭据。",
+      "loadFailed": "凭据加载失败，请重新打开面板重试。",
+      "header": "API Key 请求头名称",
+      "add": "新增凭据",
+      "edit": "编辑凭据",
+      "name": "凭据名称",
+      "keepSecret": "留空保留已保存的密钥；输入新值可更新密钥。",
+      "writeOnly": "复用现有加密存储保存，密钥保存后不能回读。",
+      "save": "保存凭据",
+      "cancel": "取消",
+      "delete": "删除凭据",
+      "saved": "凭据已保存。",
+      "deleted": "凭据已删除，引用它的其他 Workflow 需要重新选择凭据。",
+      "connected": "Agent Card 发现及认证要求检查通过，未创建远程任务。",
+      "working": "处理中…",
+      "test": "测试连接"
+    },
     "backToWorkflows": "返回工作流列表",
     "name": "工作流名称",
     "runMode": "运行模式",

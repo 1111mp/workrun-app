@@ -43,6 +43,7 @@ import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { JsonEditorField } from '@/components/json-editor';
+import { RemoteAgentAuthenticationFields } from '@/components/remote-agent-authentication';
 import { isTeamMode } from '@/lib/constant';
 import {
   getProcessNodes,
@@ -51,6 +52,7 @@ import {
   listPublishedProcessNodeReleases,
   type ProcessAppRef,
 } from '@/services/process-node';
+import type { RemoteAuthentication } from '@/services/remote-agent';
 import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
 import { getWorkflows } from '@/services/workflow';
@@ -1090,6 +1092,19 @@ function WorkflowNodeInspector({
                     timeoutSeconds: value === '' ? undefined : Number(value),
                   })
                 }
+              />
+            </InspectorSection>
+            <InspectorSection
+              title={t('workflowEditor.remoteAuth.title')}
+              description={t('workflowEditor.remoteAuth.description')}
+            >
+              <RemoteAgentAuthenticationFields
+                key={node.id}
+                url={getText(data, 'url')}
+                authentication={
+                  data.authentication as RemoteAuthentication | undefined
+                }
+                onChange={(authentication) => updateData({ authentication })}
               />
             </InspectorSection>
           </FieldGroup>

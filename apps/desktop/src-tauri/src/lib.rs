@@ -93,6 +93,10 @@ pub fn run() {
             cmd::artifact::artifact_export,
             cmd::artifact::artifact_preview,
             cmd::artifact::artifact_open_pdf,
+            cmd::remote_agent::remote_credentials_list,
+            cmd::remote_agent::remote_credential_save,
+            cmd::remote_agent::remote_credential_delete,
+            cmd::remote_agent::remote_agent_test_connection,
             // workrun
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,

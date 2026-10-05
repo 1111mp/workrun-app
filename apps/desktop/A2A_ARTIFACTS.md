@@ -73,8 +73,8 @@ fail before service discovery.
   JSON/SSE and accumulated output are bounded to 32 MiB; SSE wire traffic to
   64 MiB. Names cannot contain directory separators. Known binary signatures
   must match the declared media type (generic octet-stream is detected locally).
-- URL Parts are rejected explicitly. Remote blob fetch/upload, authenticated
-  endpoints, required extensions, gRPC and HTTP+JSON bindings are not supported.
+- URL Parts are rejected explicitly. Remote blob fetch/upload, required extensions, gRPC and HTTP+JSON bindings are
+  not supported. Authentication is described below.
 
 ## Automated verification
 
@@ -97,3 +97,73 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib \
 
 Actual desktop previews/download dialogs and third-party servers still require
 manual acceptance with a running desktop build.
+
+## Authentication
+
+The Remote Agent inspector has an **Authentication** section:
+
+1. Set the service URL first. Select **Bearer Token** or **API Key**.
+2. Select an existing credential, or click **New credential**, enter a name and
+   the secret, and save. For Bearer authentication enter the token only, without
+   the `Bearer ` prefix. For API Key set the header name, typically `X-API-Key`.
+3. Click **Test connection**. This fetches the Agent Card and validates its
+   advertised authentication and v1.0.1 JSONRPC interface without creating a
+   task or sending workflow files. For a public Agent Card, this does not prove
+   that a private task endpoint will accept the key; that endpoint is checked
+   when the workflow runs.
+4. **Edit credential** can rename a credential or replace/rotate its secret.
+   Leaving the secret blank keeps the saved value. Deleting a credential leaves
+   workflows referencing its ID unresolved until another local credential is
+   selected.
+
+Workflow JSON stores only `authentication.type`, `credentialId`, and (for
+API Key) `headerName`. Credentials are installation-local. Importing a workflow
+on another machine requires selecting that machine's credential.
+
+Credential ciphertext is saved in `workrun.yaml` using the existing AES-GCM
+helpers and installation encryption key. The credential list and save response
+return name/type/origin/ID only; no secret or ciphertext is returned to the
+webview. Credential inputs never enter State or the workflow patch. Known secret
+values echoed in response text, file names, task IDs and node errors are masked;
+binary resource contents retain their original bytes.
+
+A credential is bound to the service origin (scheme, host and port). It cannot
+be used after changing a workflow URL to another origin. Authenticated services
+require HTTPS, except loopback HTTP for local fixtures. API Key headers cannot
+override routing/transport/protocol headers. Redirects remain disabled and the
+Agent Card interface must remain on the configured origin. All discovery,
+SendMessage, SendStreamingMessage, GetTask and CancelTask requests use the same
+sensitive credential header.
+
+Agent Card `securityRequirements` uses v1.0.1's `schemes` map with StringList
+scope objects. Requirement alternatives are OR; schemes within an alternative
+are AND. This phase supports a single Bearer or header API Key credential;
+OAuth flows, query/cookie API keys, mTLS and combined credentials remain
+unsupported. A mismatch fails before input is posted. HTTP 401/403 report their
+status without echoing the response body or secret.
+
+### Authenticated fixture acceptance
+
+Start the existing fixture with a dummy test token:
+
+```sh
+WORKRUN_A2A_TEST_SECRET=test-token python3 apps/desktop/examples/a2a-v1/server.py \
+  --port 8088 --auth bearer
+```
+
+Set URL `http://127.0.0.1:8088`, create a Bearer credential with `test-token`, and
+follow the single-node acceptance steps above. Then edit it to an incorrect
+value: connection testing and workflow discovery should return 401. Restore the
+correct value and repeat file transfer.
+
+For API Key, start with `--auth apiKey --header X-API-Key`, select API Key
+in the node, create a matching credential, and set `X-API-Key` as the header.
+The fixture keeps the token in its environment; it does not print its value.
+
+The native HTTP integration test now runs all transport modes with no auth,
+Bearer and API Key, checks authentication on every request including polling
+and cancellation, checks 401/403 and secret redaction, and launches the Python
+fixture in all three modes. UI tests verify write-only save, reference-only
+workflow patches, metadata edits without key replacement, deletion and connection
+errors. Unit tests verify encrypted YAML round trips, safe public summaries,
+origin/type/missing-reference checks, header injection and requirement semantics.

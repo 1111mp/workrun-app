@@ -12,6 +12,7 @@ pub mod mcp_server;
 pub mod model;
 pub mod process_node;
 pub mod python_runtime;
+pub mod remote_agent;
 pub mod run_history;
 pub mod run_manager;
 pub mod schedule;

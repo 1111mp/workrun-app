@@ -512,6 +512,33 @@
     }
   },
   "workflowEditor": {
+    "remoteAuth": {
+      "enterUrl": "Enter a valid service URL first. Credentials bound to other origins are shown but cannot be selected.",
+      "originMismatch": "These credentials belong to other service origins. Use the matching scheme, host and port, or create a credential for this service.",
+
+      "title": "Authentication",
+      "mode": "Authentication method",
+      "none": "None",
+      "description": "Use a saved local credential. Workflow documents contain only its ID. Credentials are bound to this service origin.",
+      "credential": "Saved credential",
+      "select": "Select a credential",
+      "missing": "Credential missing or bound to another origin. Select or create a local credential.",
+      "loadFailed": "Could not load credentials. Reopen this panel to retry.",
+      "header": "API Key header name",
+      "add": "New credential",
+      "edit": "Edit credential",
+      "name": "Credential name",
+      "keepSecret": "Leave blank to keep the saved secret. Enter a value to rotate it.",
+      "writeOnly": "Saved using existing encrypted storage. Secret values cannot be read back.",
+      "save": "Save credential",
+      "cancel": "Cancel",
+      "delete": "Delete credential",
+      "saved": "Credential saved.",
+      "deleted": "Credential deleted. Other workflows referencing it must select another credential.",
+      "connected": "Agent Card discovery and authentication requirements passed. No remote task was created.",
+      "working": "Working…",
+      "test": "Test connection"
+    },
     "backToWorkflows": "Back to workflows",
     "name": "Workflow name",
     "runMode": "Run mode",

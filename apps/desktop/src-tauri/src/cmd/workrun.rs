@@ -8,8 +8,8 @@ use serde::Serialize;
 
 /// The portion of Workrun configuration that is safe to return over IPC.
 ///
-/// CodeAct secrets intentionally do not appear here: their plaintext values are
-/// only used while constructing a Monty runtime in the backend.
+/// Remote Agent credentials are listed through a separate metadata-only command;
+/// their encrypted values and plaintext never appear in this settings response.
 #[derive(Serialize)]
 pub struct PublicWorkrunConfig {
     workspace_mode: Option<WorkspaceMode>,

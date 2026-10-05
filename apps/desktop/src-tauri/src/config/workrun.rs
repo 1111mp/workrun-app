@@ -154,6 +154,8 @@ pub struct IWorkrun {
 
     #[serde(default)]
     pub provider_credentials: Vec<ProviderCredential>,
+    #[serde(default)]
+    pub remote_agent_credentials: Vec<super::RemoteAgentCredential>,
     /// Workrun-owned model for internal conversation memory compression.
     pub summary_model_profile_id: Option<String>,
     /// app log level

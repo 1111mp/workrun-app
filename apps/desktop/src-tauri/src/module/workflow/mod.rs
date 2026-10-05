@@ -11,6 +11,7 @@ mod guardrails;
 mod human_review;
 mod process;
 mod remote_agent;
+mod remote_auth;
 mod routing;
 mod state_bridge;
 mod subworkflow;
@@ -24,7 +25,9 @@ use codeact_agent::*;
 use guardrails::*;
 use human_review::*;
 use process::*;
+pub(crate) use remote_agent::test_remote_connection;
 use remote_agent::*;
+pub(crate) use remote_auth::{RemoteAuthentication, validate_remote_secret};
 use routing::*;
 use state_bridge::*;
 use subworkflow::*;
@@ -721,6 +724,7 @@ pub(super) async fn compile_with_path(
             // The v1.0.1 adapter participates in the same scoped State boundary.
             "remote_agent" => graph.add_node(remote_a2a_graph_node(
                 node,
+                config,
                 on_event.clone(),
                 Arc::clone(&state),
                 node_state_config(node, &executable_ids)?,

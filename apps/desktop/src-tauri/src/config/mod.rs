@@ -4,9 +4,11 @@ mod encrypt;
 mod mcp_server;
 mod process_node;
 mod registry;
+mod remote_agent;
 mod workflow;
 mod workrun;
 
 pub use self::{
-    base_config::*, draft::*, encrypt::*, mcp_server::*, process_node::*, registry::*, workflow::*, workrun::*,
+    base_config::*, draft::*, encrypt::*, mcp_server::*, process_node::*, registry::*, remote_agent::*, workflow::*,
+    workrun::*,
 };
