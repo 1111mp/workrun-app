@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "app:dev": "turbo dev --filter workrun",
+    "app:build": "turbo build --filter workrun",
     "server:dev": "turbo dev --filter workrun-server",
     "docs:dev": "turbo dev --filter workrun-docs",
     "docs:build": "turbo build --filter workrun-docs",

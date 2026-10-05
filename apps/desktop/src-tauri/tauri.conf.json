@@ -48,7 +48,7 @@
     "externalBin": ["binaries/uv"],
     "publisher": "Workrun",
     "copyright": "MIT License",
-    "licenseFile": "../LICENSE",
+    "licenseFile": "../../../LICENSE",
     "license": "MIT",
     "category": "Productivity",
     "shortDescription": "A local-first visual AI automation platform.",

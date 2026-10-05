@@ -278,7 +278,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseBody: "Draft release, will be updated later."
           tauriScript: pnpm --filter workrun tauri
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --verbose
           uploadUpdaterJson: true
 
       - name: Attest Windows bundles

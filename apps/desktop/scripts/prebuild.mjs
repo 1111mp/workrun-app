@@ -110,10 +110,13 @@ function bundledVersion(binary) {
 }
 
 const { triple, platform, archive: archiveType } = resolveTarget();
+// Cross-compiled sidecars cannot necessarily run on the build host. Their
+// downloaded release archives are still verified by SHA-256 below.
+const canRunSidecar = triple === rustHostTriple();
 const extension = platform === 'win32' ? '.exe' : '';
 const sidecarName = `uv-${triple}${extension}`;
 const sidecarPath = join(BINARIES_DIR, sidecarName);
-const currentVersion = bundledVersion(sidecarPath);
+const currentVersion = canRunSidecar ? bundledVersion(sidecarPath) : undefined;
 
 if (!FORCE && currentVersion?.startsWith(`uv ${UV_VERSION}`)) {
   console.log(`uv sidecar is ready: ${currentVersion}`);
@@ -159,11 +162,17 @@ try {
   await rm(sidecarPath, { force: true });
   await rename(stagedPath, sidecarPath);
 
-  const version = bundledVersion(sidecarPath);
-  if (!version?.startsWith(`uv ${UV_VERSION}`)) {
-    throw new Error(`Downloaded sidecar did not report uv ${UV_VERSION}`);
+  if (canRunSidecar) {
+    const version = bundledVersion(sidecarPath);
+    if (!version?.startsWith(`uv ${UV_VERSION}`)) {
+      throw new Error(`Downloaded sidecar did not report uv ${UV_VERSION}`);
+    }
+    console.log(`uv sidecar installed: ${version}`);
+  } else {
+    console.log(
+      `uv ${UV_VERSION} sidecar installed for ${triple} (SHA-256 verified; cross-compiling)`,
+    );
   }
-  console.log(`uv sidecar installed: ${version}`);
 } finally {
   await rm(tempDir, { recursive: true, force: true });
 }

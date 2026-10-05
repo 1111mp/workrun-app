@@ -16,20 +16,27 @@ function rustHostTriple() {
   return host;
 }
 
+const hostTriple = rustHostTriple();
 const bundledUv = fileURLToPath(
   new URL(
-    `../src-tauri/binaries/uv-${rustHostTriple()}${
+    `../src-tauri/binaries/uv-${hostTriple}${
       process.platform === 'win32' ? '.exe' : ''
     }`,
     import.meta.url,
   ),
 );
-// prebuild downloads this sidecar but intentionally does not add it to PATH.
+// prebuild downloads sidecars but intentionally does not add them to PATH.
 // Building with it keeps local builds independent of a system-wide uv install.
 const uv = process.env.UV ?? bundledUv;
 
 if (!process.env.UV && !existsSync(bundledUv)) {
-  throw new Error(`Bundled uv sidecar is missing: ${bundledUv}`);
+  // Cross-compiling prepares the target sidecar, but building the SDK wheel
+  // requires a uv executable that can run on the build host.
+  execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL('./prebuild.mjs', import.meta.url)), hostTriple],
+    { stdio: 'inherit' },
+  );
 }
 
 // Wheels are generated for every Desktop build so the resource directory never
