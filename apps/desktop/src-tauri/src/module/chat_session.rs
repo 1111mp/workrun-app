@@ -164,6 +164,29 @@ impl ChatSessionStore {
                 "recentMessages": messages.into_iter().rev().take(RECENT_MESSAGE_LIMIT).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>(),
             }));
         }
+        Self::compact_context(
+            &pool,
+            session_id,
+            summary,
+            covered,
+            messages,
+            |summary, older| async move { summarize(&summary, &older).await },
+        )
+        .await
+    }
+
+    async fn compact_context<F, Fut>(
+        pool: &sqlx::SqlitePool,
+        session_id: &str,
+        summary: String,
+        covered: i64,
+        messages: Vec<ConversationMessage>,
+        summarize_window: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce(String, Vec<ConversationMessage>) -> Fut,
+        Fut: std::future::Future<Output = Result<String>>,
+    {
         let split_at = messages.len().saturating_sub(RECENT_MESSAGE_LIMIT);
         // Never split a user/assistant pair: keeping a few extra messages is
         // safer than putting a reply in memory without the question it answers.
@@ -177,11 +200,11 @@ impl ChatSessionStore {
                     .filter(|message| message.sequence > covered && message.sequence <= through)
                     .cloned()
                     .collect::<Vec<_>>();
-                match summarize(&summary, &older).await {
+                match summarize_window(summary.clone(), older).await {
                     Ok(next) => {
                         let now = chrono::Utc::now().to_rfc3339();
                         sqlx::query("UPDATE chat_sessions SET summary = ?, summary_through_sequence = ?, summary_status = 'ready', summary_updated_at = ?, summary_error = NULL, updated_at = ? WHERE id = ?")
-                            .bind(&next).bind(through).bind(&now).bind(&now).bind(session_id).execute(&pool).await?;
+                            .bind(&next).bind(through).bind(&now).bind(&now).bind(session_id).execute(pool).await?;
                         let recent = messages
                             .iter()
                             .filter(|message| message.sequence > through)
@@ -193,13 +216,9 @@ impl ChatSessionStore {
                         // Compression is opportunistic: its failure must never block a chat turn.
                         let detail = error.to_string().chars().take(500).collect::<String>();
                         sqlx::query("UPDATE chat_sessions SET summary_status = 'failed', summary_error = ?, updated_at = ? WHERE id = ?")
-                            .bind(detail).bind(chrono::Utc::now().to_rfc3339()).bind(session_id).execute(&pool).await?;
-                        let recent = messages
-                            .iter()
-                            .filter(|message| message.sequence > through)
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        return Ok(json!({ "summary": "", "recentMessages": recent }));
+                            .bind(detail).bind(chrono::Utc::now().to_rfc3339()).bind(session_id).execute(pool).await?;
+                        // Fall through with the persisted summary and its actual coverage:
+                        // the failed window must remain in context until a summary succeeds.
                     },
                 }
             }
@@ -545,6 +564,153 @@ mod tests {
             .await
             .unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn failed_compaction_preserves_existing_memory_and_uncovered_turns() {
+        assert_failed_compaction_context("{\"facts\":[\"Remember my preference\"]}", 2).await;
+    }
+
+    #[tokio::test]
+    async fn failed_first_compaction_preserves_all_turns() {
+        assert_failed_compaction_context("", -1).await;
+    }
+
+    async fn assert_failed_compaction_context(summary: &str, covered: i64) {
+        let pool = chat_pool().await;
+        sqlx::query("ALTER TABLE chat_sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE chat_sessions ADD COLUMN summary_through_sequence INTEGER NOT NULL DEFAULT -1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for statement in [
+            "ALTER TABLE chat_sessions ADD COLUMN summary_status TEXT",
+            "ALTER TABLE chat_sessions ADD COLUMN summary_error TEXT",
+            "ALTER TABLE chat_sessions ADD COLUMN updated_at TEXT",
+            "ALTER TABLE chat_sessions ADD COLUMN summary_updated_at TEXT",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO chat_sessions (id, status, summary, summary_through_sequence, summary_status) VALUES ('session-1', 'active', ?, ?, 'ready')")
+            .bind(summary).bind(covered).execute(&pool).await.unwrap();
+        let messages = (0..16)
+            .flat_map(|sequence| {
+                ["user", "assistant"].map(|role| ConversationMessage {
+                    sequence,
+                    role: role.to_string(),
+                    content: format!("{role} turn {sequence}"),
+                })
+            })
+            .collect::<Vec<_>>();
+        let expected = messages
+            .iter()
+            .filter(|message| message.sequence > covered)
+            .map(|message| serde_json::to_value(message).unwrap())
+            .collect::<Vec<_>>();
+        assert!(expected.len() > super::RECENT_MESSAGE_LIMIT);
+        let context = ChatSessionStore::compact_context(
+            &pool,
+            "session-1",
+            summary.to_string(),
+            covered,
+            messages.clone(),
+            |previous, older| async move {
+                assert_eq!(previous, summary);
+                assert_eq!(older.first().unwrap().sequence, covered + 1);
+                assert_eq!(older.last().unwrap().sequence, 5);
+                anyhow::bail!("summary service unavailable")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(context["summary"], summary);
+        assert_eq!(context["recentMessages"], serde_json::json!(expected));
+        let row = sqlx::query("SELECT summary, summary_through_sequence, summary_status, summary_error FROM chat_sessions WHERE id = 'session-1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.try_get::<String, _>("summary").unwrap(), summary);
+        assert_eq!(row.try_get::<i64, _>("summary_through_sequence").unwrap(), covered);
+        assert_eq!(row.try_get::<String, _>("summary_status").unwrap(), "failed");
+        assert_eq!(
+            row.try_get::<String, _>("summary_error").unwrap(),
+            "summary service unavailable"
+        );
+
+        // Retry from the unchanged boundary, then verify only successfully
+        // summarized turns leave the next context.
+        let next_summary = "{\"facts\":[\"Updated memory\"]}";
+        let context = ChatSessionStore::compact_context(
+            &pool,
+            "session-1",
+            summary.to_string(),
+            covered,
+            messages,
+            |previous, older| async move {
+                assert_eq!(previous, summary);
+                assert_eq!(older.first().unwrap().sequence, covered + 1);
+                assert_eq!(older.last().unwrap().sequence, 5);
+                Ok(next_summary.to_string())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(context["summary"], next_summary);
+        assert_eq!(
+            context["recentMessages"],
+            serde_json::json!(
+                (6..16)
+                    .flat_map(|sequence| ["user", "assistant"].map(move |role| {
+                        serde_json::json!({"role": role, "content": format!("{role} turn {sequence}")})
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+        let row = sqlx::query("SELECT summary, summary_through_sequence, summary_status, summary_error, summary_updated_at FROM chat_sessions WHERE id = 'session-1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.try_get::<String, _>("summary").unwrap(), next_summary);
+        assert_eq!(row.try_get::<i64, _>("summary_through_sequence").unwrap(), 5);
+        assert_eq!(row.try_get::<String, _>("summary_status").unwrap(), "ready");
+        assert!(row.try_get::<Option<String>, _>("summary_error").unwrap().is_none());
+        assert!(
+            row.try_get::<Option<String>, _>("summary_updated_at")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_compaction_when_no_new_window_needs_summarizing() {
+        let pool = chat_pool().await;
+        for (turns, covered) in [(0, -1), (10, -1), (16, 5)] {
+            let messages = (0..turns)
+                .flat_map(|sequence| {
+                    ["user", "assistant"].map(|role| ConversationMessage {
+                        sequence,
+                        role: role.to_string(),
+                        content: format!("{role} turn {sequence}"),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let expected = messages
+                .iter()
+                .filter(|message| message.sequence > covered)
+                .map(|message| serde_json::to_value(message).unwrap())
+                .collect::<Vec<_>>();
+            let context = ChatSessionStore::compact_context(
+                &pool,
+                "session-1",
+                "existing memory".to_string(),
+                covered,
+                messages,
+                |_, _| async { panic!("summary must not be requested") },
+            )
+            .await
+            .unwrap();
+            assert_eq!(context["summary"], "existing memory");
+            assert_eq!(context["recentMessages"], serde_json::json!(expected));
+        }
     }
 
     #[test]
