@@ -769,6 +769,7 @@
       }
     },
     "artifacts": {
+      "add": "添加照片与文件",
       "remotePathsDescription": "每行一个可见 State 路径。通过 A2A v1.0.1 发送实际文件内容，最多 10 个文件、合计 20 MiB。留空仅发送文本。",
       "remoteTimeout": "请求超时（秒）",
       "remoteTimeoutDescription": "包含服务发现、远程处理和文件传输。默认 120，范围 1–600。",

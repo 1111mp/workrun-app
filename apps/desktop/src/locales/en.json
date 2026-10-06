@@ -781,6 +781,7 @@
       }
     },
     "artifacts": {
+      "add": "Add photos & files",
       "remotePathsDescription": "One visible State path per line. A2A v1.0.1 sends inline file bytes; maximum 10 files and 20 MiB in total. Leave empty to send text only.",
       "remoteTimeout": "Request timeout (seconds)",
       "remoteTimeoutDescription": "Includes discovery, remote processing and file transfer. Default 120; range 1–600.",

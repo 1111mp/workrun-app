@@ -1,4 +1,8 @@
 import {
+  Attachment,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentTitle,
   Button,
   Dialog,
   DialogContent,
@@ -31,7 +35,11 @@ export function ArtifactFiles({
   multiple = false,
   disabled = false,
   modalPreview = false,
+  compact = false,
+  hidePicker = false,
 }: {
+  compact?: boolean;
+  hidePicker?: boolean;
   value: unknown;
   onChange?: (value: ArtifactRef | ArtifactRef[] | undefined) => void;
   multiple?: boolean;
@@ -58,6 +66,7 @@ export function ArtifactFiles({
       : [{ type: 'image', src: preview.url, alt: preview.reference.name }];
   }, [preview]);
   const references = artifactReferences(value);
+  const FileContainer = compact ? Attachment : 'div';
   async function pick() {
     setBusy(true);
     try {
@@ -91,8 +100,12 @@ export function ArtifactFiles({
     />
   );
   return (
-    <div className='flex flex-col gap-2'>
-      {onChange && (
+    <div
+      className={
+        compact ? 'flex min-w-0 flex-wrap gap-2' : 'flex flex-col gap-2'
+      }
+    >
+      {onChange && !hidePicker && (
         <Button
           type='button'
           variant='outline'
@@ -104,14 +117,21 @@ export function ArtifactFiles({
         </Button>
       )}
       {references.map((reference) => (
-        <div
+        <FileContainer
           key={`${reference.id}:${reference.version}`}
-          className='flex items-center gap-2'
+          {...(compact ? { size: 'sm' as const } : {})}
+          className={
+            compact ? 'max-w-full gap-1 p-1' : 'flex items-center gap-2'
+          }
         >
           <Button
             type='button'
             variant='ghost'
-            className='min-w-0 flex-1 justify-start'
+            className={
+              compact
+                ? 'h-auto max-w-56 min-w-0 flex-1 justify-start px-2 py-1'
+                : 'min-w-0 flex-1 justify-start'
+            }
             onClick={() => {
               void exportArtifact(reference).catch((error) =>
                 toast.error(String(error), { toasterId: 'global' }),
@@ -119,18 +139,33 @@ export function ArtifactFiles({
             }}
           >
             <DownloadIcon data-icon='inline-start' />
-            <span className='truncate'>{reference.name}</span>
+            {compact ? (
+              <AttachmentContent className='text-left'>
+                <AttachmentTitle title={reference.name}>
+                  {reference.name}
+                </AttachmentTitle>
+                <AttachmentDescription>
+                  {reference.size < 1024 * 1024
+                    ? `${Math.ceil(reference.size / 1024)} KB`
+                    : `${(reference.size / 1024 / 1024).toFixed(1)} MiB`}
+                </AttachmentDescription>
+              </AttachmentContent>
+            ) : (
+              <span className='truncate'>{reference.name}</span>
+            )}
           </Button>
-          <FieldDescription>
-            {(reference.size / 1024 / 1024).toFixed(1)} MiB
-          </FieldDescription>
+          {!compact && (
+            <FieldDescription>
+              {(reference.size / 1024 / 1024).toFixed(1)} MiB
+            </FieldDescription>
+          )}
           {(reference.mimeType.startsWith('image/') ||
             reference.mimeType === 'application/pdf' ||
             reference.mimeType.startsWith('video/')) && (
             <Button
               type='button'
               variant='ghost'
-              size='icon'
+              size={compact ? 'icon-xs' : 'icon'}
               disabled={busy}
               aria-label={t(
                 reference.mimeType === 'application/pdf'
@@ -166,7 +201,7 @@ export function ArtifactFiles({
             <Button
               type='button'
               variant='ghost'
-              size='icon'
+              size={compact ? 'icon-xs' : 'icon'}
               disabled={disabled || busy}
               aria-label={t('workflowEditor.artifacts.remove')}
               onClick={() => {
@@ -179,7 +214,7 @@ export function ArtifactFiles({
               <XIcon />
             </Button>
           )}
-        </div>
+        </FileContainer>
       ))}
       {modalPreview ? (
         <Dialog

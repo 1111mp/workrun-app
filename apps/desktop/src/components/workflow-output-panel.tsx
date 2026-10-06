@@ -19,14 +19,6 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-  Field,
-  FieldGroup,
-  FieldLabel,
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupText,
-  InputGroupTextarea,
   Marker,
   MarkerContent,
   MarkerIcon,
@@ -43,7 +35,6 @@ import {
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
 import {
-  ArrowUpIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -76,6 +67,7 @@ import {
   RemoteTasksPanel,
   RemoteTaskRerunButton,
 } from '@/components/remote-tasks';
+import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
 import { artifactReferences } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
@@ -2496,62 +2488,18 @@ function WorkflowRunOutput({
               label={rerunLabel(run.status, t)}
             />
           )}
-          <form className='flex w-full flex-col gap-3' onSubmit={sendMessage}>
-            {fileInputs.length > 0 && (
-              <FieldGroup>
-                {fileInputs.map((field) => (
-                  <Field key={field.id}>
-                    <FieldLabel>{field.label}</FieldLabel>
-                    <ArtifactFiles
-                      value={filesForInput(field.key)}
-                      multiple={field.type === 'files'}
-                      disabled={readOnly || chatIsBusy}
-                      onChange={
-                        readOnly
-                          ? undefined
-                          : (value) =>
-                              setFileValues((current) => ({
-                                ...current,
-                                [field.key]: value ?? null,
-                              }))
-                      }
-                    />
-                  </Field>
-                ))}
-              </FieldGroup>
-            )}
-            <InputGroup className='h-auto'>
-              <InputGroupTextarea
-                aria-label={t('workflowEditor.output.message')}
-                disabled={readOnly || chatIsBusy}
-                placeholder={t('workflowEditor.output.messagePlaceholder')}
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-              <InputGroupAddon align='block-end' className='justify-between'>
-                <InputGroupText>
-                  {t('workflowEditor.output.sendHint')}
-                </InputGroupText>
-                <InputGroupButton
-                  disabled={readOnly || !message.trim() || chatIsBusy}
-                  size='icon-sm'
-                  type='submit'
-                  variant='default'
-                >
-                  <ArrowUpIcon />
-                  <span className='sr-only'>
-                    {t('workflowEditor.output.send')}
-                  </span>
-                </InputGroupButton>
-              </InputGroupAddon>
-            </InputGroup>
-          </form>
+          <WorkflowChatComposer
+            key={run.runId}
+            fileInputs={fileInputs}
+            filesForInput={filesForInput}
+            onFileChange={(key, value) =>
+              setFileValues((current) => ({ ...current, [key]: value }))
+            }
+            message={message}
+            onMessageChange={setMessage}
+            disabled={readOnly || chatIsBusy}
+            onSubmit={sendMessage}
+          />
         </DrawerFooter>
       ) : (
         <DrawerFooter className='flex-row justify-end'>
