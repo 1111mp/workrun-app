@@ -95,6 +95,8 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
     let chat_message = request.input.get("input").and_then(Value::as_str).map(str::to_owned);
     let runtime = json!({
         "kind": "workflow",
+        "compensationJournalVersion": 1,
+        "executionId": request.run_id,
         "dsl": request.dsl,
         "threadId": request.thread_id,
         "chatSessionId": request.chat_session_id,
@@ -341,41 +343,62 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
     Ok(RunHistoryStore::inspect(&run_id).await?.summary)
 }
 
-/// Create a new execution branch from the last checkpoint of a failed workflow.
-/// The source record remains immutable, which keeps its failure evidence intact
-/// while the new run owns all events produced by the resumed execution.
+/// Continue the same business task; attempts and event sequences are append-only.
 pub async fn retry_failed_workflow(source_run_id: &str) -> Result<RunRecordSummary> {
-    let source = RunHistoryStore::inspect(source_run_id).await?;
-    if source.summary.target_type != "workflow" || source.summary.status != "failed" {
-        bail!("only a failed workflow can be retried from its checkpoint");
+    recover_workflow(source_run_id, false).await
+}
+
+pub(super) async fn recover_workflow(run_id: &str, automatic: bool) -> Result<RunRecordSummary> {
+    let source = RunHistoryStore::inspect(run_id).await?;
+    if source.summary.target_type != "workflow" || !matches!(source.summary.status.as_str(), "failed" | "interrupted") {
+        bail!("only a failed or interrupted workflow can be continued");
+    }
+    // A finished run can still be flushing its writer/session. Requeue only
+    // after its native owner has actually released it.
+    if RunManager::global().workflow_cancellations.lock().contains_key(run_id) {
+        bail!("The previous execution is still stopping; retry shortly");
     }
     ensure_replay_dependencies_installed(&source.runtime).await?;
-
     let session = workflow_session_from_runtime(&source.runtime)?;
     let dsl: WorkflowDsl = serde_json::from_value(session.dsl.clone())?;
     let config = BaseConfig::workrun().await.latest_arc();
-    let compiled = workflow_module::compile(dsl, &config, None).await?;
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let thread_id = uuid::Uuid::new_v4().to_string();
-    compiled.fork_latest_checkpoint(&session.thread_id, &thread_id).await?;
-
-    let runtime = retry_failed_runtime(source.runtime, source_run_id, &thread_id)?;
-    RunHistoryStore::create(CreateRunRecord {
-        id: run_id.clone(),
-        target_type: RunTargetType::Workflow,
-        target_id: source.summary.target_id,
-        target_name: source.summary.target_name,
-        status: RunStatus::Queued,
-        started_at: chrono::Utc::now().to_rfc3339(),
-        input: source.input,
-        output_view: json!({}),
-        target_snapshot: source.target_snapshot,
-        runtime,
-    })
+    let compiled = workflow_module::compile(dsl.clone(), &config, None).await?;
+    let pool = crate::core::db::DBManager::global().pool()?;
+    let key = crate::utils::dirs::get_encryption_key()?;
+    let execution_id = source
+        .runtime
+        .get("executionId")
+        .and_then(Value::as_str)
+        .unwrap_or(run_id);
+    let workflow_path = if dsl.id.is_empty() {
+        Vec::new()
+    } else {
+        vec![dsl.id.clone()]
+    };
+    workflow_module::recovery::validate_frontier(
+        &compiled,
+        &dsl,
+        &pool,
+        &key,
+        execution_id,
+        run_id,
+        "root",
+        &session.thread_id,
+        &config,
+        workflow_path,
+        automatic,
+    )
     .await?;
-    publish_run_status(&run_id, RunStatus::Queued)?;
+    let mut runtime = workflow_resume_runtime(source.runtime, None)?;
+    runtime
+        .as_object_mut()
+        .unwrap()
+        .entry("executionId")
+        .or_insert_with(|| json!(run_id));
+    RunHistoryStore::enqueue_recovery(run_id, runtime).await?;
+    publish_run_status(run_id, RunStatus::Queued)?;
     RunManager::global().supervisor.notify();
-    Ok(RunHistoryStore::inspect(&run_id).await?.summary)
+    Ok(RunHistoryStore::inspect(run_id).await?.summary)
 }
 
 async fn ensure_replay_dependencies_installed(runtime: &Value) -> Result<()> {
@@ -466,6 +489,10 @@ fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     let object = runtime.as_object_mut().context("run runtime metadata is invalid")?;
     // A replay starts from the original recipe, but never from its checkpoint.
     // The thread ID namespaces persisted graph state, so it must also be new.
+    object.insert("executionId".to_string(), json!(uuid::Uuid::new_v4().to_string()));
+    if object.get("kind").and_then(Value::as_str) == Some("workflow") {
+        object.insert("compensationJournalVersion".to_string(), json!(1));
+    }
     object.remove("resume");
     object.remove("toolConfirmation");
     if object.contains_key("threadId") {
@@ -475,20 +502,9 @@ fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     Ok(runtime)
 }
 
-fn retry_failed_runtime(mut runtime: Value, source_run_id: &str, thread_id: &str) -> Result<Value> {
-    let object = runtime.as_object_mut().context("run runtime metadata is invalid")?;
-    // A fork starts at the failed frontier. Reusing the old thread would append
-    // to the failed run's checkpoint history and make later retries ambiguous.
-    object.insert("threadId".to_string(), json!(thread_id));
-    object.insert("resume".to_string(), Value::Bool(true));
-    object.remove("toolConfirmation");
-    object.insert("retryOf".to_string(), json!(source_run_id));
-    Ok(runtime)
-}
-
 #[cfg(test)]
 mod replay_tests {
-    use super::{replay_output_view, replay_runtime, retry_failed_runtime, team_app_dependencies};
+    use super::{replay_output_view, replay_runtime, team_app_dependencies};
     use serde_json::json;
 
     #[test]
@@ -506,6 +522,7 @@ mod replay_tests {
 
         assert_eq!(runtime["dsl"], json!({ "nodes": [] }));
         assert_eq!(runtime["replayOf"], "old-run");
+        assert_eq!(runtime["compensationJournalVersion"], 1);
         assert!(runtime.get("resume").is_none());
         assert!(runtime.get("toolConfirmation").is_none());
     }
@@ -557,18 +574,14 @@ mod replay_tests {
     }
 
     #[test]
-    fn failed_retry_runtime_resumes_a_forked_thread() {
-        let runtime = retry_failed_runtime(
-            json!({ "kind": "workflow", "threadId": "original", "toolConfirmation": {} }),
-            "failed-run",
-            "retry-thread",
-        )
-        .unwrap();
-
-        assert_eq!(runtime["threadId"], "retry-thread");
+    fn recovery_runtime_keeps_thread_and_business_identity() {
+        let runtime =
+            super::workflow_resume_runtime(json!({"threadId":"original-thread", "executionId":"task-1"}), None)
+                .unwrap();
+        assert_eq!(runtime["threadId"], "original-thread");
+        assert_eq!(runtime["executionId"], "task-1");
         assert_eq!(runtime["resume"], true);
-        assert_eq!(runtime["retryOf"], "failed-run");
-        assert!(runtime.get("toolConfirmation").is_none());
+        assert_ne!(replay_runtime(runtime, "task-1").unwrap()["executionId"], "task-1");
     }
 }
 
@@ -777,4 +790,52 @@ pub(super) fn workflow_session_from_runtime(runtime: &Value) -> Result<WorkflowS
         thread_id,
         initial_state,
     })
+}
+
+/// Persist authorization before sending local Stop. The worker repeats Stop
+/// after startup if the process exited in that window.
+pub async fn abandon_workflow(run_id: &str) -> Result<()> {
+    let pool = DBManager::global().pool()?;
+    workflow_module::saga_scheduler::request(&pool, run_id).await?;
+    let record = RunHistoryStore::inspect(run_id).await?;
+    if matches!(record.summary.status.as_str(), "running" | "waiting_for_input") {
+        let _ = cancel_waiting_workflow(run_id).await;
+    }
+    RunManager::global().supervisor.notify();
+    let record = RunHistoryStore::inspect(run_id).await?;
+    let status = serde_json::from_value::<RunStatus>(json!(record.summary.status))?;
+    publish_run_status(run_id, status).ok();
+    Ok(())
+}
+
+pub async fn retry_workflow_compensation(run_id: &str) -> Result<()> {
+    workflow_module::saga_scheduler::retry(&DBManager::global().pool()?, run_id).await?;
+    RunManager::global().supervisor.notify();
+    Ok(())
+}
+
+/// Manual evidence changes operation facts, never the original execution status.
+pub async fn review_operation(request: workflow_module::operation_review::ReviewRequest) -> Result<()> {
+    let pool = DBManager::global().pool()?;
+    let key = crate::utils::dirs::get_encryption_key()?;
+    workflow_module::operation_review::resolve(&pool, &key, &request, |result| {
+        let refs = crate::module::artifact::references(result)?;
+        if !refs.is_empty() {
+            let store = crate::module::artifact::ArtifactStore::active()?;
+            for reference in refs {
+                store.resolve(&reference)?;
+            }
+        }
+        Ok(())
+    })
+    .await?;
+    RunManager::global().supervisor.notify();
+    Ok(())
+}
+
+pub async fn approve_compensation(run_id: &str, approval_id: &str, approved: bool) -> Result<()> {
+    workflow_module::operation_review::decide_approval(&DBManager::global().pool()?, run_id, approval_id, approved)
+        .await?;
+    RunManager::global().supervisor.notify();
+    Ok(())
 }

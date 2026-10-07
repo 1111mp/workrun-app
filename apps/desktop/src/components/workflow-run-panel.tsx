@@ -616,11 +616,11 @@ function WorkflowRunPanel({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
+            <AlertDialogTitle>Continue this task?</AlertDialogTitle>
             <AlertDialogDescription>
-              Earlier completed nodes will not run again. The failed node may
-              have already performed an external action, such as sending a
-              message or updating a record.
+              Continue in the original task from its saved checkpoint. Saved
+              Remote and tool results are reused; unknown outcomes require
+              confirmation before proceeding.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -631,7 +631,7 @@ function WorkflowRunPanel({
                 onRetryFailed();
               }}
             >
-              Retry failed node
+              Continue task
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -171,3 +171,40 @@ the binary content to the model. Use a vision-capable model for images. PDF
 input currently requires the Gemini adapter. Model attachments total at most
 20 MiB. Video files can be passed to Process nodes; direct video model analysis
 is not implemented yet.
+
+### A separate App compensation entry
+
+An App can keep its normal `main.py` and optionally configure a sibling
+`compensate.py` in App settings. Both entries share the project dependencies.
+Declare why repeated compensation is safe; an entry alone does not establish
+idempotency. Workflow nodes and Process-backed Agent tools inherit the App
+capability unless a workflow explicitly overrides its compensation declaration.
+
+```python
+# compensate.py
+from workrun_sdk import compensation
+
+
+def main():
+    ctx = compensation.context()
+    # Use the original result, not current workflow State.
+    delete_upload_if_present(ctx.original_result["fileId"])
+    compensation.result({"removed": True})
+
+
+if __name__ == "__main__":
+    main()
+```
+
+`context()` reads the host's JSON input once. Its fields are
+`original_operation_id`, `compensation_id` (the stable compensation intent / dedup
+key), `original_input`, `original_result`, and `resources`. A Tool App's
+compensation entry uses `compensation.result`, not the normal `@tool` decorator.
+The host requires a successful exit and an acknowledged object receipt.
+
+Unknown original outcomes require reconciliation before compensation. Unknown
+compensation outcomes are not blindly resubmitted. The source and lockfile must
+match the recorded fingerprint; retain the original project until the task is
+settled. Put generated output outside the App source or in ignored output paths.
+This first version detects changed code; it does not retain immutable code
+bundles or journal partially generated resources before the normal result.

@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsArray,
   IsIn,
@@ -6,7 +7,20 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  ValidateNested,
 } from 'class-validator';
+
+export class AppCompensationDto {
+  @ApiProperty({ example: 'compensate.py' })
+  @IsString()
+  @IsNotEmpty()
+  entry!: string;
+
+  @ApiProperty({ example: 'Deleting an absent resource succeeds.' })
+  @IsString()
+  @IsNotEmpty()
+  idempotencyContract!: string;
+}
 
 export class CreateAppDto {
   @ApiProperty({ example: 'Process data' })
@@ -28,6 +42,12 @@ export class CreateAppDto {
   @IsOptional()
   @IsString()
   entry?: string;
+
+  @ApiPropertyOptional({ type: AppCompensationDto, nullable: true })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AppCompensationDto)
+  compensation?: AppCompensationDto | null;
 
   @ApiPropertyOptional({
     example: '/Users/me/projects/process-data',

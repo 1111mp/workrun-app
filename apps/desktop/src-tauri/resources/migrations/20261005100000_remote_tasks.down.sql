@@ -1,1 +1,14 @@
+DROP TABLE workflow_compensation_approvals;
+DROP TABLE workflow_operation_reviews;
+DROP TABLE workflow_abandonments;
+DROP TABLE workflow_operation_dependencies;
+DROP TABLE workflow_compensation_events;
+DROP TABLE workflow_compensation_intents;
+DROP TABLE workflow_subworkflow_invocations;
+DROP TABLE workflow_process_inputs;
+DROP TABLE workflow_tool_inputs;
+DROP TABLE run_recovery_jobs;
+DROP TABLE run_attempts;
+DROP TABLE workflow_operation_attempts;
+DROP TABLE workflow_operations;
 DROP TABLE remote_tasks;

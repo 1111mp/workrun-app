@@ -60,6 +60,9 @@ impl DBManager {
 
         Self::mark_incomplete_runs_interrupted(&db_pool).await?;
         crate::module::workflow::mark_remote_tasks_interrupted(&db_pool).await?;
+        crate::module::workflow::operations::recover_interrupted(&db_pool).await?;
+        crate::module::run_history::recovery::recover_startup(&db_pool).await?;
+        crate::module::workflow::saga_scheduler::recover_startup(&db_pool).await?;
 
         logging!(info, Type::Setup, "Successfully applied database migrations");
 
@@ -82,9 +85,9 @@ impl DBManager {
 
     async fn mark_incomplete_runs_interrupted(pool: &sqlx::SqlitePool) -> Result<()> {
         // A native restart destroys running execution sessions and their paused
-        // checkpoints. Do not auto-run queued work after restart: the history
-        // entry remains the user's durable recipe, but only an explicit replay
-        // can create a new execution from it.
+        // in-memory execution owners. Mark records first; the journal-aware
+        // recovery scheduler validates durable checkpoints before continuing
+        // the same task. Unjournaled executors remain a manual decision.
         let recovered_at = chrono::Utc::now().to_rfc3339();
         let active_runs = sqlx::query(
             "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status IN ('running', 'waiting_for_input')",

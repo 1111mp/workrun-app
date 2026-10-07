@@ -406,8 +406,8 @@ function reduceWorkflowRunEvent(
       projection.turnsById[context.turnId].error = undefined;
       projection.turnsById[context.turnId].endedAt = undefined;
     }
-    for (const nodeId of event.pending_nodes)
-      projection.resumePendingNodeIds[nodeId] = true;
+    // Only an explicit input interruption can merge execution rows. Recovery
+    // after a failed attempt creates a new row even at the same graph frontier.
     return;
   }
   if (event.type === 'node_end') {
@@ -464,6 +464,7 @@ function reduceWorkflowRunEvent(
       transient?.humanReview ||
       transient?.askUserQuestion,
     );
+    if (event.node) projection.resumePendingNodeIds[event.node] = true;
     // A dynamic interrupt is the runtime's checkpoint signal for an approval
     // or review. It is not a failed workflow and must not surface its internal
     // reason as an error banner while the corresponding action is pending.
@@ -538,6 +539,21 @@ function applyCustom(
   >,
   turnId?: string,
 ) {
+  if (event.event_type === 'workflow.attempt_started') {
+    // Keep previous outputs and execution rows; only the task's live status is
+    // reset when another attempt starts within the same business task.
+    projection.status = 'running';
+    projection.error = undefined;
+    projection.endedAt = undefined;
+    projection.durationMs = undefined;
+    projection.finalState = undefined;
+    projection.activeNodeId = undefined;
+    if (turnId && projection.turnsById[turnId]) {
+      projection.turnsById[turnId].status = 'running';
+      projection.turnsById[turnId].error = undefined;
+    }
+    return;
+  }
   if (event.event_type === 'workflow.run_cancelled')
     return projectTerminal(
       projection,

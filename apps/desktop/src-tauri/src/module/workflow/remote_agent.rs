@@ -7,6 +7,11 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, time::Duration};
 use tauri_plugin_http::reqwest::{Client, Response, Url};
 
+const REMOTE_CAPABILITIES: operations::ExecutionCapabilities = operations::ExecutionCapabilities {
+    reuse_result: true,
+    reconcile_existing: true,
+};
+
 const MAX_BYTES: usize = 20 * 1024 * 1024;
 const MAX_FILES: usize = 10;
 const MAX_WIRE: usize = 64 * 1024 * 1024;
@@ -16,6 +21,7 @@ pub(super) struct RemoteAgentNode {
     id: String,
     auth: RemoteAuth,
     authentication: Option<RemoteAuthentication>,
+    compensation: Option<Value>,
     #[cfg(test)]
     tracking_storage: Option<(sqlx::SqlitePool, Vec<u8>)>,
     store: Option<ArtifactStore>,
@@ -54,6 +60,7 @@ pub(super) fn remote_a2a_graph_node(
         id: node.id.clone(),
         auth,
         authentication,
+        compensation: node.data.get("compensation").cloned(),
         #[cfg(test)]
         tracking_storage: None,
         store: None,
@@ -555,7 +562,25 @@ impl RemoteAgentNode {
         ))
     }
 
-    async fn run(&self, context: &NodeContext, store: &ArtifactStore, input: &Value) -> Result<RemoteResult> {
+    async fn run(
+        &self,
+        context: &NodeContext,
+        store: &ArtifactStore,
+        input: &Value,
+        operation: Option<&operations::Operation>,
+    ) -> Result<RemoteResult> {
+        if let Some(operation) = operation {
+            if !operation.can_submit
+                && let Some(id) = &operation.adapter_record_id
+            {
+                let (pool, key) = self.tracking_storage()?;
+                let tracker = RemoteTaskTracker::load(pool, key, id).await?;
+                return self.reconcile(context, tracker).await;
+            }
+            if !operation.can_submit {
+                bail!("A2A submission outcome is unknown; no task ID was saved and automatic resubmission is disabled");
+            }
+        }
         let parts = input_parts(input, &self.paths, store)?;
         let client = self.auth.client()?;
         let card_url = self.url.join("/.well-known/agent-card.json")?;
@@ -590,29 +615,49 @@ impl RemoteAgentNode {
             }
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let message_id = uuid::Uuid::new_v4().to_string();
+        let message_id = if let Some(existing) = operation.and_then(|op| op.adapter_record_id.as_ref()) {
+            let (pool, _) = self.tracking_storage()?;
+            sqlx::query_scalar("SELECT message_id FROM remote_tasks WHERE id = ?")
+                .bind(existing)
+                .fetch_one(&pool)
+                .await?
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
         let tracking = if let Some(run_id) = context.config.metadata.get("workrun.run_id").and_then(Value::as_str) {
             let (pool, key) = self.tracking_storage()?;
             Some(
-                RemoteTaskTracker::begin(
-                    pool,
-                    key,
-                    run_id,
-                    &self.id,
-                    &message_id,
-                    RemoteConnection {
-                        service_url: self.url.to_string(),
-                        endpoint: url.to_string(),
-                        tenant: tenant.clone(),
-                        authentication: self.authentication.clone(),
-                        task_id: None,
-                    },
-                )
-                .await?,
+                if let Some(existing) = operation.and_then(|op| op.adapter_record_id.as_ref()) {
+                    let tracker = RemoteTaskTracker::load(pool, key, existing).await?;
+                    if tracker.connection.endpoint != url.as_str() {
+                        bail!("Saved A2A endpoint changed before dispatch");
+                    }
+                    tracker
+                } else {
+                    RemoteTaskTracker::begin(
+                        pool,
+                        key,
+                        run_id,
+                        &self.id,
+                        &message_id,
+                        RemoteConnection {
+                            service_url: self.url.to_string(),
+                            endpoint: url.to_string(),
+                            tenant: tenant.clone(),
+                            authentication: self.authentication.clone(),
+                            task_id: None,
+                        },
+                    )
+                    .await?
+                },
             )
         } else {
             None
         };
+        if let (Some(operation), Some(tracker)) = (operation, &tracking) {
+            // Link the external identity before the first network submission.
+            tracker.attach_operation(&operation.id).await?;
+        }
         let mut result = RemoteResult {
             tracking,
             ..Default::default()
@@ -623,6 +668,9 @@ impl RemoteAgentNode {
             params["tenant"] = json!(tenant);
         }
         let request = json!({"jsonrpc":"2.0","id":id,"method":if streaming {"SendStreamingMessage"} else {"SendMessage"},"params":params});
+        if let Some(operation) = operation {
+            operation.mark_dispatched().await?;
+        }
         let response = client
             .post(url.clone())
             .header("A2A-Version", "1.0")
@@ -695,6 +743,42 @@ impl RemoteAgentNode {
         }
         Ok(result)
     }
+    async fn reconcile(&self, context: &NodeContext, tracker: RemoteTaskTracker) -> Result<RemoteResult> {
+        let task_id = tracker.connection.task_id.clone().context(
+            "A2A submission outcome is unknown; no task ID was saved and automatic resubmission is disabled",
+        )?;
+        let url = Url::parse(&tracker.connection.endpoint)?;
+        validate_url(&url)?;
+        let base = Url::parse(&tracker.connection.service_url)?;
+        if base.origin() != url.origin() {
+            bail!("Saved A2A endpoint has a different origin");
+        }
+        let client = self.auth.client()?;
+        let mut tracking = Some(tracker);
+        loop {
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut params = json!({"id":task_id,"historyLength":1});
+            if let Some(tenant) = &tracking.as_ref().unwrap().connection.tenant {
+                params["tenant"] = json!(tenant);
+            }
+            let request = json!({"jsonrpc":"2.0","id":id,"method":"GetTask","params":params});
+            let task = rpc_result(
+                serde_json::from_slice(&read_with_retry(&client, &url, Some(&request), context).await?)?,
+                &id,
+            )?;
+            let mut result = RemoteResult {
+                task_id: Some(task_id.clone()),
+                tracking: tracking.take(),
+                ..Default::default()
+            };
+            result.accept_tracked(json!({"task":task}), &self.auth).await?;
+            if result.complete {
+                return Ok(result);
+            }
+            tracking = result.tracking.take();
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -712,26 +796,126 @@ impl Node for RemoteAgentNode {
             // Compilation also runs in headless validation. Resolve storage only
             // when invoking, then retain that workspace throughout the call.
             let store = self.store.clone().map(Ok).unwrap_or_else(ArtifactStore::active)?;
-            let remote = tokio::time::timeout(self.timeout, self.run(context, &store, &input))
-                .await
-                .context("A2A request timed out")??;
-            let (response, files) = remote.output()?;
-            // Validate the entire result before importing files or publishing State.
-            let artifacts = files
-                .iter()
-                .map(|(name, mime, bytes)| {
-                    store
-                        .save_bytes_with_mime(&self.auth.redact(name), bytes, mime.as_deref())
-                        .and_then(|r| Ok(serde_json::to_value(r)?))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let response = redact_text(&self.auth.redact(&response));
-            let values = json!({"response":response,"messages":[{"role":"assistant","content":response}],"artifacts":artifacts,"remoteTaskId":remote.task_id.as_ref().map(|id| self.auth.redact(id))});
-            if let Some(tracking) = &remote.tracking {
-                tracking
-                    .save_result(&redact_json(&json!({"response": response, "artifacts": artifacts})))
-                    .await?;
+            let mut snapshot = json!({"url":self.url.as_str(), "paths":self.paths, "authentication":self.authentication, "capabilities":REMOTE_CAPABILITIES});
+            if let Some(compensation) = &self.compensation {
+                snapshot["compensation"] = compensation.clone();
             }
+            let mut operation =
+                if let Some(run_id) = context.config.metadata.get("workrun.run_id").and_then(Value::as_str) {
+                    let (pool, _) = self.tracking_storage()?;
+                    let execution_id = context
+                        .config
+                        .metadata
+                        .get("workrun.execution_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or(run_id);
+                    let scope = context
+                        .config
+                        .metadata
+                        .get("workrun.execution_path")
+                        .and_then(Value::as_str)
+                        .unwrap_or("root");
+                    Some(
+                        operations::Operation::enter(
+                            pool,
+                            execution_id,
+                            &serde_json::to_string(&json!([scope, self.id, context.step, "remote"]))?,
+                            run_id,
+                            "remote_agent",
+                            &input,
+                            &snapshot,
+                        )
+                        .await?,
+                    )
+                } else {
+                    None
+                };
+            if let Some(op) = &mut operation {
+                let (_, key) = self.tracking_storage()?;
+                op.prepare_compensation(&key, &input, &snapshot).await?;
+                if op.result.is_none()
+                    && let Some(id) = &op.adapter_record_id
+                {
+                    let (pool, _) = self.tracking_storage()?;
+                    let saved: Option<(Option<String>, Option<String>)> =
+                        sqlx::query_as("SELECT result_json, task_id FROM remote_tasks WHERE id = ?")
+                            .bind(id)
+                            .fetch_optional(&pool)
+                            .await?;
+                    if let Some((Some(saved), task_id)) = saved {
+                        let mut values: Value = serde_json::from_str(&saved)?;
+                        values["messages"] = json!([{"role":"assistant", "content":values["response"]}]);
+                        values["remoteTaskId"] = json!(task_id);
+                        op.result = Some(values);
+                    }
+                }
+            }
+            if let Some(op) = &operation {
+                op.action(REMOTE_CAPABILITIES)?;
+            }
+            let values = if let Some(result) = operation.as_ref().and_then(|op| op.result.clone()) {
+                // A stored reference is reusable only while its artifact exists.
+                for reference in references(&result["artifacts"])? {
+                    store.resolve(&reference)?;
+                }
+                result
+            } else {
+                let remote = tokio::time::timeout(self.timeout, self.run(context, &store, &input, operation.as_ref()))
+                    .await
+                    .context("A2A request timed out")
+                    .and_then(|result| result);
+                let remote = match remote {
+                    Ok(remote) => remote,
+                    Err(error) => {
+                        if let Some(op) = &mut operation {
+                            let (pool, _) = self.tracking_storage()?;
+                            let status: Option<String> = sqlx::query_scalar("SELECT t.status FROM remote_tasks t JOIN workflow_operations o ON o.adapter_record_id = t.id WHERE o.id = ?")
+                                .bind(&op.id).fetch_optional(&pool).await?;
+                            let outcome = if status
+                                .as_deref()
+                                .is_some_and(|s| matches!(s, "failed" | "rejected" | "canceled"))
+                            {
+                                "failed"
+                            } else {
+                                "unknown"
+                            };
+                            op.record_retryability(
+                                transient(&error)
+                                    || error.chain().any(|cause| cause.is::<tokio::time::error::Elapsed>()),
+                            )
+                            .await?;
+                            op.finish(None, outcome, Some(&self.auth.redact(&error.to_string())))
+                                .await?;
+                        }
+                        return Err(error);
+                    },
+                };
+                let (response, files) = remote.output()?;
+                let artifacts = files
+                    .iter()
+                    .map(|(name, mime, bytes)| {
+                        store
+                            .save_bytes_with_mime(&self.auth.redact(name), bytes, mime.as_deref())
+                            .and_then(|r| Ok(serde_json::to_value(r)?))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let response = redact_text(&self.auth.redact(&response));
+                let values = json!({"response":response,"messages":[{"role":"assistant","content":response}],"artifacts":artifacts,"remoteTaskId":remote.task_id.as_ref().map(|id| self.auth.redact(id))});
+                if operation.is_none()
+                    && let Some(tracking) = &remote.tracking
+                {
+                    tracking
+                        .save_result(&redact_json(&json!({"response": response, "artifacts": artifacts})))
+                        .await?;
+                }
+                values
+            };
+            if let Some(op) = &mut operation {
+                let (pool, _) = self.tracking_storage()?;
+                remote_tasks::complete_operation(&pool, op, &values).await?;
+            }
+            let response = &values["response"];
+            let artifacts = &values["artifacts"];
             let updates = self
                 .state
                 .lock()
@@ -816,6 +1000,11 @@ async fn remote_task_operation_in_pool(
     if matches!(run_status.as_str(), "queued" | "running" | "waiting_for_input") {
         bail!("Wait until the local run has ended before managing its remote task");
     }
+    let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_operations o JOIN workflow_operation_attempts a ON a.operation_id = o.id JOIN run_records r ON r.id = a.run_id WHERE o.adapter_record_id = ? AND r.status IN ('queued', 'running', 'waiting_for_input'))")
+        .bind(id).fetch_one(&pool).await?;
+    if active {
+        bail!("Wait until the recovering local run has ended before managing its remote task");
+    }
     let current = remote_tasks::list_remote_tasks(&pool, &run_id)
         .await?
         .into_iter()
@@ -892,7 +1081,15 @@ pub(crate) async fn cancel_remote_tasks_for_run(run_id: &str) -> Result<()> {
     let pool = crate::core::db::DBManager::global().pool()?;
     let config = BaseConfig::workrun().await.data_arc();
     for record in remote_tasks::list_remote_tasks(&pool, run_id).await? {
-        if record.task_id.is_some()
+        let compensation: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM workflow_operations WHERE adapter_record_id=? AND purpose='compensation') OR EXISTS(SELECT 1 FROM workflow_operation_reviews WHERE remote_record_id=? AND decision='no_effect')",
+        )
+        .bind(&record.id)
+        .bind(&record.id)
+        .fetch_one(&pool)
+        .await?;
+        if !compensation
+            && record.task_id.is_some()
             && matches!(
                 record.status.as_str(),
                 "unknown" | "submitted" | "working" | "input_required" | "auth_required"
@@ -1094,6 +1291,32 @@ mod tests {
 
     // Real HTTP exercises discovery, wire names, tenant routing, SSE framing,
     // task polling, timeout cancellation, immutable files and downstream State.
+    struct FailCheckpointOnce {
+        inner: adk_rust::graph::checkpoint::MemoryCheckpointer,
+        fail: std::sync::atomic::AtomicBool,
+    }
+    #[async_trait::async_trait]
+    impl adk_rust::graph::Checkpointer for FailCheckpointOnce {
+        async fn save(&self, checkpoint: &adk_rust::graph::Checkpoint) -> adk_rust::graph::Result<String> {
+            if self.fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return Err(graph_node_error("checkpoint", "injected checkpoint commit failure"));
+            }
+            self.inner.save(checkpoint).await
+        }
+        async fn load(&self, thread: &str) -> adk_rust::graph::Result<Option<adk_rust::graph::Checkpoint>> {
+            self.inner.load(thread).await
+        }
+        async fn load_by_id(&self, id: &str) -> adk_rust::graph::Result<Option<adk_rust::graph::Checkpoint>> {
+            self.inner.load_by_id(id).await
+        }
+        async fn list(&self, thread: &str) -> adk_rust::graph::Result<Vec<adk_rust::graph::Checkpoint>> {
+            self.inner.list(thread).await
+        }
+        async fn delete(&self, thread: &str) -> adk_rust::graph::Result<()> {
+            self.inner.delete(thread).await
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires loopback TCP sockets"]
     async fn v1_http_files_stream_poll_and_timeout_closed_loop() {
@@ -1392,6 +1615,7 @@ mod tests {
                     id: "remote".into(),
                     auth: RemoteAuth::testing(auth_kind.clone()),
                     authentication: None,
+                    compensation: None,
                     tracking_storage: Some((task_pool.clone(), vec![42; 32])),
                     store: Some(store.clone()),
                     url: Url::parse(&url).unwrap(),
@@ -1415,12 +1639,128 @@ mod tests {
                     .add_edge("remote", END)
                     .compile()
                     .unwrap();
-                let result = graph
+                let checkpointer = Arc::new(FailCheckpointOnce {
+                    inner: adk_rust::graph::checkpoint::MemoryCheckpointer::new(),
+                    fail: std::sync::atomic::AtomicBool::new(false),
+                });
+                let state_checkpointer = Arc::new(
+                    WorkflowStateCheckpointer::new(
+                        checkpointer.clone(),
+                        bridge.clone(),
+                        "workflow-test",
+                        "snapshot-test",
+                    )
+                    .unwrap(),
+                );
+                if mode == "send" {
+                    use adk_rust::graph::{Checkpoint, Checkpointer};
+                    state_checkpointer
+                        .save(&Checkpoint::new("a2a-http", State::new(), 0, vec!["remote".into()]))
+                        .await
+                        .unwrap();
+                }
+                checkpointer
+                    .fail
+                    .store(mode == "send", std::sync::atomic::Ordering::SeqCst);
+                let graph = graph.with_checkpointer_arc(state_checkpointer.clone());
+                let mut result = graph
                     .invoke(
                         State::new(),
                         ExecutionConfig::new("a2a-http").with_metadata("workrun.run_id", json!("run-1")),
                     )
                     .await;
+                if mode == "send" {
+                    use adk_rust::graph::Checkpointer;
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("injected checkpoint commit failure")
+                    );
+                    // Resume the original task/thread from its uncommitted
+                    // frontier; successful operation facts remain outside it.
+                    let mut old = state_checkpointer.load("a2a-http").await.unwrap().unwrap();
+                    assert_eq!(old.step, 0);
+                    old.thread_id = "a2a-http".into();
+                    old.checkpoint_id = uuid::Uuid::new_v4().to_string();
+                    checkpointer.inner.save(&old).await.unwrap();
+                    result = graph
+                        .invoke(
+                            State::new(),
+                            ExecutionConfig::new("a2a-http")
+                                .with_metadata("workrun.run_id", json!("run-1"))
+                                .with_metadata("workrun.execution_id", json!("run-1")),
+                        )
+                        .await;
+                    assert!(result.is_ok(), "checkpoint recovery failed: {result:?}");
+                    let submissions = calls
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|r| r["method"] == "SendMessage")
+                        .count();
+                    assert_eq!(submissions, 1);
+                    let actions: Vec<String> =
+                        sqlx::query_scalar("SELECT action FROM workflow_operation_attempts ORDER BY sequence")
+                            .fetch_all(&task_pool)
+                            .await
+                            .unwrap();
+                    assert_eq!(actions, vec!["submit", "reuse"]);
+                    // Model the other recovery window: the remote ID survived,
+                    // but no reusable local output did. Only GetTask is allowed.
+                    sqlx::query("UPDATE workflow_operations SET result_json = NULL, status = 'unknown'")
+                        .execute(&task_pool)
+                        .await
+                        .unwrap();
+                    sqlx::query("UPDATE remote_tasks SET result_json = NULL")
+                        .execute(&task_pool)
+                        .await
+                        .unwrap();
+                    old.thread_id = "a2a-http".into();
+                    old.checkpoint_id = uuid::Uuid::new_v4().to_string();
+                    checkpointer.inner.save(&old).await.unwrap();
+                    result = graph
+                        .invoke(
+                            State::new(),
+                            ExecutionConfig::new("a2a-http")
+                                .with_metadata("workrun.run_id", json!("run-1"))
+                                .with_metadata("workrun.execution_id", json!("run-1")),
+                        )
+                        .await;
+                    assert!(result.is_ok(), "remote reconciliation failed: {result:?}");
+                    {
+                        let requests = calls.lock().unwrap();
+                        assert_eq!(requests.iter().filter(|r| r["method"] == "SendMessage").count(), 1);
+                        assert_eq!(requests.iter().filter(|r| r["method"] == "GetTask").count(), 1);
+                    }
+                    let actions: Vec<String> =
+                        sqlx::query_scalar("SELECT action FROM workflow_operation_attempts ORDER BY sequence")
+                            .fetch_all(&task_pool)
+                            .await
+                            .unwrap();
+                    assert_eq!(actions, vec!["submit", "reuse", "reconcile"]);
+                    let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM run_records")
+                        .fetch_one(&task_pool)
+                        .await
+                        .unwrap();
+                    assert_eq!(runs, 1);
+                }
+                if mode == "unknown" {
+                    let before = calls.lock().unwrap().len();
+                    let resumed = graph
+                        .invoke(
+                            State::new(),
+                            ExecutionConfig::new("another-thread").with_metadata("workrun.run_id", json!("run-1")),
+                        )
+                        .await;
+                    assert!(
+                        resumed
+                            .unwrap_err()
+                            .to_string()
+                            .contains("automatic resubmission is disabled")
+                    );
+                    assert_eq!(calls.lock().unwrap().len(), before);
+                }
                 if matches!(mode, "timeout" | "recovery_timeout") || mode.starts_with("manual_") {
                     assert!(result.err().unwrap().to_string().contains("timed out"));
                     assert!(!calls.lock().unwrap().iter().any(|r| r["method"] == "CancelTask"));
@@ -1741,6 +2081,7 @@ mod tests {
                 id: "fixture".into(),
                 auth: RemoteAuth::testing(auth_kind.clone()),
                 authentication: None,
+                compensation: None,
                 tracking_storage: None,
                 store: Some(store.clone()),
                 url: url.clone(),
@@ -1753,7 +2094,7 @@ mod tests {
                 on_event: None,
             };
             let context = NodeContext::new(State::new(), ExecutionConfig::new("python-fixture"), 0);
-            let result = node.run(&context, &store, &input).await.unwrap();
+            let result = node.run(&context, &store, &input, None).await.unwrap();
             let (receipt, files) = result.output().unwrap();
             assert_eq!(serde_json::from_str::<Value>(&receipt).unwrap()["receivedFiles"], 3);
             assert_eq!(files.len(), 3);
@@ -1830,5 +2171,259 @@ mod tests {
                 assert_eq!(cancelled["status"]["state"], "TASK_STATE_CANCELED");
             }
         }
+    }
+}
+
+/// Compensation uses the existing A2A transport and saved task identity, without
+/// executing a graph node or publishing into the original workflow State.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn execute_compensation_remote(
+    pool: &sqlx::SqlitePool,
+    key: &[u8],
+    run_id: &str,
+    url: &str,
+    authentication: Option<&RemoteAuthentication>,
+    input: &Value,
+    operation: &mut operations::Operation,
+    config: &IWorkrun,
+    store: &ArtifactStore,
+) -> Result<Value> {
+    let parsed = Url::parse(url)?;
+    validate_url(&parsed)?;
+    let node = RemoteAgentNode {
+        id: format!("compensation:{}", operation.id),
+        auth: RemoteAuth::resolve(authentication, url, config)?,
+        authentication: authentication.cloned(),
+        compensation: None,
+        #[cfg(test)]
+        tracking_storage: Some((pool.clone(), key.to_vec())),
+        store: None,
+        url: parsed,
+        paths: Vec::new(),
+        timeout: Duration::from_secs(120),
+        state: Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({}))?)),
+        state_config: WorkflowNodeStateConfig::default(),
+        on_event: None,
+    };
+    let context = NodeContext::new(
+        State::new(),
+        ExecutionConfig::new(&format!("compensation:{run_id}")).with_metadata("workrun.run_id", json!(run_id)),
+        0,
+    );
+    let remote = tokio::time::timeout(node.timeout, node.run(&context, store, input, Some(operation))).await??;
+    let (response, files) = remote.output()?;
+    let artifacts = files
+        .iter()
+        .map(|(name, mime, bytes)| {
+            store
+                .save_bytes_with_mime(&node.auth.redact(name), bytes, mime.as_deref())
+                .and_then(|r| Ok(serde_json::to_value(r)?))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let values = json!({"response":redact_text(&node.auth.redact(&response)),"artifacts":artifacts,"remoteTaskId":remote.task_id});
+    remote_tasks::complete_operation(pool, operation, &values).await?;
+    let _ = key; // Storage injection is test-only; production uses the active workspace.
+    Ok(values)
+}
+
+/// Query only original Remote operations after abandonment. Fetching an already
+/// completed task closes the external-success/local-save window atomically with
+/// the original compensation outcome; it never reschedules the forward graph.
+pub(super) async fn reconcile_abandoned_operations(pool: &sqlx::SqlitePool, key: &[u8], run_id: &str) -> Result<bool> {
+    let rows:Vec<(String,String)>=sqlx::query_as("SELECT DISTINCT o.id,o.adapter_record_id FROM workflow_operations o JOIN workflow_operation_attempts a ON a.operation_id=o.id WHERE a.run_id=? AND o.purpose='execution' AND o.adapter='remote_agent' AND o.status!='running' AND o.result_json IS NULL AND o.confirmed_no_effect=0 AND o.dispatched_at IS NOT NULL AND o.adapter_record_id IS NOT NULL")
+        .bind(run_id).fetch_all(pool).await?;
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    let config = BaseConfig::workrun().await.latest_arc();
+    let mut still_running = false;
+    for (operation_id, record_id) in rows {
+        let record = remote_task_operation(&record_id, RemoteTaskOperation::Query, &config).await?;
+        if record.status != "completed" {
+            still_running |= matches!(record.status.as_str(), "submitted" | "working");
+            continue;
+        }
+        let record = remote_task_operation(&record_id, RemoteTaskOperation::Fetch, &config).await?;
+        let mut values = record.result.context("Completed task has no saved result")?;
+        values["remoteTaskId"] = json!(record.task_id);
+        values["messages"] = json!([{"role":"assistant","content":values["response"]}]);
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+        saga::capture_outcome(&mut tx, key, &operation_id, &values).await?;
+        sqlx::query("UPDATE workflow_operations SET status='succeeded',result_json=?,updated_at=? WHERE id=? AND status!='running' AND result_json IS NULL")
+            .bind(values.to_string()).bind(&now).bind(&operation_id).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO workflow_operation_attempts (id,operation_id,run_id,sequence,action,status,started_at,ended_at) SELECT ?,?,?,COALESCE(MAX(sequence),0)+1,'reconcile','succeeded',?,? FROM workflow_operation_attempts WHERE operation_id=?")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&operation_id).bind(run_id).bind(&now).bind(now).bind(&operation_id).execute(&mut *tx).await?;
+        tx.commit().await?;
+    }
+    Ok(still_running)
+}
+
+#[cfg(test)]
+mod compensation_http_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    #[ignore = "requires loopback TCP sockets"]
+    async fn compensation_timeout_reconciles_same_remote_task_without_resubmitting() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server_base = base.clone();
+        let methods = Arc::new(Mutex::new(Vec::<String>::new()));
+        let received = Arc::clone(&methods);
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut bytes = [0; 4096];
+                    let count = socket.read(&mut bytes).await.unwrap();
+                    if count == 0 {
+                        break 0;
+                    }
+                    request.extend_from_slice(&bytes[..count]);
+                    if let Some(end) = request.windows(4).position(|b| b == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                if header_end == 0 {
+                    continue;
+                }
+                let header = String::from_utf8_lossy(&request[..header_end]).to_lowercase();
+                let body=if header.starts_with("get ") {
+                    received.lock().unwrap().push("Discovery".into());
+                    json!({"supportedInterfaces":[{"url":format!("{server_base}/rpc"),"protocolBinding":"JSONRPC","protocolVersion":"1.0"}],"capabilities":{"streaming":false}})
+                } else {
+                    let len:usize=header.lines().find_map(|line|line.strip_prefix("content-length: ")).unwrap().trim().parse().unwrap();
+                    while request.len()<header_end+len {
+                        let mut bytes=[0;4096];
+                        let count=socket.read(&mut bytes).await.unwrap();
+                        if count==0 { break; }
+                        request.extend_from_slice(&bytes[..count]);
+                    }
+                    let rpc:Value=serde_json::from_slice(&request[header_end..header_end+len]).unwrap();
+                    let method=rpc["method"].as_str().unwrap();
+                    received.lock().unwrap().push(method.into());
+                    let task=if method=="SendMessage" {
+                        let args:Value=serde_json::from_str(rpc["params"]["message"]["parts"][0]["text"].as_str().unwrap()).unwrap();
+                        assert_eq!(args["requestId"],"stable-undo-id");
+                        json!({"task":{"id":"undo-task","status":{"state":"TASK_STATE_WORKING"}}})
+                    } else {
+                        assert_eq!(method,"GetTask");
+                        assert_eq!(rpc["params"]["id"],"undo-task");
+                        json!({"id":"undo-task","status":{"state":"TASK_STATE_COMPLETED","message":{"role":"ROLE_AGENT","parts":[{"text":"undone"}]}}})
+                    };
+                    json!({"jsonrpc":"2.0","id":rpc["id"],"result":task})
+                }.to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        let pool = remote_tasks::test_pool().await;
+        sqlx::query("UPDATE run_records SET status='cancelled' WHERE id='run-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(temp.path().to_path_buf());
+        let key = [42; 32];
+        let args = json!({"resource":"publication","requestId":"stable-undo-id"});
+        let snapshot = json!({"url":base});
+        let mut first = operations::Operation::enter_compensation(
+            pool.clone(),
+            "run-1",
+            "stable-undo-id",
+            "remote_agent",
+            &args,
+            &snapshot,
+        )
+        .await
+        .unwrap();
+        {
+            let config = IWorkrun::default();
+            let work =
+                execute_compensation_remote(&pool, &key, "run-1", &base, None, &args, &mut first, &config, &store);
+            tokio::pin!(work);
+            let observed = async {
+                loop {
+                    let received: bool =
+                        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM remote_tasks WHERE task_id='undo-task')")
+                            .fetch_one(&pool)
+                            .await
+                            .unwrap();
+                    if received {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            };
+            // Inject timeout only once task identity is durable, keeping the
+            // failure window deterministic even on a slow CI machine.
+            tokio::select! {
+                result=&mut work=>panic!("Remote work ended before interruption: {result:?}"),
+                result=tokio::time::timeout(Duration::from_secs(5),observed)=>result.unwrap(),
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut work)
+                    .await
+                    .is_err()
+            );
+        }
+        first
+            .finish(None, "unknown", Some("Response timed out after submit"))
+            .await
+            .unwrap();
+        let original_id = first.id.clone();
+        operations::recover_interrupted(&pool).await.unwrap();
+        let mut resumed = operations::Operation::enter_compensation(
+            pool.clone(),
+            "run-1",
+            "stable-undo-id",
+            "remote_agent",
+            &args,
+            &snapshot,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed.id, original_id);
+        assert!(!resumed.can_submit);
+        let receipt = execute_compensation_remote(
+            &pool,
+            &key,
+            "run-1",
+            &base,
+            None,
+            &args,
+            &mut resumed,
+            &IWorkrun::default(),
+            &store,
+        )
+        .await
+        .unwrap();
+        assert_eq!(receipt["response"], "undone");
+        let mut reuse = operations::Operation::enter_compensation(
+            pool.clone(),
+            "run-1",
+            "stable-undo-id",
+            "remote_agent",
+            &args,
+            &snapshot,
+        )
+        .await
+        .unwrap();
+        assert!(reuse.result.is_some());
+        reuse.finish(Some(&receipt), "succeeded", None).await.unwrap();
+        assert_eq!(*methods.lock().unwrap(), ["Discovery", "SendMessage", "GetTask"]);
+        let attempts: Vec<String> =
+            sqlx::query_scalar("SELECT action FROM workflow_operation_attempts ORDER BY sequence")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, ["submit", "reconcile", "reuse"]);
+        server.abort();
     }
 }

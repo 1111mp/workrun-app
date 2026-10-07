@@ -53,3 +53,25 @@ pub async fn run_replay_missing_dependencies(
         .await
         .stringify_err()
 }
+
+#[tauri::command]
+pub async fn workflow_run_abandon(run_id: String) -> CmdResult {
+    run_manager::abandon_workflow(&run_id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn workflow_compensation_retry(run_id: String) -> CmdResult {
+    run_manager::retry_workflow_compensation(&run_id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn workflow_operation_review(request: crate::module::workflow::operation_review::ReviewRequest) -> CmdResult {
+    run_manager::review_operation(request).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn workflow_compensation_approve(run_id: String, approval_id: String, approved: bool) -> CmdResult {
+    run_manager::approve_compensation(&run_id, &approval_id, approved)
+        .await
+        .stringify_err()
+}

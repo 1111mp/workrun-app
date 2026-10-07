@@ -161,6 +161,41 @@ describe('workflow run projection', () => {
     });
   });
 
+  it('retains the failed execution when continuing the same task', () => {
+    const projection = replayWorkflowRunProjection(
+      'run-1',
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        { type: 'error', node: 'research', message: 'temporary failure' },
+        {
+          type: 'custom',
+          node: '',
+          event_type: 'workflow.attempt_started',
+          data: {},
+        },
+        { type: 'resumed', step: 1, pending_nodes: ['research'] },
+        { type: 'node_start', node: 'research', step: 1 },
+        { type: 'node_end', node: 'research', step: 1, duration_ms: 20 },
+        {
+          type: 'done',
+          state: { global: {}, nodes: {}, workflow: {} },
+          total_steps: 2,
+        },
+      ),
+      { mode: 'task', nodes: [node] },
+    );
+    expect(projection.runId).toBe('run-1');
+    expect(projection.executionIds).toHaveLength(2);
+    expect(projection.executionsById[projection.executionIds[0]].status).toBe(
+      'failed',
+    );
+    expect(projection.executionsById[projection.executionIds[1]].status).toBe(
+      'completed',
+    );
+    expect(projection.status).toBe('completed');
+    expect(projection.error).toBeUndefined();
+  });
+
   it('merges an action-resumed node into its original logical execution', () => {
     const projection = replayWorkflowRunProjection(
       'run-1',

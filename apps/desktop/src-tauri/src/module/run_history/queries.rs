@@ -126,6 +126,7 @@ impl RunHistoryStore {
             runtime: json_column(row.try_get("runtime_json")?)?,
             events,
             spans,
+            execution_history: super::recovery::inspect_history(&pool, id).await?,
         })
     }
 }

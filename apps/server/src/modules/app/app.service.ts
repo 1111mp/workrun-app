@@ -551,6 +551,12 @@ export class AppService {
           ? draft.description
           : app.description,
       entry: typeof draft.entry === 'string' ? draft.entry : app.entry,
+      compensation:
+        draft.compensation === null
+          ? null
+          : draft.compensation === undefined
+            ? app.compensation
+            : (draft.compensation as App['compensation']),
       inputs: this.objectDraft(draft.inputs, app.inputs),
       kind:
         draft.kind === 'tool' || draft.kind === 'workflow'
@@ -589,6 +595,7 @@ export class AppService {
     return {
       description: app.description,
       entry: app.entry,
+      compensation: app.compensation ?? null,
       inputs: app.inputs,
       kind: app.kind,
       name: app.name,

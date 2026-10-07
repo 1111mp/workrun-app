@@ -95,6 +95,7 @@ pub(super) async fn add_codeact_agent_node(
             executor,
             ManagedToolConfig {
                 agent_node_id: id.clone(),
+                compensation: None,
                 on_event: on_event.clone(),
                 tool_calls: Arc::clone(&tool_calls),
                 tool_trace: Arc::clone(&tool_trace),

@@ -16,6 +16,7 @@ mod pending_actions;
 mod queries;
 mod queue;
 mod records;
+pub(crate) mod recovery;
 
 #[cfg(test)]
 use pending_actions::claim_next_pending_action_from_pool;
@@ -92,6 +93,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("CREATE TABLE workflow_abandonments (run_id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE run_attempts (id TEXT PRIMARY KEY, run_id TEXT, sequence INTEGER, status TEXT, started_at TEXT)")
+            .execute(&pool).await.unwrap();
         for (id, target_type, created_at) in [
             ("run-1", "app", "2026-09-05T00:00:01Z"),
             ("run-2", "workflow", "2026-09-05T00:00:02Z"),

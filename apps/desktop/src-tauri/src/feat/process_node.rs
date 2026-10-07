@@ -434,6 +434,73 @@ fn stale_scoped_team_releases(replacement: &IProcessNode, installed: Vec<IProces
         .collect()
 }
 
+/// Reject mutable App source changes rather than undoing with newer code.
+/// The digest covers the publishable source, including the dependency lockfile.
+pub(crate) async fn process_compensation_fingerprint(definition: &IProcessNode) -> Result<String> {
+    let root = ProcessNodeRegistry::project_path(definition)?;
+    let business_entry = definition.entry.clone();
+    let entry = definition
+        .compensation
+        .as_ref()
+        .context("App compensation entry missing")?
+        .entry
+        .clone();
+    AsyncHandler::spawn_blocking(move || {
+        let root = std::fs::canonicalize(root)?;
+        let script = std::fs::canonicalize(root.join(&entry))?;
+        if !script.starts_with(&root) || !script.is_file() || !root.join("uv.lock").is_file() {
+            bail!("Compensation entry must be inside the App and uv.lock must exist");
+        }
+        let ignore = load_gitignore(&root)?;
+        let mut files = Vec::new();
+        for item in WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|item| {
+                item.path()
+                    .strip_prefix(&root)
+                    .is_ok_and(|path| !is_ignored_source_path(path))
+            })
+        {
+            let item = item?;
+            let relative = item.path().strip_prefix(&root)?;
+            if ignore.as_ref().is_some_and(|ignore| {
+                ignore
+                    .matched_path_or_any_parents(relative, item.file_type().is_dir())
+                    .is_ignore()
+            }) {
+                continue;
+            }
+            if item.file_type().is_symlink() {
+                bail!("Compensatable App source cannot contain symlinks");
+            }
+            if item.file_type().is_file() {
+                files.push(relative.to_path_buf());
+            }
+        }
+        if !files.contains(&business_entry)
+            || !files.contains(&entry)
+            || !files.contains(&PathBuf::from("uv.lock"))
+            || !files.contains(&PathBuf::from("pyproject.toml"))
+        {
+            bail!("Compensation entry, pyproject.toml and uv.lock must be included in App source");
+        }
+        files.sort();
+        let mut hash = Sha256::new();
+        for path in files {
+            let name = path.to_string_lossy();
+            hash.update((name.len() as u64).to_le_bytes());
+            hash.update(name.as_bytes());
+            let bytes = std::fs::read(root.join(&path))?;
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+        }
+        Ok(format!("{:x}", hash.finalize()))
+    })
+    .await
+    .context("App source fingerprint task failed")?
+}
+
 fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive> {
     let gitignore = load_gitignore(project_path)?;
     let archive_path = std::env::temp_dir().join(format!("workrun-source-{}.tar.gz", Uuid::now_v7()));
@@ -513,6 +580,7 @@ pub async fn create_process_node(
         created_at: now.clone(),
         updated_at: now,
         entry: PathBuf::from("main.py"),
+        compensation: None,
         project_root: request.project_root,
         kind: request.kind,
         tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
@@ -635,22 +703,6 @@ pub(crate) async fn run_process_node_with_output(
     ProcessNodeRegistry::run_with_output(get_process_node(id).await?, on_output, on_started).await
 }
 
-pub(crate) async fn run_process_node_for_workflow(
-    id: &str,
-    input: &serde_json::Value,
-    on_output: std::sync::Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
-) -> Result<crate::module::process_node::WorkflowProcessNodeRun> {
-    ProcessNodeRegistry::run_for_workflow(get_process_node(id).await?, input, on_output).await
-}
-
-pub(crate) async fn run_process_node_for_tool(
-    id: &str,
-    input: &serde_json::Value,
-    on_output: std::sync::Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
-) -> Result<crate::module::process_node::WorkflowProcessNodeRun> {
-    ProcessNodeRegistry::run_for_tool(get_process_node(id).await?, input, on_output).await
-}
-
 pub(crate) async fn get_process_node(id: &str) -> Result<IProcessNode> {
     validate_process_node_id(id)?;
     if let Some(node) = Config::process_nodes().await.data_arc().get_process_node(id) {
@@ -697,6 +749,7 @@ mod installation_scope_tests {
             created_at: String::new(),
             updated_at: String::new(),
             entry: "main.py".into(),
+            compensation: None,
             project_root: None,
             kind: ProcessNodeKind::Workflow,
             tool_execution_policy: ToolExecutionPolicy::AskEveryTime,

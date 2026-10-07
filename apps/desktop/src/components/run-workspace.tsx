@@ -25,9 +25,13 @@ import {
   AppRunOutputPanel,
   restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
+import { RunExecutionHistory } from '@/components/run-execution-history';
 import { WorkflowRunOutput } from '@/components/workflow-output-panel';
 import {
   inspectRunRecord,
+  abandonWorkflowRun,
+  retryWorkflowCompensation,
+  replayRun,
   type RunRecord,
   type RunStatus,
 } from '@/services/run-history';
@@ -83,6 +87,24 @@ function RunWorkspace() {
   const activeTab = tabs.find((tab) => tab.id === activeRunId);
   const [record, setRecord] = useState<RunRecord>();
   const [retrySourceRunId, setRetrySourceRunId] = useState<string>();
+  const [abandonSourceRunId, setAbandonSourceRunId] = useState<string>();
+  const [compensationBusy, setCompensationBusy] = useState(false);
+  const changeCompensation = (
+    runId: string,
+    action: (id: string) => Promise<void>,
+  ) => {
+    setCompensationBusy(true);
+    void action(runId)
+      .then(() => inspectRunRecord(runId))
+      .then(setRecord)
+      .catch((error: unknown) =>
+        toast.error('Could not update compensation', {
+          toasterId: 'global',
+          description: String(error),
+        }),
+      )
+      .finally(() => setCompensationBusy(false));
+  };
   // Keep the previous response while a new tab loads, but never render it for
   // a different run. This avoids a synchronous effect update just to clear UI.
   const activeRecord = record?.id === activeRunId ? record : undefined;
@@ -107,19 +129,19 @@ function RunWorkspace() {
         : activeRecord.endedAt
           ? Date.parse(activeRecord.endedAt)
           : undefined;
-    const terminalState =
-      activeRecord.status === 'completed' ||
-      activeRecord.status === 'failed' ||
-      activeRecord.status === 'cancelled' ||
-      activeRecord.status === 'interrupted'
-        ? {
-            status: activeRecord.status,
-            error:
-              activeRecord.status === 'cancelled'
-                ? undefined
-                : activeRecord.error,
-          }
-        : undefined;
+    const terminalState = {
+      status:
+        activeRecord.status === 'queued' || activeRecord.status === 'running'
+          ? ('running' as const)
+          : activeRecord.status === 'waiting_for_input'
+            ? ('interrupted' as const)
+            : activeRecord.status,
+      error:
+        activeRecord.status === 'failed' ||
+        activeRecord.status === 'interrupted'
+          ? activeRecord.error
+          : undefined,
+    };
     return {
       ...snapshot,
       // The archived duration is authoritative. It remains stable even if the
@@ -154,7 +176,7 @@ function RunWorkspace() {
     if (
       !activeRecord ||
       activeRecord.targetType !== 'workflow' ||
-      activeRecord.status !== 'failed'
+      !['failed', 'interrupted'].includes(activeRecord.status)
     )
       return;
     setRetrySourceRunId(activeRecord.id);
@@ -224,6 +246,76 @@ function RunWorkspace() {
           onOpenChange={setOpen}
         >
           <DrawerContent>
+            <div className='flex items-center justify-end gap-2 px-6 pt-4'>
+              {activeRecord ? (
+                <Badge variant='outline'>{activeRecord.status}</Badge>
+              ) : null}
+              {activeRecord &&
+              !activeRecord.executionHistory?.compensation &&
+              ['failed', 'interrupted'].includes(activeRecord.status) ? (
+                <Button onClick={requestFailedWorkflowRetry}>
+                  Continue task
+                </Button>
+              ) : null}
+              {activeRecord &&
+              ['completed', 'failed', 'interrupted', 'cancelled'].includes(
+                activeRecord.status,
+              ) ? (
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    void replayRun(activeRecord.id)
+                      .then(openRun)
+                      .catch((error: unknown) => {
+                        toast.error('Could not start a new task', {
+                          toasterId: 'global',
+                          description: String(error),
+                        });
+                      });
+                  }}
+                >
+                  Run again
+                </Button>
+              ) : null}
+              {activeRecord && !activeRecord.executionHistory?.compensation ? (
+                <Button
+                  variant='outline'
+                  disabled={compensationBusy}
+                  onClick={() => setAbandonSourceRunId(activeRecord.id)}
+                >
+                  Abandon and compensate
+                </Button>
+              ) : null}
+              {activeRecord?.executionHistory?.compensation?.status ===
+              'blocked' ? (
+                <Button
+                  variant='outline'
+                  disabled={compensationBusy}
+                  onClick={() =>
+                    changeCompensation(
+                      activeRecord.id,
+                      retryWorkflowCompensation,
+                    )
+                  }
+                >
+                  Retry compensation
+                </Button>
+              ) : null}
+            </div>
+            <RunExecutionHistory
+              history={activeRecord?.executionHistory}
+              runId={activeRecord?.id}
+              inactive={
+                !!activeRecord &&
+                !['queued', 'running', 'waiting_for_input'].includes(
+                  activeRecord.status,
+                )
+              }
+              onChanged={async () => {
+                if (activeRecord)
+                  setRecord(await inspectRunRecord(activeRecord.id));
+              }}
+            />
             <WorkflowRunOutput
               readOnly
               isChat={workflowRun.mode === 'chat'}
@@ -237,22 +329,55 @@ function RunWorkspace() {
           </DrawerContent>
         </Drawer>
         <AlertDialog
+          open={Boolean(abandonSourceRunId)}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setAbandonSourceRunId(undefined);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Abandon this task and compensate?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Execution will stop and this task cannot be continued. Saved
+                compensation contracts will handle recorded effects. Unknown
+                outcomes, missing contracts and irreversible operations require
+                reconciliation or manual remediation.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep task</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (abandonSourceRunId)
+                    changeCompensation(abandonSourceRunId, abandonWorkflowRun);
+                  setAbandonSourceRunId(undefined);
+                }}
+              >
+                Abandon and compensate
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog
           open={Boolean(retrySourceRunId)}
           onOpenChange={(open) => !open && setRetrySourceRunId(undefined)}
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
+              <AlertDialogTitle>Continue this task?</AlertDialogTitle>
               <AlertDialogDescription>
-                Earlier completed nodes will not run again. The failed node may
-                have already performed an external action, such as sending a
-                message or updating a record.
+                Continue from the saved checkpoint in this task. Saved Remote
+                and tool results are reused; unknown outcomes are checked before
+                proceeding. Steps without a recovery contract may require manual
+                reconciliation.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction onClick={retryFailedWorkflow}>
-                Retry failed node
+                Continue task
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

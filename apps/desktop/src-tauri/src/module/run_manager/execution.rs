@@ -14,11 +14,11 @@ pub(super) async fn execute_claimed_run(run_id: &str) {
     }
     .await;
     if let Err(error) = result {
+        RunManager::global().workflow_sessions.lock().remove(run_id);
         let message = error.to_string();
         if publish_error(run_id, &error).await.is_err() {
             let _ = finish_run(run_id, RunStatus::Failed, Some(message)).await;
         }
-        RunManager::global().workflow_sessions.lock().remove(run_id);
     }
 }
 
@@ -36,6 +36,11 @@ async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
 }
 
 async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Value) -> Result<()> {
+    publish_value_event(
+        run_id,
+        json!({"type":"custom", "node":"", "event_type":"workflow.attempt_started", "data":{}}),
+    )
+    .await?;
     let session = workflow_session_from_runtime(&runtime)?;
     let workflow_version = runtime.get("releaseVersion").and_then(Value::as_str).unwrap_or("draft");
     let resume = runtime.get("resume").and_then(Value::as_bool).unwrap_or(false);
@@ -161,11 +166,22 @@ async fn execute_workflow(
             },
         );
         tokio::select! {
-            result = run => Some(result?),
+            result = run => Some(result),
             _ = cancellation.cancelled() => None,
         }
         // `compiled` owns the node event Channel. Its sender must be dropped
         // before waiting for the writer, otherwise receiver.recv never ends.
+    };
+    let result = match result {
+        Some(Ok(result)) => Some(result),
+        Some(Err(error)) => {
+            // Drain the previous attempt before recording failure or permitting
+            // same-task recovery, so writers cannot reuse an event sequence.
+            drop(events);
+            writer.await??;
+            return Err(error);
+        },
+        None => None,
     };
     let Some(result) = result else {
         drop(events);
@@ -214,6 +230,8 @@ async fn execute_workflow(
     drop(events);
     let has_pending_action = writer.await??;
     if result.interrupted && has_pending_action {
+        crate::module::run_history::recovery::complete_attempt(&crate::core::db::DBManager::global().pool()?, run_id)
+            .await?;
         return Ok(());
     }
     finish_run(

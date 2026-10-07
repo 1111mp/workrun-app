@@ -472,8 +472,7 @@ function useWorkflowRun(
     if (!sourceRunId) return;
     try {
       const retry = await retryFailedBackgroundWorkflowRun(sourceRunId);
-      // The retry is a separate durable run. Open its history-backed workspace
-      // instead of reusing this editor's event subscription for the failed run.
+      // Open the original task's history, including every earlier attempt.
       useRunWorkspaceStore.getState().openRun(retry);
     } catch (error) {
       toast.error('Could not retry failed workflow', {

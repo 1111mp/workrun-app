@@ -44,6 +44,7 @@ export type ProcessNodeDefinition = {
   createdAt: string;
   updatedAt: string;
   entry: string;
+  compensation?: { entry: string; idempotencyContract: string } | null;
   projectRoot?: string;
   kind: ProcessNodeKind;
   toolExecutionPolicy: ToolExecutionPolicy;
@@ -464,7 +465,7 @@ function publishRequest(definition: ProcessNodeDefinition) {
     ownerId: _ownerId,
     ...request
   } = definition;
-  return request;
+  return { ...request, compensation: definition.compensation ?? null };
 }
 
 /** Creates the server-owned Draft that mirrors a newly initialized local App. */

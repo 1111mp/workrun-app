@@ -8,7 +8,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSource {
     Process,
@@ -26,7 +26,7 @@ pub enum ToolRiskLevel {
 
 /// A Tool definition that can be selected by an Agent independent of its
 /// implementation source.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDefinition {
     /// Stable source-local id. Existing workflow `toolIds` use this value.

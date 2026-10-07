@@ -105,6 +105,15 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
     Ok(has_pending_action)
 }
 
+async fn attempt_span_id(run_id: &str, kind: &str, suffix: &str) -> Result<String> {
+    let pool = crate::core::db::DBManager::global().pool()?;
+    let attempt: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sequence), 0) FROM run_attempts WHERE run_id = ?")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await?;
+    Ok(format!("{run_id}:attempt:{attempt}:{kind}:{suffix}"))
+}
+
 async fn project_telemetry_span(run_id: &str, event: &Value) -> Result<()> {
     let Some(event_type) = workflow_event_type(event) else {
         return Ok(());
@@ -119,7 +128,7 @@ async fn project_telemetry_span(run_id: &str, event: &Value) -> Result<()> {
         return project_model_span(run_id, node_id, event.get("data")).await;
     }
     let step = event.get("step").and_then(Value::as_i64).unwrap_or_default();
-    let span_id = format!("{run_id}:workflow-node:{node_id}:{step}");
+    let span_id = attempt_span_id(run_id, "workflow-node", &format!("{node_id}:{step}")).await?;
     let attributes = json!({ "step": step });
     match event_type {
         "node_start" => {
@@ -211,7 +220,7 @@ async fn project_model_span(run_id: &str, node_id: &str, data: Option<&Value>) -
         .filter(|timestamp| !timestamp.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| started_at.clone());
-    let span_id = format!("{run_id}:model:{call_id}");
+    let span_id = attempt_span_id(run_id, "model", call_id).await?;
     let attributes = json!({ "modelCallId": call_id });
     let parent_span_id = RunHistoryStore::active_node_span_id(run_id, node_id).await?;
     RunHistoryStore::create_span(CreateRunSpan {
@@ -267,7 +276,7 @@ async fn project_tool_span(run_id: &str, node_id: &str, event_type: &str, data: 
     let Some(tool_name) = data.get("tool").and_then(Value::as_str).filter(|name| !name.is_empty()) else {
         return Ok(());
     };
-    let span_id = format!("{run_id}:tool:{call_id}");
+    let span_id = attempt_span_id(run_id, "tool", call_id).await?;
     // Inputs and outputs remain in the redacted event journal. The span stores
     // only identity fields needed for duration and reliability aggregation.
     let attributes = json!({ "callId": call_id });
@@ -380,6 +389,25 @@ pub(super) async fn complete_app_cancellation(run_id: &str) -> Result<()> {
 
 pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> Result<()> {
     RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
+    let pool = crate::core::db::DBManager::global().pool()?;
+    crate::module::run_history::recovery::complete_attempt(&pool, run_id).await?;
+    if matches!(status, RunStatus::Completed | RunStatus::Cancelled) {
+        sqlx::query("UPDATE run_recovery_jobs SET status = 'done', updated_at = ? WHERE run_id = ?")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(run_id)
+            .execute(&pool)
+            .await?;
+    }
+    if matches!(status, RunStatus::Failed) {
+        let journaled: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_operation_attempts WHERE run_id = ?)")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await?;
+        if journaled {
+            crate::module::run_history::recovery::schedule(&pool, run_id, error.as_deref()).await?;
+        }
+    }
     if let Err(error) = crate::module::chat_session::ChatSessionStore::finish_turn(run_id, status).await {
         log::warn!("failed to finish chat turn for run {run_id}: {error:#}");
     }
