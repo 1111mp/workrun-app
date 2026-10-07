@@ -57,6 +57,7 @@ sha2 = { workspace = true }
 sqlx = { workspace = true, features = ["chrono", "json", "migrate", "runtime-tokio", "sqlite"] }
 sys-locale = "0.3.2"
 tar = { workspace = true }
+tempfile = "3.27.0"
 tauri = { workspace = true, features = [
   "devtools",
   "image-ico",

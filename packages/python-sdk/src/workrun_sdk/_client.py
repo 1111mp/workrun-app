@@ -167,7 +167,7 @@ class WorkrunClient:
 
         return future.result()
 
-    def emit(self, message: JsonObject) -> None:
+    def emit(self, message: JsonObject) -> JsonValue:
         """Send a host-defined event and wait until the host accepts it."""
         self.connect()
         request_id = str(uuid4())
@@ -180,7 +180,7 @@ class WorkrunClient:
             with self._pending_lock:
                 _ = self._pending.pop(request_id, None)
             raise WorkrunConnectionError("failed to send host event") from error
-        future.result()
+        return future.result()
 
     def _send(self, message: JsonObject) -> None:
         with self._send_lock:
@@ -221,6 +221,10 @@ class WorkrunClient:
                         message.get("reason") or "interaction was cancelled"
                     )
                 )
+            elif message_type == "artifact.response":
+                future.set_result(message.get("data"))
+            elif message_type == "artifact.error":
+                future.set_exception(WorkrunConnectionError(str(message.get("error", "Resource operation failed"))))
             elif message_type in {"process.result.accepted", "tool.result.accepted"}:
                 future.set_result(None)
             else:

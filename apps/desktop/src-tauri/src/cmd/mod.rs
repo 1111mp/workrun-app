@@ -4,6 +4,7 @@ use anyhow::Result;
 pub type CmdResult<T = ()> = Result<T, String>;
 
 pub mod app;
+pub mod artifact;
 pub mod chat_session;
 pub mod evaluation;
 pub mod ipc;
@@ -11,6 +12,7 @@ pub mod mcp_server;
 pub mod model;
 pub mod process_node;
 pub mod python_runtime;
+pub mod remote_agent;
 pub mod run_history;
 pub mod run_manager;
 pub mod schedule;

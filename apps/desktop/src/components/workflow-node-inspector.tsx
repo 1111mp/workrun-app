@@ -43,6 +43,7 @@ import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { JsonEditorField } from '@/components/json-editor';
+import { RemoteAgentAuthenticationFields } from '@/components/remote-agent-authentication';
 import { isTeamMode } from '@/lib/constant';
 import {
   getProcessNodes,
@@ -51,6 +52,7 @@ import {
   listPublishedProcessNodeReleases,
   type ProcessAppRef,
 } from '@/services/process-node';
+import type { RemoteAuthentication } from '@/services/remote-agent';
 import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
 import { getWorkflows } from '@/services/workflow';
@@ -69,6 +71,8 @@ const workflowOutputTypeLabels: Record<WorkflowInputType, string> = {
   textarea: 'Long text',
   number: 'Number',
   boolean: 'Yes / no',
+  file: 'File',
+  files: 'Multiple files',
 };
 
 const modelProviderLabels: Record<ModelDefinition['provider'], string> = {
@@ -452,8 +456,18 @@ function CodeActRuntimeFields({
         </FieldGroup>
       </InspectorSection>
       <InspectorSection
+        title={t('workflowEditor.inspector.codeActResources')}
+        description={t('workflowEditor.inspector.codeActResourcesDescription')}
+      >
+        <FieldDescription>
+          {t('workflowEditor.inspector.codeActResourcesLimits')}
+        </FieldDescription>
+      </InspectorSection>
+      <InspectorSection
         title='Filesystem mounts'
-        description='Mount only directories this agent needs. Paths outside these mounts are denied by Monty.'
+        description={t(
+          'workflowEditor.inspector.codeActExtraMountsDescription',
+        )}
       >
         <FieldGroup className='gap-3'>
           {mounts.map((mount, index) => (
@@ -794,6 +808,22 @@ function WorkflowNodeInspector({
                 onChange={(instruction) => updateData({ instruction })}
                 className='min-h-36 font-mono text-xs'
               />
+              {!isCodeActAgent && (
+                <TextareaField
+                  id='agent-attachments'
+                  label={t('workflowEditor.artifacts.paths')}
+                  description={t('workflowEditor.artifacts.pathsDescription')}
+                  value={getStringArray(data, 'attachmentPaths').join('\n')}
+                  onChange={(value) =>
+                    updateData({
+                      attachmentPaths: value
+                        .split('\n')
+                        .map((path) => path.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              )}
               {!isCodeActAgent && !getText(data, 'outputSchema').trim() && (
                 <TextField
                   id='agent-output-key'
@@ -1032,6 +1062,49 @@ function WorkflowNodeInspector({
                 type='url'
                 value={getText(data, 'url')}
                 onChange={(url) => updateData({ url })}
+              />
+              <TextareaField
+                id='remote-agent-attachments'
+                label={t('workflowEditor.artifacts.paths')}
+                description={t(
+                  'workflowEditor.artifacts.remotePathsDescription',
+                )}
+                value={getStringArray(data, 'attachmentPaths').join('\n')}
+                onChange={(value) =>
+                  updateData({
+                    attachmentPaths: value
+                      .split('\n')
+                      .map((path) => path.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+              <TextField
+                id='remote-agent-timeout'
+                type='number'
+                label={t('workflowEditor.artifacts.remoteTimeout')}
+                description={t(
+                  'workflowEditor.artifacts.remoteTimeoutDescription',
+                )}
+                value={String(getNumber(data, 'timeoutSeconds') || 120)}
+                onChange={(value) =>
+                  updateData({
+                    timeoutSeconds: value === '' ? undefined : Number(value),
+                  })
+                }
+              />
+            </InspectorSection>
+            <InspectorSection
+              title={t('workflowEditor.remoteAuth.title')}
+              description={t('workflowEditor.remoteAuth.description')}
+            >
+              <RemoteAgentAuthenticationFields
+                key={node.id}
+                url={getText(data, 'url')}
+                authentication={
+                  data.authentication as RemoteAuthentication | undefined
+                }
+                onChange={(authentication) => updateData({ authentication })}
               />
             </InspectorSection>
           </FieldGroup>
@@ -1648,6 +1721,22 @@ function WorkflowNodeInspector({
                   })
                 }
               />
+              <TextareaField
+                id='human-review-attachments'
+                label={t('workflowEditor.inspector.reviewAttachmentPaths')}
+                description={t(
+                  'workflowEditor.inspector.reviewAttachmentPathsDescription',
+                )}
+                value={getStringArray(data, 'attachmentPaths').join('\n')}
+                onChange={(value) =>
+                  updateData({
+                    attachmentPaths: value
+                      .split('\n')
+                      .map((path) => path.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
               <Field orientation='horizontal'>
                 <div className='flex flex-1 flex-col gap-1'>
                   <Label htmlFor='human-review-editable'>
@@ -1841,8 +1930,8 @@ function WorkflowNodeInspector({
       open={node !== null}
       modal={false}
       disablePointerDismissal
-      defaultHorizontalSnapPoint='31rem'
-      horizontalSnapPoints={['31rem', '48rem', '64rem']}
+      defaultHorizontalSnapPoint='48rem'
+      horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
       swipeDirection='right'
       onOpenChange={(open) => {
         if (!open) {
@@ -2528,7 +2617,7 @@ function TextField({
   label: string;
   description?: string;
   value: string;
-  type?: 'text' | 'url';
+  type?: 'text' | 'url' | 'number';
   placeholder?: string;
   disabled?: boolean;
   onChange: (value: string) => void;

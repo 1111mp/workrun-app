@@ -10,6 +10,9 @@ mod codeact_agent;
 mod guardrails;
 mod human_review;
 mod process;
+mod remote_agent;
+mod remote_auth;
+mod remote_tasks;
 mod routing;
 mod state_bridge;
 mod subworkflow;
@@ -23,6 +26,14 @@ use codeact_agent::*;
 use guardrails::*;
 use human_review::*;
 use process::*;
+use remote_agent::*;
+pub(crate) use remote_agent::{
+    RemoteTaskOperation, cancel_remote_tasks_for_run, remote_task_operation, test_remote_connection,
+};
+pub(crate) use remote_auth::{RemoteAuthentication, validate_remote_secret};
+pub(crate) use remote_tasks::{
+    RemoteTaskRecord, list_remote_tasks, mark_remote_tasks_interrupted, remote_task_warnings,
+};
 use routing::*;
 use state_bridge::*;
 use subworkflow::*;
@@ -56,7 +67,6 @@ use adk_rust::{
         openai::{OpenAIClient, OpenAIConfig},
     },
     prelude::{Content, Event, Llm, LlmAgentBuilder, Tool, ToolContext},
-    server::RemoteA2aAgent,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use futures::StreamExt;
@@ -401,6 +411,22 @@ impl CompiledWorkflow {
         thread_id: &str,
         resume: bool,
         tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+        on_event: F,
+    ) -> Result<WorkflowRunResult>
+    where
+        F: FnMut(StreamEvent),
+    {
+        self.run_stream_tracked(initial_state, thread_id, resume, tool_confirmation, None, on_event)
+            .await
+    }
+
+    pub(crate) async fn run_stream_tracked<F>(
+        self,
+        initial_state: State,
+        thread_id: &str,
+        resume: bool,
+        tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+        run_id: Option<&str>,
         mut on_event: F,
     ) -> Result<WorkflowRunResult>
     where
@@ -450,7 +476,7 @@ impl CompiledWorkflow {
         };
         let stream = self.graph.stream_with_run_config(
             initial_state,
-            ExecutionConfig::new(thread_id),
+            ExecutionConfig::new(thread_id).with_metadata("workrun.run_id", json!(run_id)),
             StreamMode::Messages,
             run_config,
         );
@@ -717,11 +743,10 @@ pub(super) async fn compile_with_path(
 
     for node in &executable {
         graph = match node.kind.as_str() {
-            // A2A is a first-class ADK Agent. Wrapping it in AgentNode makes
-            // the remote call a real graph execution step, not a side effect
-            // performed by the Tauri command.
+            // The v1.0.1 adapter participates in the same scoped State boundary.
             "remote_agent" => graph.add_node(remote_a2a_graph_node(
                 node,
+                config,
                 on_event.clone(),
                 Arc::clone(&state),
                 node_state_config(node, &executable_ids)?,

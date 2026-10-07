@@ -7,6 +7,7 @@ pub(super) struct HumanReviewConfig {
     pub(super) content_key: Option<String>,
     pub(super) context_keys: Vec<String>,
     pub(super) editable: bool,
+    pub(super) attachment_paths: Vec<String>,
     pub(super) approval_key: String,
     pub(super) workflow_context: Option<Value>,
 }
@@ -30,6 +31,7 @@ pub(super) fn human_review_config(node: &WorkflowNode) -> Result<HumanReviewConf
             .get("editable")
             .and_then(Value::as_bool)
             .unwrap_or(legacy_editable_key.is_some()),
+        attachment_paths: string_array_data(node, "attachmentPaths")?,
         approval_key: review_approval_key(&node.id),
         workflow_context: node.data.get("workflowContext").cloned(),
     })
@@ -51,6 +53,7 @@ pub(super) fn add_human_review_node(
             content_key: config.content_key.clone(),
             context_keys: config.context_keys.clone(),
             editable: config.editable,
+            attachment_paths: config.attachment_paths.clone(),
             approval_key: config.approval_key.clone(),
             workflow_context: config.workflow_context.clone(),
         };
@@ -87,21 +90,7 @@ pub(super) fn add_human_review_node(
                 .map_err(|_| graph_node_error(&id, "workflow state lock is poisoned"))?
                 .node_input(&id)
                 .map_err(|error| graph_node_error(&id, error))?;
-            let context_values = config
-                .context_keys
-                .iter()
-                .map(|key| (key.clone(), input.get(key).cloned().unwrap_or(Value::Null)))
-                .collect::<serde_json::Map<_, _>>();
-            let payload = json!({
-                "nodeId": id,
-                "title": config.title,
-                "description": config.description,
-                "contentKey": config.content_key.clone(),
-                "content": config.content_key.as_ref().and_then(|key| input.get(key).cloned()),
-                "context": context_values,
-                "editable": config.editable,
-                "workflowContext": config.workflow_context,
-            });
+            let payload = review_payload(&id, &config, &input).map_err(|error| graph_node_error(&id, error))?;
             if let Some(on_event) = on_event {
                 send_guarded_event(
                     &on_event,
@@ -110,6 +99,42 @@ pub(super) fn add_human_review_node(
             }
             Ok(NodeOutput::interrupt_with_data("Human review required", payload))
         }
+    }))
+}
+
+fn review_payload(id: &str, config: &HumanReviewConfig, input: &Value) -> Result<Value> {
+    let context_values = config
+        .context_keys
+        .iter()
+        .map(|key| (key.clone(), input.get(key).cloned().unwrap_or(Value::Null)))
+        .collect::<serde_json::Map<_, _>>();
+    let content = config.content_key.as_ref().and_then(|key| input.get(key)).cloned();
+    let mut attachments = crate::module::artifact::references(&json!({
+        "content": content, "context": context_values,
+    }))?;
+    // Select only the review's configured content, context and attachment paths,
+    // never the whole workflow State or the subworkflow routing metadata.
+    for path in &config.attachment_paths {
+        let value = super::state_bridge::value_at_path(input, path)
+            .ok_or_else(|| anyhow!("Review attachment State path `{path}` is missing or inaccessible"))?;
+        let selected = crate::module::artifact::references(value)?;
+        if selected.is_empty() {
+            bail!("Review attachment State path `{path}` contains no files");
+        }
+        attachments.extend(selected);
+    }
+    let mut seen = HashSet::new();
+    attachments.retain(|reference| seen.insert((reference.id.clone(), reference.version)));
+    Ok(json!({
+        "nodeId": id,
+        "title": config.title,
+        "description": config.description,
+        "contentKey": config.content_key,
+        "content": content,
+        "context": context_values,
+        "editable": config.editable,
+        "attachments": attachments,
+        "workflowContext": config.workflow_context,
     }))
 }
 
@@ -241,5 +266,157 @@ mod tests {
             .unwrap();
 
         assert_eq!(after_review_runs.load(Ordering::SeqCst), 1);
+    }
+    fn file(id: &str) -> Value {
+        json!({"$type": "artifact", "id": id, "version": 1, "name": "review.pdf", "mimeType": "application/pdf", "size": 42})
+    }
+
+    #[test]
+    fn selects_content_context_and_explicit_attachments_without_unrelated_files() {
+        let config = human_review_config(&WorkflowNode { id: "review".into(), kind: "human_review".into(), data: json!({
+            "contentKey": "document", "contextKeys": ["contextFiles"], "attachmentPaths": ["generated.files.0", "document"],
+        }) }).unwrap();
+        let payload = review_payload(
+            "review",
+            &config,
+            &json!({
+                "document": file("one"), "contextFiles": {"nested": [file("two"), file("one")]},
+                "generated": {"files": [file("three")]}, "unrelated": file("hidden"),
+            }),
+        )
+        .unwrap();
+        let attachments = payload["attachments"].as_array().unwrap();
+        assert_eq!(attachments.len(), 3);
+        assert_eq!(
+            attachments
+                .iter()
+                .map(|reference| reference["id"].as_str().unwrap())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["one", "two", "three"])
+        );
+        assert!(payload.get("unrelated").is_none());
+    }
+
+    #[test]
+    fn attachment_paths_cannot_bypass_state_read_permissions_or_sensitive_fields() {
+        use crate::module::state::{NodeStatePolicy, NodeStateUpdate};
+        let mut bridge = WorkflowStateBridge::from_initial_state_with_policy(
+            json!({"secret": file("sensitive")}),
+            BTreeSet::new(),
+            BTreeSet::from(["secret".into()]),
+        )
+        .unwrap();
+        bridge.configure_node(
+            "producer",
+            NodeStatePolicy {
+                readers: AccessRule::only(["review"]),
+                ..Default::default()
+            },
+        );
+        bridge
+            .apply_node_update(
+                "producer",
+                NodeStateUpdate::new().set("report", file("allowed")),
+                &BTreeSet::new(),
+            )
+            .unwrap();
+        let config = human_review_config(&WorkflowNode {
+            id: "review".into(),
+            kind: "human_review".into(),
+            data: json!({"attachmentPaths": ["report"]}),
+        })
+        .unwrap();
+        assert_eq!(
+            review_payload("review", &config, &bridge.node_input("review").unwrap()).unwrap()["attachments"][0]["id"],
+            "allowed"
+        );
+        assert!(
+            review_payload("other", &config, &bridge.node_input("other").unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("inaccessible")
+        );
+        let config = human_review_config(&WorkflowNode {
+            id: "review".into(),
+            kind: "human_review".into(),
+            data: json!({"attachmentPaths": ["secret"]}),
+        })
+        .unwrap();
+        assert!(
+            review_payload("review", &config, &bridge.node_input("review").unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("no files")
+        );
+    }
+
+    #[tokio::test]
+    async fn review_pause_keeps_durable_file_references_and_resumes_after_approval() {
+        use crate::module::artifact::{ArtifactStore, references};
+        use adk_rust::graph::{Interrupt, MemoryCheckpointer};
+        let directory = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(directory.path().join("store"));
+        let source = directory.path().join("report.pdf");
+        std::fs::write(&source, b"%PDF-1.7\nreview fixture").unwrap();
+        let reference = store.import(&source).unwrap();
+        std::fs::remove_file(source).unwrap();
+        let review = WorkflowNode {
+            id: "review".into(),
+            kind: "human_review".into(),
+            data: json!({"attachmentPaths": ["document"]}),
+        };
+        let graph = add_human_review_node(
+            StateGraph::with_channels(&[
+                "workflow.last_node",
+                "workflow.node",
+                "workflow.trace",
+                "workflow.human_review.review.approved",
+            ]),
+            &review,
+            None,
+            Arc::new(Mutex::new(
+                WorkflowStateBridge::from_initial_state(json!({"document": reference})).unwrap(),
+            )),
+        )
+        .unwrap()
+        .add_edge(START, "review")
+        .add_edge("review", END)
+        .compile()
+        .unwrap()
+        .with_checkpointer(MemoryCheckpointer::new());
+        let GraphError::Interrupted(paused) = graph
+            .invoke(State::new(), ExecutionConfig::new("review-files"))
+            .await
+            .unwrap_err()
+        else {
+            panic!("expected review pause");
+        };
+        let Interrupt::Dynamic {
+            data: Some(payload), ..
+        } = paused.interrupt
+        else {
+            panic!("expected review payload");
+        };
+        // The durable action transports JSON references, never PDF bytes or host paths.
+        let persisted = serde_json::to_string(&payload).unwrap();
+        assert!(!persisted.contains("%PDF"));
+        assert!(!persisted.contains(directory.path().to_str().unwrap()));
+        let reopened: Value = serde_json::from_str(&persisted).unwrap();
+        let attachments = references(&reopened["attachments"]).unwrap();
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(
+            std::fs::read(store.resolve(&attachments[0]).unwrap()).unwrap(),
+            b"%PDF-1.7\nreview fixture"
+        );
+        graph
+            .update_state("review-files", [(review_approval_key("review"), json!(true))])
+            .await
+            .unwrap();
+        let resumed = graph
+            .invoke(State::new(), ExecutionConfig::new("review-files"))
+            .await
+            .unwrap();
+        assert_eq!(resumed["workflow.node"]["result"]["approved"], true);
+        assert!(store.resolve(&attachments[0]).is_ok());
     }
 }

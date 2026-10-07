@@ -59,6 +59,7 @@ impl DBManager {
         .await?;
 
         Self::mark_incomplete_runs_interrupted(&db_pool).await?;
+        crate::module::workflow::mark_remote_tasks_interrupted(&db_pool).await?;
 
         logging!(info, Type::Setup, "Successfully applied database migrations");
 

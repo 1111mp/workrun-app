@@ -30,6 +30,7 @@ pub struct WorkflowStateBridge {
     input_raw_readers: BTreeSet<String>,
     input_sensitive_fields: BTreeSet<String>,
     global_owners: BTreeMap<String, String>,
+    codeact_files: BTreeMap<String, Value>,
 }
 
 /// Private workflow state persisted alongside one ADK graph checkpoint.
@@ -45,6 +46,8 @@ pub struct WorkflowStateCheckpoint {
     input_sensitive_fields: BTreeSet<String>,
     #[serde(default)]
     global_owners: BTreeMap<String, String>,
+    #[serde(default)]
+    codeact_files: BTreeMap<String, Value>,
 }
 
 /// A checkpointer wrapper that atomically embeds Workrun State in ADK's
@@ -89,6 +92,7 @@ impl WorkflowStateBridge {
             input_raw_readers,
             input_sensitive_fields,
             global_owners: BTreeMap::new(),
+            codeact_files: BTreeMap::new(),
         })
     }
 
@@ -118,6 +122,23 @@ impl WorkflowStateBridge {
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
+    }
+
+    // Runtime-only snapshots survive a tool-confirmation pause without exposing
+    // generated files to another node before this node has completed.
+    pub(super) fn codeact_files(&self, node_id: &str) -> Option<Value> {
+        self.codeact_files.get(node_id).cloned()
+    }
+
+    pub(super) fn set_codeact_files(&mut self, node_id: &str, files: Option<Value>) {
+        match files {
+            Some(files) => {
+                self.codeact_files.insert(node_id.to_string(), files);
+            },
+            None => {
+                self.codeact_files.remove(node_id);
+            },
+        }
     }
 
     /// Build a flat JSON input from global values and the node namespaces it
@@ -265,6 +286,7 @@ impl WorkflowStateBridge {
             input_raw_readers: self.input_raw_readers.clone(),
             input_sensitive_fields: self.input_sensitive_fields.clone(),
             global_owners: self.global_owners.clone(),
+            codeact_files: self.codeact_files.clone(),
         })
     }
 
@@ -277,6 +299,7 @@ impl WorkflowStateBridge {
             input_raw_readers: checkpoint.input_raw_readers,
             input_sensitive_fields: checkpoint.input_sensitive_fields,
             global_owners: checkpoint.global_owners,
+            codeact_files: checkpoint.codeact_files,
         })
     }
 }
@@ -307,7 +330,7 @@ fn overlay_authorized_raw(target: &mut Value, visible: &Value, mixed: &Value) {
     }
 }
 
-fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+pub(super) fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(value, |value, segment| match value {
         Value::Object(object) => object.get(segment),
         Value::Array(array) => segment.parse::<usize>().ok().and_then(|index| array.get(index)),
@@ -895,6 +918,10 @@ mod tests {
                 .create("draft", json!("private"))
                 .unwrap();
             bridge.runtime_state().runtime_set("approval", json!("secret"));
+            bridge.set_codeact_files(
+                "extractor",
+                Some(json!([{ "relativePath": "draft.txt", "reference": {"id": "snapshot"} }])),
+            );
         }
         let checkpointer = WorkflowStateCheckpointer::new(
             Arc::new(MemoryCheckpointer::new()),
@@ -924,6 +951,14 @@ mod tests {
             Some(&json!("private"))
         );
         assert_eq!(restored.runtime_state().runtime_get("approval"), Some(&json!("secret")));
+        assert_eq!(
+            restored.codeact_files("extractor").unwrap()[0]["relativePath"],
+            "draft.txt"
+        );
+        assert_eq!(restored.codeact_files("other"), None);
+        assert!(restored.agent_input("other").unwrap().get("codeactFiles").is_none());
+        restored.set_codeact_files("extractor", None);
+        assert_eq!(restored.codeact_files("extractor"), None);
     }
 
     #[tokio::test]

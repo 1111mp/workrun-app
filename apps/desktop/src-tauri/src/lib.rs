@@ -89,6 +89,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // app
             cmd::app::restart_app,
+            cmd::artifact::artifact_pick,
+            cmd::artifact::artifact_export,
+            cmd::artifact::artifact_preview,
+            cmd::artifact::artifact_open_pdf,
+            cmd::remote_agent::remote_credentials_list,
+            cmd::remote_agent::remote_credential_save,
+            cmd::remote_agent::remote_credential_delete,
+            cmd::remote_agent::remote_agent_test_connection,
+            cmd::remote_agent::remote_tasks_list,
+            cmd::remote_agent::remote_task_manage,
+            cmd::remote_agent::remote_task_warnings,
             // workrun
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,

@@ -42,9 +42,69 @@ pub struct IpcSession {
 struct IpcSessionEntry {
     token: String,
     messages: mpsc::Sender<Value>,
+    artifacts: Option<ArtifactAccess>,
+}
+
+#[derive(Debug, Clone)]
+struct ArtifactAccess {
+    store: crate::module::artifact::ArtifactStore,
+    references: Vec<crate::module::artifact::ArtifactRef>,
+    copies: Arc<tempfile::TempDir>,
+}
+
+impl ArtifactAccess {
+    fn allows(&self, reference: &crate::module::artifact::ArtifactRef) -> bool {
+        self.references.iter().any(|allowed| {
+            allowed.id == reference.id
+                && allowed.version == reference.version
+                && allowed.size == reference.size
+                && allowed.mime_type == reference.mime_type
+                && allowed.kind == reference.kind
+        })
+    }
 }
 
 impl IpcSession {
+    pub async fn grant_artifacts(&self, input: &Value) -> Result<()> {
+        let access = ArtifactAccess {
+            store: crate::module::artifact::ArtifactStore::active()?,
+            references: crate::module::artifact::references(input)?,
+            copies: Arc::new(tempfile::tempdir()?),
+        };
+        self.sessions
+            .lock()
+            .await
+            .get_mut(&self.id)
+            .context("IPC session has closed")?
+            .artifacts = Some(access);
+        Ok(())
+    }
+
+    pub async fn validate_artifact_result(&self, value: &Value) -> Result<()> {
+        let references = crate::module::artifact::references(value)?;
+        let access = self
+            .sessions
+            .lock()
+            .await
+            .get(&self.id)
+            .and_then(|entry| entry.artifacts.clone())
+            .context("IPC resource access is missing")?;
+        for reference in &references {
+            if !access.allows(reference) {
+                bail!("Process returned an unauthorized resource");
+            }
+        }
+        // Validate durability before accepting the result, after releasing the
+        // session lock so hashing large outputs does not block other processes.
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            for reference in references {
+                access.store.resolve(&reference)?;
+            }
+            Ok(())
+        })
+        .await?
+    }
+
     pub async fn close(mut self) {
         self.sessions.lock().await.remove(&self.id);
         #[cfg(any(unix, windows))]
@@ -240,6 +300,7 @@ impl IpcServer {
             IpcSessionEntry {
                 token: token.clone(),
                 messages,
+                artifacts: None,
             },
         );
         let endpoint = self
@@ -357,6 +418,20 @@ where
     let app_handle = handle::Handle::app_handle();
     let result = async {
         while let Ok(message) = receive_message(&mut reader).await {
+            if message
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.starts_with("artifact."))
+            {
+                let id = required_string(&message, "id")?;
+                let response = artifact_request(&session_id, &message).await;
+                let response = match response {
+                    Ok(data) => serde_json::json!({"id": id, "type": "artifact.response", "data": data}),
+                    Err(error) => serde_json::json!({"id": id, "type": "artifact.error", "error": error.to_string()}),
+                };
+                IpcServer::global().send(&session_id, response).await?;
+                continue;
+            }
             // A run owner can await structured messages (such as process.result)
             // while the webview continues to receive the same event for UI work.
             enqueue_result(&message_sender, &message)?;
@@ -473,6 +548,7 @@ mod tests {
                 IpcSessionEntry {
                     token: format!("token-{id}"),
                     messages,
+                    artifacts: None,
                 },
             );
         }
@@ -535,6 +611,7 @@ mod tests {
             IpcSessionEntry {
                 token: "token".into(),
                 messages,
+                artifacts: None,
             },
         );
         let session = IpcSession {
@@ -632,6 +709,7 @@ mod tests {
                 IpcSessionEntry {
                     token: format!("token-{id}"),
                     messages: sender,
+                    artifacts: None,
                 },
             );
             let mut pipe = ServerOptions::new().create(&endpoint).unwrap();
@@ -665,5 +743,300 @@ mod tests {
         for server in servers {
             server.await.unwrap();
         }
+    }
+}
+
+async fn artifact_request(session_id: &str, message: &Value) -> Result<Value> {
+    let access = IpcServer::global()
+        .sessions
+        .lock()
+        .await
+        .get(session_id)
+        .and_then(|entry| entry.artifacts.clone())
+        .context("This process has no resource capability")?;
+    let kind = required_string(message, "type")?;
+    match kind.as_str() {
+        "artifact.read" => {
+            let reference: crate::module::artifact::ArtifactRef = serde_json::from_value(
+                message
+                    .get("reference")
+                    .cloned()
+                    .context("Missing resource reference")?,
+            )?;
+            if !access.allows(&reference) {
+                bail!("Resource is not part of this process's authorized input");
+            }
+            tokio::task::spawn_blocking(move || -> Result<Value> {
+                let source = access.store.resolve(&reference)?;
+                // SDK consumers receive a private copy, never the immutable original.
+                let directory = access.copies.path().join(Uuid::new_v4().to_string());
+                std::fs::create_dir(&directory)?;
+                // Use a basename so libraries that inspect extensions can open
+                // the copy, without letting display metadata escape the directory.
+                let filename = std::path::Path::new(&reference.name)
+                    .file_name()
+                    .context("Invalid resource filename")?;
+                let destination = directory.join(filename);
+                std::fs::copy(source, &destination)?;
+                Ok(serde_json::json!({"path": destination}))
+            })
+            .await?
+        },
+        "artifact.save" => {
+            let path = std::path::PathBuf::from(required_string(message, "path")?);
+            let reference = tokio::task::spawn_blocking(move || access.store.import(&path)).await??;
+            let mut sessions = IpcServer::global().sessions.lock().await;
+            let access = sessions
+                .get_mut(session_id)
+                .and_then(|entry| entry.artifacts.as_mut())
+                .context("IPC session has closed")?;
+            access.references.push(reference.clone());
+            Ok(serde_json::to_value(reference)?)
+        },
+        _ => bail!("Unknown resource operation"),
+    }
+}
+
+#[cfg(test)]
+mod artifact_capability_tests {
+    use super::*;
+    #[tokio::test]
+    async fn artifact_ipc_round_trip_returns_private_copies_and_denies_ungranted_reads() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = crate::module::artifact::ArtifactStore::new(temporary.path().join("store"));
+        let private = store.save_bytes("private.pdf", b"%PDF-private").unwrap();
+        let source = temporary.path().join("report.pdf");
+        std::fs::write(&source, b"%PDF-report").unwrap();
+        let access = ArtifactAccess {
+            store: store.clone(),
+            references: Vec::new(),
+            copies: Arc::new(tempfile::tempdir().unwrap()),
+        };
+        let server = IpcServer::global();
+        let id = Uuid::new_v4().to_string();
+        let (messages, _receiver) = mpsc::channel(16);
+        server.sessions.lock().await.insert(
+            id.clone(),
+            IpcSessionEntry {
+                token: "test".into(),
+                messages,
+                artifacts: Some(access),
+            },
+        );
+        let result = artifact_request(&id, &serde_json::json!({"type":"artifact.save", "path":source}))
+            .await
+            .unwrap();
+        let reference: crate::module::artifact::ArtifactRef = serde_json::from_value(result.clone()).unwrap();
+        let loaded = artifact_request(&id, &serde_json::json!({"type":"artifact.read", "reference":result}))
+            .await
+            .unwrap();
+        let copied = std::path::PathBuf::from(loaded["path"].as_str().unwrap());
+        assert_eq!(std::fs::read(&copied).unwrap(), b"%PDF-report");
+        std::fs::write(copied, b"consumer changed copy").unwrap();
+        assert_eq!(
+            std::fs::read(store.resolve(&reference).unwrap()).unwrap(),
+            b"%PDF-report"
+        );
+        assert!(
+            artifact_request(&id, &serde_json::json!({"type":"artifact.read", "reference":private}))
+                .await
+                .is_err()
+        );
+        server.sessions.lock().await.remove(&id);
+        assert!(
+            artifact_request(&id, &serde_json::json!({"type":"artifact.read", "reference":reference}))
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn process_capability_rejects_other_resources_and_forged_metadata() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = crate::module::artifact::ArtifactStore::new(temporary.path().join("store"));
+        let file = store.save_bytes("allowed.pdf", b"%PDF-allowed").unwrap();
+        let other = store.save_bytes("private.pdf", b"%PDF-private").unwrap();
+        let access = ArtifactAccess {
+            store,
+            references: vec![file.clone()],
+            copies: Arc::new(tempfile::tempdir().unwrap()),
+        };
+        assert!(access.allows(&file));
+        assert!(!access.allows(&other));
+        let mut forged = file.clone();
+        forged.size = 1;
+        assert!(!access.allows(&forged));
+        let mut visible = file;
+        visible.name = "[EMAIL REDACTED].pdf".into();
+        assert!(access.allows(&visible));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_pdf_integration_tests {
+    use super::*;
+    use crate::module::{
+        artifact::ArtifactStore,
+        python_runtime::{ManagedPython, ManagedVenv, PythonRuntime},
+        state::{AccessRule, NodeStatePolicy, State},
+    };
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
+
+    async fn run_process(store: ArtifactStore, input: Value, project: &Path, entry: &str, python: &Path) -> Value {
+        let temporary = tempfile::tempdir().unwrap();
+        let socket = temporary.path().join("s");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = IpcServer::global();
+        let id = Uuid::new_v4().to_string();
+        let token = Uuid::new_v4().to_string();
+        let (messages, receiver) = mpsc::channel(16);
+        server.sessions.lock().await.insert(
+            id.clone(),
+            IpcSessionEntry {
+                token: token.clone(),
+                messages,
+                artifacts: Some(ArtifactAccess {
+                    store,
+                    references: crate::module::artifact::references(&input).unwrap(),
+                    copies: Arc::new(tempfile::tempdir().unwrap()),
+                }),
+            },
+        );
+        let mut session = IpcSession {
+            id: id.clone(),
+            token: token.clone(),
+            endpoint: socket.to_string_lossy().into_owned(),
+            receiver,
+            sessions: Arc::clone(&server.sessions),
+            connections: Arc::clone(&server.connections),
+            closed: false,
+        };
+        let sessions = Arc::clone(&server.sessions);
+        let connections = Arc::clone(&server.connections);
+        let listener_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_connection(stream, sessions, connections).await.unwrap();
+        });
+        let environment = ManagedVenv {
+            project_path: project.canonicalize().unwrap(),
+            environment_path: python.parent().unwrap().parent().unwrap().into(),
+            executable_path: python.into(),
+            python: ManagedPython {
+                requested_version: "3.10+".into(),
+                executable_path: python.into(),
+                version: "test".into(),
+            },
+        };
+        let logs = Arc::new(std::sync::Mutex::new(String::new()));
+        let captured = Arc::clone(&logs);
+        let execution = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            PythonRuntime::run_python_streaming_with_env_and_stdin(
+                &environment,
+                Path::new(entry),
+                &[],
+                &[
+                    ("WORKRUN_IPC_ENDPOINT".into(), session.endpoint.clone()),
+                    ("WORKRUN_IPC_TOKEN".into(), token),
+                    ("WORKRUN_RUN_ID".into(), id),
+                ],
+                Some(&serde_json::to_vec(&input).unwrap()),
+                Arc::new(move |chunk| captured.lock().unwrap().push_str(&chunk.data)),
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(execution.exit_code, Some(0), "{}", logs.lock().unwrap());
+        let message = session
+            .try_receive()
+            .expect("Python process must return process.result");
+        assert_eq!(message["type"], "process.result");
+        let result = message["data"].clone();
+        session.validate_artifact_result(&result).await.unwrap();
+        session.close().await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), listener_task)
+            .await
+            .unwrap()
+            .unwrap();
+        result
+    }
+
+    #[tokio::test]
+    #[ignore = "requires uv sync in packages/python-sdk (pypdf) and local IPC sockets"]
+    async fn python_pdf_process_generates_durable_files_for_authorized_downstream_nodes() {
+        let sdk = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../packages/python-sdk")
+            .canonicalize()
+            .unwrap();
+        let python = sdk.join(".venv/bin/python");
+        assert!(python.exists(), "Run uv sync --project packages/python-sdk first");
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path();
+        let source = project.join("source.pdf");
+        let fixture = tokio::process::Command::new(&python)
+            .arg(sdk.join("tests/fixtures/create_pdf.py"))
+            .arg(&source)
+            .output()
+            .await
+            .unwrap();
+        assert!(fixture.status.success(), "{}", String::from_utf8_lossy(&fixture.stderr));
+        let store = ArtifactStore::new(project.join("artifacts"));
+        let original = store.import(&source).unwrap();
+        std::fs::remove_file(source).unwrap();
+        std::fs::copy(sdk.join("examples/pdf-process/main.py"), project.join("main.py")).unwrap();
+        let result = run_process(store.clone(), json!({"document":original}), project, "main.py", &python).await;
+        assert_eq!(result["pageCount"], 2);
+        assert_eq!(result["textPageCount"], 2);
+        assert_eq!(result["warnings"], json!([]));
+        let contract: Value =
+            serde_json::from_slice(&std::fs::read(sdk.join("examples/pdf-process/contract.json")).unwrap()).unwrap();
+        let schema = json!({"type":"object","properties":contract["outputs"],"required":["pageCount","textPageCount","warnings","report","processedPdf"]});
+        assert!(jsonschema::is_valid(&schema, &result));
+        for reference in crate::module::artifact::references(&result).unwrap() {
+            store.resolve(&reference).unwrap();
+        }
+
+        let mut state = State::new();
+        state.runtime().configure_node(
+            "extractor",
+            NodeStatePolicy {
+                readers: AccessRule::only(["consumer"]),
+                ..Default::default()
+            },
+        );
+        for (key, value) in result.as_object().unwrap() {
+            state.node("extractor").set(key, value.clone()).unwrap();
+        }
+        let downstream = state.scoped_visible_input("consumer").unwrap();
+        assert!(
+            state
+                .scoped_visible_input("other")
+                .unwrap()
+                .get("processedPdf")
+                .is_none()
+        );
+        std::fs::write(
+            project.join("consume.py"),
+            r#"import json, sys
+from pypdf import PdfReader
+from workrun_sdk import artifacts, process
+state = json.load(sys.stdin)
+text = artifacts.read(state['report']).decode('utf-8')
+assert '--- Page 1 ---' in text and 'First page alpha' in text
+assert '--- Page 2 ---' in text and 'Second page beta' in text
+pdf = artifacts.path(state['processedPdf'])
+assert pdf.suffix == '.pdf'
+reader = PdfReader(pdf)
+assert len(reader.pages) == 2
+assert reader.pages[1].extract_text().strip() == 'Second page beta'
+process.result({'verified': True})
+"#,
+        )
+        .unwrap();
+        let verified = run_process(store, downstream, project, "consume.py", &python).await;
+        assert_eq!(verified, json!({"verified":true}));
     }
 }

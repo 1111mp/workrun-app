@@ -214,3 +214,28 @@ def test_send_message_rejects_non_finite_json_numbers() -> None:
     finally:
         left.close()
         right.close()
+
+
+@requires_unix_socket
+def test_artifact_request_returns_host_reference() -> None:
+    with tempfile.TemporaryDirectory(prefix="wr-") as directory:
+        endpoint = Path(directory) / "workrun.sock"
+        reference = {"$type": "artifact", "id": "resource", "version": 1}
+        thread, received = serve_once(endpoint, {"type": "artifact.response", "data": reference})
+        with WorkrunClient(str(endpoint), "token", "run") as client:
+            assert client.emit({"type": "artifact.save", "path": "/tmp/report.pdf"}) == reference
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert received[1]["type"] == "artifact.save"
+
+
+@requires_unix_socket
+def test_artifact_request_surfaces_host_denial() -> None:
+    with tempfile.TemporaryDirectory(prefix="wr-") as directory:
+        endpoint = Path(directory) / "workrun.sock"
+        thread, _ = serve_once(endpoint, {"type": "artifact.error", "error": "Resource is not authorized"})
+        with WorkrunClient(str(endpoint), "token", "run") as client:
+            with pytest.raises(WorkrunConnectionError, match="not authorized"):
+                client.emit({"type": "artifact.read", "reference": {"id": "other"}})
+        thread.join(timeout=5)
+        assert not thread.is_alive()

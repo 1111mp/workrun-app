@@ -19,11 +19,6 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupText,
-  InputGroupTextarea,
   Marker,
   MarkerContent,
   MarkerIcon,
@@ -40,7 +35,6 @@ import {
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
 import {
-  ArrowUpIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -50,7 +44,6 @@ import {
   DatabaseIcon,
   Globe2Icon,
   Layers3Icon,
-  RotateCcwIcon,
   TerminalIcon,
 } from 'lucide-react';
 import {
@@ -66,9 +59,17 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
+import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
+import { ArtifactFiles } from '@/components/artifact-files';
+import {
+  RemoteTasksPanel,
+  RemoteTaskRerunButton,
+} from '@/components/remote-tasks';
+import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
+import { artifactReferences } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
 import type {
   WorkflowRunExecution,
@@ -85,6 +86,7 @@ type WorkflowOutputPanelProps = {
   onRunAgain: () => void;
   onClose: () => void;
   isChat?: boolean;
+  fileInputs?: WorkflowInput[];
   onSend?: (initialState: Record<string, unknown>) => void;
   readOnly?: boolean;
   spans?: RunSpan[];
@@ -358,6 +360,7 @@ function StateSection({
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
+        <ArtifactFiles value={value} />
         <pre className='bg-muted/60 max-h-80 overflow-auto border-t px-3 py-2.5 font-mono text-xs leading-5'>
           {JSON.stringify(value, null, 2)}
         </pre>
@@ -1709,6 +1712,7 @@ function LiveWorkflowTaskOutput({
 }: Omit<WorkflowOutputPanelProps, 'run' | 'isRunning' | 'isChat' | 'onSend'>) {
   const { t } = useTranslation();
   const {
+    runId,
     status,
     startedAt,
     endedAt,
@@ -1720,6 +1724,7 @@ function LiveWorkflowTaskOutput({
     thoughtIds,
   } = useWorkflowRunStore(
     useShallow((state) => ({
+      runId: state.projection.runId,
       status: state.projection.status,
       startedAt: state.projection.startedAt,
       endedAt: state.projection.endedAt,
@@ -1844,6 +1849,17 @@ function LiveWorkflowTaskOutput({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 px-4 py-4'>
+                <MessageScrollerItem messageId='remote-tasks'>
+                  <RemoteTasksPanel
+                    key={runId}
+                    runId={runId}
+                    isActive={
+                      status === 'running' ||
+                      (status === 'interrupted' && !error)
+                    }
+                    nodeName={displayNodeName}
+                  />
+                </MessageScrollerItem>
                 {executionIds.length > 0 ? (
                   <MessageScrollerItem
                     messageId='execution-start'
@@ -1980,10 +1996,14 @@ function LiveWorkflowTaskOutput({
       </div>
       <DrawerFooter className='flex-row justify-end'>
         {!readOnly ? (
-          <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
-            <RotateCcwIcon data-icon='inline-start' />
-            {rerunLabel(status, t)}
-          </Button>
+          <RemoteTaskRerunButton
+            key={runId}
+            runId={runId}
+            disabled={isRunning}
+            onRunAgain={onRunAgain}
+            localFailed={status === 'failed' || Boolean(error)}
+            label={rerunLabel(status, t)}
+          />
         ) : null}
         <Button variant='outline' onClick={copyAll}>
           <ClipboardIcon data-icon='inline-start' />
@@ -2005,12 +2025,18 @@ function WorkflowRunOutput({
   onClose,
   isChat = false,
   onSend,
+  fileInputs = [],
   readOnly = false,
   spans = [],
   spansByTurn = {},
 }: WorkflowOutputPanelProps) {
   const { t } = useTranslation();
   const [message, setMessage] = useState('');
+  const [fileValues, setFileValues] = useState<Record<string, unknown>>({});
+  const filesForInput = (key: string) =>
+    key in fileValues
+      ? fileValues[key]
+      : recordValue(run.finalState?.global)?.[key];
   const animatedChatResponseIds = useRef(new Set<string>());
   const [presentedChatResponses, setPresentedChatResponses] = useState<
     Set<string>
@@ -2116,7 +2142,20 @@ function WorkflowRunOutput({
     event.preventDefault();
     const content = message.trim();
     if (!content || readOnly || chatIsBusy || !onSend) return;
-    onSend({ input: content });
+    const attachments: Record<string, unknown> = {};
+    for (const field of fileInputs) {
+      const files = artifactReferences(filesForInput(field.key));
+      if (field.required && files.length === 0) {
+        toast.error(
+          `${field.label}: ${t('workflowEditor.artifacts.required')}`,
+          { toasterId: 'global' },
+        );
+        return;
+      }
+      if (files.length)
+        attachments[field.key] = field.type === 'file' ? files[0] : files;
+    }
+    onSend({ ...attachments, input: content });
     setMessage('');
   };
 
@@ -2176,7 +2215,22 @@ function WorkflowRunOutput({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className='gap-4 p-4'>
+                <MessageScrollerItem messageId='remote-tasks'>
+                  <RemoteTasksPanel
+                    key={run.runId}
+                    runId={run.runId}
+                    isActive={
+                      isRunning || (run.status === 'interrupted' && !run.error)
+                    }
+                    nodeName={displayNodeName}
+                  />
+                </MessageScrollerItem>
                 {!isChat && <RunModelUsage spans={sessionSpans} />}
+                {run.finalState && (
+                  <MessageScrollerItem messageId='run-files'>
+                    <ArtifactFiles value={run.finalState} />
+                  </MessageScrollerItem>
+                )}
                 {!isChat && execution.length > 0 && (
                   <MessageScrollerItem messageId='execution-start'>
                     <div>
@@ -2425,56 +2479,39 @@ function WorkflowRunOutput({
       {isChat ? (
         <DrawerFooter>
           {!readOnly && run.status === 'failed' && (
-            <Button
-              variant='outline'
+            <RemoteTaskRerunButton
+              key={run.runId}
+              runId={run.runId}
               disabled={chatIsBusy}
-              onClick={onRunAgain}
-            >
-              <RotateCcwIcon data-icon='inline-start' />
-              {rerunLabel(run.status, t)}
-            </Button>
+              onRunAgain={onRunAgain}
+              localFailed={run.status === 'failed' || Boolean(run.error)}
+              label={rerunLabel(run.status, t)}
+            />
           )}
-          <form className='w-full' onSubmit={sendMessage}>
-            <InputGroup className='h-auto'>
-              <InputGroupTextarea
-                aria-label={t('workflowEditor.output.message')}
-                disabled={readOnly || chatIsBusy}
-                placeholder={t('workflowEditor.output.messagePlaceholder')}
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-              <InputGroupAddon align='block-end' className='justify-between'>
-                <InputGroupText>
-                  {t('workflowEditor.output.sendHint')}
-                </InputGroupText>
-                <InputGroupButton
-                  disabled={readOnly || !message.trim() || chatIsBusy}
-                  size='icon-sm'
-                  type='submit'
-                  variant='default'
-                >
-                  <ArrowUpIcon />
-                  <span className='sr-only'>
-                    {t('workflowEditor.output.send')}
-                  </span>
-                </InputGroupButton>
-              </InputGroupAddon>
-            </InputGroup>
-          </form>
+          <WorkflowChatComposer
+            key={run.runId}
+            fileInputs={fileInputs}
+            filesForInput={filesForInput}
+            onFileChange={(key, value) =>
+              setFileValues((current) => ({ ...current, [key]: value }))
+            }
+            message={message}
+            onMessageChange={setMessage}
+            disabled={readOnly || chatIsBusy}
+            onSubmit={sendMessage}
+          />
         </DrawerFooter>
       ) : (
         <DrawerFooter className='flex-row justify-end'>
           {!readOnly && (
-            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
-              <RotateCcwIcon data-icon='inline-start' />
-              {rerunLabel(run.status, t)}
-            </Button>
+            <RemoteTaskRerunButton
+              key={run.runId}
+              runId={run.runId}
+              disabled={isRunning}
+              onRunAgain={onRunAgain}
+              localFailed={run.status === 'failed' || Boolean(run.error)}
+              label={rerunLabel(run.status, t)}
+            />
           )}
           <Button variant='outline' disabled={!output} onClick={copyAll}>
             <ClipboardIcon data-icon='inline-start' />

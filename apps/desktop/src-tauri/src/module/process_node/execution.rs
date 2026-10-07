@@ -100,10 +100,12 @@ impl ProcessNodeRegistry {
         on_output: Arc<dyn Fn(PythonOutputChunk) + Send + Sync>,
     ) -> Result<WorkflowProcessNodeRun> {
         let node = Self::installed_node(definition).await?;
+        let input = apply_input_defaults(input, &node.definition.inputs)?;
+        validate_payload(&input, &node.definition.inputs, "input")?;
         let python_version = project_python_version(&node.project_path).await?;
         let sync = PythonRuntime::sync_dependencies(&node.project_path, &python_version).await?;
         let mut ipc = IpcServer::global().create_session().await?;
-        let input = apply_input_defaults(input, &node.definition.inputs)?;
+        ipc.grant_artifacts(&input).await?;
         let input = serde_json::to_vec(&input).context("failed to serialize input for Process Node")?;
         let logs = Arc::new(Mutex::new((String::new(), String::new())));
         let captured_logs = Arc::clone(&logs);
@@ -143,6 +145,13 @@ impl ProcessNodeRegistry {
                 })
         } else {
             Ok(Value::Null)
+        };
+        let result = match result {
+            Ok(value) => match validate_payload(&value, &node.definition.outputs, "output") {
+                Ok(()) => ipc.validate_artifact_result(&value).await.map(|_| value),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
         };
         ipc.close().await;
         let execution = execution?;
@@ -195,6 +204,29 @@ fn apply_input_defaults(input: &Value, schemas: &BTreeMap<String, Value>) -> Res
     Ok(input)
 }
 
+fn validate_payload(value: &Value, fields: &BTreeMap<String, Value>, kind: &str) -> Result<()> {
+    let mut schema = super::tool_definition::object_schema(fields);
+    // Workflow nodes receive a scoped State snapshot, including fields they do
+    // not declare. Validate declared fields without rejecting those siblings.
+    schema["additionalProperties"] = Value::Bool(true);
+    let validator =
+        jsonschema::validator_for(&schema).with_context(|| format!("Process Node {kind} schema is invalid"))?;
+    if let Some(error) = validator.iter_errors(value).next() {
+        // Report the path, never the rejected value: it may contain raw input.
+        if let jsonschema::error::ValidationErrorKind::Required { property } = error.kind() {
+            bail!(
+                "Process Node {kind} is missing required field {property} at {}",
+                error.instance_path()
+            );
+        }
+        bail!(
+            "Process Node {kind} does not match its schema at {}",
+            error.instance_path()
+        );
+    }
+    Ok(())
+}
+
 const MAX_WORKFLOW_LOG_CHARS: usize = 200_000;
 
 fn append_output(current: &mut String, chunk: &str) {
@@ -210,7 +242,7 @@ fn append_output(current: &mut String, chunk: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_WORKFLOW_LOG_CHARS, append_output, apply_input_defaults};
+    use super::{MAX_WORKFLOW_LOG_CHARS, append_output, apply_input_defaults, validate_payload};
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -224,6 +256,55 @@ mod tests {
         let result = apply_input_defaults(&json!({"branch": "release"}), &schemas).unwrap();
 
         assert_eq!(result, json!({"branch": "release", "limit": 250}));
+    }
+
+    #[test]
+    fn validates_declared_fields_without_rejecting_scoped_state_siblings() {
+        let fields = BTreeMap::from([
+            (
+                "document".into(),
+                json!({"type":"object", "required":["$type"], "properties":{"$type":{"const":"artifact"}}}),
+            ),
+            ("label".into(), json!({"type":"string", "x-workrun-optional":true})),
+        ]);
+        assert!(
+            validate_payload(
+                &json!({"document":{"$type":"artifact"}, "question":"extra state"}),
+                &fields,
+                "input"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_payload(&json!({}), &fields, "input")
+                .unwrap_err()
+                .to_string()
+                .contains("document")
+        );
+        let error = validate_payload(&json!({"document":"private-input-value"}), &fields, "input")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("/document"));
+        assert!(!error.contains("private-input-value"));
+        assert!(validate_payload(&json!({"anything":true}), &BTreeMap::new(), "output").is_ok());
+    }
+
+    #[test]
+    fn validates_generated_resource_output_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../../packages/python-sdk/examples/pdf-process/contract.json"
+        ))
+        .unwrap();
+        let fields = serde_json::from_value(contract["outputs"].clone()).unwrap();
+        assert!(validate_payload(&json!({"pageCount":2}), &fields, "output").is_err());
+        assert!(
+            validate_payload(
+                &json!({"pageCount":2,"textPageCount":2,"warnings":[],"report":"/tmp/report.txt","processedPdf":{}}),
+                &fields,
+                "output"
+            )
+            .is_err()
+        );
     }
 
     #[test]

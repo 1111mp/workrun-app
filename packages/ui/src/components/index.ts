@@ -1,7 +1,8 @@
-import { VariantProps } from 'class-variance-authority';
+import type { VariantProps } from 'class-variance-authority';
 
 export * from './alert';
 export * from './alert-dialog';
+export * from './attachment';
 export * from './avatar';
 export * from './badge';
 export * from './breadcrumb';

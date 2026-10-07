@@ -46,18 +46,25 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 
+import { ArtifactFiles } from '@/components/artifact-files';
+import { RemoteTaskStartWarning } from '@/components/remote-tasks';
 import {
   LiveWorkflowTaskOutput,
   WorkflowRunOutput,
 } from '@/components/workflow-output-panel';
+import { artifactReferences, type ArtifactRef } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
 import type { ChatSession } from '@/services/workflow';
 import { useWorkflowRunStore } from '@/stores';
 import { workflowRunView } from '@/stores/workflow-run.store';
 
-type RunValues = Record<string, string | boolean>;
+type RunValues = Record<
+  string,
+  string | boolean | ArtifactRef | ArtifactRef[] | undefined
+>;
 
 type WorkflowRunPanelProps = {
+  workflowId?: string;
   settings: WorkflowSettings;
   nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
@@ -155,13 +162,16 @@ function WorkflowRunForm({
   const submit = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const missing = new Set(
-      inputs.flatMap((input) =>
-        input.required &&
-        input.type !== 'boolean' &&
-        !String(values[input.key] ?? '').trim()
+      inputs.flatMap((input) => {
+        const value = values[input.key];
+        return input.required &&
+          input.type !== 'boolean' &&
+          (input.type === 'file' || input.type === 'files'
+            ? artifactReferences(value).length === 0
+            : !(typeof value === 'string' && value.trim()))
           ? [input.key]
-          : [],
-      ),
+          : [];
+      }),
     );
     if (missing.size > 0) {
       setErrors(missing);
@@ -172,7 +182,12 @@ function WorkflowRunForm({
       inputs.flatMap((input) => {
         const value = values[input.key];
         if (input.type === 'boolean') return [[input.key, value === true]];
-        if (value === undefined || value === '') return [];
+        if (
+          value === undefined ||
+          value === '' ||
+          (Array.isArray(value) && value.length === 0)
+        )
+          return [];
         return [[input.key, input.type === 'number' ? Number(value) : value]];
       }),
     );
@@ -194,7 +209,19 @@ function WorkflowRunForm({
                 {input.description && (
                   <FieldDescription>{input.description}</FieldDescription>
                 )}
-                {input.type === 'textarea' ? (
+                {input.type === 'file' || input.type === 'files' ? (
+                  <ArtifactFiles
+                    value={value}
+                    multiple={input.type === 'files'}
+                    disabled={isRunning}
+                    onChange={(value) =>
+                      setValues((current) => ({
+                        ...current,
+                        [input.key]: value,
+                      }))
+                    }
+                  />
+                ) : input.type === 'textarea' ? (
                   <Textarea
                     id={`run-input-${input.id}`}
                     aria-invalid={invalid || undefined}
@@ -263,6 +290,7 @@ function WorkflowRunForm({
 }
 
 function WorkflowRunPanel({
+  workflowId,
   settings,
   nodes,
   onRun,
@@ -513,11 +541,20 @@ function WorkflowRunPanel({
                   {t('workflowEditor.settings.contextCompressionFallback')}
                 </p>
               ) : null}
+              {!readOnly && (
+                <RemoteTaskStartWarning
+                  workflowId={workflowId}
+                  onReview={() => onOpenChange(false)}
+                />
+              )}
               <WorkflowRunOutput
                 run={run!}
                 workflowNodes={nodes}
                 isRunning={isRunning}
                 isChat
+                fileInputs={settings.inputSchema.fields.filter(
+                  (field) => field.type === 'file' || field.type === 'files',
+                )}
                 readOnly={readOnly}
                 onRunAgain={runAgain}
                 onSend={onRun}
@@ -558,6 +595,10 @@ function WorkflowRunPanel({
                   {t('workflowEditor.testRunDescription')}
                 </DrawerDescription>
               </DrawerHeader>
+              <RemoteTaskStartWarning
+                workflowId={workflowId}
+                onReview={() => onOpenChange(false)}
+              />
               <WorkflowRunForm
                 key={formKey}
                 settings={settings}

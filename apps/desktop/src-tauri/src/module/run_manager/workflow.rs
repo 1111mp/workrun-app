@@ -72,6 +72,18 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
             )?;
         }
     }
+    if let Some(schema) = request.dsl.get("inputSchema") {
+        crate::module::artifact::validate_input(schema, &request.initial_state)?;
+    }
+    let store = crate::module::artifact::ArtifactStore::active()?;
+    let references = crate::module::artifact::references(&request.initial_state)?;
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        for reference in references {
+            store.resolve(&reference)?;
+        }
+        Ok(())
+    })
+    .await??;
     // Persist the immutable Team App coordinates separately from the executable
     // local IDs. Replay and cache cleanup must not infer these from a mutable catalog.
     let release_or_draft = request
@@ -733,7 +745,12 @@ pub async fn cancel_waiting_workflow(run_id: &str) -> Result<()> {
         }),
     )
     .await?;
-    finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await
+    let finished = finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await;
+    let cancelled_run_id = run_id.to_string();
+    tokio::spawn(async move {
+        let _ = workflow_module::cancel_remote_tasks_for_run(&cancelled_run_id).await;
+    });
+    finished
 }
 
 pub(super) fn workflow_session_from_runtime(runtime: &Value) -> Result<WorkflowSession> {

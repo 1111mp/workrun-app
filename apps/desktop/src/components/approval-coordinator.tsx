@@ -26,6 +26,8 @@ import { useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 import { toast } from 'sonner';
 
+import { ArtifactFiles } from '@/components/artifact-files';
+import { humanReviewAttachments } from '@/services/human-review';
 import {
   claimNextPendingAction,
   releasePendingAction,
@@ -193,6 +195,7 @@ function HumanReviewDialog({
   const contentKey =
     typeof payload.contentKey === 'string' ? payload.contentKey : undefined;
   const content = payload.content;
+  const attachments = humanReviewAttachments(payload);
   const editable = payload.editable === true;
   const [edit, setEdit] = useState<string>();
   const canEdit = editable && contentKey && typeof content === 'string';
@@ -228,35 +231,47 @@ function HumanReviewDialog({
           </div>
         </AlertDialogHeader>
         <div className='max-h-[calc(80vh-14rem)] min-h-0 overflow-y-auto px-7 py-6'>
-          <section className='bg-muted/15 rounded-xl border p-5'>
-            <div className='mb-4 flex items-center gap-2'>
-              <span className='flex size-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'>
-                <ShieldCheckIcon className='size-3.5' />
-              </span>
-              <h2 className='text-sm font-medium'>
-                {t('approval.review.content')}
+          {content != null && (
+            <section className='bg-muted/15 rounded-xl border p-5'>
+              <div className='mb-4 flex items-center gap-2'>
+                <span className='flex size-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'>
+                  <ShieldCheckIcon className='size-3.5' />
+                </span>
+                <h2 className='text-sm font-medium'>
+                  {t('approval.review.content')}
+                </h2>
+                {contentKey ? (
+                  <code className='bg-background rounded-md border px-1.5 py-0.5 text-xs'>
+                    {contentKey}
+                  </code>
+                ) : null}
+              </div>
+              {canEdit ? (
+                <Textarea
+                  className='min-h-72 font-mono text-sm leading-6'
+                  value={edit ?? content}
+                  onChange={(event) => setEdit(event.target.value)}
+                />
+              ) : typeof content === 'string' ? (
+                <ReviewMarkdown content={content} />
+              ) : (
+                <pre className='bg-background max-h-[calc(80vh-18rem)] overflow-auto rounded-lg border p-4 font-mono text-xs leading-5'>
+                  {JSON.stringify(content ?? null, null, 2)}
+                </pre>
+              )}
+            </section>
+          )}
+          {attachments.length > 0 && (
+            <section className='bg-muted/15 mt-4 rounded-xl border p-5'>
+              <h2 className='mb-4 text-sm font-medium'>
+                {t('approval.review.attachments')}
               </h2>
-              {contentKey ? (
-                <code className='bg-background rounded-md border px-1.5 py-0.5 text-xs'>
-                  {contentKey}
-                </code>
-              ) : null}
-            </div>
-            {canEdit ? (
-              <Textarea
-                className='min-h-72 font-mono text-sm leading-6'
-                value={edit ?? content}
-                onChange={(event) => setEdit(event.target.value)}
-              />
-            ) : typeof content === 'string' ? (
-              <ReviewMarkdown content={content} />
-            ) : (
-              <pre className='bg-background max-h-[calc(80vh-18rem)] overflow-auto rounded-lg border p-4 font-mono text-xs leading-5'>
-                {JSON.stringify(content ?? null, null, 2)}
-              </pre>
-            )}
-          </section>
-          {payload.context && typeof payload.context === 'object' ? (
+              <ArtifactFiles value={attachments} modalPreview />
+            </section>
+          )}
+          {payload.context &&
+          typeof payload.context === 'object' &&
+          Object.keys(payload.context).length > 0 ? (
             <section className='bg-muted/15 mt-4 rounded-xl border p-5'>
               <div className='mb-4 flex items-center gap-2'>
                 <Badge variant='secondary'>
@@ -492,6 +507,7 @@ function ApprovalCoordinator() {
 
   return action ? (
     <PendingActionDialog
+      key={action.id}
       action={action}
       submitting={submitting}
       onClose={close}

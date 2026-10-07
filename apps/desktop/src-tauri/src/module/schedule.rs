@@ -601,6 +601,9 @@ fn validate_scheduled_input(definition: &Value, input: &Value) -> Result<()> {
             .get("settings")
             .and_then(|settings| settings.get("inputSchema"))
     });
+    if let Some(schema) = schema {
+        crate::module::artifact::validate_input(schema, input)?;
+    }
     let Some(fields) = schema.and_then(|schema| schema.get("fields")).and_then(Value::as_array) else {
         return Ok(());
     };

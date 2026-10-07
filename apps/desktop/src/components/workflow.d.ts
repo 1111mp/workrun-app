@@ -19,7 +19,13 @@ type WorkflowNodeType =
 
 type WorkflowMode = 'task' | 'chat';
 
-type WorkflowInputType = 'string' | 'textarea' | 'number' | 'boolean';
+type WorkflowInputType =
+  | 'string'
+  | 'textarea'
+  | 'number'
+  | 'boolean'
+  | 'file'
+  | 'files';
 
 /** A parameter accepted by one workflow run. Values are never stored here. */
 type WorkflowInput = {
@@ -82,6 +88,8 @@ type WorkflowSettings = {
 type WorkflowAgentNodeData = WorkflowNodeStateConfig & {
   name: string;
   modelProfileId: string;
+  /** Dot-separated paths in this node’s visible State, injected as model attachments. */
+  attachmentPaths?: string[];
   description: string;
   instruction: string;
   /** Optional state key that receives the agent's complete final text. */
@@ -136,6 +144,9 @@ type WorkflowCodeActAgentNode = WorkflowBaseNode & {
 
 // ---------- Remote Agent Node ----------
 type WorkflowRemoteAgentNodeData = WorkflowNodeStateConfig & {
+  authentication?: import('@/services/remote-agent').RemoteAuthentication;
+  attachmentPaths?: string[];
+  timeoutSeconds?: number;
   name: string;
   url: string;
   description: string;
@@ -250,6 +261,8 @@ type WorkflowHumanReviewNodeData = WorkflowNodeStateConfig & {
   editable?: boolean;
   /** Additional read-only state values shown with the review content. */
   contextKeys?: string[];
+  /** Visible flat State paths selecting additional files for the reviewer. */
+  attachmentPaths?: string[];
 };
 type WorkflowHumanReviewNode = WorkflowBaseNode & {
   type: 'human_review';
