@@ -189,4 +189,4 @@ For further investigation, see [Runs, debugging, and traces](/quality/runs-and-t
 
 ## How this differs from Remote Agents
 
-App compensation runs your cleanup code for successful calls when a workflow fails; user Stop does not trigger automatic App compensation. Remote Agents use standard A2A queries and cancellation after workflow failure or Stop to handle unfinished tasks, without automatically undoing completed business work. Both show progress in node messages. See [Remote Agents and A2A task handling](/guides/remote-agents/).
+App compensation runs your cleanup code for successful calls when a workflow fails; user Stop does not trigger automatic App compensation. Remote Agents send one best-effort standard A2A cancellation request after workflow failure or Stop for unfinished tasks with a known task ID. They do not poll, retry cancellation, or automatically undo completed business work. Both show progress in node messages. See [Remote Agents and A2A task handling](/guides/remote-agents/).

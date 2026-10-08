@@ -29,7 +29,7 @@ Before a run, Workrun validates graph structure and routing. For example, a work
 | `If/Else`, `Switch`                 | Chooses the next path from conditions in state.                                                                                                                                |
 | `Human Review`, `Ask User Question` | Pauses for a person to review or choose an option before continuing.                                                                                                           |
 | `Subworkflow`                       | Calls a saved workflow, so complex flows can be composed from smaller units.                                                                                                   |
-| `Remote Agent`                      | Calls a remote Agent over A2A; [automatically checks and cancels unfinished tasks](/guides/remote-agents/).                                                                    |
+| `Remote Agent`                      | Calls a remote Agent over A2A; [attempts one cancellation after failure or Stop](/guides/remote-agents/).                                                                      |
 | `Terminate`, `End`                  | Ends the current path; `Terminate` can end the whole workflow run.                                                                                                             |
 | `Group`                             | Organizes the canvas only; it never executes.                                                                                                                                  |
 

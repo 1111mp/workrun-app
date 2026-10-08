@@ -1,11 +1,11 @@
 ---
 title: Remote Agents and A2A task handling
-description: Connect a Remote Agent and understand automatic task queries, cancellation, unknown results, and restart behavior.
+description: Connect a Remote Agent and understand best-effort cancellation after workflow failure or Stop.
 ---
 
 A Remote Agent node calls an external Agent through A2A. Workrun runs the workflow locally; the external service owns its remote task. A workflow can fail while that task is still running, or after it has already completed.
 
-Workrun automatically checks unfinished remote tasks after workflow failure or user Stop. No execution-time confirmation is required. Progress appears in the corresponding node’s messages, while the original workflow error remains visible.
+After workflow failure or user Stop, Workrun automatically sends one best-effort cancellation request for remote tasks with a known task ID and a nonterminal local status. No execution-time confirmation is required. The request and returned status appear in the corresponding node’s messages, while the original workflow error remains visible.
 
 ## Configure a Remote Agent
 
@@ -31,40 +31,35 @@ Saved successful operation results can be reused when the same logical operation
 
 ## After workflow failure or Stop
 
-Workrun stops subsequent local scheduling and persists automatic handling for unfinished original remote calls, including calls in parallel branches. It queries the remote task first:
+Workrun stops subsequent local scheduling and uses the saved remote records to identify unfinished original calls, including calls in parallel branches. It sends `CancelTask` directly, without a preliminary status query:
 
-| Remote situation                                               | Automatic handling                                                               |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Submitted, working, awaiting input, or awaiting authentication | Attempt cancellation once; retain the returned status                            |
-| Completed                                                      | Fetch and save the result; do not cancel                                         |
-| Failed, canceled, or rejected                                  | Record the terminal state                                                        |
-| Query fails or cancellation response is lost                   | Keep the result unconfirmed; query again later                                   |
-| No task ID was received                                        | Keep submission unknown; do not automatically resubmit                           |
-| Task is not found                                              | Show the unconfirmed outcome; absence is not proof that no side effects occurred |
+| Saved local situation                                                               | Automatic handling                                        |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Task ID available; submitted, working, awaiting input or authentication, or unknown | Send one cancellation request; show the returned status   |
+| Completed, failed, canceled, or rejected                                            | Skip cancellation                                         |
+| No task ID was received                                                             | Show submission unknown; do not cancel or resubmit        |
+| Cancellation request fails or times out                                             | Show cancellation unconfirmed; do not automatically retry |
 
-A cancellation request is not proof of cancellation. If the service reports that the task is still working, Workrun continues querying. Failed or nonterminal checks are scheduled again at approximately 30-second intervals while the application is open. Other pending remote tasks can still be processed.
+A cancellation request is not proof of cancellation. The service may return a task that is still working, or report that it finished before cancellation arrived. Workrun displays that response without polling for a later state. One request failure does not prevent cancellation of independent calls.
 
 ## Read the node messages
 
 For example, one parallel branch fails while a Remote Agent is working:
 
 ```text
-Remote task: Checking task status…
-Remote task: Cancellation requested; awaiting confirmation
+Remote task: Requesting cancellation…
 Remote task: Canceled
 ```
 
-If the remote task finished before the query, the message instead shows **Completed; result saved**. The workflow still retains its original failure; remote completion does not make the whole workflow successful.
+If the request fails or times out, the message shows **Cancellation unconfirmed: request failed or timed out; no automatic retry**. The workflow retains its original failure; the remote response does not make the whole workflow successful.
 
-While termination is pending, same-task continuation is blocked to avoid racing recovery against cancellation. Once cancellation has been attempted, automatic forward recovery is suppressed. **Run again** creates a new business execution; check unknown outcomes before deliberately repeating work that may already have taken effect. See [Runs, debugging, and traces](/quality/runs-and-traces/).
+Cancellation messages do not add a same-task continuation restriction or suppress existing recovery behavior. Other recovery checks and App compensation can still restrict continuation independently. **Run again** creates a new business execution. See [Runs, debugging, and traces](/quality/runs-and-traces/).
 
 ## Exit and restart
 
-Pending task handling and cancellation intent are stored locally. Exiting Workrun pauses local handling; reopening it resumes outstanding checks. This does not stop the remote service, which may continue its task while Workrun is closed, and it does not provide a local background process.
+Cancellation messages and remote task records are stored locally. If Workrun exits before a cancellation request completes, the remote task may continue running. Reopening Workrun does not resume this cancellation, poll for its outcome, or send another cancellation request.
 
-Application-exit interruption is treated separately from explicit Stop or workflow failure. Interrupted runs retain the existing recovery path rather than automatically receiving cancellation. Automatic failure/Stop handling applies to tasks created with this capability; upgrading does not retrospectively cancel old failed runs.
-
-Workrun saves the cancellation-attempt marker before sending the request. If it exits between those actions, the remote task may continue running. After restart, the current implementation only queries and does not send another cancellation attempt.
+Application exit alone does not trigger `CancelTask`. Interrupted runs retain their existing recovery path, separately from best-effort cancellation after failure or Stop. Current cancellation handling does not scan historical failed tasks on startup.
 
 ## A2A protocol versus Workrun policy
 

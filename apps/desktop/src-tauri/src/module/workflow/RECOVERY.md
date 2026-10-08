@@ -233,25 +233,17 @@ Without eligible calls, existing recovery behavior remains available. App
 cleanup events stay on their original node messages without changing failure.
 
 
-## Automatic A2A termination
+## Best-effort A2A cancellation
 
-New workflow tasks persist `remoteLifecycleVersion: 1`. On workflow failure or
-user Stop, the supervisor discovers unfinished original remote calls and saves
-termination intent in `remote_task_lifecycle`; no runtime approval is required.
-Legacy failed tasks and application-exit interruptions are not automatically
-cancelled. Exit interruptions retain the existing forward recovery behavior.
+When a workflow fails or the user stops it, Workrun sends one CancelTask request
+for each original remote call with a task ID whose local status is nonterminal.
+Known terminal calls, compensation operations and calls confirmed to have no
+effects are skipped. There is no preliminary GetTask, automatic polling,
+cancellation retry, startup cancellation worker or continuation fence.
 
-The worker queries GetTask first. Completed tasks have their result fetched and
-saved for reuse; failed/canceled/rejected tasks remain terminal. Running,
-input-required and auth-required tasks receive one CancelTask attempt. The
-cancel-attempt fence commits before network dispatch, so a timeout or restart
-continues with GetTask only. A crash between that commit and sending CancelTask
-can leave the remote task running; the worker continues observing it without
-sending another cancellation. Cancellation is best effort, not business undo.
-
-Missing task IDs remain unknown and are never resubmitted. Failed queries retry
-at 30-second intervals while Workrun is open; no background process is added.
-Pending confirmation fences same-task continuation. Once cancellation has been
-attempted, automatic forward recovery is suppressed. Node messages persist the
-latest observed state without changing the original workflow error or answer.
-A task-not-found response is shown as unconfirmed, not as proof of no effects.
+Node messages persist the request and returned state. A timeout or error is shown
+as cancellation unconfirmed; it never implies the remote task has stopped. A
+submission without a task ID is shown as unknown and is never resubmitted. A
+failed cancellation does not prevent independent calls from receiving theirs.
+Application exit can interrupt this best-effort request; it is not retried on
+restart. Existing business recovery remains separate from this cancellation.

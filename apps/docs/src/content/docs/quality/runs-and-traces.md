@@ -83,9 +83,9 @@ For state boundaries, redaction, and checkpoints, see [Workflows and state](/con
 
 ## Remote Agents: distinguish local Stop from remote completion
 
-After workflow failure or user Stop, Workrun automatically queries unfinished remote tasks and attempts to cancel tasks still in progress, without runtime confirmation. Node messages show checks, cancellation, and observed status without replacing the original error. Completed tasks retain their results; submissions that timed out without a task ID remain unknown and are not automatically resubmitted.
+After workflow failure or user Stop, Workrun sends one best-effort `CancelTask` request for unfinished remote calls with a known task ID, without runtime confirmation. Node messages show the request and returned status without replacing the original error. Known terminal tasks are skipped; submissions without a task ID remain unknown and are not automatically resubmitted.
 
-Pending confirmation blocks same-task continuation, and a cancellation attempt suppresses automatic forward recovery. Local checks pause on exit and resume on restart; an interruption caused only by application exit retains the existing recovery path. Remote cancellation does not promise business undo. See [Remote Agents and A2A task handling](/guides/remote-agents/).
+A failed or timed-out cancellation is shown as unconfirmed. There is no preliminary query, automatic polling, cancellation retry, startup continuation of cancellation, or continuation restriction added by cancellation. Application-exit interruptions retain their existing recovery path. Remote cancellation does not promise business undo. See [Remote Agents and A2A task handling](/guides/remote-agents/).
 
 ## After App compensation, fix the problem and run again
 

@@ -31,7 +31,7 @@ Workrun 是本地优先的 AI 自动化工作台。它解决的不只是「如�
 | `If/Else`、`Switch`                 | 根据状态中的条件选择后续路径。                                                                           |
 | `Human Review`、`Ask User Question` | 暂停运行，等待人工审核或用户选择后继续。                                                                 |
 | `Subworkflow`                       | 调用已保存的工作流，将复杂流程拆成可组合单元。                                                           |
-| `Remote Agent`                      | 通过 A2A 调用远程 Agent；[自动查询与取消未结束任务](/zh-cn/guides/remote-agents/)。                      |
+| `Remote Agent`                      | 通过 A2A 调用远程 Agent；[失败或停止后尝试一次取消](/zh-cn/guides/remote-agents/)。                      |
 | `Terminate`、`End`                  | 结束当前流程；`Terminate` 可终止整次工作流执行。                                                         |
 | `Group`                             | 仅用于画布布局，不参与执行。                                                                             |
 

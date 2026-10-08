@@ -399,8 +399,7 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
             .await?;
     }
     if matches!(status, RunStatus::Failed | RunStatus::Cancelled) {
-        workflow_module::remote_lifecycle::enqueue(&pool).await?;
-        RunManager::global().supervisor.notify();
+        workflow_module::remote_lifecycle::cancel_for_run(run_id);
     }
     if matches!(status, RunStatus::Failed) {
         let journaled: bool =

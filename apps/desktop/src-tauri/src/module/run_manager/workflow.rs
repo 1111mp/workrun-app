@@ -97,7 +97,6 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
         "kind": "workflow",
         "compensationJournalVersion": 1,
         "processCleanupVersion": 1,
-        "remoteLifecycleVersion": 1,
         "executionId": request.run_id,
         "dsl": request.dsl,
         "threadId": request.thread_id,

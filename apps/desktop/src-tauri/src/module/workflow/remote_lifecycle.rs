@@ -1,176 +1,91 @@
-//! Standard A2A termination: query first, cancel once, then confirm by querying.
+//! One best-effort A2A cancellation when a workflow fails or is stopped.
 use super::{RemoteTaskOperation, remote_tasks};
 use anyhow::Result;
 use serde_json::{Value, json};
-use sqlx::{Row, SqlitePool};
-use std::sync::atomic::{AtomicBool, Ordering};
+use sqlx::SqlitePool;
 
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-struct ActiveGuard;
-impl Drop for ActiveGuard {
-    fn drop(&mut self) {
-        ACTIVE.store(false, Ordering::Release);
-    }
-}
-
-/// Discover after terminal commit too, closing the crash window before enqueue.
-/// Never retrospectively cancel legacy runs or tasks interrupted by app exit.
-pub(crate) async fn enqueue(pool: &SqlitePool) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT OR IGNORE INTO remote_task_lifecycle (remote_record_id,run_id,next_check_at,updated_at) SELECT DISTINCT t.id,r.id,?,? FROM remote_tasks t JOIN run_records r ON (r.id=t.run_id OR EXISTS(SELECT 1 FROM workflow_operations o JOIN workflow_operation_attempts a ON a.operation_id=o.id WHERE o.adapter_record_id=t.id AND a.run_id=r.id)) WHERE r.target_type='workflow' AND r.status IN ('failed','cancelled') AND json_extract(r.runtime_json,'$.remoteLifecycleVersion')=1 AND json_extract(r.runtime_json,'$.evaluationProfile') IS NULL AND (t.status IN ('unknown','submitted','working','input_required','auth_required') OR (t.status='completed' AND t.result_json IS NULL)) AND NOT EXISTS(SELECT 1 FROM workflow_operations o WHERE o.adapter_record_id=t.id AND (o.purpose='compensation' OR o.confirmed_no_effect=1)) AND NOT EXISTS(SELECT 1 FROM workflow_operation_reviews v WHERE v.remote_record_id=t.id AND v.decision='no_effect') AND NOT EXISTS(SELECT 1 FROM workflow_operations o JOIN workflow_operation_attempts a ON a.operation_id=o.id JOIN run_records active ON active.id=a.run_id WHERE o.adapter_record_id=t.id AND active.status IN ('queued','running','waiting_for_input'))")
-        .bind(&now).bind(&now).execute(pool).await?;
-    Ok(())
-}
-
-pub(crate) async fn dispatch() -> Result<()> {
-    let pool = crate::core::db::DBManager::global().pool()?;
-    enqueue(&pool).await?;
-    if ACTIVE.swap(true, Ordering::AcqRel) {
-        return Ok(());
-    }
+pub(crate) fn cancel_for_run(run_id: &str) {
+    let run_id = run_id.to_owned();
     tokio::spawn(async move {
-        let _guard = ActiveGuard;
         let result = async {
+            let pool = crate::core::db::DBManager::global().pool()?;
             let config = crate::config::BaseConfig::workrun().await.data_arc();
-            process_next(&pool, |id, action| {
-                let config = config.clone();
-                async move { super::remote_agent::remote_task_operation(&id, action, &config).await }
-            })
-            .await
+            cancel_in_pool(&pool, &run_id, |id| {
+                    let config = config.clone();
+                    async move {
+                        super::remote_agent::remote_task_operation(&id, RemoteTaskOperation::Cancel, &config).await
+                    }
+                })
+                .await
         }
         .await;
         if let Err(error) = result {
-            log::warn!("remote task lifecycle: {error:#}");
+            log::warn!("remote task cancellation: {error:#}");
         }
     });
-    Ok(())
 }
 
-async fn process_next<F, Fut>(pool: &SqlitePool, mut call: F) -> Result<()>
+async fn cancel_in_pool<F, Fut>(pool: &SqlitePool, run: &str, mut cancel: F) -> Result<()>
 where
-    F: FnMut(String, RemoteTaskOperation) -> Fut,
+    F: FnMut(String) -> Fut,
     Fut: std::future::Future<Output = Result<remote_tasks::RemoteTaskRecord>>,
 {
-    let now = chrono::Utc::now();
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let row = sqlx::query("SELECT l.*,t.node_id,t.task_id,t.status AS remote_status FROM remote_task_lifecycle l JOIN remote_tasks t ON t.id=l.remote_record_id JOIN run_records r ON r.id=l.run_id WHERE l.status='pending' AND l.next_check_at<=? AND r.status IN ('failed','cancelled') ORDER BY l.next_check_at,l.remote_record_id LIMIT 1")
-        .bind(now.to_rfc3339()).fetch_optional(&mut *tx).await?;
-    let Some(row) = row else {
-        tx.commit().await?;
+    let eligible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_records WHERE id=? AND target_type='workflow' AND status IN ('failed','cancelled') AND json_extract(runtime_json,'$.evaluationProfile') IS NULL)")
+        .bind(run).fetch_one(pool).await?;
+    if !eligible {
         return Ok(());
-    };
-    let id: String = row.get("remote_record_id");
-    let run: String = row.get("run_id");
-    let node: String = row.get("node_id");
-    let cancel_attempted: bool = row.get("cancel_attempted");
-    // Lease the network work without keeping a SQLite write transaction open.
-    sqlx::query("UPDATE remote_task_lifecycle SET next_check_at=? WHERE remote_record_id=?")
-        .bind((now + chrono::Duration::seconds(60)).to_rfc3339())
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    if row.get::<Option<String>, _>("task_id").is_none() {
-        sqlx::query("UPDATE run_recovery_jobs SET status='blocked',last_error='Remote submission result unknown: no task ID; automatic resubmission disabled',updated_at=? WHERE run_id=? AND status='pending'")
-            .bind(chrono::Utc::now().to_rfc3339()).bind(&run).execute(pool).await?;
-        return message(pool, &run, &node, &id, "unknown", "blocked").await;
     }
-    message(pool, &run, &node, &id, "querying", "pending").await?;
-    let result = async {
-        let mut record = call(id.clone(), RemoteTaskOperation::Query).await?;
-        if matches!(
+    for record in remote_tasks::list_remote_tasks(pool, run).await? {
+        if !matches!(
             record.status.as_str(),
             "unknown" | "submitted" | "working" | "input_required" | "auth_required"
-        ) && !cancel_attempted
+        ) {
+            continue;
+        }
+        let excluded: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_operations WHERE adapter_record_id=? AND (purpose='compensation' OR confirmed_no_effect=1)) OR EXISTS(SELECT 1 FROM workflow_operation_reviews WHERE remote_record_id=? AND decision='no_effect')")
+            .bind(&record.id).bind(&record.id).fetch_one(pool).await?;
+        if excluded {
+            continue;
+        }
+        // The persisted start message also prevents duplicate finish callbacks
+        // from issuing another cancellation. No scheduler resumes this on exit.
+        if !message(
+            pool,
+            run,
+            &record.node_id,
+            &record.id,
+            if record.task_id.is_some() {
+                "cancel_requested"
+            } else {
+                "unknown"
+            },
+        )
+        .await?
         {
-            // Commit BEFORE network dispatch. Lost responses must never cause
-            // automatic repeated cancellation; subsequent ticks only GetTask.
-            sqlx::query("UPDATE remote_task_lifecycle SET cancel_attempted=1 WHERE remote_record_id=?")
-                .bind(&id)
-                .execute(pool)
-                .await?;
-            sqlx::query("UPDATE run_recovery_jobs SET status='blocked',last_error='Remote task termination has started; automatic forward recovery is disabled',updated_at=? WHERE run_id=? AND status='pending'")
-                .bind(chrono::Utc::now().to_rfc3339()).bind(&run).execute(pool).await?;
-            message(pool, &run, &node, &id, "cancel_requested", "pending").await?;
-            record = call(id.clone(), RemoteTaskOperation::Cancel).await?;
+            continue;
         }
-        if record.status == "completed" {
-            record = call(id.clone(), RemoteTaskOperation::Fetch).await?;
-            save_completed(pool, &run, &record).await?;
+        if record.task_id.is_none() {
+            continue;
         }
-        Ok::<_, anyhow::Error>(record)
+        let status = match cancel(record.id.clone()).await {
+            Ok(updated) => updated.status,
+            // Hide credential-bearing server errors; timeout is not cancellation.
+            Err(_) => "awaiting_confirmation".to_owned(),
+        };
+        message(pool, run, &record.node_id, &record.id, &status).await?;
     }
-    .await;
-    match result {
-        Ok(record) => {
-            let terminal = matches!(
-                record.status.as_str(),
-                "completed" | "failed" | "canceled" | "rejected" | "not_found"
-            );
-            message(
-                pool,
-                &run,
-                &node,
-                &id,
-                &record.status,
-                if terminal { "done" } else { "pending" },
-            )
-            .await?;
-        },
-        // Do not put endpoint or credential-bearing server errors in public events.
-        Err(_) => message(pool, &run, &node, &id, "awaiting_confirmation", "pending").await?,
-    }
-    sqlx::query("UPDATE remote_task_lifecycle SET next_check_at=? WHERE remote_record_id=? AND status='pending'")
-        .bind((chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc3339())
-        .bind(&id)
-        .execute(pool)
-        .await?;
     Ok(())
 }
 
-async fn save_completed(pool: &SqlitePool, run: &str, record: &remote_tasks::RemoteTaskRecord) -> Result<()> {
-    let Some(mut result) = record.result.clone() else {
-        anyhow::bail!("Completed remote result unavailable");
-    };
-    result["remoteTaskId"] = json!(record.task_id);
-    result["messages"] = json!([{"role":"assistant","content":result["response"]}]);
+async fn message(pool: &SqlitePool, run: &str, node: &str, id: &str, status: &str) -> Result<bool> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let operation: Option<String> = sqlx::query_scalar("SELECT id FROM workflow_operations WHERE adapter_record_id=? AND purpose='execution' AND status!='running' AND result_json IS NULL")
-        .bind(&record.id).fetch_optional(&mut *tx).await?;
-    if let Some(operation) = operation {
-        let key = crate::utils::dirs::get_encryption_key()?;
-        super::saga::capture_outcome(&mut tx, &key, &operation, &result).await?;
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("UPDATE workflow_operations SET status='succeeded',result_json=?,updated_at=? WHERE id=?")
-            .bind(result.to_string())
-            .bind(&now)
-            .bind(&operation)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO workflow_operation_attempts (id,operation_id,run_id,sequence,action,status,started_at,ended_at) SELECT ?,?,?,COALESCE(MAX(sequence),0)+1,'reconcile','succeeded',?,? FROM workflow_operation_attempts WHERE operation_id=?")
-            .bind(uuid::Uuid::new_v4().to_string()).bind(&operation).bind(run).bind(&now).bind(&now).bind(&operation).execute(&mut *tx).await?;
-    }
-    tx.commit().await?;
-    Ok(())
-}
-
-async fn message(pool: &SqlitePool, run: &str, node: &str, id: &str, status: &str, job_status: &str) -> Result<()> {
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let previous: Option<String> =
-        sqlx::query_scalar("SELECT last_message FROM remote_task_lifecycle WHERE remote_record_id=?")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
-    sqlx::query("UPDATE remote_task_lifecycle SET status=?,last_message=?,updated_at=? WHERE remote_record_id=?")
-        .bind(job_status)
-        .bind(status)
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    if previous.as_deref() == Some(status) {
-        tx.commit().await?;
-        return Ok(());
+    if matches!(status, "cancel_requested" | "unknown") {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_events WHERE run_id=? AND json_extract(event_json,'$.event_type')='remote.lifecycle' AND json_extract(event_json,'$.data.remoteRecordId')=?)")
+            .bind(run).bind(id).fetch_one(&mut *tx).await?;
+        if exists {
+            tx.commit().await?;
+            return Ok(false);
+        }
     }
     let path: Option<String> =
         sqlx::query_scalar("SELECT execution_path FROM workflow_operations WHERE adapter_record_id=?")
@@ -213,7 +128,7 @@ async fn message(pool: &SqlitePool, run: &str, node: &str, id: &str, status: &st
         .await?;
     tx.commit().await?;
     crate::module::run_manager::emit_cleanup_event(run, sequence, event);
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -221,90 +136,58 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    async fn fixture(task: bool, status: &str) -> (SqlitePool, String) {
+    async fn fixture(status: &str) -> SqlitePool {
         let pool = remote_tasks::test_pool().await;
         sqlx::query("CREATE TABLE run_events (run_id TEXT,sequence INTEGER,event_json TEXT,created_at TEXT,PRIMARY KEY(run_id,sequence))").execute(&pool).await.unwrap();
-        sqlx::query("UPDATE run_records SET status=?,runtime_json='{\"remoteLifecycleVersion\":1}' WHERE id='run-1'")
+        sqlx::query("UPDATE run_records SET status=? WHERE id='run-1'")
             .bind(status)
             .execute(&pool)
             .await
             .unwrap();
-        let mut tracker = remote_tasks::RemoteTaskTracker::begin(
-            pool.clone(),
-            vec![42; 32],
-            "run-1",
-            "remote",
-            "message",
-            remote_tasks::RemoteConnection {
-                service_url: "https://agent.example".into(),
-                endpoint: "https://agent.example/rpc".into(),
-                tenant: None,
-                authentication: None,
-                task_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        if task {
-            tracker
-                .observe(Some("task-1"), Some("TASK_STATE_WORKING"), Some("task-1".into()))
-                .await
-                .unwrap();
+        for (id, remote_status, task) in [
+            ("working", "working", Some("task-1")),
+            ("no-id", "unknown", None),
+            ("completed", "completed", Some("task-2")),
+            ("failed", "failed", Some("task-3")),
+            ("input", "input_required", Some("task-4")),
+        ] {
+            sqlx::query("INSERT INTO remote_tasks (id,run_id,node_id,message_id,service_origin,connection_ciphertext,task_id,status,created_at,updated_at) VALUES (?,'run-1','remote',?,'https://agent.example','private',?,?,?,?)")
+                .bind(id).bind(id).bind(task).bind(remote_status).bind(id).bind(id).execute(&pool).await.unwrap();
         }
-        let id = tracker.id.clone();
-        drop(tracker);
-        tokio::task::yield_now().await;
-        (pool, id)
-    }
-
-    async fn due(pool: &SqlitePool) {
-        sqlx::query("UPDATE remote_task_lifecycle SET next_check_at='2000-01-01T00:00:00Z'")
-            .execute(pool)
-            .await
-            .unwrap();
+        pool
     }
 
     #[tokio::test]
-    async fn cancellation_response_loss_only_queries_after_restart() {
-        let (pool, id) = fixture(true, "failed").await;
-        enqueue(&pool).await.unwrap();
+    async fn cancels_once_without_querying_and_skips_terminal_or_missing_identity() {
+        let pool = fixture("failed").await;
         let calls = Arc::new(Mutex::new(Vec::new()));
         let record = remote_tasks::list_remote_tasks(&pool, "run-1").await.unwrap().remove(0);
-        process_next(&pool, |_, action| {
-            calls.lock().unwrap().push(action);
-            let record = record.clone();
-            async move {
-                if action == RemoteTaskOperation::Cancel {
-                    anyhow::bail!("lost response");
-                }
-                Ok(record)
-            }
-        })
-        .await
-        .unwrap();
-        due(&pool).await;
-        // Re-discovery is idempotent and must retain the persisted cancel fence.
-        enqueue(&pool).await.unwrap();
-        process_next(&pool, |_, action| {
-            calls.lock().unwrap().push(action);
-            let mut record = record.clone();
-            record.status = "canceled".into();
-            async move { Ok(record) }
-        })
-        .await
-        .unwrap();
-        {
-            let calls = calls.lock().unwrap();
-            assert_eq!(calls.iter().filter(|a| **a == RemoteTaskOperation::Cancel).count(), 1);
-            assert_eq!(calls.iter().filter(|a| **a == RemoteTaskOperation::Query).count(), 2);
-        }
-        let row = sqlx::query("SELECT status,cancel_attempted FROM remote_task_lifecycle WHERE remote_record_id=?")
-            .bind(id)
-            .fetch_one(&pool)
+        for _ in 0..2 {
+            cancel_in_pool(&pool, "run-1", |id| {
+                calls.lock().unwrap().push(id.clone());
+                let mut record = record.clone();
+                record.id = id;
+                record.status = "canceled".into();
+                async move { Ok(record) }
+            })
             .await
             .unwrap();
-        assert_eq!(row.get::<String, _>("status"), "done");
-        assert_eq!(row.get::<i64, _>("cancel_attempted"), 1);
+        }
+        assert_eq!(*calls.lock().unwrap(), vec!["input", "working"]);
+        let unknown: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM run_events WHERE json_extract(event_json,'$.data.status')='unknown'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(unknown, 1);
+        let cancelled: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM run_events WHERE json_extract(event_json,'$.data.status')='canceled'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cancelled, 2);
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='run-1'")
                 .fetch_one(&pool)
@@ -312,125 +195,62 @@ mod tests {
                 .unwrap(),
             "failed"
         );
-        let event: String = sqlx::query_scalar("SELECT event_json FROM run_events ORDER BY sequence DESC LIMIT 1")
-            .fetch_one(&pool)
+    }
+
+    #[tokio::test]
+    async fn timeout_is_unconfirmed_does_not_retry_or_block_other_calls_or_continuation() {
+        let pool = fixture("cancelled").await;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        for _ in 0..2 {
+            cancel_in_pool(&pool, "run-1", |id| {
+                calls.lock().unwrap().push(id);
+                async { anyhow::bail!("request timed out with private credential") }
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(calls.lock().unwrap().len(), 2);
+        let events: Vec<String> = sqlx::query_scalar("SELECT event_json FROM run_events ORDER BY sequence")
+            .fetch_all(&pool)
             .await
             .unwrap();
         assert_eq!(
-            serde_json::from_str::<Value>(&event).unwrap()["data"]["status"],
-            "canceled"
+            events
+                .iter()
+                .filter(|event| event.contains("awaiting_confirmation"))
+                .count(),
+            2
         );
+        assert!(!events.iter().any(|event| event.contains("private credential")));
+        let mut tx = pool.begin().await.unwrap();
+        super::super::saga_scheduler::ensure_continuable(&mut tx, "run-1")
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
     }
 
     #[tokio::test]
-    async fn unknown_without_task_id_never_sends_and_completed_is_fetched_not_canceled() {
-        let (pool, _) = fixture(false, "cancelled").await;
-        enqueue(&pool).await.unwrap();
-        process_next(&pool, |_, _| async {
-            panic!("Unknown submission must not be sent again")
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            sqlx::query_scalar::<_, String>("SELECT status FROM remote_task_lifecycle")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            "blocked"
-        );
-        let (pool, _) = fixture(true, "failed").await;
-        enqueue(&pool).await.unwrap();
-        let mut record = remote_tasks::list_remote_tasks(&pool, "run-1").await.unwrap().remove(0);
-        record.status = "completed".into();
-        record.result = Some(json!({"response":"Saved answer","artifacts":[]}));
-        let actions = Arc::new(Mutex::new(Vec::new()));
-        process_next(&pool, |_, action| {
-            actions.lock().unwrap().push(action);
-            let record = record.clone();
-            async move { Ok(record) }
-        })
-        .await
-        .unwrap();
-        {
-            let actions = actions.lock().unwrap();
-            assert!(actions.as_slice() == [RemoteTaskOperation::Query, RemoteTaskOperation::Fetch]);
-        }
-        assert_eq!(
-            sqlx::query_scalar::<_, String>("SELECT status FROM remote_task_lifecycle")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            "done"
-        );
-    }
-
-    #[tokio::test]
-    async fn startup_only_discovers_failed_or_stopped_new_runs() {
-        for status in ["failed", "cancelled", "interrupted", "completed", "running"] {
-            let (pool, _) = fixture(true, status).await;
-            enqueue(&pool).await.unwrap();
-            enqueue(&pool).await.unwrap();
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM remote_task_lifecycle")
-                .fetch_one(&pool)
+    async fn completion_app_exit_interruption_and_evaluation_do_not_cancel() {
+        for status in ["completed", "interrupted", "running", "waiting_for_input"] {
+            let pool = fixture(status).await;
+            cancel_in_pool(&pool, "run-1", |_| async { panic!("Must not cancel") })
                 .await
                 .unwrap();
-            assert_eq!(count, i64::from(matches!(status, "failed" | "cancelled")));
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM run_events")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
         }
-        let (pool, _) = fixture(true, "failed").await;
-        sqlx::query("UPDATE run_records SET runtime_json='{}'")
+        let pool = fixture("failed").await;
+        sqlx::query("UPDATE run_records SET runtime_json='{\"evaluationProfile\":{}}'")
             .execute(&pool)
             .await
             .unwrap();
-        enqueue(&pool).await.unwrap();
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM remote_task_lifecycle")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn pending_termination_fences_recovery_and_one_unreachable_task_does_not_starve_others() {
-        let (pool, _) = fixture(true, "failed").await;
-        sqlx::query("INSERT INTO remote_tasks (id,run_id,node_id,message_id,service_origin,connection_ciphertext,task_id,status,created_at,updated_at) SELECT 'remote-2',run_id,node_id,'message-2',service_origin,connection_ciphertext,'task-2',status,created_at,updated_at FROM remote_tasks")
-            .execute(&pool).await.unwrap();
-        enqueue(&pool).await.unwrap();
-        let mut tx = pool.begin().await.unwrap();
-        assert!(
-            super::super::saga_scheduler::ensure_continuable(&mut tx, "run-1")
-                .await
-                .is_err()
-        );
-        tx.rollback().await.unwrap();
-        process_next(&pool, |_, _| async { anyhow::bail!("offline") })
+        cancel_in_pool(&pool, "run-1", |_| async { panic!("Must not cancel fixtures") })
             .await
             .unwrap();
-        let row = sqlx::query(
-            "SELECT status,next_check_at FROM remote_task_lifecycle WHERE last_message='awaiting_confirmation'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(row.get::<String, _>("status"), "pending");
-        assert!(row.get::<String, _>("next_check_at") > chrono::Utc::now().to_rfc3339());
-        let record = remote_tasks::list_remote_tasks(&pool, "run-1").await.unwrap().remove(0);
-        process_next(&pool, |id, action| {
-            assert!(action == RemoteTaskOperation::Query);
-            let mut record = record.clone();
-            record.id = id;
-            record.status = "canceled".into();
-            async move { Ok(record) }
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM remote_task_lifecycle WHERE status='done'")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            1
-        );
     }
 }

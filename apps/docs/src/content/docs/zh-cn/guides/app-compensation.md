@@ -191,4 +191,4 @@ Tool App 的补偿脚本使用 `compensation.context()`，无需 `@tool` 装饰�
 
 ## 与 Remote Agent 的区别
 
-App 补偿执行你配置的清理代码，只针对 workflow 失败前成功的调用；用户停止不触发 App 自动补偿。Remote Agent 使用标准 A2A 查询与取消，在 workflow 失败或停止后自动处理未结束任务，但不自动撤销已经完成的业务。两者的进度都显示在对应节点 message 中。详见 [Remote Agent 与 A2A 任务处理](/zh-cn/guides/remote-agents/)。
+App 补偿执行你配置的清理代码，只针对 workflow 失败前成功的调用；用户停止不触发 App 自动补偿。Remote Agent 在 workflow 失败或停止后，对有 taskId、尚未结束的任务发起一次标准 A2A 尽力取消；不自动轮询、不重试取消，也不自动撤销已经完成的业务。两者的进度都显示在对应节点 message 中。详见 [Remote Agent 与 A2A 任务处理](/zh-cn/guides/remote-agents/)。

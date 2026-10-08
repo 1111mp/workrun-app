@@ -104,9 +104,6 @@ impl RunSupervisor {
                 if !self.accepting.load(Ordering::Acquire) {
                     break;
                 }
-                if let Err(error) = workflow_module::remote_lifecycle::dispatch().await {
-                    log::warn!("remote task lifecycle: {error:#}");
-                }
                 if let Err(error) = super_recovery_tick().await {
                     log::warn!("recovery scheduler: {error:#}");
                 }
