@@ -6,18 +6,16 @@ import {
   CollapsibleTrigger,
   ScrollArea,
 } from '@workspace/ui/components';
+import { useTranslation } from 'react-i18next';
 
 import { OperationReviewControls } from '@/components/operation-review-controls';
 import type { ExecutionHistory } from '@/services/run-history';
 
-function statusLabel(status: string) {
-  return status === 'unknown' ? 'Awaiting confirmation' : status;
-}
-
-function operationLabel(path: string) {
+function operationLabel(path: string, nodeNames: Record<string, string>) {
   try {
     const parts: unknown = JSON.parse(path);
-    if (Array.isArray(parts) && typeof parts[1] === 'string') return parts[1];
+    if (Array.isArray(parts) && typeof parts[1] === 'string')
+      return nodeNames[parts[1]] ?? parts[1];
   } catch {
     // Legacy paths remain readable even when they predate structured identity.
   }
@@ -29,23 +27,42 @@ export function RunExecutionHistory({
   runId,
   inactive,
   onChanged,
+  nodeNames = {},
 }: {
   history?: ExecutionHistory;
+  nodeNames?: Record<string, string>;
   runId?: string;
   inactive?: boolean;
   onChanged?: () => Promise<void>;
 }) {
-  if (!history) return null;
+  const { t, i18n } = useTranslation();
+  const statusLabel = (status: string) =>
+    t(`executionRecovery.status.${status}`, { defaultValue: status });
+  const dateLabel = (date: string) =>
+    new Date(date).toLocaleString(i18n.resolvedLanguage ?? i18n.language);
+  if (!history || history.compensation?.automatic) return null;
   const unknownCount = history.operations.filter(
     (operation) => operation.status === 'unknown',
   ).length;
   return (
-    <Collapsible className='px-6 py-3'>
+    <Collapsible
+      className='px-6 py-3'
+      defaultOpen={
+        unknownCount > 0 ||
+        history.operations.some(
+          (operation) => operation.approval?.status === 'pending',
+        )
+      }
+    >
       <CollapsibleTrigger render={<Button variant='ghost' size='sm' />}>
-        Execution history · {history.attempts.length} attempts
+        {t('executionRecovery.historyTitle', {
+          count: history.attempts.length,
+        })}
       </CollapsibleTrigger>
       {unknownCount > 0 ? (
-        <Badge variant='outline'>{unknownCount} awaiting confirmation</Badge>
+        <Badge variant='outline'>
+          {t('executionRecovery.awaitingCount', { count: unknownCount })}
+        </Badge>
       ) : null}
       <CollapsibleContent>
         <ScrollArea className='h-64'>
@@ -53,8 +70,11 @@ export function RunExecutionHistory({
             {history.compensation ? (
               <div className='flex flex-col gap-1'>
                 <p>
-                  Compensation: {history.compensation.status} ·{' '}
-                  {history.compensation.completed}/{history.compensation.total}
+                  {t('executionRecovery.compensationProgress', {
+                    status: statusLabel(history.compensation.status),
+                    completed: history.compensation.completed,
+                    total: history.compensation.total,
+                  })}
                 </p>
                 {history.compensation.lastError ? (
                   <p className='text-muted-foreground break-words'>
@@ -65,9 +85,11 @@ export function RunExecutionHistory({
             ) : null}
             {history.recovery && history.recovery.status !== 'done' ? (
               <p className='text-muted-foreground'>
-                Recovery: {history.recovery.status}
+                {t('executionRecovery.recovery', {
+                  status: statusLabel(history.recovery.status),
+                })}
                 {history.recovery.status === 'pending'
-                  ? ` · next check ${new Date(history.recovery.nextCheckAt).toLocaleString()}`
+                  ? ` · ${t('executionRecovery.nextCheck', { time: dateLabel(history.recovery.nextCheckAt) })}`
                   : ''}
                 {history.recovery.lastError
                   ? ` · ${history.recovery.lastError}`
@@ -77,10 +99,14 @@ export function RunExecutionHistory({
             {history.attempts.map((attempt) => (
               <div key={attempt.sequence} className='flex flex-col gap-1'>
                 <div className='flex items-center gap-2'>
-                  <span>Attempt {attempt.sequence}</span>
+                  <span>
+                    {t('executionRecovery.attempt', {
+                      sequence: attempt.sequence,
+                    })}
+                  </span>
                   <Badge variant='outline'>{statusLabel(attempt.status)}</Badge>
                   <span className='text-muted-foreground text-xs'>
-                    {new Date(attempt.startedAt).toLocaleString()}
+                    {dateLabel(attempt.startedAt)}
                   </span>
                 </div>
                 {attempt.error ? (
@@ -95,20 +121,25 @@ export function RunExecutionHistory({
                 <div className='flex items-center gap-2'>
                   <span>
                     {operation.purpose === 'compensation'
-                      ? 'Compensation attempt'
-                      : operationLabel(operation.path)}
+                      ? t('executionRecovery.compensationAttempt')
+                      : operationLabel(operation.path, nodeNames)}
                   </span>
                   <Badge variant='outline'>
                     {statusLabel(operation.status)}
                   </Badge>
                 </div>
                 <span className='text-muted-foreground text-xs break-all'>
-                  Operation {operation.id}
+                  {t('executionRecovery.operation', { id: operation.id })}
                 </span>
                 {operation.review ? (
                   <p className='text-muted-foreground'>
-                    Reconciled attempt #{operation.review.attemptSequence}:{' '}
-                    {operation.review.decision}
+                    {t('executionRecovery.reviewSummary', {
+                      sequence: operation.review.attemptSequence,
+                      decision: t(
+                        `executionRecovery.decision.${operation.review.decision}`,
+                        { defaultValue: operation.review.decision },
+                      ),
+                    })}
                   </p>
                 ) : null}
                 {runId && onChanged ? (
@@ -129,8 +160,13 @@ export function RunExecutionHistory({
                 ) : null}
                 {operation.compensation ? (
                   <p className='text-muted-foreground break-words'>
-                    Compensation: {operation.compensation.mode} ·{' '}
-                    {operation.compensation.status}
+                    {t('executionRecovery.compensationSummary', {
+                      mode: t(
+                        `executionRecovery.mode.${operation.compensation.mode}`,
+                        { defaultValue: operation.compensation.mode },
+                      ),
+                      status: statusLabel(operation.compensation.status),
+                    })}
                     {operation.compensation.lastError
                       ? ` · ${operation.compensation.lastError}`
                       : ''}
@@ -141,8 +177,11 @@ export function RunExecutionHistory({
                     key={attempt.sequence}
                     className='text-muted-foreground break-words'
                   >
-                    #{attempt.sequence} · {attempt.action} ·{' '}
-                    {statusLabel(attempt.status)}
+                    #{attempt.sequence} ·{' '}
+                    {t(`executionRecovery.action.${attempt.action}`, {
+                      defaultValue: attempt.action,
+                    })}{' '}
+                    · {statusLabel(attempt.status)}
                     {attempt.errorSummary ? ` · ${attempt.errorSummary}` : ''}
                   </p>
                 ))}

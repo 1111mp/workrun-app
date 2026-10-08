@@ -158,6 +158,7 @@ export type RunObservability = {
 export type ExecutionHistory = {
   compensation?: {
     status: 'pending' | 'running' | 'completed' | 'blocked';
+    automatic?: boolean;
     requestedAt: string;
     lastError?: string | null;
     completed: number;

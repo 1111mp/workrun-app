@@ -221,17 +221,17 @@ block the plan; per-operation review does not waive those constraints.
 
 ## Same-App Process compensation entry
 
-App catalog `compensation: {entry, idempotencyContract}` declares a separate
+App catalog `compensation: {entry}` declares a separate
 relative Python entry in the same uv project. Normal execution keeps its entry,
 input/output schemas and receipt channel. Workflow Process nodes and managed
 Process tool calls freeze the App definition and inherit an `app_entry` action;
-explicit workflow declarations take precedence. Each tool call owns an intent.
+App entry configuration takes precedence for these calls. Each tool call owns an intent.
 
 The entry receives original input, decoded original result, resource references,
 original operation ID and stable compensation intent ID as JSON on stdin. It
 returns `process.result` via `workrun_sdk.compensation.result`. Business schemas
-are not applied to the compensation context or receipt. Tool Apps retain their
-per-call approval policy. Operation logging, dispatch fencing, receipt reuse and
+are not applied to the compensation context or receipt. Cleanup never asks for execution-time approval, including Tool Apps.
+The original business tool retains its normal approval policy. Operation logging, dispatch fencing, receipt reuse and
 unknown-outcome handling remain common with other compensators.
 
 The before-dispatch intent stores a digest of publishable source (including both
@@ -243,3 +243,29 @@ should use artifact storage or ignored paths. Symlinked source is rejected.
 External editable/path dependencies and concurrent file edits are not frozen.
 No partial resource journal is added here; original failures still reconcile
 before compensation. Standalone App runs outside a workflow remain outside Saga.
+
+## Default automatic Process/App failure cleanup
+
+New production workflow tasks carry `processCleanupVersion:1`. On final failure,
+the finish path selects successful original same-App calls with a configured
+entry, atomically activates their intents, and fences forward continuation.
+Failed/unknown originals, unconfigured Apps, other executor kinds, evaluations,
+normal completion and Stop do not trigger cleanup. This is best-effort cleanup
+of successful App calls, not a claim of full workflow reversal. Failed App calls
+own their try/except/finally cleanup. Manual whole-workflow Saga remains separate.
+
+A failed task preserves its execution status and original error. The existing
+local worker reverses selected dependencies, resumes durable claims after
+restart, and reuses committed receipts. Failures are recorded while independent
+branches continue; predecessors of unfinished cleanup remain fenced. No automatic
+retry submits an unknown cleanup again. A successful process exit is sufficient
+for cleanup; optional `process.result` can provide an object receipt.
+
+`process.compensation` events and intent status changes commit together and are
+rendered as messages on the original node invocation (or visible parent row for
+child workflows). Automatic tasks do not display the approval/Saga action panel.
+The App editor requires only a separate entry; legacy idempotency declarations
+are accepted but are not required. Code fingerprints still protect against
+changed source. Once cleanup has been activated, re-execution uses a new task.
+A startup scan covers failure committed before cleanup was enqueued. Historical
+pre-feature tasks are not retrospectively cleaned up.

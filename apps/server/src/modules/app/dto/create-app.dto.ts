@@ -16,10 +16,12 @@ export class AppCompensationDto {
   @IsNotEmpty()
   entry!: string;
 
-  @ApiProperty({ example: 'Deleting an absent resource succeeds.' })
+  @ApiPropertyOptional({
+    description: 'Legacy optional contract; cleanup is enabled by the entry.',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  idempotencyContract!: string;
+  idempotencyContract?: string;
 }
 
 export class CreateAppDto {

@@ -201,27 +201,41 @@ impl Declaration {
     }
 }
 
-/// Explicit workflow declarations override App defaults. The App definition
+/// App entry configuration enables automatic cleanup. The App definition
 /// comes from the execution snapshot, never a fresh compensation-time lookup.
 pub(super) fn execution_declaration(snapshot: &Value, container: bool) -> Result<Declaration> {
-    if snapshot.get("compensation").is_some_and(|value| !value.is_null()) {
-        return declaration(snapshot.get("compensation"), container);
-    }
     let app = snapshot.get("app").unwrap_or(&snapshot["definition"]);
     if let Some(value) = app.get("compensation").filter(|value| !value.is_null()) {
-        let contract: crate::config::ProcessCompensation = serde_json::from_value(value.clone())?;
+        let _: crate::config::ProcessCompensation = serde_json::from_value(value.clone())?;
         let result = Declaration::Compensatable {
             action: Action::AppEntry,
             bindings: BTreeMap::new(),
             idempotency: Idempotency {
                 key_argument: "compensationId".into(),
-                contract: contract.idempotency_contract,
+                contract: "App failure cleanup uses the original successful invocation".into(),
             },
         };
         result.validate(container)?;
         return Ok(result);
     }
-    declaration(None, container)
+    declaration(snapshot.get("compensation"), container)
+}
+
+/// Only the same-App entry is eligible for automatic workflow-failure cleanup.
+pub(super) fn app_cleanup_metadata(ciphertext: &str, key: &[u8]) -> Result<Option<(String, String)>> {
+    let context: SavedContext = decrypt(ciphertext, key)?;
+    if !matches!(
+        context.declaration,
+        Declaration::Compensatable {
+            action: Action::AppEntry,
+            ..
+        }
+    ) {
+        return Ok(None);
+    }
+    let app: crate::config::IProcessNode = serde_json::from_value(context.compensation_target_snapshot["app"].clone())?;
+    let entry = app.compensation.context("Saved App cleanup entry missing")?.entry;
+    Ok(Some((app.name, entry.to_string_lossy().into_owned())))
 }
 
 pub(super) fn declaration(value: Option<&Value>, container: bool) -> Result<Declaration> {
@@ -509,6 +523,8 @@ pub(super) async fn execute_compensation(
         .await?;
         bail!("Compensation outcome unknown; resubmission disabled");
     }
+    let output = Arc::new(std::sync::Mutex::new(String::new()));
+    let captured_output = output.clone();
     let work = async {
         let value = match action {
             Action::RemoteAgent { url, authentication } => {
@@ -535,11 +551,6 @@ pub(super) async fn execute_compensation(
                 if crate::feat::process_compensation_fingerprint(&definition).await? != source_digest {
                     bail!("Original App source changed; restore the original code and lockfile before compensation");
                 }
-                if definition.kind == crate::config::ProcessNodeKind::Tool
-                    && definition.tool_execution_policy != ToolExecutionPolicy::Auto
-                {
-                    operation_review::require_approval(pool, key, &op.id, &definition.name, &args).await?;
-                }
                 op.mark_dispatched().await?;
                 tokio::time::timeout(
                     std::time::Duration::from_secs(120),
@@ -547,7 +558,13 @@ pub(super) async fn execute_compensation(
                         definition,
                         &args,
                         source_digest,
-                        Arc::new(|_| {}),
+                        Arc::new(move |chunk| {
+                            let mut log = captured_output.lock().expect("Compensation output lock poisoned");
+                            // Keep output bounded while preserving stdout/stderr arrival order.
+                            if log.len() < 256 * 1024 {
+                                log.push_str(&chunk.data);
+                            }
+                        }),
                     ),
                 )
                 .await??
@@ -630,17 +647,20 @@ pub(super) async fn execute_compensation(
         Ok::<_, anyhow::Error>(value)
     }
     .await;
+    let log = output.lock().expect("Compensation output lock poisoned").clone();
     match work {
         Ok(value) => {
             // Save the business fact before changing the compensation intent.
             // A crash in between reuses this result, never invokes undo twice.
             let saved = json!({"compensationResultCiphertext":encrypt(&value,key)?});
             op.finish(Some(&saved), "succeeded", None).await?;
+            super::process_cleanup::record_output(pool, key, run_id, intent_id, operation_id, &log).await?;
             Ok(())
         },
         Err(error) => {
             op.finish(None, "unknown", Some("Compensation did not return a durable result"))
                 .await?;
+            super::process_cleanup::record_output(pool, key, run_id, intent_id, operation_id, &log).await?;
             Err(error)
         },
     }
@@ -726,7 +746,10 @@ mod tests {
             let override_snapshot = json!({"app":snapshot.get("app").unwrap_or(&snapshot["definition"]),"compensation":{"mode":"read_only"}});
             assert!(matches!(
                 execution_declaration(&override_snapshot, false).unwrap(),
-                Declaration::ReadOnly
+                Declaration::Compensatable {
+                    action: Action::AppEntry,
+                    ..
+                }
             ));
         }
     }

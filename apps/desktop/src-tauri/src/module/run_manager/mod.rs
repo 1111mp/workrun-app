@@ -152,6 +152,12 @@ impl RunSupervisor {
         let Ok(pool) = crate::core::db::DBManager::global().pool() else {
             return;
         };
+        if let Ok(key) = crate::utils::dirs::get_encryption_key()
+            && let Err(error) = workflow_module::process_cleanup::recover_failed(&pool, &key).await
+        {
+            log::warn!("Failed to schedule App cleanup: {error:#}");
+        }
+
         let run_id = match workflow_module::saga_scheduler::claim(&pool).await {
             Ok(Some(id)) => id,
             Ok(None) => return,
@@ -414,3 +420,5 @@ pub use workflow::{
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use events::emit_cleanup_event;

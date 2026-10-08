@@ -176,9 +176,11 @@ is not implemented yet.
 
 An App can keep its normal `main.py` and optionally configure a sibling
 `compensate.py` in App settings. Both entries share the project dependencies.
-Declare why repeated compensation is safe; an entry alone does not establish
-idempotency. Workflow nodes and Process-backed Agent tools inherit the App
-capability unless a workflow explicitly overrides its compensation declaration.
+If the workflow fails, successful calls are automatically cleaned up without
+execution-time approval. Failed calls and Apps without an entry are skipped;
+failed business calls should clean up in their own try/except/finally. Workflow
+nodes and Process-backed Agent tools inherit this behavior. Normal completion
+and user Stop do not trigger cleanup.
 
 ```python
 # compensate.py
@@ -200,9 +202,11 @@ if __name__ == "__main__":
 `original_operation_id`, `compensation_id` (the stable compensation intent / dedup
 key), `original_input`, `original_result`, and `resources`. A Tool App's
 compensation entry uses `compensation.result`, not the normal `@tool` decorator.
-The host requires a successful exit and an acknowledged object receipt.
+The host requires a successful exit. An object receipt is optional for cleanup;
+`compensation.result` can record extra details. Business entry receipt requirements
+are unchanged.
 
-Unknown original outcomes require reconciliation before compensation. Unknown
+Only successful original calls participate in automatic cleanup. Unknown
 compensation outcomes are not blindly resubmitted. The source and lockfile must
 match the recorded fingerprint; retain the original project until the task is
 settled. Put generated output outside the App source or in ignored output paths.

@@ -2,9 +2,12 @@
 use super::*;
 use serde::Serialize;
 
-pub(crate) async fn enqueue_recovery_in_pool(pool: &sqlx::SqlitePool, id: &str, runtime: Value) -> Result<()> {
+pub(crate) async fn enqueue_recovery_in_pool(pool: &sqlx::SqlitePool, id: &str, mut runtime: Value) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     crate::module::workflow::saga_scheduler::ensure_continuable(&mut tx, id).await?;
+    if let Some(runtime) = runtime.as_object_mut() {
+        runtime.remove("processCleanupConsidered");
+    }
     let now = chrono::Utc::now().to_rfc3339();
     if let Some(session_id) = runtime.get("chatSessionId").and_then(Value::as_str) {
         let active: Option<String> = sqlx::query_scalar("SELECT active_run_id FROM chat_sessions WHERE id = ?")

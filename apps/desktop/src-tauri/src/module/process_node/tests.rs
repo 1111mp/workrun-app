@@ -155,7 +155,7 @@ async fn installation_status_only_checks_for_a_project_directory() {
 }
 
 #[test]
-fn compensation_requires_separate_safe_entry_and_nonempty_contract() {
+fn compensation_requires_separate_safe_entry_without_a_contract() {
     let mut app = definition();
     app.compensation = Some(crate::config::ProcessCompensation {
         entry: "compensate.py".into(),
@@ -168,5 +168,5 @@ fn compensation_requires_separate_safe_entry_and_nonempty_contract() {
     }
     app.compensation.as_mut().unwrap().entry = "compensate.py".into();
     app.compensation.as_mut().unwrap().idempotency_contract.clear();
-    assert!(validate_process_node_definition(&app).is_err());
+    assert!(validate_process_node_definition(&app).is_ok());
 }

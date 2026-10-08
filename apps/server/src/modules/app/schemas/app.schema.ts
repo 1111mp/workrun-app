@@ -35,7 +35,7 @@ export class App {
   entry!: string;
 
   @Prop({ type: Object, default: null })
-  compensation?: { entry: string; idempotencyContract: string } | null;
+  compensation?: { entry: string; idempotencyContract?: string } | null;
 
   @Prop({ trim: true })
   projectRoot?: string;

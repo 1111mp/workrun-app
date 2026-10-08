@@ -223,3 +223,11 @@ identity. Review is a durable encrypted assertion tied to the latest attempt,
 not an automatic inference from timeout. Imported artifact references must
 resolve. Attempt history is preserved; Continue remains explicit for forward
 execution. See SAGA.md for approval and compensation-specific behavior.
+
+## Automatic App cleanup and continuation
+
+New workflow failures first decide whether successful configured Process/App
+calls need cleanup. Selected tasks enter durable cleanup and cannot continue
+forward with deleted results; Run again creates a fresh business execution.
+Without eligible calls, existing recovery behavior remains available. App
+cleanup events stay on their original node messages without changing failure.

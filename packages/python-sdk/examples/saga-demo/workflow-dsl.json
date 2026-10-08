@@ -1,0 +1,72 @@
+{
+  "id": "saga-demo",
+  "name": "Saga Demo",
+  "inputSchema": {
+    "fields": [
+      {
+        "key": "caseId"
+      }
+    ]
+  },
+  "outputSchema": {
+    "fields": [
+      {
+        "key": "audit"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "data": {
+        "name": "Start"
+      }
+    },
+    {
+      "id": "generate",
+      "type": "process",
+      "data": {
+        "name": "Generate document",
+        "processNodeId": "REPLACE_GENERATOR_APP_ID",
+        "state": {
+          "access": {
+            "readers": ["audit"]
+          }
+        }
+      }
+    },
+    {
+      "id": "audit",
+      "type": "process",
+      "data": {
+        "name": "Audit document",
+        "processNodeId": "REPLACE_AUDITOR_APP_ID",
+        "state": {
+          "globalKeys": ["audit"]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "data": {
+        "name": "End"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "generate"
+    },
+    {
+      "source": "generate",
+      "target": "audit"
+    },
+    {
+      "source": "audit",
+      "target": "end"
+    }
+  ]
+}

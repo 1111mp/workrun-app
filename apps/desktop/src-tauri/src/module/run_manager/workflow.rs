@@ -96,6 +96,7 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
     let runtime = json!({
         "kind": "workflow",
         "compensationJournalVersion": 1,
+        "processCleanupVersion": 1,
         "executionId": request.run_id,
         "dsl": request.dsl,
         "threadId": request.thread_id,

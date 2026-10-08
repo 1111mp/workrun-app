@@ -6,6 +6,7 @@ use sqlx::Row;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Abandonment {
     pub status: String,
+    pub automatic: bool,
     pub requested_at: String,
     pub last_error: Option<String>,
     pub completed: i64,
@@ -13,7 +14,7 @@ pub(crate) struct Abandonment {
 }
 
 pub(crate) async fn inspect(pool: &sqlx::SqlitePool, run_id: &str) -> Result<Option<Abandonment>> {
-    Ok(sqlx::query_as("SELECT b.status,b.requested_at,b.last_error,(SELECT COUNT(DISTINCT i.id) FROM workflow_compensation_intents i JOIN workflow_operations o ON o.id=i.operation_id JOIN workflow_operation_attempts a ON a.operation_id=i.operation_id WHERE a.run_id=b.run_id AND i.mode='compensatable' AND i.status='succeeded' AND o.dispatched_at IS NOT NULL AND o.confirmed_no_effect=0) AS completed,(SELECT COUNT(DISTINCT i.id) FROM workflow_compensation_intents i JOIN workflow_operations o ON o.id=i.operation_id JOIN workflow_operation_attempts a ON a.operation_id=i.operation_id WHERE a.run_id=b.run_id AND i.mode='compensatable' AND o.dispatched_at IS NOT NULL AND o.confirmed_no_effect=0) AS total FROM workflow_abandonments b WHERE b.run_id=?")
+    Ok(sqlx::query_as("SELECT b.status,COALESCE(json_extract(r.runtime_json,'$.automaticProcessCleanup'),0) AS automatic,b.requested_at,b.last_error,(SELECT COUNT(DISTINCT i.id) FROM workflow_compensation_intents i JOIN workflow_operations o ON o.id=i.operation_id JOIN workflow_operation_attempts a ON a.operation_id=i.operation_id WHERE a.run_id=b.run_id AND i.mode='compensatable' AND i.status='succeeded' AND o.dispatched_at IS NOT NULL AND o.confirmed_no_effect=0) AS completed,(SELECT COUNT(DISTINCT i.id) FROM workflow_compensation_intents i JOIN workflow_operations o ON o.id=i.operation_id JOIN workflow_operation_attempts a ON a.operation_id=i.operation_id WHERE a.run_id=b.run_id AND i.mode='compensatable' AND o.dispatched_at IS NOT NULL AND o.confirmed_no_effect=0 AND (COALESCE(json_extract(r.runtime_json,'$.automaticProcessCleanup'),0)=0 OR i.status!='not_requested')) AS total FROM workflow_abandonments b JOIN run_records r ON r.id=b.run_id WHERE b.run_id=?")
         .bind(run_id).fetch_optional(pool).await?)
 }
 
@@ -22,8 +23,13 @@ pub(crate) async fn ensure_continuable(tx: &mut sqlx::Transaction<'_, sqlx::Sqli
         .bind(run_id)
         .fetch_one(&mut **tx)
         .await?;
+    let undecided:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_records WHERE id=? AND status='failed' AND json_extract(runtime_json,'$.processCleanupVersion')=1 AND COALESCE(json_extract(runtime_json,'$.processCleanupConsidered'),0)=0)")
+        .bind(run_id).fetch_one(&mut **tx).await?;
+    if undecided {
+        bail!("Workflow failure cleanup is being scheduled; wait for the task status to refresh");
+    }
     if abandoned {
-        bail!("This task was abandoned; create a new task to execute business again");
+        bail!("Task compensation or cleanup has started; create a new task to execute business again");
     }
     Ok(())
 }
@@ -110,7 +116,12 @@ pub(crate) async fn claim(pool: &sqlx::SqlitePool) -> Result<Option<String>> {
     Ok(id)
 }
 
-async fn plan_status(pool: &sqlx::SqlitePool, run_id: &str, status: &str, error: Option<&str>) -> Result<()> {
+pub(super) async fn plan_status(
+    pool: &sqlx::SqlitePool,
+    run_id: &str,
+    status: &str,
+    error: Option<&str>,
+) -> Result<()> {
     let now = chrono::Utc::now();
     sqlx::query("UPDATE workflow_abandonments SET status=?,last_error=?,updated_at=?,next_check_at=? WHERE run_id=? AND status='running'")
         .bind(status).bind(error).bind(now.to_rfc3339()).bind((now+chrono::Duration::seconds(5)).to_rfc3339()).bind(run_id).execute(pool).await?;
@@ -225,6 +236,10 @@ pub(super) async fn next_intent(pool: &sqlx::SqlitePool, run_id: &str) -> Result
 /// One bounded work item per tick. The SQLite claim survives renderer loss;
 /// shutdown never starts another item and startup reopens an interrupted claim.
 pub(crate) async fn tick(pool: sqlx::SqlitePool, key: Vec<u8>, run_id: &str) -> Result<()> {
+    if process_cleanup::is_automatic(&pool, run_id).await? {
+        return process_cleanup::tick(&pool, &key, run_id).await;
+    }
+
     let result = process_plan(&pool, &key, run_id, |intent, operation| {
         let pool = &pool;
         let key = &key;

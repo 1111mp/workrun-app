@@ -19,6 +19,7 @@ import {
 import type { Node } from '@xyflow/react';
 import { PinIcon, XIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import {
@@ -73,6 +74,9 @@ const statusTone: Record<RunStatus, string> = {
 };
 
 function RunWorkspace() {
+  const { t, i18n } = useTranslation();
+  const statusLabel = (status: string) =>
+    t(`executionRecovery.status.${status}`, { defaultValue: status });
   const {
     tabs,
     activeRunId,
@@ -98,7 +102,7 @@ function RunWorkspace() {
       .then(() => inspectRunRecord(runId))
       .then(setRecord)
       .catch((error: unknown) =>
-        toast.error('Could not update compensation', {
+        toast.error(t('executionRecovery.updateFailed'), {
           toasterId: 'global',
           description: String(error),
         }),
@@ -164,7 +168,7 @@ function RunWorkspace() {
     void retryFailedBackgroundWorkflowRun(retrySourceRunId)
       .then(openRun)
       .catch((error: unknown) => {
-        toast.error('Could not retry failed workflow', {
+        toast.error(t('executionRecovery.continueFailed'), {
           toasterId: 'global',
           description: error instanceof Error ? error.message : String(error),
         });
@@ -248,13 +252,15 @@ function RunWorkspace() {
           <DrawerContent>
             <div className='flex items-center justify-end gap-2 px-6 pt-4'>
               {activeRecord ? (
-                <Badge variant='outline'>{activeRecord.status}</Badge>
+                <Badge variant='outline'>
+                  {statusLabel(activeRecord.status)}
+                </Badge>
               ) : null}
               {activeRecord &&
               !activeRecord.executionHistory?.compensation &&
               ['failed', 'interrupted'].includes(activeRecord.status) ? (
                 <Button onClick={requestFailedWorkflowRetry}>
-                  Continue task
+                  {t('workflowEditor.output.continueTask')}
                 </Button>
               ) : null}
               {activeRecord &&
@@ -267,14 +273,14 @@ function RunWorkspace() {
                     void replayRun(activeRecord.id)
                       .then(openRun)
                       .catch((error: unknown) => {
-                        toast.error('Could not start a new task', {
+                        toast.error(t('executionRecovery.newTaskFailed'), {
                           toasterId: 'global',
                           description: String(error),
                         });
                       });
                   }}
                 >
-                  Run again
+                  {t('executionRecovery.runAgain')}
                 </Button>
               ) : null}
               {activeRecord && !activeRecord.executionHistory?.compensation ? (
@@ -283,11 +289,12 @@ function RunWorkspace() {
                   disabled={compensationBusy}
                   onClick={() => setAbandonSourceRunId(activeRecord.id)}
                 >
-                  Abandon and compensate
+                  {t('workflowEditor.output.abandonCompensate')}
                 </Button>
               ) : null}
-              {activeRecord?.executionHistory?.compensation?.status ===
-              'blocked' ? (
+              {!activeRecord?.executionHistory?.compensation?.automatic &&
+              activeRecord?.executionHistory?.compensation?.status ===
+                'blocked' ? (
                 <Button
                   variant='outline'
                   disabled={compensationBusy}
@@ -298,11 +305,17 @@ function RunWorkspace() {
                     )
                   }
                 >
-                  Retry compensation
+                  {t('workflowEditor.output.retryCompensation')}
                 </Button>
               ) : null}
             </div>
             <RunExecutionHistory
+              nodeNames={Object.fromEntries(
+                (workflowRun?.nodes ?? []).map((node) => [
+                  node.id,
+                  typeof node.data.name === 'string' ? node.data.name : node.id,
+                ]),
+              )}
               history={activeRecord?.executionHistory}
               runId={activeRecord?.id}
               inactive={
@@ -317,6 +330,7 @@ function RunWorkspace() {
               }}
             />
             <WorkflowRunOutput
+              showOperationPanel={false}
               readOnly
               isChat={workflowRun.mode === 'chat'}
               isRunning={workflowRun.run.status === 'running'}
@@ -337,17 +351,16 @@ function RunWorkspace() {
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                Abandon this task and compensate?
+                {t('workflowEditor.output.abandonTitle')}
               </AlertDialogTitle>
               <AlertDialogDescription>
-                Execution will stop and this task cannot be continued. Saved
-                compensation contracts will handle recorded effects. Unknown
-                outcomes, missing contracts and irreversible operations require
-                reconciliation or manual remediation.
+                {t('executionRecovery.abandonDescription')}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Keep task</AlertDialogCancel>
+              <AlertDialogCancel>
+                {t('executionRecovery.keepTask')}
+              </AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => {
                   if (abandonSourceRunId)
@@ -355,7 +368,7 @@ function RunWorkspace() {
                   setAbandonSourceRunId(undefined);
                 }}
               >
-                Abandon and compensate
+                {t('workflowEditor.output.abandonCompensate')}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -366,18 +379,19 @@ function RunWorkspace() {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Continue this task?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {t('executionRecovery.continueTitle')}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                Continue from the saved checkpoint in this task. Saved Remote
-                and tool results are reused; unknown outcomes are checked before
-                proceeding. Steps without a recovery contract may require manual
-                reconciliation.
+                {t('executionRecovery.continueDescription')}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel>
+                {t('workflowEditor.output.cancelAction')}
+              </AlertDialogCancel>
               <AlertDialogAction onClick={retryFailedWorkflow}>
-                Continue task
+                {t('workflowEditor.output.continueTask')}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -395,7 +409,9 @@ function RunWorkspace() {
     >
       <DrawerContent>
         <DrawerHeader className='border-b px-5 py-3 text-left'>
-          <DrawerTitle className='text-base'>Run workspace</DrawerTitle>
+          <DrawerTitle className='text-base'>
+            {t('executionRecovery.workspaceTitle')}
+          </DrawerTitle>
         </DrawerHeader>
         <div className='bg-muted/25 border-b px-3 py-2'>
           <div className='flex gap-1 overflow-x-auto'>
@@ -421,7 +437,9 @@ function RunWorkspace() {
                 </button>
                 {tab.pinned ? <PinIcon className='size-3' /> : null}
                 <button
-                  aria-label={`Close ${tab.targetName}`}
+                  aria-label={t('executionRecovery.closeTask', {
+                    name: tab.targetName,
+                  })}
                   className='text-muted-foreground hover:text-foreground'
                   type='button'
                   onClick={() => closeRun(tab.id)}
@@ -444,8 +462,10 @@ function RunWorkspace() {
                     {activeTab.targetName}
                   </h2>
                   <p className='text-muted-foreground mt-1 text-xs'>
-                    {new Date(activeRecord.startedAt).toLocaleString()} ·{' '}
-                    {activeRecord.status}
+                    {new Date(activeRecord.startedAt).toLocaleString(
+                      i18n.resolvedLanguage ?? i18n.language,
+                    )}{' '}
+                    · {statusLabel(activeRecord.status)}
                   </p>
                 </div>
                 <Button

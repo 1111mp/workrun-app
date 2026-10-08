@@ -44,7 +44,7 @@ export type ProcessNodeDefinition = {
   createdAt: string;
   updatedAt: string;
   entry: string;
-  compensation?: { entry: string; idempotencyContract: string } | null;
+  compensation?: { entry: string; idempotencyContract?: string } | null;
   projectRoot?: string;
   kind: ProcessNodeKind;
   toolExecutionPolicy: ToolExecutionPolicy;

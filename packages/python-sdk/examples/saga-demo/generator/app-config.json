@@ -1,0 +1,41 @@
+{
+  "name": "Saga Demo Generator",
+  "description": "Local Saga verification fixture",
+  "version": "0.1.0",
+  "kind": "workflow",
+  "entry": "main.py",
+  "compensation": {
+    "entry": "compensate.py"
+  },
+  "inputs": {
+    "caseId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    }
+  },
+  "outputs": {
+    "document": {
+      "type": "object",
+      "required": [
+        "caseId",
+        "token",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

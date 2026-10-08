@@ -14,6 +14,7 @@ import {
   Textarea,
 } from '@workspace/ui/components';
 import { useId, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import {
   approveWorkflowCompensation,
@@ -37,6 +38,7 @@ export function OperationReviewControls({
   canApprove: boolean;
   onChanged: () => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const id = useId();
   const [open, setOpen] = useState(false);
   const [evidence, setEvidence] = useState('');
@@ -67,6 +69,13 @@ export function OperationReviewControls({
   };
   const resolve = (completed: boolean) => {
     void apply(async () => {
+      if (completed) {
+        try {
+          JSON.parse(receipt);
+        } catch {
+          throw new Error(t('executionRecovery.invalidJson'));
+        }
+      }
       const decision: OperationReviewDecision = completed
         ? { kind: 'completed', result: JSON.parse(receipt) }
         : { kind: 'no_effect' };
@@ -82,12 +91,16 @@ export function OperationReviewControls({
   };
   const receiptHint =
     operation.purpose === 'compensation'
-      ? 'Result of the completed compensation (JSON).'
+      ? t('executionRecovery.hintCompensation')
       : operation.adapter === 'remote_agent'
-        ? 'Remote receipt: {"response":"…","artifacts":[]}.'
+        ? t('executionRecovery.hintRemote', {
+            example: '{"response":"…","artifacts":[]}',
+          })
         : operation.adapter === 'process'
-          ? 'Process receipt: {"exitCode":0,"result":{…}}.'
-          : 'Original tool result (JSON).';
+          ? t('executionRecovery.hintProcess', {
+              example: '{"exitCode":0,"result":{…}}',
+            })
+          : t('executionRecovery.hintTool');
   return (
     <Dialog
       open={open}
@@ -102,32 +115,36 @@ export function OperationReviewControls({
         render={<Button variant='outline' size='sm' />}
         disabled={needsApproval ? !canApprove : !canReview}
       >
-        {needsApproval ? 'Review compensation approval' : 'Reconcile outcome'}
+        {needsApproval
+          ? t('executionRecovery.reviewApproval')
+          : t('executionRecovery.reconcile')}
       </DialogTrigger>
       <DialogContent className='sm:max-w-lg' showCloseButton={!busy}>
         <DialogHeader>
           <DialogTitle>
             {needsApproval
-              ? `Approve ${approval.targetName}`
-              : 'Reconcile operation outcome'}
+              ? t('executionRecovery.approveTitle', {
+                  name: approval.targetName,
+                })
+              : t('executionRecovery.reconcileTitle')}
           </DialogTitle>
           <DialogDescription>
             {needsApproval
-              ? 'Approve one dispatch with the original frozen arguments shown below. Denying keeps this compensation blocked.'
-              : 'Check the provider or resources first. Record evidence only after related execution has stopped. Confirming no effect permits a new submission when this operation is continued.'}
+              ? t('executionRecovery.approvalDescription')
+              : t('executionRecovery.reviewDescription')}
           </DialogDescription>
         </DialogHeader>
         {needsApproval ? (
           <pre className='max-h-64 overflow-auto break-all whitespace-pre-wrap'>
             {approval.arguments == null
-              ? 'Frozen arguments are unavailable; approval is disabled.'
+              ? t('executionRecovery.argumentsUnavailable')
               : JSON.stringify(approval.arguments, null, 2)}
           </pre>
         ) : (
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor={`${id}-evidence`}>
-                Reconciliation evidence
+                {t('executionRecovery.evidence')}
               </FieldLabel>
               <Textarea
                 id={`${id}-evidence`}
@@ -138,7 +155,7 @@ export function OperationReviewControls({
             </Field>
             <Field>
               <FieldLabel htmlFor={`${id}-receipt`}>
-                Completed result (JSON)
+                {t('executionRecovery.result')}
               </FieldLabel>
               <Textarea
                 id={`${id}-receipt`}
@@ -156,7 +173,7 @@ export function OperationReviewControls({
                 disabled={busy}
               />
               <FieldLabel htmlFor={`${id}-stopped`}>
-                I have confirmed all related execution has stopped.
+                {t('executionRecovery.stopped')}
               </FieldLabel>
             </Field>
           </FieldGroup>
@@ -178,7 +195,7 @@ export function OperationReviewControls({
                   )
                 }
               >
-                Deny
+                {t('executionRecovery.deny')}
               </Button>
               <Button
                 disabled={busy || !canApprove || approval.arguments == null}
@@ -188,7 +205,7 @@ export function OperationReviewControls({
                   )
                 }
               >
-                Approve once
+                {t('executionRecovery.approveOnce')}
               </Button>
             </>
           ) : (
@@ -198,7 +215,7 @@ export function OperationReviewControls({
                 disabled={busy || !stopped || !evidence.trim() || !canReview}
                 onClick={() => resolve(false)}
               >
-                Confirm no effect
+                {t('executionRecovery.noEffect')}
               </Button>
               <Button
                 disabled={
@@ -210,7 +227,7 @@ export function OperationReviewControls({
                 }
                 onClick={() => resolve(true)}
               >
-                Record completed result
+                {t('executionRecovery.recordCompleted')}
               </Button>
             </>
           )}

@@ -172,6 +172,8 @@ impl ProcessNodeRegistry {
                 .find(|message| message.get("type").and_then(Value::as_str) == Some(result_type))
                 .and_then(|message| message.get("data").cloned())
                 .filter(Value::is_object)
+                // Cleanup has no output schema: a normal exit is sufficient.
+                .or_else(|| source.map(|_| serde_json::json!({})))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "Process Node `{}` exited without {result_type}({{...}})",

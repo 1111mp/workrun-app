@@ -12,6 +12,7 @@ mod human_review;
 pub(crate) mod operation_review;
 pub(crate) mod operations;
 pub(crate) mod process;
+pub(crate) mod process_cleanup;
 pub(crate) mod recovery;
 mod remote_agent;
 mod remote_auth;

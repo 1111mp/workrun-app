@@ -46,6 +46,8 @@ pub enum ProcessNodePublicationStatus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProcessCompensation {
     pub entry: PathBuf,
+    /// Accepted for legacy catalogs; no longer required by automatic cleanup.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub idempotency_contract: String,
 }
 
@@ -226,10 +228,9 @@ pub(crate) fn validate_process_node_definition(definition: &IProcessNode) -> Res
             || compensation
                 .entry
                 .components()
-                .any(|part| !matches!(part, Component::Normal(_)))
-            || compensation.idempotency_contract.trim().is_empty())
+                .any(|part| !matches!(part, Component::Normal(_))))
     {
-        bail!("App compensation requires a separate relative entry and an idempotency contract");
+        bail!("App compensation requires a separate relative entry");
     }
 
     if let Some(project_root) = &definition.project_root

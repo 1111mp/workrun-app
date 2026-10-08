@@ -404,7 +404,15 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
                 .bind(run_id)
                 .fetch_one(&pool)
                 .await?;
-        if journaled {
+        let cleanup = if journaled {
+            let key = crate::utils::dirs::get_encryption_key()?;
+            workflow_module::process_cleanup::request(&pool, &key, run_id).await?
+        } else {
+            false
+        };
+        if cleanup {
+            RunManager::global().supervisor.notify();
+        } else if journaled {
             crate::module::run_history::recovery::schedule(&pool, run_id, error.as_deref()).await?;
         }
     }
@@ -549,6 +557,21 @@ fn pending_action(event: &Value) -> Option<(crate::module::run_history::PendingA
         _ => return None,
     };
     Some((kind, object.get("data")?.clone()))
+}
+
+/// Cleanup messages are already committed with their intent status.
+pub(crate) fn emit_cleanup_event(run_id: &str, sequence: i64, event: Value) {
+    if crate::APP_HANDLE.get().is_none() {
+        return;
+    }
+    let _ = emit_on_main_thread(
+        "run-event",
+        RunEventEnvelope {
+            run_id: run_id.into(),
+            sequence,
+            event,
+        },
+    );
 }
 
 #[cfg(test)]

@@ -1074,7 +1074,7 @@ function ProcessNodeDetailEditor({
             <CardDescription>
               {t('apps.detail.compensationDescription', {
                 defaultValue:
-                  'Run a separate script in this App when a workflow is abandoned. Workflow nodes and Agent tools inherit this capability.',
+                  'When a workflow fails, automatically clean up successful calls using this App’s separate script. No execution-time approval is required.',
               })}
             </CardDescription>
           </CardHeader>
@@ -1088,9 +1088,7 @@ function ProcessNodeDetailEditor({
                   onCheckedChange={(enabled) =>
                     update(
                       'compensation',
-                      enabled
-                        ? { entry: 'compensate.py', idempotencyContract: '' }
-                        : undefined,
+                      enabled ? { entry: 'compensate.py' } : undefined,
                     )
                   }
                 />
@@ -1125,28 +1123,6 @@ function ProcessNodeDetailEditor({
                           'Create this file in the same project. The normal entry remains unchanged. Return a receipt with compensation.result({...}).',
                       })}
                     </FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor='app-compensation-contract'>
-                      {t('apps.detail.compensationContract', {
-                        defaultValue: 'Idempotency contract',
-                      })}
-                    </FieldLabel>
-                    <Textarea
-                      id='app-compensation-contract'
-                      disabled={readOnly}
-                      value={draft.compensation.idempotencyContract}
-                      onChange={(event) =>
-                        update('compensation', {
-                          ...draft.compensation!,
-                          idempotencyContract: event.target.value,
-                        })
-                      }
-                      placeholder={t('apps.detail.compensationContractHint', {
-                        defaultValue:
-                          'Explain why repeated compensation is safe, e.g. deleting an already deleted resource succeeds.',
-                      })}
-                    />
                   </Field>
                 </>
               ) : null}
