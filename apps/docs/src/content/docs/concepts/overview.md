@@ -21,17 +21,17 @@ A workflow is a saved canvas definition. Nodes decide who performs work, edges d
 
 Before a run, Workrun validates graph structure and routing. For example, a workflow must have exactly one Start, Start must lead to an executable node, and branch edges must match their node's branch handles. The desktop app then compiles the canvas into an execution graph and initializes state from that run's input.
 
-| Node | Responsibility |
-| --- | --- |
-| `Agent` | Handles reasoning tasks with its selected built-in model, instruction, and optional tools. |
-| `CodeAct Agent` | Lets a model combine code and tools in a controlled Python execution environment, with limits for iterations, tool calls, duration, memory, mounts, and environment variables. |
-| `Process` | Runs a local Python App for deterministic rules, data processing, and system integration. |
-| `If/Else`, `Switch` | Chooses the next path from conditions in state. |
-| `Human Review`, `Ask User Question` | Pauses for a person to review or choose an option before continuing. |
-| `Subworkflow` | Calls a saved workflow, so complex flows can be composed from smaller units. |
-| `Remote Agent` | Calls a remote Agent over A2A. |
-| `Terminate`, `End` | Ends the current path; `Terminate` can end the whole workflow run. |
-| `Group` | Organizes the canvas only; it never executes. |
+| Node                                | Responsibility                                                                                                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Agent`                             | Handles reasoning tasks with its selected built-in model, instruction, and optional tools.                                                                                     |
+| `CodeAct Agent`                     | Lets a model combine code and tools in a controlled Python execution environment, with limits for iterations, tool calls, duration, memory, mounts, and environment variables. |
+| `Process`                           | Runs a local Python App for deterministic rules, data processing, and system integration.                                                                                      |
+| `If/Else`, `Switch`                 | Chooses the next path from conditions in state.                                                                                                                                |
+| `Human Review`, `Ask User Question` | Pauses for a person to review or choose an option before continuing.                                                                                                           |
+| `Subworkflow`                       | Calls a saved workflow, so complex flows can be composed from smaller units.                                                                                                   |
+| `Remote Agent`                      | Calls a remote Agent over A2A; [automatically checks and cancels unfinished tasks](/guides/remote-agents/).                                                                    |
+| `Terminate`, `End`                  | Ends the current path; `Terminate` can end the whole workflow run.                                                                                                             |
+| `Group`                             | Organizes the canvas only; it never executes.                                                                                                                                  |
 
 ## State is explicit, not hidden context
 

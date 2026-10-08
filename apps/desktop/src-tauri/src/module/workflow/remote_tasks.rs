@@ -161,7 +161,7 @@ pub(super) async fn complete_operation(
 impl Drop for RemoteTaskTracker {
     fn drop(&mut self) {
         // A lost local future says nothing about remote execution. Never send
-        // CancelTask here: only an explicit user cancellation requests that.
+        // CancelTask here: the durable lifecycle worker handles failure or Stop.
         if !self.mark_unknown_on_drop {
             return;
         }

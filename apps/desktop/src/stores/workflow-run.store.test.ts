@@ -483,3 +483,61 @@ describe('automatic Process App cleanup messages', () => {
     ]);
   });
 });
+
+describe('remote lifecycle messages', () => {
+  it('updates the original invocation without replacing its answer or workflow error', () => {
+    const run = workflowRunView(
+      replayWorkflowRunProjection(
+        'run-1',
+        events(
+          { type: 'node_start', node: 'research', step: 0 },
+          {
+            type: 'message',
+            node: 'research',
+            content: 'Original answer',
+            is_final: true,
+          },
+          { type: 'node_end', node: 'research', step: 0, duration_ms: 1 },
+          { type: 'node_start', node: 'research', step: 1 },
+          { type: 'error', node: 'research', message: 'Original failure' },
+          {
+            type: 'custom',
+            node: 'research',
+            event_type: 'remote.lifecycle',
+            data: {
+              remoteRecordId: 'remote-1',
+              ownerStep: 0,
+              status: 'cancel_requested',
+            },
+          },
+          {
+            type: 'custom',
+            node: 'research',
+            event_type: 'remote.lifecycle',
+            data: {
+              remoteRecordId: 'remote-1',
+              ownerStep: 0,
+              status: 'canceled',
+            },
+          },
+        ),
+        { mode: 'task', nodes: [node] },
+      ),
+    );
+    expect(run.status).toBe('failed');
+    expect(run.error).toBe('Original failure');
+    expect(run.execution[0].messages).toEqual([
+      { role: 'assistant', content: 'Original answer' },
+      {
+        role: 'assistant',
+        content: 'Remote task: canceled',
+        remoteLifecycle: {
+          remoteRecordId: 'remote-1',
+          ownerStep: 0,
+          status: 'canceled',
+        },
+      },
+    ]);
+    expect(run.execution[1].messages ?? []).toEqual([]);
+  });
+});

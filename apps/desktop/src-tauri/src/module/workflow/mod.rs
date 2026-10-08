@@ -16,6 +16,7 @@ pub(crate) mod process_cleanup;
 pub(crate) mod recovery;
 mod remote_agent;
 mod remote_auth;
+pub(crate) mod remote_lifecycle;
 mod remote_tasks;
 mod routing;
 pub(crate) mod saga;
@@ -35,9 +36,7 @@ use guardrails::*;
 use human_review::*;
 use process::*;
 use remote_agent::*;
-pub(crate) use remote_agent::{
-    RemoteTaskOperation, cancel_remote_tasks_for_run, remote_task_operation, test_remote_connection,
-};
+pub(crate) use remote_agent::{RemoteTaskOperation, remote_task_operation, test_remote_connection};
 pub(crate) use remote_auth::{RemoteAuthentication, validate_remote_secret};
 pub(crate) use remote_tasks::{
     RemoteTaskRecord, list_remote_tasks, mark_remote_tasks_interrupted, remote_task_warnings,

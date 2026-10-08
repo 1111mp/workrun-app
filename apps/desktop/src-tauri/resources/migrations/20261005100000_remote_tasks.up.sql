@@ -153,3 +153,15 @@ CREATE TABLE workflow_compensation_approvals (
  consumed_at TEXT
 );
 CREATE UNIQUE INDEX idx_compensation_active_approval ON workflow_compensation_approvals(operation_id) WHERE status IN ('pending','granted');
+
+-- Termination intent survives application exit; cancellation is never a business resubmission.
+CREATE TABLE remote_task_lifecycle (
+ remote_record_id TEXT PRIMARY KEY REFERENCES remote_tasks(id) ON DELETE CASCADE,
+ run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE CASCADE,
+ status TEXT NOT NULL DEFAULT 'pending',
+ cancel_attempted INTEGER NOT NULL DEFAULT 0,
+ next_check_at TEXT NOT NULL,
+ last_message TEXT,
+ updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_remote_lifecycle_due ON remote_task_lifecycle(status,next_check_at);

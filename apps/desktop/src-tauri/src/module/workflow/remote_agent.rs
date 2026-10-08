@@ -1077,32 +1077,6 @@ async fn remote_task_operation_in_pool(
         .context("Remote task record not found")
 }
 
-pub(crate) async fn cancel_remote_tasks_for_run(run_id: &str) -> Result<()> {
-    let pool = crate::core::db::DBManager::global().pool()?;
-    let config = BaseConfig::workrun().await.data_arc();
-    for record in remote_tasks::list_remote_tasks(&pool, run_id).await? {
-        let compensation: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM workflow_operations WHERE adapter_record_id=? AND purpose='compensation') OR EXISTS(SELECT 1 FROM workflow_operation_reviews WHERE remote_record_id=? AND decision='no_effect')",
-        )
-        .bind(&record.id)
-        .bind(&record.id)
-        .fetch_one(&pool)
-        .await?;
-        if !compensation
-            && record.task_id.is_some()
-            && matches!(
-                record.status.as_str(),
-                "unknown" | "submitted" | "working" | "input_required" | "auth_required"
-            )
-        {
-            // The workflow is already locally cancelled. Remote cancellation is
-            // best effort; its confirmed state remains independently inspectable.
-            let _ = remote_task_operation(&record.id, RemoteTaskOperation::Cancel, &config).await;
-        }
-    }
-    Ok(())
-}
-
 /// A read-only check: discover the card and validate transport/authentication.
 /// No remote agent task is created and no workflow files are sent.
 pub(crate) async fn test_remote_connection(

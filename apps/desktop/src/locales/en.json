@@ -952,6 +952,22 @@
       "processCleanupOutput": "Compensation output",
       "processCleanupUnknown": "Compensation result unknown; automatic resubmission disabled",
       "processCleanupCannotStart": "Compensation could not start; check the saved App entry and original code",
+      "remoteLifecycleMessage": "Remote task: {{status}}",
+      "remoteLifecycleStatus": {
+        "querying": "Checking task status…",
+        "cancel_requested": "Cancellation requested; awaiting confirmation",
+        "awaiting_confirmation": "Result awaiting confirmation; will check again",
+        "unknown": "Submission result unknown: no task ID; automatic resubmission disabled",
+        "submitted": "Submitted; awaiting termination",
+        "working": "Still running; awaiting termination",
+        "input_required": "Awaiting input; cancellation not confirmed",
+        "auth_required": "Awaiting authentication; cancellation not confirmed",
+        "completed": "Completed; result saved",
+        "failed": "Failed",
+        "canceled": "Canceled",
+        "rejected": "Rejected",
+        "not_found": "Task not found; result remains unconfirmed"
+      },
       "processCleanupMessage": "Compensation · {{app}} · {{entry}}: {{status}}",
       "processCleanupStatus": {
         "running": "Running",

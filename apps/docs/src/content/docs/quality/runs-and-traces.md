@@ -81,6 +81,12 @@ A condition should read an explicitly published stable field. When routing is wr
 
 For state boundaries, redaction, and checkpoints, see [Workflows and state](/concepts/workflows-and-state/).
 
+## Remote Agents: distinguish local Stop from remote completion
+
+After workflow failure or user Stop, Workrun automatically queries unfinished remote tasks and attempts to cancel tasks still in progress, without runtime confirmation. Node messages show checks, cancellation, and observed status without replacing the original error. Completed tasks retain their results; submissions that timed out without a task ID remain unknown and are not automatically resubmitted.
+
+Pending confirmation blocks same-task continuation, and a cancellation attempt suppresses automatic forward recovery. Local checks pause on exit and resume on restart; an interruption caused only by application exit retains the existing recovery path. Remote cancellation does not promise business undo. See [Remote Agents and A2A task handling](/guides/remote-agents/).
+
 ## After App compensation, fix the problem and run again
 
 When a workflow fails, successful App calls with a compensation entry are cleaned up automatically, including successful Tool App calls inside an Agent. Check compensation status in the corresponding node messages and verify unfinished or unknown resources. Once cleanup starts, checkpoint continuation cannot reuse cleaned-up results. Fix the problem and choose Run again to create a new task for a fresh business execution; the original retains failure and cleanup evidence.

@@ -940,6 +940,22 @@
       "processCleanupOutput": "补偿输出",
       "processCleanupUnknown": "补偿结果待确认，已禁止自动重新提交。",
       "processCleanupCannotStart": "补偿无法启动，请检查保存的补偿入口及原始应用代码。",
+      "remoteLifecycleMessage": "远程任务：{{status}}",
+      "remoteLifecycleStatus": {
+        "querying": "正在查询任务状态…",
+        "cancel_requested": "已请求取消，等待确认",
+        "awaiting_confirmation": "结果待确认，将继续查询",
+        "unknown": "提交结果未知：未收到 taskId，不会自动重新提交",
+        "submitted": "已提交，等待结束",
+        "working": "仍在执行，等待结束",
+        "input_required": "等待输入，取消尚未确认",
+        "auth_required": "等待认证，取消尚未确认",
+        "completed": "已完成，结果已保存",
+        "failed": "已失败",
+        "canceled": "已取消",
+        "rejected": "已拒绝",
+        "not_found": "远程任务不存在，结果仍待确认"
+      },
       "processCleanupMessage": "补偿执行 · {{app}} · {{entry}}：{{status}}",
       "processCleanupStatus": {
         "running": "执行中",

@@ -188,3 +188,7 @@ Tool App 的补偿脚本使用 `compensation.context()`，无需 `@tool` 装饰�
 任务未结束前保留原 App 源码和锁文件。Workrun 会检查记录的代码指纹，代码或依赖锁文件变化会阻止旧任务补偿；当前没有自动保存不可变代码包。把生成文件放在项目之外，例如本教程的临时目录。入口配置只作用于后续执行，不会追溯清理旧版本的历史失败任务。
 
 进一步排查见[运行、调试与追踪](/zh-cn/quality/runs-and-traces/)。
+
+## 与 Remote Agent 的区别
+
+App 补偿执行你配置的清理代码，只针对 workflow 失败前成功的调用；用户停止不触发 App 自动补偿。Remote Agent 使用标准 A2A 查询与取消，在 workflow 失败或停止后自动处理未结束任务，但不自动撤销已经完成的业务。两者的进度都显示在对应节点 message 中。详见 [Remote Agent 与 A2A 任务处理](/zh-cn/guides/remote-agents/)。

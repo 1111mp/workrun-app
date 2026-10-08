@@ -97,6 +97,7 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
         "kind": "workflow",
         "compensationJournalVersion": 1,
         "processCleanupVersion": 1,
+        "remoteLifecycleVersion": 1,
         "executionId": request.run_id,
         "dsl": request.dsl,
         "threadId": request.thread_id,
@@ -759,12 +760,7 @@ pub async fn cancel_waiting_workflow(run_id: &str) -> Result<()> {
         }),
     )
     .await?;
-    let finished = finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await;
-    let cancelled_run_id = run_id.to_string();
-    tokio::spawn(async move {
-        let _ = workflow_module::cancel_remote_tasks_for_run(&cancelled_run_id).await;
-    });
-    finished
+    finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await
 }
 
 pub(super) fn workflow_session_from_runtime(runtime: &Value) -> Result<WorkflowSession> {

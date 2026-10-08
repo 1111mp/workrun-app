@@ -595,6 +595,40 @@ function applyCustom(
       transient.askUserQuestion = event.data as Record<string, unknown>;
     return;
   }
+  if (event.event_type === 'remote.lifecycle') {
+    const data = event.data as Record<string, unknown>;
+    const execution =
+      projection.executionIds
+        .map((id) => projection.executionsById[id])
+        .findLast(
+          (item) => item.nodeId === event.node && item.step === data.ownerStep,
+        ) ?? latestExecution(projection, event.node);
+    if (!execution || typeof data.remoteRecordId !== 'string') return;
+    const messages = Array.isArray(execution.messages)
+      ? execution.messages
+      : [];
+    const existing = messages.find(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        (item as Record<string, unknown>).remoteLifecycle &&
+        (
+          (item as Record<string, unknown>).remoteLifecycle as Record<
+            string,
+            unknown
+          >
+        ).remoteRecordId === data.remoteRecordId,
+    ) as Record<string, unknown> | undefined;
+    const message = {
+      role: 'assistant',
+      content: `Remote task: ${String(data.status)}`,
+      remoteLifecycle: data,
+    };
+    if (existing) Object.assign(existing, message);
+    else messages.push(message);
+    execution.messages = messages;
+    return;
+  }
   if (event.event_type === 'process.compensation') {
     const cleanup = event.data as Record<string, unknown>;
     const execution =

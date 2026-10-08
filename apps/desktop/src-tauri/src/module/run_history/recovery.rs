@@ -75,7 +75,7 @@ pub(crate) async fn schedule(pool: &sqlx::SqlitePool, id: &str, error: Option<&s
 pub(crate) async fn claim_recovery(pool: &sqlx::SqlitePool) -> Result<Option<String>> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let now = chrono::Utc::now().to_rfc3339();
-    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status IN ('failed','interrupted') AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) ORDER BY j.next_check_at LIMIT 1")
+    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status IN ('failed','interrupted') AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) AND NOT EXISTS(SELECT 1 FROM remote_task_lifecycle l WHERE l.run_id=r.id AND (l.status IN ('pending','blocked') OR l.cancel_attempted=1)) ORDER BY j.next_check_at LIMIT 1")
         .bind(&now).fetch_optional(&mut *tx).await?;
     if let Some(id) = &id {
         sqlx::query(

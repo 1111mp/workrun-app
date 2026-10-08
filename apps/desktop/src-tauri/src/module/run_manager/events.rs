@@ -398,6 +398,10 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
             .execute(&pool)
             .await?;
     }
+    if matches!(status, RunStatus::Failed | RunStatus::Cancelled) {
+        workflow_module::remote_lifecycle::enqueue(&pool).await?;
+        RunManager::global().supervisor.notify();
+    }
     if matches!(status, RunStatus::Failed) {
         let journaled: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_operation_attempts WHERE run_id = ?)")

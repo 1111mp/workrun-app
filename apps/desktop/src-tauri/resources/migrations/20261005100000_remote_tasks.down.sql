@@ -1,3 +1,4 @@
+DROP TABLE remote_task_lifecycle;
 DROP TABLE workflow_compensation_approvals;
 DROP TABLE workflow_operation_reviews;
 DROP TABLE workflow_abandonments;

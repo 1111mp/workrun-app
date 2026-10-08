@@ -198,10 +198,6 @@ async fn execute_workflow(
         )
         .await?;
         let finished = finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await;
-        let cancelled_run_id = run_id.to_string();
-        tokio::spawn(async move {
-            let _ = workflow_module::cancel_remote_tasks_for_run(&cancelled_run_id).await;
-        });
         return finished;
     };
     if let Some(total_steps) = terminal_steps.lock().take() {

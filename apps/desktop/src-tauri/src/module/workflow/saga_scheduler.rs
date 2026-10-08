@@ -19,6 +19,14 @@ pub(crate) async fn inspect(pool: &sqlx::SqlitePool, run_id: &str) -> Result<Opt
 }
 
 pub(crate) async fn ensure_continuable(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, run_id: &str) -> Result<()> {
+    let settling: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM remote_task_lifecycle WHERE run_id=? AND status='pending')")
+            .bind(run_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if settling {
+        bail!("Remote task termination is still being confirmed");
+    }
     let abandoned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_abandonments WHERE run_id=?)")
         .bind(run_id)
         .fetch_one(&mut **tx)

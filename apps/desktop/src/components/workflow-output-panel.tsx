@@ -680,6 +680,19 @@ function CleanupMessages({ entry }: { entry: WorkflowTraceEntry }) {
     <>
       {messages.map((message, index) => {
         if (typeof message !== 'object' || message === null) return null;
+        const lifecycle = recordValue(
+          (message as Record<string, unknown>).remoteLifecycle,
+        );
+        if (lifecycle)
+          return (
+            <p key={index} className='text-muted-foreground mt-2 text-sm'>
+              {t('workflowEditor.output.remoteLifecycleMessage', {
+                status: t(
+                  `workflowEditor.output.remoteLifecycleStatus.${String(lifecycle.status)}`,
+                ),
+              })}
+            </p>
+          );
         const cleanup = recordValue(
           (message as Record<string, unknown>).compensation,
         );
@@ -862,7 +875,7 @@ function TraceResult({
         )
       : [];
     const responses = messages
-      .filter((message) => !message.compensation)
+      .filter((message) => !message.compensation && !message.remoteLifecycle)
       .map((message) => message.content)
       .filter((content): content is string => typeof content === 'string');
 
@@ -1570,7 +1583,11 @@ function chatTurnResponse(
     const messages = Array.isArray(entry.messages) ? entry.messages : [];
     return messages.flatMap((message) => {
       if (typeof message !== 'object' || message === null) return [];
-      if ((message as Record<string, unknown>).compensation) return [];
+      if (
+        (message as Record<string, unknown>).compensation ||
+        (message as Record<string, unknown>).remoteLifecycle
+      )
+        return [];
       const content = (message as Record<string, unknown>).content;
       return typeof content === 'string' && content.trim()
         ? [

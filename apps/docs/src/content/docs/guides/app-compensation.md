@@ -186,3 +186,7 @@ If a process produces side effects but stops before the local result is saved, t
 Retain the original App source and lockfile until the task is settled. Workrun checks the recorded fingerprint; changed code or lockfiles block old-task compensation. Immutable code bundles are not saved automatically. Keep generated files outside the project, as in this tutorial’s temporary directory. Entry configuration applies to subsequent execution, without retroactively cleaning legacy failed runs.
 
 For further investigation, see [Runs, debugging, and traces](/quality/runs-and-traces/).
+
+## How this differs from Remote Agents
+
+App compensation runs your cleanup code for successful calls when a workflow fails; user Stop does not trigger automatic App compensation. Remote Agents use standard A2A queries and cancellation after workflow failure or Stop to handle unfinished tasks, without automatically undoing completed business work. Both show progress in node messages. See [Remote Agents and A2A task handling](/guides/remote-agents/).
