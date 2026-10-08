@@ -7,10 +7,10 @@ A Python App is a complete, editable local `uv` project for predictable data pro
 
 Workrun has two types. Choose based not on the language, but on **who decides when the code runs**.
 
-| Type | Triggered by | Can run independently? | How it joins a workflow | Best for |
-| --- | --- | --- | --- | --- |
-| **App / Process Node** | A person from the App page, or a workflow in canvas order | Yes | Select it as a **Process** node’s **App connection** | Fixed-position collection, cleanup, calculation, files, or system work |
-| **Tool App** | An Agent, based on its name, description, and schema | Its meaningful invocation receives Agent arguments | Select it in an Agent’s **Tools**; it cannot be a Process node | A lookup, calculation, or action whose need depends on the task |
+| Type                   | Triggered by                                              | Can run independently?                             | How it joins a workflow                                        | Best for                                                               |
+| ---------------------- | --------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **App / Process Node** | A person from the App page, or a workflow in canvas order | Yes                                                | Select it as a **Process** node’s **App connection**           | Fixed-position collection, cleanup, calculation, files, or system work |
+| **Tool App**           | An Agent, based on its name, description, and schema      | Its meaningful invocation receives Agent arguments | Select it in an Agent’s **Tools**; it cannot be a Process node | A lookup, calculation, or action whose need depends on the task        |
 
 > An App is not a sandbox. It has the file, network, and system permissions of the current user environment. Run only code you trust, and minimize sensitive data and side effects.
 
@@ -20,12 +20,12 @@ Start with an independent run; it makes the App model easiest to see. This “He
 
 Go to **Apps → New**, choose **App** (not Tool App), and name it “Health information collection.” Choose a project location and let Workrun create the `uv` project. Under **Data contract**, add these output fields. On cancellation only `status` is returned, so the other three outputs must be **optional**.
 
-| Direction | Label | Key | Type | Required |
-| --- | --- | --- | --- | --- |
-| Output | Collection status | `status` | string | Yes |
-| Output | Email | `email` | string | No |
-| Output | Height (cm) | `height_cm` | number | No |
-| Output | Weight (kg) | `weight_kg` | number | No |
+| Direction | Label             | Key         | Type   | Required |
+| --------- | ----------------- | ----------- | ------ | -------- |
+| Output    | Collection status | `status`    | string | Yes      |
+| Output    | Email             | `email`     | string | No       |
+| Output    | Height (cm)       | `height_cm` | number | No       |
+| Output    | Weight (kg)       | `weight_kg` | number | No       |
 
 Replace the entry-point code with:
 
@@ -77,17 +77,17 @@ The Python UI SDK does not require you to write a React interface. An App sends 
 
 `collect()` is a convenience layer for common fields: it builds an object schema and turns `layout` into RJSF `LayoutGridField` configuration. Use `form()` directly for nested objects, arrays, conditional structures, or precise UI Schema control. A cancelled form returns `None`; after receiving a result, the same App run can request another interaction.
 
-| API | Purpose | Returns | Use it when |
-| --- | --- | --- | --- |
-| `form()` | Sends a complete JSON Schema and optional UI Schema | Submitted JSON value, or `None` on cancel | Nested objects, arrays, `oneOf`, or direct RJSF configuration |
-| `collect()` | Collects named fields with field helpers | JSON object, or `None` on cancel | Ordinary forms; the health-information example on this page uses it |
-| `confirm()` | Shows a confirmation/cancellation dialog | `True` or `False` | One clear decision, such as sending, deleting, or overwriting |
-| `text()` | Builds a string field | `Field` for `collect()` | Single/multiline text, descriptions, and placeholders |
-| `number()` | Builds a number or integer field | `Field` for `collect()` | Bounds, integers, steps, and numeric placeholders |
-| `choice()` | Builds a single-choice field | `Field` for `collect()` | Selects or radio buttons; keys are saved values and values are display labels |
-| `boolean()` | Builds a Boolean field | `Field` for `collect()` | Checkboxes or switch-like confirmation |
-| `path()` | Builds a file or directory field | `Field` for `collect()` | The desktop app’s native file or directory picker |
-| `shutdown()` | Closes the shared IPC client | Nothing | Normally unnecessary; the SDK cleans up automatically on process exit |
+| API          | Purpose                                             | Returns                                   | Use it when                                                                   |
+| ------------ | --------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `form()`     | Sends a complete JSON Schema and optional UI Schema | Submitted JSON value, or `None` on cancel | Nested objects, arrays, `oneOf`, or direct RJSF configuration                 |
+| `collect()`  | Collects named fields with field helpers            | JSON object, or `None` on cancel          | Ordinary forms; the health-information example on this page uses it           |
+| `confirm()`  | Shows a confirmation/cancellation dialog            | `True` or `False`                         | One clear decision, such as sending, deleting, or overwriting                 |
+| `text()`     | Builds a string field                               | `Field` for `collect()`                   | Single/multiline text, descriptions, and placeholders                         |
+| `number()`   | Builds a number or integer field                    | `Field` for `collect()`                   | Bounds, integers, steps, and numeric placeholders                             |
+| `choice()`   | Builds a single-choice field                        | `Field` for `collect()`                   | Selects or radio buttons; keys are saved values and values are display labels |
+| `boolean()`  | Builds a Boolean field                              | `Field` for `collect()`                   | Checkboxes or switch-like confirmation                                        |
+| `path()`     | Builds a file or directory field                    | `Field` for `collect()`                   | The desktop app’s native file or directory picker                             |
+| `shutdown()` | Closes the shared IPC client                        | Nothing                                   | Normally unnecessary; the SDK cleans up automatically on process exit         |
 
 ### Use `form()` for full Schema and UI Schema
 
@@ -178,9 +178,9 @@ Later Agents, conditions, or Process nodes can then read the values. Email is se
 
 A Process App can also read workflow state. For example, to prefill or display a known email, add this input to the App’s data contract:
 
-| Direction | Label | Key | Type | Required |
-| --- | --- | --- | --- | --- |
-| Input | Known email | `email` | string | No |
+| Direction | Label       | Key     | Type   | Required |
+| --------- | ----------- | ------- | ------ | -------- |
+| Input     | Known email | `email` | string | No       |
 
 Workflow inputs are global state. Ordinary Process output is private until added to **Published output keys**. For a full Process, Agent, and branch example, see [Build your first workflow](/guides/build-a-workflow/).
 
@@ -190,12 +190,12 @@ Use a **Tool App** when the Agent should decide whether a lookup or action is ne
 
 Declare a small, explicit contract:
 
-| Direction | Label | Key | Type | Required |
-| --- | --- | --- | --- | --- |
-| Input | Order ID | `ticket_id` | string | Yes |
-| Output | Order status | `status` | string | Yes |
-| Output | Estimated delivery date | `estimated_delivery` | string | Yes |
-| Output | Refund eligible | `can_refund` | boolean | Yes |
+| Direction | Label                   | Key                  | Type    | Required |
+| --------- | ----------------------- | -------------------- | ------- | -------- |
+| Input     | Order ID                | `ticket_id`          | string  | Yes      |
+| Output    | Order status            | `status`             | string  | Yes      |
+| Output    | Estimated delivery date | `estimated_delivery` | string  | Yes      |
+| Output    | Refund eligible         | `can_refund`         | boolean | Yes      |
 
 Use this demonstration implementation to test the connection. When connecting a real order system, replace only the lookup inside the function and preserve the same input and output contract:
 
@@ -229,17 +229,21 @@ When a customer asks about order status, a refund, or a replacement, call lookup
 After calling it, use status, estimated_delivery, and can_refund to recommend an action. Do not issue a refund or replacement yourself.
 ```
 
+## Configure compensation for Apps with side effects
+
+Both Process Apps and Tool Apps can configure a separate `compensate.py` in the same project. When a workflow finally fails, Workrun automatically cleans up successful calls and reports the results in the corresponding node messages. Normal completion and Stop do not trigger cleanup. After fixing the problem, Run again creates a new task. See [App failure compensation](/guides/app-compensation/) for configuration, runnable examples, and recovery limits.
+
 ## 4. Verify and troubleshoot
 
 First run an App from the App page and confirm its form, stdout/stderr, and output JSON. Then connect it to a workflow and verify state publication. Verify a Tool App from a workflow that contains its Agent.
 
-| Symptom | Check first |
-| --- | --- |
-| The form does not appear | Confirm Workrun starts the code from the App page or workflow, and the entry point calls `collect()`, `form()`, or `confirm()`. |
-| The workflow fails after form cancellation | Fields absent on cancellation must be optional in the output contract; confirm the code returns `status`. |
-| A later node cannot see a Process value | On the **node that produces it**, check it is listed in **Published output keys**. |
-| The Agent does not call the tool | Confirm the Tool App is selected; its description and Agent instructions state the condition; and input contains `ticket_id`. |
-| Tool arguments are empty or invalid | Check the Tool App input schema uses `ticket_id`; if names differ, configure state binding. |
+| Symptom                                    | Check first                                                                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| The form does not appear                   | Confirm Workrun starts the code from the App page or workflow, and the entry point calls `collect()`, `form()`, or `confirm()`. |
+| The workflow fails after form cancellation | Fields absent on cancellation must be optional in the output contract; confirm the code returns `status`.                       |
+| A later node cannot see a Process value    | On the **node that produces it**, check it is listed in **Published output keys**.                                              |
+| The Agent does not call the tool           | Confirm the Tool App is selected; its description and Agent instructions state the condition; and input contains `ticket_id`.   |
+| Tool arguments are empty or invalid        | Check the Tool App input schema uses `ticket_id`; if names differ, configure state binding.                                     |
 
 Run history retains App stdout/stderr, tool inputs and outputs, and node events. Locate the failing node first, then decide whether to change code, schema, permissions, instructions, or model configuration.
 

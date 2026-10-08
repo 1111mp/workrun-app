@@ -107,6 +107,11 @@ export default defineConfig({
               link: '/guides/python-apps/',
             },
             {
+              label: 'App failure compensation',
+              translations: { 'zh-CN': 'App 失败补偿' },
+              link: '/guides/app-compensation/',
+            },
+            {
               label: 'Connect an MCP server',
               translations: { 'zh-CN': '连接 MCP Server' },
               link: '/guides/connect-an-mcp-server/',

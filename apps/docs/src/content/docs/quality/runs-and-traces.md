@@ -1,6 +1,6 @@
 ---
 title: Runs, debugging, and traces
-description: "Build an evidence trail from every run: locate the failed node, inspect inputs and side effects, then recover or fix automation safely."
+description: 'Build an evidence trail from every run: locate the failed node, inspect inputs and side effects, then recover or fix automation safely.'
 ---
 
 A run is not only “successful” or “failed.” Workrun keeps the workflow snapshot, state changes, node events, model and tool activity, Python logs, and runtime diagnostics in the run workspace. Use that record to answer one concrete question: **where did this run stop, with which inputs, after which result, and what should change next?**
@@ -23,13 +23,13 @@ Within one workflow, run history shows both health over a time range and the sta
 
 ## Read the run status before taking action
 
-| Status | What it means | Next step |
-| --- | --- | --- |
-| `queued` / `running` | The run is queued or still executing. | Wait for more events. If no events arrive for an unusual time, inspect timeouts on the active model or tool. |
-| `waiting_for_input` | Human review, a question response, or tool confirmation is pending. | Complete the action in the run panel; do not treat it as a failed run. |
-| `completed` | This execution has ended. | Check final state and diagnostics. If the result is wrong, trace upstream from the node that produced the wrong value. |
-| `failed` | A node or runtime step could not complete. | Read its error, events, and node evidence. Retry from a checkpoint only after checking for duplicate side effects. |
-| `cancelled` / `interrupted` | A person cancelled it, or the app stopped during execution. | Do not assume it had no effect. Check the last event and external system before starting another run. |
+| Status                      | What it means                                                       | Next step                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `queued` / `running`        | The run is queued or still executing.                               | Wait for more events. If no events arrive for an unusual time, inspect timeouts on the active model or tool.           |
+| `waiting_for_input`         | Human review, a question response, or tool confirmation is pending. | Complete the action in the run panel; do not treat it as a failed run.                                                 |
+| `completed`                 | This execution has ended.                                           | Check final state and diagnostics. If the result is wrong, trace upstream from the node that produced the wrong value. |
+| `failed`                    | A node or runtime step could not complete.                          | Read its error, events, and node evidence. Retry from a checkpoint only after checking for duplicate side effects.     |
+| `cancelled` / `interrupted` | A person cancelled it, or the app stopped during execution.         | Do not assume it had no effect. Check the last event and external system before starting another run.                  |
 
 > Waiting for input is a resumable pause. Retrying a failure creates a new run branch from an available checkpoint. They are not the same action.
 
@@ -39,15 +39,15 @@ Global **Run history** combines local workflow and App executions. When a run’
 
 ## The run workspace: what each piece of evidence answers
 
-| Evidence | Ask first | Common conclusion |
-| --- | --- | --- |
-| Node timeline and events | Which node stopped? In what order did completion, waiting, and failure occur? | The issue belongs to an Agent, App, tool, condition, or human action. |
-| Run input and upstream state | Are input keys, types, and values correct? Did an upstream node publish the required field? | A required value is missing, a key differs, or the downstream node lacks read access. |
-| Model messages and structured output | What did the Agent actually see? Does its output meet the contract? | Prompt, model configuration, structured schema, or state boundary needs adjustment. |
-| Tool activity | Were parameters, approval, limits, and returned shape correct? | Tool description, state binding, permission, or the service needs repair. |
-| Process App stdout / stderr | Where did Python fail? Did it return the expected JSON? | Dependency, environment, business logic, or App data contract is wrong. |
-| Final state | Which fields actually reached workflow output and downstream nodes? | A value was not published, was overwritten, or sensitive-data visibility needs redesign. |
-| Runtime diagnostics | Which node, model, or tool used time, tokens, or calls? | Limit tool calls, shorten context, select another model, or investigate a bottleneck. |
+| Evidence                             | Ask first                                                                                   | Common conclusion                                                                        |
+| ------------------------------------ | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Node timeline and events             | Which node stopped? In what order did completion, waiting, and failure occur?               | The issue belongs to an Agent, App, tool, condition, or human action.                    |
+| Run input and upstream state         | Are input keys, types, and values correct? Did an upstream node publish the required field? | A required value is missing, a key differs, or the downstream node lacks read access.    |
+| Model messages and structured output | What did the Agent actually see? Does its output meet the contract?                         | Prompt, model configuration, structured schema, or state boundary needs adjustment.      |
+| Tool activity                        | Were parameters, approval, limits, and returned shape correct?                              | Tool description, state binding, permission, or the service needs repair.                |
+| Process App stdout / stderr          | Where did Python fail? Did it return the expected JSON?                                     | Dependency, environment, business logic, or App data contract is wrong.                  |
+| Final state                          | Which fields actually reached workflow output and downstream nodes?                         | A value was not published, was overwritten, or sensitive-data visibility needs redesign. |
+| Runtime diagnostics                  | Which node, model, or tool used time, tokens, or calls?                                     | Limit tool calls, shorten context, select another model, or investigate a bottleneck.    |
 
 The record preserves the target snapshot, final state, and event sequence for this run. Anchor your investigation to that evidence before changing the current draft; otherwise it is hard to know whether a change solved the same problem.
 
@@ -81,7 +81,15 @@ A condition should read an explicitly published stable field. When routing is wr
 
 For state boundaries, redaction, and checkpoints, see [Workflows and state](/concepts/workflows-and-state/).
 
+## After App compensation, fix the problem and run again
+
+When a workflow fails, successful App calls with a compensation entry are cleaned up automatically, including successful Tool App calls inside an Agent. Check compensation status in the corresponding node messages and verify unfinished or unknown resources. Once cleanup starts, checkpoint continuation cannot reuse cleaned-up results. Fix the problem and choose Run again to create a new task for a fresh business execution; the original retains failure and cleanup evidence.
+
+Stop and normal completion do not trigger automatic cleanup. See [App failure compensation](/guides/app-compensation/) for configuration and exception handling.
+
 ## Confirm side effects before recovering from a checkpoint
+
+The checkpoint actions below apply only when automatic cleanup has not started and continuation is available. For tasks with App cleanup already started, use Run again.
 
 A failed run can create a new retry run from its latest checkpoint. Earlier completed nodes do not run again, but the failed node **may already have** sent a message, written a record, or called an external service before it errored. Before retrying:
 
