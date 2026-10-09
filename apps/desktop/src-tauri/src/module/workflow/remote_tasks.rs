@@ -81,6 +81,15 @@ impl RemoteTaskTracker {
         Ok(tracker)
     }
 
+    pub async fn attach_operation(&self, operation_id: &str) -> Result<()> {
+        sqlx::query("UPDATE workflow_operations SET adapter_record_id = ? WHERE id = ? AND adapter_record_id IS NULL")
+            .bind(&self.id)
+            .bind(operation_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     fn encrypt(&self) -> Result<String> {
         encrypt_data_with_key(&serde_json::to_string(&self.connection)?, &self.key)
             .map_err(|_| anyhow::anyhow!("Cannot encrypt remote task connection"))
@@ -133,10 +142,26 @@ impl RemoteTaskTracker {
     }
 }
 
+/// Adapter facts and the common reusable output commit before graph State.
+pub(super) async fn complete_operation(
+    pool: &SqlitePool,
+    operation: &mut super::operations::Operation,
+    result: &Value,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    operation.persist_outcome(&mut tx, Some(result), "succeeded").await?;
+    sqlx::query("UPDATE remote_tasks SET status = 'completed', result_json = ?, updated_at = ? WHERE id = (SELECT adapter_record_id FROM workflow_operations WHERE id = ?)")
+        .bind(serde_json::json!({"response":result["response"], "artifacts":result["artifacts"]}).to_string())
+        .bind(chrono::Utc::now().to_rfc3339()).bind(&operation.id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    operation.committed();
+    Ok(())
+}
+
 impl Drop for RemoteTaskTracker {
     fn drop(&mut self) {
         // A lost local future says nothing about remote execution. Never send
-        // CancelTask here: only an explicit user cancellation requests that.
+        // CancelTask here: the run termination handler requests cancellation.
         if !self.mark_unknown_on_drop {
             return;
         }
@@ -152,7 +177,8 @@ impl Drop for RemoteTaskTracker {
 }
 
 pub(crate) async fn list_remote_tasks(pool: &SqlitePool, run_id: &str) -> Result<Vec<RemoteTaskRecord>> {
-    let rows = sqlx::query("SELECT * FROM remote_tasks WHERE run_id = ? ORDER BY created_at, id")
+    let rows = sqlx::query("SELECT * FROM remote_tasks WHERE run_id = ? OR id IN (SELECT o.adapter_record_id FROM workflow_operations o JOIN workflow_operation_attempts a ON a.operation_id = o.id WHERE a.run_id = ?) ORDER BY created_at, id")
+        .bind(run_id)
         .bind(run_id)
         .fetch_all(pool)
         .await?;
@@ -200,7 +226,7 @@ pub(super) async fn test_pool() -> SqlitePool {
         .connect("sqlite::memory:")
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE run_records (id TEXT PRIMARY KEY, status TEXT NOT NULL, target_type TEXT NOT NULL DEFAULT 'workflow', target_id TEXT NOT NULL DEFAULT 'workflow-1')")
+    sqlx::query("CREATE TABLE run_records (id TEXT PRIMARY KEY, status TEXT NOT NULL, target_type TEXT NOT NULL DEFAULT 'workflow', target_id TEXT NOT NULL DEFAULT 'workflow-1', started_at TEXT NOT NULL DEFAULT '2026-10-07T00:00:00Z', ended_at TEXT, error TEXT, output_view_json TEXT DEFAULT '{}', runtime_json TEXT DEFAULT '{}', updated_at TEXT, created_at TEXT DEFAULT '2026-10-07T00:00:00Z', duration_ms INTEGER, last_sequence INTEGER DEFAULT 0)")
         .execute(&pool)
         .await
         .unwrap();

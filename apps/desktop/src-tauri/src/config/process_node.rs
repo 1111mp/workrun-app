@@ -41,6 +41,16 @@ pub enum ProcessNodePublicationStatus {
     Published,
 }
 
+/// A sibling entrypoint shares this App's code, lockfile and environment.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessCompensation {
+    pub entry: PathBuf,
+    /// Accepted for legacy catalogs; no longer required by automatic cleanup.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub idempotency_contract: String,
+}
+
 /// Persisted metadata for one uv-managed Python Process Node.
 ///
 /// Python versions and dependencies remain in the project's `pyproject.toml`
@@ -58,6 +68,8 @@ pub struct IProcessNode {
     #[serde(default)]
     pub updated_at: String,
     pub entry: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compensation: Option<ProcessCompensation>,
     /// Older entries use the default Process Node directory when this is absent.
     #[serde(default)]
     pub project_root: Option<PathBuf>,
@@ -210,6 +222,17 @@ pub(crate) fn validate_process_node_definition(definition: &IProcessNode) -> Res
     {
         bail!("Process Node entry must be a non-empty relative file path");
     }
+    if let Some(compensation) = &definition.compensation
+        && (compensation.entry == definition.entry
+            || compensation.entry.as_os_str().is_empty()
+            || compensation
+                .entry
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_))))
+    {
+        bail!("App compensation requires a separate relative entry");
+    }
+
     if let Some(project_root) = &definition.project_root
         && (!project_root.is_absolute() || project_root.as_os_str().is_empty())
     {

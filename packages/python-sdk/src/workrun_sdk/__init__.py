@@ -1,6 +1,6 @@
 """Python SDK for communicating with a Workrun desktop host."""
 
-from . import artifacts, process
+from . import artifacts, compensation, process
 from ._client import InteractionCancelled, WorkrunConnectionError
 from .tool import tool
 from .ui import boolean, choice, collect, confirm, form, number, path, shutdown, text
@@ -12,6 +12,7 @@ __all__ = [
     "boolean",
     "choice",
     "collect",
+    "compensation",
     "confirm",
     "form",
     "number",

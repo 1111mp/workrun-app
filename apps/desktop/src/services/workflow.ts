@@ -557,9 +557,11 @@ export function resumeBackgroundWorkflowRun(
   });
 }
 
-/** Starts a new run from the failed run's latest checkpoint. */
-export function retryFailedBackgroundWorkflowRun(sourceRunId: string) {
-  return invoke<RunRecordSummary>('workflow_run_retry_failed', { sourceRunId });
+/** Recovers an application-interrupted run in its original task. */
+export function recoverInterruptedWorkflowRun(sourceRunId: string) {
+  return invoke<RunRecordSummary>('workflow_run_recover_interrupted', {
+    sourceRunId,
+  });
 }
 
 export function resolveBackgroundWorkflowAction(

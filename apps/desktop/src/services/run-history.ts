@@ -155,6 +155,79 @@ export type RunObservability = {
   spans: SpanMetricSummary[];
 };
 
+export type ExecutionHistory = {
+  compensation?: {
+    status: 'pending' | 'running' | 'completed' | 'blocked';
+    automatic?: boolean;
+    requestedAt: string;
+    lastError?: string | null;
+    completed: number;
+    total: number;
+  } | null;
+  attempts: {
+    sequence: number;
+    status: string;
+    startedAt: string;
+    endedAt?: string;
+    error?: string;
+  }[];
+  operations: {
+    id: string;
+    path: string;
+    adapter: string;
+    status: string;
+    purpose?: 'execution' | 'compensation';
+    dispatched?: boolean;
+    confirmedNoEffect?: boolean;
+    review?: {
+      decision: 'completed' | 'no_effect';
+      attemptSequence: number;
+      createdAt: string;
+    } | null;
+    approval?: {
+      id: string;
+      status: 'pending' | 'granted' | 'denied' | 'consumed';
+      targetName: string;
+      arguments: unknown;
+      createdAt: string;
+    } | null;
+    compensation?: {
+      id: string;
+      mode:
+        | 'unspecified'
+        | 'read_only'
+        | 'compensatable'
+        | 'irreversible'
+        | 'delegated';
+      status:
+        | 'not_requested'
+        | 'pending'
+        | 'running'
+        | 'succeeded'
+        | 'failed'
+        | 'blocked';
+      provenance: 'before_dispatch' | 'after_dispatch';
+      outcomeRecorded: boolean;
+      argumentsAvailable: boolean;
+      lastError?: string | null;
+    } | null;
+    attempts: {
+      sequence: number;
+      action: string;
+      status: string;
+      startedAt: string;
+      endedAt?: string;
+      errorSummary?: string;
+    }[];
+  }[];
+  recovery?: {
+    status: string;
+    attempts: number;
+    nextCheckAt: string;
+    lastError?: string;
+  };
+};
+
 export type RunRecord = RunRecordSummary & {
   input?: Record<string, unknown>;
   outputView: unknown;
@@ -162,6 +235,7 @@ export type RunRecord = RunRecordSummary & {
   runtime: unknown;
   events: RunEvent[];
   spans: RunSpan[];
+  executionHistory?: ExecutionHistory;
 };
 
 export type MissingReplayDependency = {
@@ -294,4 +368,18 @@ export function resolvePendingAction(
     resolution,
     claimantId,
   });
+}
+
+export type OperationReviewDecision =
+  | { kind: 'completed'; result: unknown }
+  | { kind: 'no_effect' };
+export function reviewWorkflowOperation(request: {
+  runId: string;
+  operationId: string;
+  expectedAttempt: number;
+  stoppedConfirmed: boolean;
+  evidence: string;
+  decision: OperationReviewDecision;
+}) {
+  return invoke<void>('workflow_operation_review', { request });
 }

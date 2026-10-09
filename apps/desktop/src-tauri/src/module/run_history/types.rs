@@ -381,6 +381,7 @@ pub struct RunRecord {
     pub runtime: Value,
     pub events: Vec<StoredRunEvent>,
     pub spans: Vec<RunSpan>,
+    pub execution_history: super::recovery::ExecutionHistory,
 }
 
 #[derive(Debug, Clone, Serialize)]

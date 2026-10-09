@@ -50,7 +50,10 @@ function WorkspaceSettings() {
         queryClient.removeQueries({ queryKey: ['team-user'] });
       }
 
-      if (workspaceModeChanged) queryClient.clear();
+      if (workspaceModeChanged) {
+        await queryClient.cancelQueries();
+        queryClient.clear();
+      }
 
       await updateConfig({
         workspace_mode: mode,
@@ -58,6 +61,8 @@ function WorkspaceSettings() {
           ? { team: { server_url: normalizeServerUrl(serverUrl)! } }
           : {}),
       });
+
+      if (workspaceModeChanged) queryClient.clear();
 
       toast.success(t('settings.workspace.saved'), { toasterId: 'global' });
     } catch {

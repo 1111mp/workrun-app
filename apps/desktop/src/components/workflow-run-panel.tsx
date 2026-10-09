@@ -69,7 +69,6 @@ type WorkflowRunPanelProps = {
   nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
   onResume: () => void;
-  onRetryFailed: () => void;
   readOnly?: boolean;
   onHistoricalClose?: () => void;
   spans?: RunSpan[];
@@ -295,7 +294,6 @@ function WorkflowRunPanel({
   nodes,
   onRun,
   onResume,
-  onRetryFailed,
   readOnly = false,
   onHistoricalClose,
   spans,
@@ -355,17 +353,12 @@ function WorkflowRunPanel({
       ),
     [chatSessions],
   );
-  const [retryConfirmationOpen, setRetryConfirmationOpen] = useState(false);
   const [archiveCandidate, setArchiveCandidate] = useState<ChatSession>();
   const [isArchiving, setIsArchiving] = useState(false);
   const formKey = `${open}:${JSON.stringify(settings)}`;
   const runAgain = () => {
     if (runStatus === 'interrupted') {
       onResume();
-      return;
-    }
-    if (runStatus === 'failed') {
-      setRetryConfirmationOpen(true);
       return;
     }
     if (lastRunInput) onRun(lastRunInput);
@@ -610,32 +603,6 @@ function WorkflowRunPanel({
           )}
         </DrawerContent>
       </Drawer>
-      <AlertDialog
-        open={retryConfirmationOpen}
-        onOpenChange={setRetryConfirmationOpen}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Earlier completed nodes will not run again. The failed node may
-              have already performed an external action, such as sending a
-              message or updating a record.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setRetryConfirmationOpen(false);
-                onRetryFailed();
-              }}
-            >
-              Retry failed node
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
       <AlertDialog
         open={Boolean(archiveCandidate)}
         onOpenChange={(open) => {

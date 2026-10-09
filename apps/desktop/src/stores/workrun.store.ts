@@ -13,6 +13,8 @@ import {
 } from '@/services/cmd';
 import type { TeamUser } from '@/services/session';
 
+import { useRunWorkspaceStore } from './run-workspace.store';
+
 type WorkrunState = {
   config?: IWorkrunConfig;
   resolvedTheme?: AppBaseTheme;
@@ -63,6 +65,18 @@ const storage: PersistStorage<Pick<WorkrunState, 'config' | 'resolvedTheme'>> =
       }
 
       await patchWorkrunConfig(patch);
+
+      if (
+        patch.workspace_mode &&
+        patch.workspace_mode !== previousConfig.workspace_mode
+      ) {
+        // Tabs only describe the visible workspace; the native runs retain their ownership.
+        useRunWorkspaceStore.setState({
+          tabs: [],
+          activeRunId: undefined,
+          open: false,
+        });
+      }
 
       previousConfig = structuredClone(config);
 

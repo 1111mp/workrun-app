@@ -82,7 +82,8 @@ export function ArtifactFiles({
   // not treat lightbox controls as outside the modal and block interaction.
   const lightbox = (
     <Lightbox
-      portal={modalPreview ? { root: previewRoot } : undefined}
+      // Explicit undefined overrides the lightbox's default portal object.
+      portal={modalPreview ? { root: previewRoot } : {}}
       open={Boolean(preview)}
       close={() => setPreview(undefined)}
       slides={slides}

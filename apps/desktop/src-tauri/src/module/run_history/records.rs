@@ -18,7 +18,7 @@ pub(crate) async fn create_in_transaction(
     validate_create(record)?;
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
-            "INSERT INTO run_records (id, target_type, target_id, target_name, status, started_at, input_json, output_view_json, target_snapshot_json, runtime_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO run_records (id, target_type, target_id, target_name, status, started_at, input_json, output_view_json, target_snapshot_json, runtime_json, created_at, updated_at, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&record.id)
         .bind(record.target_type.as_str())
@@ -32,6 +32,7 @@ pub(crate) async fn create_in_transaction(
         .bind(record.runtime.to_string())
         .bind(&now)
         .bind(now)
+        .bind(crate::utils::dirs::active_workspace_id())
         .execute(&mut **transaction)
         .await
         .context("failed to create run record")?;

@@ -113,6 +113,7 @@ pub(super) enum ManagedToolExecutor {
 
 pub(super) struct ManagedToolConfig {
     pub(super) agent_node_id: String,
+    pub(super) compensation: Option<Value>,
     pub(super) on_event: Option<Channel<StreamEvent>>,
     pub(super) tool_calls: Arc<AtomicU32>,
     pub(super) tool_trace: Arc<Mutex<Vec<Value>>>,
@@ -127,6 +128,7 @@ pub(super) struct ManagedTool {
     definition: ToolDefinition,
     executor: ManagedToolExecutor,
     agent_node_id: String,
+    compensation: Option<Value>,
     on_event: Option<Channel<StreamEvent>>,
     tool_calls: Arc<AtomicU32>,
     tool_trace: Arc<Mutex<Vec<Value>>>,
@@ -143,6 +145,7 @@ impl ManagedTool {
             definition,
             executor,
             agent_node_id: config.agent_node_id,
+            compensation: config.compensation,
             on_event: config.on_event,
             tool_calls: config.tool_calls,
             tool_trace: config.tool_trace,
@@ -174,6 +177,12 @@ impl Tool for ManagedTool {
     }
 
     async fn execute(&self, context: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+        let journal = super::tool_journal::CURRENT.try_with(Arc::clone).ok();
+        if let Some(journal) = &journal {
+            journal
+                .check(false)
+                .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+        }
         if self.tool_calls.fetch_add(1, Ordering::Relaxed) >= self.max_tool_calls {
             return Err(adk_rust::AdkError::tool(format!(
                 "Agent reached its {} tool-call limit",
@@ -224,13 +233,36 @@ impl Tool for ManagedTool {
                 validate_tool_value(&self.definition.output_schema, &result, "fixture output")?;
                 return Ok::<_, adk_rust::AdkError>(result);
             }
+            let mut snapshot = json!({"definition": self.definition, "bindings": self.state_bindings, "capabilities": super::tool_journal::CAPABILITIES});
+            if matches!(&self.executor, ManagedToolExecutor::Process) && journal.is_some() {
+                snapshot["app"] = serde_json::to_value(crate::feat::get_process_node(&self.definition.id).await
+                    .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?)
+                    .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+            }
+            if let Some(compensation) = &self.compensation { snapshot["compensation"] = compensation.clone(); }
+            let mut operation = if let Some(journal) = &journal {
+                Some(journal.enter(&execution_args, &snapshot).await
+                    .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?)
+            } else { None };
+            if let (Some(journal), Some(operation)) = (&journal, &mut operation) {
+                if let Some(saved) = &operation.result {
+                    let result = journal.decode(saved).map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+                    validate_tool_value(&self.definition.output_schema, &result, "saved output")?;
+                    operation.finish(Some(saved.clone()).as_ref(), "succeeded", None).await
+                        .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+                    return Ok(result);
+                }
+                operation.mark_dispatched().await.map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+            }
             let timeout = std::time::Duration::from_secs(self.timeout_seconds);
-            let result = match &self.executor {
+            let execution = async { match &self.executor {
                 ManagedToolExecutor::Process => {
                     let run = tokio::time::timeout(
                         timeout,
-                        crate::feat::run_process_node_for_tool(
-                            &self.definition.id,
+                        crate::module::process_node::ProcessNodeRegistry::run_for_tool(
+                            if let Some(app)=snapshot.get("app") {
+                                serde_json::from_value(app.clone()).map_err(|error| adk_rust::AdkError::tool(error.to_string()))?
+                            } else { crate::feat::get_process_node(&self.definition.id).await.map_err(|error| adk_rust::AdkError::tool(error.to_string()))? },
                             &execution_args,
                             // Buffer process output so secrets split across chunks
                             // cannot pass through the event channel undetected.
@@ -254,12 +286,30 @@ impl Tool for ManagedTool {
                             }
                         }
                     }
-                    run.result
+                    Ok::<_, adk_rust::AdkError>(run.result)
                 },
                 ManagedToolExecutor::Mcp(tool) => tokio::time::timeout(timeout, tool.execute(context, execution_args))
                     .await
-                    .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))??,
+                    .map_err(|_| tool_timeout_error(self.name(), self.timeout_seconds))?,
+            } }.await;
+            let result = match execution {
+                Ok(result) => result,
+                Err(error) => {
+                    if let Some(operation) = &mut operation {
+                        // Process exit/MCP error does not prove no external effect.
+                        operation.finish(None, "unknown", Some("Tool execution outcome requires reconciliation")).await
+                            .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+                    }
+                    return Err(error);
+                }
             };
+            if let (Some(journal), Some(operation)) = (&journal, &mut operation) {
+                let saved = journal.encode(&result).map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+                // Save the external fact even if schema validation or Agent
+                // output processing fails afterwards.
+                operation.finish(Some(&saved), "succeeded", None).await
+                    .map_err(|error| adk_rust::AdkError::tool(error.to_string()))?;
+            }
             validate_tool_value(&self.definition.output_schema, &result, "output")?;
             Ok::<_, adk_rust::AdkError>(result)
         }
@@ -267,6 +317,9 @@ impl Tool for ManagedTool {
         let result = match execution {
             Ok(result) => result,
             Err(error) => {
+                if let Some(journal) = &journal {
+                    journal.fail("Tool execution or replay failed; manual reconciliation may be required");
+                }
                 if let Some(on_event) = &self.on_event {
                     // Record failure without duplicating the possibly sensitive tool error.
                     send_guarded_event(
@@ -406,6 +459,220 @@ mod tests {
             permissions: Vec::new(),
             execution_policy: Default::default(),
         }
+    }
+
+    struct UploadTool {
+        uploads: Arc<AtomicU32>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for UploadTool {
+        fn name(&self) -> &str {
+            "upload"
+        }
+        fn description(&self) -> &str {
+            "Upload a fixture file"
+        }
+        async fn execute(&self, _: Arc<dyn ToolContext>, _: Value) -> adk_rust::Result<Value> {
+            let resource = self.uploads.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.fail {
+                return Err(adk_rust::AdkError::tool("Response lost after upload"));
+            }
+            Ok(json!({"resourceId": format!("private-resource-{resource}")}))
+        }
+    }
+
+    struct UploadModel {
+        calls: AtomicU32,
+        fail_after_tool: bool,
+        file: &'static str,
+        skip_tool: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for UploadModel {
+        fn name(&self) -> &str {
+            "fixture-model"
+        }
+        async fn generate_content(
+            &self,
+            _: adk_rust::LlmRequest,
+            _: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+            if !first && self.fail_after_tool {
+                return Err(adk_rust::AdkError::agent("Answer generation failed after upload"));
+            }
+            let content = if first && !self.skip_tool {
+                adk_rust::Content {
+                    role: "model".into(),
+                    parts: vec![adk_rust::Part::FunctionCall {
+                        name: "upload".into(),
+                        args: json!({"file": self.file}),
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        thought_signature: None,
+                    }],
+                }
+            } else {
+                adk_rust::Content::new("model").with_text("Uploaded")
+            };
+            Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse {
+                content: Some(content),
+                partial: false,
+                turn_complete: !first || self.skip_tool,
+                ..Default::default()
+            })])))
+        }
+    }
+
+    fn upload_agent(
+        pool: sqlx::SqlitePool,
+        uploads: Arc<AtomicU32>,
+        model: UploadModel,
+        tool_fails: bool,
+    ) -> StreamingAgentNode {
+        let state = Arc::new(Mutex::new(
+            WorkflowStateBridge::from_initial_state(json!({"input":"upload"})).unwrap(),
+        ));
+        let mut definition = tool_with_schema(
+            "upload",
+            json!({"type":"object", "properties":{"file":{"type":"string"}}, "required":["file"]}),
+        );
+        definition.name = "upload".into();
+        let tool = ManagedTool::new(
+            definition,
+            ManagedToolExecutor::Mcp(Arc::new(UploadTool {
+                uploads,
+                fail: tool_fails,
+            })),
+            ManagedToolConfig {
+                agent_node_id: "agent".into(),
+                compensation: None,
+                on_event: None,
+                tool_calls: Arc::new(AtomicU32::new(0)),
+                tool_trace: Arc::new(Mutex::new(Vec::new())),
+                state: Arc::clone(&state),
+                state_bindings: Vec::new(),
+                max_tool_calls: 8,
+                timeout_seconds: 60,
+                execution_profile: WorkflowExecutionProfile::Production,
+            },
+        );
+        let agent = LlmAgentBuilder::new("agent")
+            .model(Arc::new(model))
+            .tool(Arc::new(tool))
+            .build()
+            .unwrap();
+        StreamingAgentNode::new(
+            AdkAgentNode::new(Arc::new(agent)),
+            StreamingAgentNodeConfig {
+                id: "agent".into(),
+                kind: "agent".into(),
+                endpoint_or_model: "fixture".into(),
+                on_event: None,
+                tool_trace: None,
+                output_key: None,
+                output_schema: None,
+                state,
+                global_keys: BTreeSet::new(),
+                sensitive_fields: BTreeSet::new(),
+            },
+        )
+        .with_tracking_storage(pool, vec![42; 32])
+    }
+
+    fn upload_model(fail_after_tool: bool) -> UploadModel {
+        UploadModel {
+            calls: AtomicU32::new(0),
+            fail_after_tool,
+            file: "fixture.pdf",
+            skip_tool: false,
+        }
+    }
+
+    async fn execute_upload(node: &StreamingAgentNode) -> Vec<adk_rust::graph::Result<StreamEvent>> {
+        let context = NodeContext::new(
+            HashMap::from([("input".into(), json!("upload"))]),
+            ExecutionConfig::new("same-thread").with_metadata("workrun.run_id", json!("run-1")),
+            2,
+        );
+        node.execute_stream(&context).collect().await
+    }
+
+    #[tokio::test]
+    async fn agent_failure_after_upload_reuses_saved_result_in_original_task() {
+        let pool = remote_tasks::test_pool().await;
+        let uploads = Arc::new(AtomicU32::new(0));
+        let first = upload_agent(pool.clone(), uploads.clone(), upload_model(true), false);
+        assert!(execute_upload(&first).await.iter().any(Result::is_err));
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+        let id: String = sqlx::query_scalar("SELECT id FROM workflow_operations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // Rebuild all runtime objects, as a process restart would. The provider
+        // emits a different function-call ID; the logical operation stays stable.
+        let resumed = upload_agent(pool.clone(), uploads.clone(), upload_model(false), false);
+        let events = execute_upload(&resumed).await;
+        assert!(events.iter().all(Result::is_ok), "{events:?}");
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT id FROM workflow_operations")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            id
+        );
+        let actions: Vec<String> =
+            sqlx::query_scalar("SELECT action FROM workflow_operation_attempts ORDER BY sequence")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(actions, ["submit", "reuse"]);
+        let raw: String = sqlx::query_scalar("SELECT result_json FROM workflow_operations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!raw.contains("private-resource"));
+        let input: String = sqlx::query_scalar("SELECT input_ciphertext FROM workflow_tool_inputs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!input.contains("fixture.pdf"));
+    }
+
+    #[tokio::test]
+    async fn divergent_agent_replay_never_dispatches_changed_or_skipped_calls() {
+        let pool = remote_tasks::test_pool().await;
+        let uploads = Arc::new(AtomicU32::new(0));
+        let first = upload_agent(pool.clone(), uploads.clone(), upload_model(true), false);
+        assert!(execute_upload(&first).await.iter().any(Result::is_err));
+        let mut changed = upload_model(false);
+        changed.file = "different.pdf";
+        let node = upload_agent(pool.clone(), uploads.clone(), changed, false);
+        assert!(execute_upload(&node).await.iter().any(Result::is_err));
+        let mut skipped = upload_model(false);
+        skipped.skip_tool = true;
+        let node = upload_agent(pool, uploads.clone(), skipped, false);
+        assert!(execute_upload(&node).await.iter().any(Result::is_err));
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tool_error_after_side_effect_blocks_node_even_if_model_returns_an_answer() {
+        let pool = remote_tasks::test_pool().await;
+        let uploads = Arc::new(AtomicU32::new(0));
+        let first = upload_agent(pool.clone(), uploads.clone(), upload_model(false), true);
+        assert!(execute_upload(&first).await.iter().any(Result::is_err));
+        let resumed = upload_agent(pool.clone(), uploads.clone(), upload_model(false), false);
+        assert!(execute_upload(&resumed).await.iter().any(Result::is_err));
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+        let status: String = sqlx::query_scalar("SELECT status FROM workflow_operations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "unknown");
     }
 
     #[test]

@@ -27,6 +27,34 @@ function events(
 }
 
 describe('workflow run projection', () => {
+  it('keeps errors on the failing invocation and resolves node names', () => {
+    const parallel = { ...node, id: 'parallel', data: { name: 'Parallel' } };
+    const run = workflowRunView(
+      replayWorkflowRunProjection(
+        'run-1',
+        events(
+          { type: 'node_start', node: 'research', step: 0 },
+          { type: 'node_end', node: 'research', step: 0, duration_ms: 1 },
+          { type: 'node_start', node: 'research', step: 1 },
+          { type: 'node_start', node: 'parallel', step: 2 },
+          {
+            type: 'error',
+            node: null,
+            message: "Node 'research' execution failed: traceback",
+          },
+        ),
+        { mode: 'task', nodes: [node, parallel] },
+      ),
+    );
+    expect(run.execution[0].error).toBeUndefined();
+    expect(run.execution[1]).toMatchObject({
+      status: 'failed',
+      error: "Node 'Research' execution failed: traceback",
+    });
+    expect(run.execution[2].error).toBeUndefined();
+    expect(run.error).toBe("Node 'research' execution failed: traceback");
+  });
+
   it('replays persisted envelopes into the same task output model', () => {
     const projection = replayWorkflowRunProjection(
       'run-1',
@@ -159,6 +187,41 @@ describe('workflow run projection', () => {
     expect(useWorkflowRunStore.getState().toolApproval).toMatchObject({
       functionCallId: 'call-1',
     });
+  });
+
+  it('retains the failed execution when continuing the same task', () => {
+    const projection = replayWorkflowRunProjection(
+      'run-1',
+      events(
+        { type: 'node_start', node: 'research', step: 1 },
+        { type: 'error', node: 'research', message: 'temporary failure' },
+        {
+          type: 'custom',
+          node: '',
+          event_type: 'workflow.attempt_started',
+          data: {},
+        },
+        { type: 'resumed', step: 1, pending_nodes: ['research'] },
+        { type: 'node_start', node: 'research', step: 1 },
+        { type: 'node_end', node: 'research', step: 1, duration_ms: 20 },
+        {
+          type: 'done',
+          state: { global: {}, nodes: {}, workflow: {} },
+          total_steps: 2,
+        },
+      ),
+      { mode: 'task', nodes: [node] },
+    );
+    expect(projection.runId).toBe('run-1');
+    expect(projection.executionIds).toHaveLength(2);
+    expect(projection.executionsById[projection.executionIds[0]].status).toBe(
+      'failed',
+    );
+    expect(projection.executionsById[projection.executionIds[1]].status).toBe(
+      'completed',
+    );
+    expect(projection.status).toBe('completed');
+    expect(projection.error).toBeUndefined();
   });
 
   it('merges an action-resumed node into its original logical execution', () => {
@@ -346,5 +409,135 @@ describe('workflow run projection', () => {
         },
       },
     });
+  });
+});
+
+describe('automatic Process App cleanup messages', () => {
+  it('updates the matching invocation message without changing task failure or Agent response', () => {
+    const run = workflowRunView(
+      replayWorkflowRunProjection(
+        'run-1',
+        events(
+          { type: 'node_start', node: 'research', step: 0 },
+          {
+            type: 'message',
+            node: 'research',
+            content: 'Original answer',
+            is_final: true,
+          },
+          { type: 'node_end', node: 'research', step: 0, duration_ms: 5 },
+          { type: 'node_start', node: 'research', step: 1 },
+          {
+            type: 'message',
+            node: 'research',
+            content: 'Later answer',
+            is_final: true,
+          },
+          { type: 'node_end', node: 'research', step: 1, duration_ms: 5 },
+          { type: 'error', node: 'later', message: 'Review failed' },
+          {
+            type: 'custom',
+            node: 'research',
+            event_type: 'process.compensation',
+            data: {
+              operationId: 'upload-1',
+              ownerStep: 0,
+              appName: 'Upload',
+              entry: 'compensate.py',
+              status: 'running',
+              output: 'Removed uploaded file\n',
+            },
+          },
+          {
+            type: 'custom',
+            node: 'research',
+            event_type: 'process.compensation',
+            data: {
+              operationId: 'upload-1',
+              ownerStep: 0,
+              appName: 'Upload',
+              entry: 'compensate.py',
+              status: 'succeeded',
+            },
+          },
+        ),
+        { mode: 'task', nodes: [node] },
+      ),
+    );
+    expect(run.status).toBe('failed');
+    expect(run.error).toBe('Review failed');
+    expect(run.execution[0].status).toBe('completed');
+    expect(run.execution[0].messages).toEqual([
+      { role: 'assistant', content: 'Original answer' },
+      expect.objectContaining({
+        content: 'Compensation · Upload · compensate.py: succeeded',
+        compensation: expect.objectContaining({
+          operationId: 'upload-1',
+          status: 'succeeded',
+          output: 'Removed uploaded file\n',
+        }),
+      }),
+    ]);
+    expect(run.execution[1].messages).toEqual([
+      { role: 'assistant', content: 'Later answer' },
+    ]);
+  });
+});
+
+describe('remote lifecycle messages', () => {
+  it('updates the original invocation without replacing its answer or workflow error', () => {
+    const run = workflowRunView(
+      replayWorkflowRunProjection(
+        'run-1',
+        events(
+          { type: 'node_start', node: 'research', step: 0 },
+          {
+            type: 'message',
+            node: 'research',
+            content: 'Original answer',
+            is_final: true,
+          },
+          { type: 'node_end', node: 'research', step: 0, duration_ms: 1 },
+          { type: 'node_start', node: 'research', step: 1 },
+          { type: 'error', node: 'research', message: 'Original failure' },
+          {
+            type: 'custom',
+            node: 'research',
+            event_type: 'remote.lifecycle',
+            data: {
+              remoteRecordId: 'remote-1',
+              ownerStep: 0,
+              status: 'cancel_requested',
+            },
+          },
+          {
+            type: 'custom',
+            node: 'research',
+            event_type: 'remote.lifecycle',
+            data: {
+              remoteRecordId: 'remote-1',
+              ownerStep: 0,
+              status: 'canceled',
+            },
+          },
+        ),
+        { mode: 'task', nodes: [node] },
+      ),
+    );
+    expect(run.status).toBe('failed');
+    expect(run.error).toBe('Original failure');
+    expect(run.execution[0].messages).toEqual([
+      { role: 'assistant', content: 'Original answer' },
+      {
+        role: 'assistant',
+        content: 'Remote task: canceled',
+        remoteLifecycle: {
+          remoteRecordId: 'remote-1',
+          ownerStep: 0,
+          status: 'canceled',
+        },
+      },
+    ]);
+    expect(run.execution[1].messages ?? []).toEqual([]);
   });
 });

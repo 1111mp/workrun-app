@@ -119,7 +119,6 @@ function rerunLabel(
   t: (key: string) => string,
 ) {
   if (status === 'interrupted') return t('workflowEditor.output.resume');
-  if (status === 'failed') return t('workflowEditor.output.retry');
   return t('workflowEditor.output.runAgain');
 }
 
@@ -506,6 +505,7 @@ function traceTypeLabel(type: string) {
 }
 
 function SubworkflowExecution({ entry }: { entry: WorkflowTraceEntry }) {
+  const { t } = useTranslation();
   const entries = traceEntries(entry.execution);
   if (entries.length === 0) return null;
 
@@ -523,14 +523,22 @@ function SubworkflowExecution({ entry }: { entry: WorkflowTraceEntry }) {
           return (
             <div
               key={`${child.nodeId}-${index}`}
-              className='border-border/70 border-l pl-3'
+              className={
+                child.status === 'failed'
+                  ? 'border-destructive/40 bg-destructive/5 rounded-lg border p-3'
+                  : 'border-border/70 border-l pl-3'
+              }
             >
               <p className='text-sm font-medium'>
                 {index + 1}. {traceNodeName(child)} ·{' '}
                 {traceTypeLabel(child.type)}
               </p>
+              <ExecutionOutput
+                label={t('workflowEditor.output.processOutput')}
+                log={log}
+              />
               <TraceResult entry={child} />
-              <ExecutionOutput label='Process output' log={log} />
+              <CleanupMessages entry={child} />
             </div>
           );
         })}
@@ -662,6 +670,63 @@ const ModelUsage = memo(function ModelUsage({
   );
 });
 
+function CleanupMessages({ entry }: { entry: WorkflowTraceEntry }) {
+  const { t } = useTranslation();
+  const messages = Array.isArray(entry.messages) ? entry.messages : [];
+  return (
+    <>
+      {messages.map((message, index) => {
+        if (typeof message !== 'object' || message === null) return null;
+        const lifecycle = recordValue(
+          (message as Record<string, unknown>).remoteLifecycle,
+        );
+        if (lifecycle)
+          return (
+            <p key={index} className='text-muted-foreground mt-2 text-sm'>
+              {t('workflowEditor.output.remoteLifecycleMessage', {
+                status: t(
+                  `workflowEditor.output.remoteLifecycleStatus.${String(lifecycle.status)}`,
+                ),
+              })}
+            </p>
+          );
+        const cleanup = recordValue(
+          (message as Record<string, unknown>).compensation,
+        );
+        if (!cleanup) return null;
+        return (
+          <div key={index}>
+            <p className='text-muted-foreground mt-2 text-sm'>
+              {t('workflowEditor.output.processCleanupMessage', {
+                app: String(cleanup.appName),
+                entry: String(cleanup.entry),
+                status: t(
+                  `workflowEditor.output.processCleanupStatus.${String(cleanup.status)}`,
+                ),
+              })}
+              {typeof cleanup.error === 'string'
+                ? ` · ${
+                    cleanup.error ===
+                    'Compensation result unknown; automatic resubmission disabled'
+                      ? t('workflowEditor.output.processCleanupUnknown')
+                      : cleanup.error ===
+                          'Compensation could not start; check the saved App entry and original code'
+                        ? t('workflowEditor.output.processCleanupCannotStart')
+                        : cleanup.error
+                  }`
+                : ''}
+            </p>
+            <ExecutionOutput
+              label={t('workflowEditor.output.processCleanupOutput')}
+              log={typeof cleanup.output === 'string' ? cleanup.output : ''}
+            />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function TraceResult({
   entry,
   showAgentResponse = true,
@@ -676,10 +741,23 @@ function TraceResult({
   animateResponses?: boolean;
   onResponsePresentationComplete?: (responseIndex: number) => void;
 }) {
+  const { t } = useTranslation();
   const result =
     typeof entry.result === 'object' && entry.result !== null
       ? (entry.result as Record<string, unknown>)
       : undefined;
+
+  if (typeof entry.error === 'string') {
+    return (
+      <Alert variant='destructive' className='mt-2'>
+        <CircleAlertIcon />
+        <AlertTitle>{t('workflowEditor.output.nodeFailed')}</AlertTitle>
+        <AlertDescription className='break-words whitespace-pre-wrap'>
+          {entry.error}
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   // Cancellation is terminal regardless of node type; do not let an
   // individual node's normal completion fallback misrepresent it as finished.
@@ -794,6 +872,7 @@ function TraceResult({
         )
       : [];
     const responses = messages
+      .filter((message) => !message.compensation && !message.remoteLifecycle)
       .map((message) => message.content)
       .filter((content): content is string => typeof content === 'string');
 
@@ -834,13 +913,17 @@ function TraceResult({
     return entry.result === undefined ? (
       <p className='text-muted-foreground mt-2 text-sm'>
         {entry.status === 'running'
-          ? 'Running process…'
-          : 'Completed without a structured result.'}
+          ? t('workflowEditor.output.processRunning')
+          : t(
+              entry.status === 'failed'
+                ? 'workflowEditor.output.processFailed'
+                : 'workflowEditor.output.processNoResult',
+            )}
       </p>
     ) : (
       <div className='mt-2'>
         <p className='text-muted-foreground text-sm'>
-          Returned a structured result.
+          {t('workflowEditor.output.processStructuredResult')}
         </p>
         <pre className='bg-muted mt-2 overflow-x-auto rounded-md p-3 text-xs'>
           {JSON.stringify(entry.result, null, 2)}
@@ -1232,6 +1315,11 @@ const LiveTaskExecution = memo(function LiveTaskExecution({
   return (
     <MessageScrollerItem
       messageId={id}
+      className={
+        entry.status === 'failed'
+          ? 'border-destructive/40 bg-destructive/5 rounded-lg border p-3'
+          : undefined
+      }
       // Dynamic output cannot use the scroller's estimated 10rem item height:
       // swapping that estimate for real streamed text causes visible reflow.
       style={{ contentVisibility: 'visible' }}
@@ -1255,16 +1343,17 @@ const LiveTaskExecution = memo(function LiveTaskExecution({
           ) : null}
         </div>
       ) : null}
+      <ExecutionOutput
+        label={t('workflowEditor.output.processOutput')}
+        log={log}
+      />
       <TraceResult
         entry={entry}
         spans={spans}
         animateResponses
         onResponsePresentationComplete={onResponsePresentationComplete}
       />
-      <ExecutionOutput
-        label={t('workflowEditor.output.processOutput')}
-        log={log}
-      />
+      <CleanupMessages entry={entry} />
     </MessageScrollerItem>
   );
 });
@@ -1491,6 +1580,11 @@ function chatTurnResponse(
     const messages = Array.isArray(entry.messages) ? entry.messages : [];
     return messages.flatMap((message) => {
       if (typeof message !== 'object' || message === null) return [];
+      if (
+        (message as Record<string, unknown>).compensation ||
+        (message as Record<string, unknown>).remoteLifecycle
+      )
+        return [];
       const content = (message as Record<string, unknown>).content;
       return typeof content === 'string' && content.trim()
         ? [
@@ -1647,7 +1741,8 @@ function ChatTurnReceipt({
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent className='pt-1 pb-3'>
-        {turn?.error ? (
+        {turn?.error &&
+        !execution.some((entry) => typeof entry.error === 'string') ? (
           <p className='text-destructive mb-3 text-sm'>{turn.error}</p>
         ) : null}
         {!completed && execution.length === 0 ? (
@@ -1656,7 +1751,14 @@ function ChatTurnReceipt({
         {execution.length > 0 ? (
           <div className='border-border/70 ml-1 space-y-3 border-l pl-4'>
             {execution.map((entry, index) => (
-              <div key={`${entry.nodeId}-${index}`} className='relative'>
+              <div
+                key={`${entry.nodeId}-${index}`}
+                className={
+                  entry.status === 'failed'
+                    ? 'border-destructive/40 bg-destructive/5 relative rounded-lg border p-3'
+                    : 'relative'
+                }
+              >
                 <span className='bg-background border-border absolute top-1 -left-[21px] flex size-3 items-center justify-center rounded-full border'>
                   {executionStatusIcon(entry.status)}
                 </span>
@@ -1672,11 +1774,12 @@ function ChatTurnReceipt({
                 </p>
                 {/* The chat surface promotes only the final answer, while the
                     expanded receipt remains a complete per-node record. */}
-                <TraceResult entry={entry} spans={spans} />
                 <ExecutionOutput
                   label={t('workflowEditor.output.processOutput')}
                   log={processLog(entry)}
                 />
+                <TraceResult entry={entry} spans={spans} />
+                <CleanupMessages entry={entry} />
               </div>
             ))}
           </div>
@@ -1830,7 +1933,12 @@ function LiveWorkflowTaskOutput({
       </DrawerHeader>
 
       <div className='relative flex min-h-0 flex-1 flex-col'>
-        {error ? (
+        {error &&
+        !executionIds.some(
+          (id) =>
+            typeof useWorkflowRunStore.getState().projection.executionsById[id]
+              ?.error === 'string',
+        ) ? (
           <Alert
             variant='destructive'
             className='z-10 mx-4 mb-4 w-auto shadow-md'
@@ -2203,13 +2311,17 @@ function WorkflowRunOutput({
           </div>
         )}
 
-        {!isChat && run.error && (
-          <Alert variant='destructive' className='m-4 w-auto'>
-            <CircleAlertIcon />
-            <AlertTitle>{t('workflowEditor.output.workflowFailed')}</AlertTitle>
-            <AlertDescription>{run.error}</AlertDescription>
-          </Alert>
-        )}
+        {!isChat &&
+          run.error &&
+          !execution.some((entry) => typeof entry.error === 'string') && (
+            <Alert variant='destructive' className='m-4 w-auto'>
+              <CircleAlertIcon />
+              <AlertTitle>
+                {t('workflowEditor.output.workflowFailed')}
+              </AlertTitle>
+              <AlertDescription>{run.error}</AlertDescription>
+            </Alert>
+          )}
 
         <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
           <MessageScroller>
@@ -2257,6 +2369,11 @@ function WorkflowRunOutput({
                       <MessageScrollerItem
                         key={`${entry.nodeId}-${index}`}
                         messageId={`execution-${entry.nodeId}-${index}`}
+                        className={
+                          entry.status === 'failed'
+                            ? 'border-destructive/40 bg-destructive/5 rounded-lg border p-3'
+                            : undefined
+                        }
                       >
                         <Marker variant='separator'>
                           <MarkerIcon>
@@ -2271,11 +2388,12 @@ function WorkflowRunOutput({
                           </MarkerContent>
                         </Marker>
                         {appIdentity(entry.nodeId)}
-                        <TraceResult entry={entry} spans={spans} />
                         <ExecutionOutput
                           label={t('workflowEditor.output.processOutput')}
                           log={log}
                         />
+                        <TraceResult entry={entry} spans={spans} />
+                        <CleanupMessages entry={entry} />
                       </MessageScrollerItem>
                     );
                   })}

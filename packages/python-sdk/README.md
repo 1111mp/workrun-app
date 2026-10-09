@@ -171,3 +171,44 @@ the binary content to the model. Use a vision-capable model for images. PDF
 input currently requires the Gemini adapter. Model attachments total at most
 20 MiB. Video files can be passed to Process nodes; direct video model analysis
 is not implemented yet.
+
+### A separate App compensation entry
+
+An App can keep its normal `main.py` and optionally configure a sibling
+`compensate.py` in App settings. Both entries share the project dependencies.
+If the workflow fails, successful calls are automatically cleaned up without
+execution-time approval. Failed calls and Apps without an entry are skipped;
+failed business calls should clean up in their own try/except/finally. Workflow
+nodes and Process-backed Agent tools inherit this behavior. Normal completion
+and user Stop do not trigger cleanup.
+
+```python
+# compensate.py
+from workrun_sdk import compensation
+
+
+def main():
+    ctx = compensation.context()
+    # Use the original result, not current workflow State.
+    delete_upload_if_present(ctx.original_result["fileId"])
+    compensation.result({"removed": True})
+
+
+if __name__ == "__main__":
+    main()
+```
+
+`context()` reads the host's JSON input once. Its fields are
+`original_operation_id`, `compensation_id` (the stable compensation intent / dedup
+key), `original_input`, `original_result`, and `resources`. A Tool App's
+compensation entry uses `compensation.result`, not the normal `@tool` decorator.
+The host requires a successful exit. An object receipt is optional for cleanup;
+`compensation.result` can record extra details. Business entry receipt requirements
+are unchanged.
+
+Only successful original calls participate in automatic cleanup. Unknown
+compensation outcomes are not blindly resubmitted. The source and lockfile must
+match the recorded fingerprint; retain the original project until the task is
+settled. Put generated output outside the App source or in ignored output paths.
+This first version detects changed code; it does not retain immutable code
+bundles or journal partially generated resources before the normal result.

@@ -1064,6 +1064,71 @@ function ProcessNodeDetailEditor({
             </div>
           </CardFooter>
         </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {t('apps.detail.compensationTitle', {
+                defaultValue: 'Compensation',
+              })}
+            </CardTitle>
+            <CardDescription>
+              {t('apps.detail.compensationDescription', {
+                defaultValue:
+                  'When a workflow fails, automatically clean up successful calls using this App’s separate script. No execution-time approval is required.',
+              })}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup>
+              <Field orientation='horizontal'>
+                <Switch
+                  id='app-compensation-enabled'
+                  checked={!!draft.compensation}
+                  disabled={readOnly}
+                  onCheckedChange={(enabled) =>
+                    update(
+                      'compensation',
+                      enabled ? { entry: 'compensate.py' } : undefined,
+                    )
+                  }
+                />
+                <FieldLabel htmlFor='app-compensation-enabled'>
+                  {t('apps.detail.compensationEnabled', {
+                    defaultValue: 'Provide a compensation entry',
+                  })}
+                </FieldLabel>
+              </Field>
+              {draft.compensation ? (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor='app-compensation-entry'>
+                      {t('apps.detail.compensationEntry', {
+                        defaultValue: 'Compensation script',
+                      })}
+                    </FieldLabel>
+                    <Input
+                      id='app-compensation-entry'
+                      disabled={readOnly}
+                      value={draft.compensation.entry}
+                      onChange={(event) =>
+                        update('compensation', {
+                          ...draft.compensation!,
+                          entry: event.target.value,
+                        })
+                      }
+                    />
+                    <FieldDescription>
+                      {t('apps.detail.compensationEntryHint', {
+                        defaultValue:
+                          'Create this file in the same project. The normal entry remains unchanged. Return a receipt with compensation.result({...}).',
+                      })}
+                    </FieldDescription>
+                  </Field>
+                </>
+              ) : null}
+            </FieldGroup>
+          </CardContent>
+        </Card>
         <AppSchedules app={processNode} readOnly={readOnly} />
         <Card className='shadow-sm'>
           <CardHeader>

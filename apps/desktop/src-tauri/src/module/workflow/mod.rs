@@ -9,14 +9,23 @@ mod ask_user_question;
 mod codeact_agent;
 mod guardrails;
 mod human_review;
-mod process;
+pub(crate) mod operation_review;
+pub(crate) mod operations;
+pub(crate) mod process;
+pub(crate) mod process_cleanup;
+pub(crate) mod recovery;
 mod remote_agent;
 mod remote_auth;
+pub(crate) mod remote_lifecycle;
 mod remote_tasks;
 mod routing;
+pub(crate) mod saga;
+pub(crate) mod saga_scheduler;
 mod state_bridge;
-mod subworkflow;
+pub(crate) mod subworkflow;
+mod subworkflow_journal;
 mod tool;
+pub(crate) mod tool_journal;
 
 pub(super) const WORKFLOW_TERMINATED_KEY: &str = "workflow.terminated";
 
@@ -27,9 +36,7 @@ use guardrails::*;
 use human_review::*;
 use process::*;
 use remote_agent::*;
-pub(crate) use remote_agent::{
-    RemoteTaskOperation, cancel_remote_tasks_for_run, remote_task_operation, test_remote_connection,
-};
+pub(crate) use remote_agent::{RemoteTaskOperation, remote_task_operation, test_remote_connection};
 pub(crate) use remote_auth::{RemoteAuthentication, validate_remote_secret};
 pub(crate) use remote_tasks::{
     RemoteTaskRecord, list_remote_tasks, mark_remote_tasks_interrupted, remote_task_warnings,
@@ -85,7 +92,7 @@ use tauri::ipc::Channel;
 type RouterFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 pub(super) type SharedWorkflowState = Arc<Mutex<WorkflowStateBridge>>;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ToolStateBinding {
@@ -356,7 +363,17 @@ async fn resolve_checkpoint_context(
                 .path
                 .first()
                 .context("subworkflow context is missing its parent node")?;
-            let mut dsl = subworkflow_dsl(&context.workflow_id).await?;
+            let pool = crate::core::db::DBManager::global().pool()?;
+            let key = crate::utils::dirs::get_encryption_key()?;
+            let mut dsl = match subworkflow_journal::saved_by_thread(&pool, &key, &context.thread_id).await? {
+                Some(saved) => {
+                    if saved.dsl.id != context.workflow_id {
+                        bail!("Subworkflow context does not match its saved invocation");
+                    }
+                    saved.dsl
+                },
+                None => subworkflow_dsl(&context.workflow_id).await?,
+            };
             inject_subworkflow_context(&mut dsl, &context.thread_id, parent_node_id);
             Ok((dsl, context.thread_id))
         },
@@ -394,13 +411,13 @@ pub struct CompiledWorkflow {
 }
 
 impl CompiledWorkflow {
-    /// Branch the newest durable frontier so a failed run can be retried without
-    /// mutating its history or re-executing work that completed before it.
-    pub async fn fork_latest_checkpoint(&self, source_thread_id: &str, target_thread_id: &str) -> Result<()> {
-        self.state_checkpointer
-            .fork_latest_checkpoint(source_thread_id, target_thread_id)
-            .await?;
-        Ok(())
+    pub(crate) async fn recovery_frontier(&self, thread_id: &str) -> Result<(usize, Vec<String>)> {
+        let checkpoint = self
+            .state_checkpointer
+            .load(thread_id)
+            .await?
+            .context("No resumable checkpoint was found for this task")?;
+        Ok((checkpoint.step, checkpoint.pending_nodes))
     }
 
     /// Execute the graph while forwarding ordered node and model events to the
@@ -427,6 +444,52 @@ impl CompiledWorkflow {
         resume: bool,
         tool_confirmation: Option<ToolConfirmationDecisionRequest>,
         run_id: Option<&str>,
+        on_event: F,
+    ) -> Result<WorkflowRunResult>
+    where
+        F: FnMut(StreamEvent),
+    {
+        let execution_id = if let Some(id) = run_id {
+            #[cfg(not(test))]
+            {
+                crate::module::run_history::RunHistoryStore::inspect(id)
+                    .await?
+                    .runtime
+                    .get("executionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id)
+                    .to_string()
+            }
+            #[cfg(test)]
+            {
+                id.to_string()
+            }
+        } else {
+            thread_id.to_string()
+        };
+        self.run_stream_scoped(
+            initial_state,
+            thread_id,
+            resume,
+            tool_confirmation,
+            run_id,
+            &execution_id,
+            "root",
+            on_event,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn run_stream_scoped<F>(
+        self,
+        initial_state: State,
+        thread_id: &str,
+        resume: bool,
+        tool_confirmation: Option<ToolConfirmationDecisionRequest>,
+        run_id: Option<&str>,
+        execution_id: &str,
+        execution_path: &str,
         mut on_event: F,
     ) -> Result<WorkflowRunResult>
     where
@@ -449,6 +512,28 @@ impl CompiledWorkflow {
                 .map_err(|_| anyhow!("workflow state lock is poisoned"))?;
             state.initialize_global(input)?;
             state.graph_state()
+        };
+
+        let initial_state = if !resume {
+            let mut checkpoint_state = self.graph.schema().initialize_state();
+            for (key, value) in initial_state {
+                self.graph.schema().apply_update(&mut checkpoint_state, &key, value);
+            }
+            // Persist the first frontier before any node can submit a side effect.
+            // Otherwise a crash in the first node has no checkpoint to resume.
+            self.state_checkpointer
+                .save(&adk_rust::graph::Checkpoint::new(
+                    thread_id,
+                    checkpoint_state,
+                    0,
+                    self.graph.get_entry_nodes(),
+                ))
+                .await?;
+            // The executor loads the saved input; merging it again would apply
+            // reducer channels twice.
+            State::new()
+        } else {
+            initial_state
         };
 
         let run_config = match tool_confirmation {
@@ -476,7 +561,10 @@ impl CompiledWorkflow {
         };
         let stream = self.graph.stream_with_run_config(
             initial_state,
-            ExecutionConfig::new(thread_id).with_metadata("workrun.run_id", json!(run_id)),
+            ExecutionConfig::new(thread_id)
+                .with_metadata("workrun.run_id", json!(run_id))
+                .with_metadata("workrun.execution_id", json!(execution_id))
+                .with_metadata("workrun.execution_path", json!(execution_path)),
             StreamMode::Messages,
             run_config,
         );
@@ -653,6 +741,27 @@ pub(super) async fn compile_with_path(
     }
 
     for node in &dsl.nodes {
+        if node.data.get("compensation").is_some()
+            && !matches!(node.kind.as_str(), "process" | "remote_agent" | "subworkflow")
+        {
+            bail!(
+                "Node-level compensation is supported on Process, Remote and subworkflow nodes; Agent effects require toolCompensations"
+            );
+        }
+        if matches!(node.kind.as_str(), "process" | "remote_agent" | "subworkflow") {
+            saga::declaration(node.data.get("compensation"), node.kind == "subworkflow")?;
+        }
+        if let Some(declarations) = node.data.get("toolCompensations") {
+            if node.kind != "agent" {
+                bail!("toolCompensations is only supported on Agent nodes");
+            }
+            let declarations = declarations
+                .as_object()
+                .context("toolCompensations must be keyed by selected tool ID")?;
+            for value in declarations.values() {
+                saga::declaration(Some(value), false)?;
+            }
+        }
         if !matches!(
             node.kind.as_str(),
             "start"
@@ -870,9 +979,15 @@ pub(super) async fn compile_with_path(
     })
 }
 
+#[cfg(test)]
+tokio::task_local! { static TEST_CHECKPOINT_DB: String; }
+
 async fn workflow_checkpointer_db_url() -> Result<String> {
     #[cfg(test)]
     {
+        if let Ok(url) = TEST_CHECKPOINT_DB.try_with(Clone::clone) {
+            return Ok(url);
+        }
         let path = std::env::temp_dir().join(format!("workrun-workflow-test-{}.sqlite", uuid::Uuid::now_v7()));
         std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
         Ok(format!("sqlite://{}", path.display()))

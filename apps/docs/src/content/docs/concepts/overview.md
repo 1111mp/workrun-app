@@ -21,17 +21,17 @@ A workflow is a saved canvas definition. Nodes decide who performs work, edges d
 
 Before a run, Workrun validates graph structure and routing. For example, a workflow must have exactly one Start, Start must lead to an executable node, and branch edges must match their node's branch handles. The desktop app then compiles the canvas into an execution graph and initializes state from that run's input.
 
-| Node | Responsibility |
-| --- | --- |
-| `Agent` | Handles reasoning tasks with its selected built-in model, instruction, and optional tools. |
-| `CodeAct Agent` | Lets a model combine code and tools in a controlled Python execution environment, with limits for iterations, tool calls, duration, memory, mounts, and environment variables. |
-| `Process` | Runs a local Python App for deterministic rules, data processing, and system integration. |
-| `If/Else`, `Switch` | Chooses the next path from conditions in state. |
-| `Human Review`, `Ask User Question` | Pauses for a person to review or choose an option before continuing. |
-| `Subworkflow` | Calls a saved workflow, so complex flows can be composed from smaller units. |
-| `Remote Agent` | Calls a remote Agent over A2A. |
-| `Terminate`, `End` | Ends the current path; `Terminate` can end the whole workflow run. |
-| `Group` | Organizes the canvas only; it never executes. |
+| Node                                | Responsibility                                                                                                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Agent`                             | Handles reasoning tasks with its selected built-in model, instruction, and optional tools.                                                                                     |
+| `CodeAct Agent`                     | Lets a model combine code and tools in a controlled Python execution environment, with limits for iterations, tool calls, duration, memory, mounts, and environment variables. |
+| `Process`                           | Runs a local Python App for deterministic rules, data processing, and system integration.                                                                                      |
+| `If/Else`, `Switch`                 | Chooses the next path from conditions in state.                                                                                                                                |
+| `Human Review`, `Ask User Question` | Pauses for a person to review or choose an option before continuing.                                                                                                           |
+| `Subworkflow`                       | Calls a saved workflow, so complex flows can be composed from smaller units.                                                                                                   |
+| `Remote Agent`                      | Calls a remote Agent over A2A; [attempts one cancellation after failure or Stop](/guides/remote-agents/).                                                                      |
+| `Terminate`, `End`                  | Ends the current path; `Terminate` can end the whole workflow run.                                                                                                             |
+| `Group`                             | Organizes the canvas only; it never executes.                                                                                                                                  |
 
 ## State is explicit, not hidden context
 
@@ -64,7 +64,7 @@ Local Python Apps are not sandboxes. Run only projects you trust, and review the
 
 Workrun treats each execution as an identified run, not an untraceable chat request. While it runs, the interface streams node start, completion, failure, and waiting events. The run panel also exposes Agent model messages, tool calls, Python logs, and key outputs.
 
-When a flow reaches Human Review or Ask User Question, Workrun stores a checkpoint in local SQLite and waits. After a reviewer submits a result or a user chooses an option, it resumes at the pause point without running completed steps again. Failed background runs can also retry from a checkpoint. At present, retry requires a checkpoint with one pending node, so a failure at a parallel fan-out should be investigated in run history first.
+When a flow reaches Human Review or Ask User Question, Workrun stores a checkpoint in local SQLite and waits. After a reviewer submits a result or a user chooses an option, it resumes at the pause point without running completed steps again. Failed or stopped runs use Run again to create a new task. Only application-interrupted tasks can recover from a checkpoint after journal validation.
 
 Task workflows suit independent, one-off runs. Chat workflows keep a durable session and its turns so later messages can continue the same context.
 

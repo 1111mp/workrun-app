@@ -14,7 +14,6 @@ import {
   resolveAskUserQuestion,
   resolveHumanReview,
   resumeBackgroundWorkflowRun,
-  retryFailedBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
   subscribeWorkflowRun,
   toWorkflowDocument,
@@ -26,7 +25,7 @@ import {
   type WorkflowRunEvent,
   type WorkflowRunEventEnvelope,
 } from '@/services/workflow';
-import { useRunWorkspaceStore, useWorkflowRunStore } from '@/stores';
+import { useWorkflowRunStore } from '@/stores';
 import { workflowRunView } from '@/stores/workflow-run.store';
 
 type SubworkflowContext = {
@@ -467,22 +466,6 @@ function useWorkflowRun(
     });
   };
 
-  const retryFailedWorkflowRun = async () => {
-    const sourceRunId = runId.current;
-    if (!sourceRunId) return;
-    try {
-      const retry = await retryFailedBackgroundWorkflowRun(sourceRunId);
-      // The retry is a separate durable run. Open its history-backed workspace
-      // instead of reusing this editor's event subscription for the failed run.
-      useRunWorkspaceStore.getState().openRun(retry);
-    } catch (error) {
-      toast.error('Could not retry failed workflow', {
-        toasterId: 'global',
-        description: error instanceof Error ? error.message : String(error),
-      });
-    }
-  };
-
   const restoreChatSession = async (sessionId: string) => {
     setIsRestoringChatSession(true);
     try {
@@ -742,7 +725,6 @@ function useWorkflowRun(
     resolvePendingHumanReview,
     resolvePendingAskUserQuestion,
     resumeWorkflowRun,
-    retryFailedWorkflowRun,
     restoreChatSession,
     archiveChatSession,
     isRestoringChatSession,

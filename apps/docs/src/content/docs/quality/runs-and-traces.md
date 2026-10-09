@@ -1,6 +1,6 @@
 ---
 title: Runs, debugging, and traces
-description: "Build an evidence trail from every run: locate the failed node, inspect inputs and side effects, then recover or fix automation safely."
+description: 'Build an evidence trail from every run: locate the failed node, inspect inputs and side effects, then recover or fix automation safely.'
 ---
 
 A run is not only “successful” or “failed.” Workrun keeps the workflow snapshot, state changes, node events, model and tool activity, Python logs, and runtime diagnostics in the run workspace. Use that record to answer one concrete question: **where did this run stop, with which inputs, after which result, and what should change next?**
@@ -23,31 +23,31 @@ Within one workflow, run history shows both health over a time range and the sta
 
 ## Read the run status before taking action
 
-| Status | What it means | Next step |
-| --- | --- | --- |
-| `queued` / `running` | The run is queued or still executing. | Wait for more events. If no events arrive for an unusual time, inspect timeouts on the active model or tool. |
-| `waiting_for_input` | Human review, a question response, or tool confirmation is pending. | Complete the action in the run panel; do not treat it as a failed run. |
-| `completed` | This execution has ended. | Check final state and diagnostics. If the result is wrong, trace upstream from the node that produced the wrong value. |
-| `failed` | A node or runtime step could not complete. | Read its error, events, and node evidence. Retry from a checkpoint only after checking for duplicate side effects. |
-| `cancelled` / `interrupted` | A person cancelled it, or the app stopped during execution. | Do not assume it had no effect. Check the last event and external system before starting another run. |
+| Status                      | What it means                                                       | Next step                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `queued` / `running`        | The run is queued or still executing.                               | Wait for more events. If no events arrive for an unusual time, inspect timeouts on the active model or tool.           |
+| `waiting_for_input`         | Human review, a question response, or tool confirmation is pending. | Complete the action in the run panel; do not treat it as a failed run.                                                 |
+| `completed`                 | This execution has ended.                                           | Check final state and diagnostics. If the result is wrong, trace upstream from the node that produced the wrong value. |
+| `failed`                    | A node or runtime step could not complete.                          | Read the error and cleanup/cancellation evidence, then Run again to create a new task.                                 |
+| `cancelled` / `interrupted` | A person cancelled it, or the app stopped during execution.         | Do not assume it had no effect. Check the last event and external system before starting another run.                  |
 
-> Waiting for input is a resumable pause. Retrying a failure creates a new run branch from an available checkpoint. They are not the same action.
+> Waiting for input is a resumable pause. Failed or stopped tasks must Run again; only application-interrupted tasks can recover their original checkpoint.
 
 ![Global run history: saved workflow and App runs can be filtered by target type, task or chat mode, and statuses such as queued, running, needs attention, and failed.](/media/runs/02-all-run-history.png)
 
-Global **Run history** combines local workflow and App executions. When a run’s source is unclear, or when you need to find interrupted and failed App runs, filter by name, target type, mode, and status before opening its output.
+Global **Run history** combines local workflow and App executions in the current workspace. When a run’s source is unclear, or when you need to find interrupted and failed App runs, filter by name, target type, mode, and status before opening its output.
 
 ## The run workspace: what each piece of evidence answers
 
-| Evidence | Ask first | Common conclusion |
-| --- | --- | --- |
-| Node timeline and events | Which node stopped? In what order did completion, waiting, and failure occur? | The issue belongs to an Agent, App, tool, condition, or human action. |
-| Run input and upstream state | Are input keys, types, and values correct? Did an upstream node publish the required field? | A required value is missing, a key differs, or the downstream node lacks read access. |
-| Model messages and structured output | What did the Agent actually see? Does its output meet the contract? | Prompt, model configuration, structured schema, or state boundary needs adjustment. |
-| Tool activity | Were parameters, approval, limits, and returned shape correct? | Tool description, state binding, permission, or the service needs repair. |
-| Process App stdout / stderr | Where did Python fail? Did it return the expected JSON? | Dependency, environment, business logic, or App data contract is wrong. |
-| Final state | Which fields actually reached workflow output and downstream nodes? | A value was not published, was overwritten, or sensitive-data visibility needs redesign. |
-| Runtime diagnostics | Which node, model, or tool used time, tokens, or calls? | Limit tool calls, shorten context, select another model, or investigate a bottleneck. |
+| Evidence                             | Ask first                                                                                   | Common conclusion                                                                        |
+| ------------------------------------ | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Node timeline and events             | Which node stopped? In what order did completion, waiting, and failure occur?               | The issue belongs to an Agent, App, tool, condition, or human action.                    |
+| Run input and upstream state         | Are input keys, types, and values correct? Did an upstream node publish the required field? | A required value is missing, a key differs, or the downstream node lacks read access.    |
+| Model messages and structured output | What did the Agent actually see? Does its output meet the contract?                         | Prompt, model configuration, structured schema, or state boundary needs adjustment.      |
+| Tool activity                        | Were parameters, approval, limits, and returned shape correct?                              | Tool description, state binding, permission, or the service needs repair.                |
+| Process App stdout / stderr          | Where did Python fail? Did it return the expected JSON?                                     | Dependency, environment, business logic, or App data contract is wrong.                  |
+| Final state                          | Which fields actually reached workflow output and downstream nodes?                         | A value was not published, was overwritten, or sensitive-data visibility needs redesign. |
+| Runtime diagnostics                  | Which node, model, or tool used time, tokens, or calls?                                     | Limit tool calls, shorten context, select another model, or investigate a bottleneck.    |
 
 The record preserves the target snapshot, final state, and event sequence for this run. Anchor your investigation to that evidence before changing the current draft; otherwise it is hard to know whether a change solved the same problem.
 
@@ -81,16 +81,27 @@ A condition should read an explicitly published stable field. When routing is wr
 
 For state boundaries, redaction, and checkpoints, see [Workflows and state](/concepts/workflows-and-state/).
 
+## Remote Agents: distinguish local Stop from remote completion
+
+After workflow failure or user Stop, Workrun sends one best-effort `CancelTask` request for unfinished remote calls with a known task ID, without runtime confirmation. Node messages show the request and returned status without replacing the original error. Known terminal tasks are skipped; submissions without a task ID remain unknown and are not automatically resubmitted.
+
+A failed or timed-out cancellation is shown as unconfirmed. There is no preliminary query, automatic polling, cancellation retry, or startup continuation of cancellation. Failed or stopped tasks must Run again. Application-exit interruptions retain their existing recovery path. Remote cancellation does not promise business undo. See [Remote Agents and A2A task handling](/guides/remote-agents/).
+
+Run output presents automatic App compensation and remote cancellation results in the owning node messages.
+
+## After App compensation, fix the problem and run again
+
+When a workflow fails, successful App calls with a compensation entry are cleaned up automatically, including successful Tool App calls inside an Agent. Check compensation status in the corresponding node messages and verify unfinished or unknown resources. Once cleanup starts, checkpoint continuation cannot reuse cleaned-up results. Fix the problem and choose Run again to create a new task for a fresh business execution; the original retains failure and cleanup evidence.
+
+Stop and normal completion do not trigger automatic cleanup. See [App failure compensation](/guides/app-compensation/) for configuration and exception handling.
+
 ## Confirm side effects before recovering from a checkpoint
 
-A failed run can create a new retry run from its latest checkpoint. Earlier completed nodes do not run again, but the failed node **may already have** sent a message, written a record, or called an external service before it errored. Before retrying:
+Only application-interrupted tasks can recover from a checkpoint. Failed or stopped tasks use **Run again**, which creates a new business execution; it does not resume their checkpoint.
 
-1. Check run events and the external system to learn how far the failed node progressed.
-2. For writes, verify an idempotency key, deduplication behavior, or a business rule that makes repetition safe.
-3. Fix credentials, parameters, code, or configuration, then choose **Retry failed node from checkpoint**.
-4. If side-effect state cannot be established, retain this run as evidence and start a controlled new run with deliberate input.
+For an application-interrupted task, Workrun checks the checkpoint and operation journal before recovering in the original task. Saved results can be reused; unknown outcomes require reconciliation and cannot be blindly submitted again. Unsupported recovery contracts block continuation.
 
-Checkpoint retry currently requires one pending workflow node in the checkpoint. If a parallel branch fails, use run history to decide which branch should recover, or start a new run when appropriate.
+After a workflow failure, inspect the failed node and the automatic App cleanup or remote cancellation messages. Verify external resource state before choosing **Run again**: a new task repeats business execution and does not undo effects left by the previous task.
 
 ## Use runtime diagnostics to find slow and expensive work
 
@@ -109,3 +120,9 @@ The run workspace remains the first source of evidence for one execution. To inv
 Before configuring export, confirm that the collector and network policy allow only intended recipients, traces do not contain sensitive content or credentials that must not leave the device, and a non-sensitive run in an isolated environment verifies connection, fields, and retention first.
 
 OTLP is a diagnostic export. It does not replace local run records, state boundaries, or inspecting individual results.
+
+## File results and local storage
+
+History stores file outputs as artifact references; the actual files remain in the current workspace's local artifacts directory. Export files from the results, preview images and videos, or open PDFs. Access depends on the corresponding local snapshots: keeping run records without their artifact files cannot restore file contents.
+
+Personal and Team run history, chat sessions, and pending approvals are isolated by workspace. Switching modes shows only the current workspace; switching back restores access to its records. Team run history and artifacts also remain on the local device. Publishing a workflow does not upload them to the team server, and another device or team member does not automatically receive these results. Backups or device migrations need both the run database and the corresponding workspace artifact files.

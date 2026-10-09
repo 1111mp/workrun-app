@@ -134,6 +134,7 @@ describe('getProcessNodes', () => {
     ).resolves.toEqual({ id: 'remote-app-1' });
 
     expect(fetchApi.post).toHaveBeenCalledWith('/app', {
+      compensation: null,
       name: definition.name,
       description: definition.description,
       version: definition.version,

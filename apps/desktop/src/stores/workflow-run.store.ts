@@ -381,6 +381,7 @@ function reduceWorkflowRunEvent(
       projection.thoughtIds.push(nextThoughtId);
       projection.executionsById[nextExecutionId] = {
         nodeId: event.node,
+        step: event.step,
         type: node?.type ?? 'node',
         status: 'running',
         turnId: context.turnId,
@@ -406,8 +407,8 @@ function reduceWorkflowRunEvent(
       projection.turnsById[context.turnId].error = undefined;
       projection.turnsById[context.turnId].endedAt = undefined;
     }
-    for (const nodeId of event.pending_nodes)
-      projection.resumePendingNodeIds[nodeId] = true;
+    // Only an explicit input interruption can merge execution rows. Recovery
+    // after a failed attempt creates a new row even at the same graph frontier.
     return;
   }
   if (event.type === 'node_end') {
@@ -450,7 +451,23 @@ function reduceWorkflowRunEvent(
     projection.totalSteps = event.total_steps;
     if (context.turnId && projection.turnsById[context.turnId])
       projection.turnsById[context.turnId].totalSteps = event.total_steps;
-  } else if (event.type === 'error')
+  } else if (event.type === 'error') {
+    // Attribute only explicit runtime errors; unrelated running parallel nodes
+    // must not receive another node's traceback.
+    const nodeId =
+      event.node ??
+      /Node ['`]([^'`]+)['`] execution failed/.exec(event.message)?.[1];
+    const execution = nodeId ? latestExecution(projection, nodeId) : undefined;
+    if (execution) {
+      execution.status = 'failed';
+      execution.error = event.message.replace(
+        /Node ['`]([^'`]+)['`] execution failed/g,
+        (match, id: string) => {
+          const node = context.nodes.find((item) => item.id === id);
+          return node ? `Node '${displayName(node)}' execution failed` : match;
+        },
+      );
+    }
     projectTerminal(
       projection,
       'failed',
@@ -458,12 +475,13 @@ function reduceWorkflowRunEvent(
       event.message,
       context.turnId,
     );
-  else if (event.type === 'interrupted') {
+  } else if (event.type === 'interrupted') {
     const awaitingInput = Boolean(
       transient?.toolApproval ||
       transient?.humanReview ||
       transient?.askUserQuestion,
     );
+    if (event.node) projection.resumePendingNodeIds[event.node] = true;
     // A dynamic interrupt is the runtime's checkpoint signal for an approval
     // or review. It is not a failed workflow and must not surface its internal
     // reason as an error banner while the corresponding action is pending.
@@ -538,6 +556,21 @@ function applyCustom(
   >,
   turnId?: string,
 ) {
+  if (event.event_type === 'workflow.attempt_started') {
+    // Keep previous outputs and execution rows; only the task's live status is
+    // reset when another attempt starts within the same business task.
+    projection.status = 'running';
+    projection.error = undefined;
+    projection.endedAt = undefined;
+    projection.durationMs = undefined;
+    projection.finalState = undefined;
+    projection.activeNodeId = undefined;
+    if (turnId && projection.turnsById[turnId]) {
+      projection.turnsById[turnId].status = 'running';
+      projection.turnsById[turnId].error = undefined;
+    }
+    return;
+  }
   if (event.event_type === 'workflow.run_cancelled')
     return projectTerminal(
       projection,
@@ -560,6 +593,79 @@ function applyCustom(
   if (event.event_type === 'workflow.ask_user_question_required') {
     if (transient)
       transient.askUserQuestion = event.data as Record<string, unknown>;
+    return;
+  }
+  if (event.event_type === 'remote.lifecycle') {
+    const data = event.data as Record<string, unknown>;
+    const execution =
+      projection.executionIds
+        .map((id) => projection.executionsById[id])
+        .findLast(
+          (item) => item.nodeId === event.node && item.step === data.ownerStep,
+        ) ?? latestExecution(projection, event.node);
+    if (!execution || typeof data.remoteRecordId !== 'string') return;
+    const messages = Array.isArray(execution.messages)
+      ? execution.messages
+      : [];
+    const existing = messages.find(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        (item as Record<string, unknown>).remoteLifecycle &&
+        (
+          (item as Record<string, unknown>).remoteLifecycle as Record<
+            string,
+            unknown
+          >
+        ).remoteRecordId === data.remoteRecordId,
+    ) as Record<string, unknown> | undefined;
+    const message = {
+      role: 'assistant',
+      content: `Remote task: ${String(data.status)}`,
+      remoteLifecycle: data,
+    };
+    if (existing) Object.assign(existing, message);
+    else messages.push(message);
+    execution.messages = messages;
+    return;
+  }
+  if (event.event_type === 'process.compensation') {
+    const cleanup = event.data as Record<string, unknown>;
+    const execution =
+      projection.executionIds
+        .map((id) => projection.executionsById[id])
+        .findLast(
+          (item) =>
+            item.nodeId === event.node && item.step === cleanup.ownerStep,
+        ) ?? latestExecution(projection, event.node);
+    if (!execution || typeof cleanup.operationId !== 'string') return;
+    const messages = Array.isArray(execution.messages)
+      ? execution.messages
+      : [];
+    const existing = messages.find(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        (item as Record<string, unknown>).compensation &&
+        (
+          (item as Record<string, unknown>).compensation as Record<
+            string,
+            unknown
+          >
+        ).operationId === cleanup.operationId,
+    ) as Record<string, unknown> | undefined;
+    const content = `Compensation · ${String(cleanup.appName)} · ${String(cleanup.entry)}: ${String(cleanup.status)}`;
+    if (existing) {
+      existing.content = content;
+      existing.compensation = {
+        ...(existing.compensation as Record<string, unknown>),
+        ...cleanup,
+        output:
+          cleanup.output ??
+          (existing.compensation as Record<string, unknown>).output,
+      };
+    } else messages.push({ role: 'assistant', content, compensation: cleanup });
+    execution.messages = messages;
     return;
   }
   const execution = latestExecution(projection, event.node);

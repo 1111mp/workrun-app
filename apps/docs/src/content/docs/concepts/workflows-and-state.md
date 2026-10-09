@@ -29,16 +29,26 @@ As a result, **More settings → Run inputs** defines the runtime form and field
 
 ## Inputs, outputs, and run modes
 
-In **More settings**, a workflow can define four input types: string, multiline text, number, and boolean. Each has a user-facing label, a machine-facing key, help text, and a required flag. Keep keys clear and stable, such as `feedback`, `customer_id`, and `dry_run`. Changing a key can break Agent instructions, conditions, and downstream state references.
+In **More settings**, a workflow can define six input types: string, multiline text, number, boolean, file, and files. Each has a user-facing label, a machine-facing key, help text, and a required flag. Keep keys clear and stable, such as `feedback`, `customer_id`, and `dry_run`. Changing a key can break Agent instructions, conditions, and downstream state references.
 
-| Mode | Best for | Input behavior |
-| --- | --- | --- |
-| Task | Independent, one-off automation such as routing feedback or executing an approval flow. | The run panel shows the defined run inputs. |
-| Chat | Assistants or collaborative flows that need continuous multi-turn context. | `input` is reserved for the message body; other defined fields can still be submitted with a chat turn. |
+| Mode | Best for                                                                                | Input behavior                                                                                          |
+| ---- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Task | Independent, one-off automation such as routing feedback or executing an approval flow. | The run panel shows the defined run inputs.                                                             |
+| Chat | Assistants or collaborative flows that need continuous multi-turn context.              | `input` is reserved for the message body; other defined fields can still be submitted with a chat turn. |
 
 Workflow output fields declare what a workflow delivers. An Agent can additionally define an output key or use JSON Schema to require structured model output. Naming fields that routing or downstream nodes depend on is more reliable than asking them to infer an answer from free text.
 
 > In chat mode, only top-level global fields explicitly selected under **More settings → Session state** are carried into the next turn. Sensitive fields, reserved keys, and nested paths cannot be session-state fields.
+
+## File inputs and artifacts
+
+Choose **file** (`file`) or **files** (`files`) under **More settings → Run inputs** and select files when starting a run. Task mode uses the run form; chat mode can submit file fields with a message.
+
+Workrun copies selected files into immutable snapshots within the current workspace. State carries an `ArtifactRef` with `$type: "artifact"`, an ID, version, filename, MIME type, and size. A file field contains one reference; a files field contains an array. References contain neither file bytes nor the original file path. Editing the original file does not change a saved snapshot. The current per-file limit is 512 MiB.
+
+File references follow the ordinary State publishing and read permissions. Process nodes use the Python SDK to read supplied files and save new ones; see [Use Python Apps](/guides/python-apps/#file-inputs-and-outputs). To send file contents to an Agent or Remote Agent, explicitly select accessible State paths in its attachment-path configuration. Putting a reference in a prompt alone does not transfer file contents, and the selected model must support the file type. CodeAct Agents find authorized virtual file paths through `/artifacts/manifest.json` and write deliverables under `/outputs`; Workrun collects those files as artifacts on successful completion.
+
+Generated files enter State as references for authorized downstream nodes or workflow output mappings. Files in run results and human reviews can be exported. Images and videos support previews, and PDFs can be opened for viewing.
 
 ## The three layers of state
 
@@ -112,7 +122,7 @@ Wait for a review result or selected option
 Continue later nodes from the same checkpoint
 ```
 
-A review node can let a reviewer approve or reject and, when configured, edit content. A question node writes the selected option to its own state key. Resuming does not re-execute completed nodes. Failed background runs can also retry from a checkpoint, but currently that requires the checkpoint to contain one pending node. For a failure in a parallel fan-out, inspect run history first to decide which branch to retry or whether to begin a new run.
+A review node can let a reviewer approve or reject and, when configured, edit content. A question node writes the selected option to its own state key. Resuming does not re-execute completed nodes. Failed or stopped tasks do not continue from a checkpoint; fix the issue and use Run again to create a new task. Application-exit interruptions can separately recover after checkpoint and operation-journal validation.
 
 Subworkflows execute with parent workflow context and protect against recursive use: Workrun blocks cycles and limits nesting depth. `Terminate` explicitly ends the entire execution, rather than ending only one canvas path.
 

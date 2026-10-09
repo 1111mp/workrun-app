@@ -19,6 +19,7 @@ import {
 import type { Node } from '@xyflow/react';
 import { PinIcon, XIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 import {
@@ -28,11 +29,12 @@ import {
 import { WorkflowRunOutput } from '@/components/workflow-output-panel';
 import {
   inspectRunRecord,
+  replayRun,
   type RunRecord,
   type RunStatus,
 } from '@/services/run-history';
 import {
-  retryFailedBackgroundWorkflowRun,
+  recoverInterruptedWorkflowRun,
   type WorkflowRunEvent,
 } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
@@ -69,6 +71,9 @@ const statusTone: Record<RunStatus, string> = {
 };
 
 function RunWorkspace() {
+  const { t, i18n } = useTranslation();
+  const statusLabel = (status: string) =>
+    t(`executionRecovery.status.${status}`, { defaultValue: status });
   const {
     tabs,
     activeRunId,
@@ -82,7 +87,7 @@ function RunWorkspace() {
   } = useRunWorkspaceStore();
   const activeTab = tabs.find((tab) => tab.id === activeRunId);
   const [record, setRecord] = useState<RunRecord>();
-  const [retrySourceRunId, setRetrySourceRunId] = useState<string>();
+  const [recoverySourceRunId, setRecoverySourceRunId] = useState<string>();
   // Keep the previous response while a new tab loads, but never render it for
   // a different run. This avoids a synchronous effect update just to clear UI.
   const activeRecord = record?.id === activeRunId ? record : undefined;
@@ -107,19 +112,19 @@ function RunWorkspace() {
         : activeRecord.endedAt
           ? Date.parse(activeRecord.endedAt)
           : undefined;
-    const terminalState =
-      activeRecord.status === 'completed' ||
-      activeRecord.status === 'failed' ||
-      activeRecord.status === 'cancelled' ||
-      activeRecord.status === 'interrupted'
-        ? {
-            status: activeRecord.status,
-            error:
-              activeRecord.status === 'cancelled'
-                ? undefined
-                : activeRecord.error,
-          }
-        : undefined;
+    const terminalState = {
+      status:
+        activeRecord.status === 'queued' || activeRecord.status === 'running'
+          ? ('running' as const)
+          : activeRecord.status === 'waiting_for_input'
+            ? ('interrupted' as const)
+            : activeRecord.status,
+      error:
+        activeRecord.status === 'failed' ||
+        activeRecord.status === 'interrupted'
+          ? activeRecord.error
+          : undefined,
+    };
     return {
       ...snapshot,
       // The archived duration is authoritative. It remains stable even if the
@@ -137,27 +142,27 @@ function RunWorkspace() {
     };
   }, [activeRecord, activeTab?.targetType]);
 
-  const retryFailedWorkflow = () => {
-    if (!retrySourceRunId) return;
-    void retryFailedBackgroundWorkflowRun(retrySourceRunId)
+  const recoverInterruptedWorkflow = () => {
+    if (!recoverySourceRunId) return;
+    void recoverInterruptedWorkflowRun(recoverySourceRunId)
       .then(openRun)
       .catch((error: unknown) => {
-        toast.error('Could not retry failed workflow', {
+        toast.error(t('executionRecovery.continueFailed'), {
           toasterId: 'global',
           description: error instanceof Error ? error.message : String(error),
         });
       });
-    setRetrySourceRunId(undefined);
+    setRecoverySourceRunId(undefined);
   };
 
-  const requestFailedWorkflowRetry = () => {
+  const requestInterruptedWorkflowRecovery = () => {
     if (
       !activeRecord ||
       activeRecord.targetType !== 'workflow' ||
-      activeRecord.status !== 'failed'
+      activeRecord.status !== 'interrupted'
     )
       return;
-    setRetrySourceRunId(activeRecord.id);
+    setRecoverySourceRunId(activeRecord.id);
   };
 
   useEffect(() => {
@@ -224,6 +229,40 @@ function RunWorkspace() {
           onOpenChange={setOpen}
         >
           <DrawerContent>
+            <div className='flex items-center justify-end gap-2 px-6 pt-4'>
+              {activeRecord ? (
+                <Badge variant='outline'>
+                  {statusLabel(activeRecord.status)}
+                </Badge>
+              ) : null}
+              {activeRecord &&
+              !activeRecord.executionHistory?.compensation &&
+              activeRecord.status === 'interrupted' ? (
+                <Button onClick={requestInterruptedWorkflowRecovery}>
+                  {t('workflowEditor.output.continueTask')}
+                </Button>
+              ) : null}
+              {activeRecord &&
+              ['completed', 'failed', 'interrupted', 'cancelled'].includes(
+                activeRecord.status,
+              ) ? (
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    void replayRun(activeRecord.id)
+                      .then(openRun)
+                      .catch((error: unknown) => {
+                        toast.error(t('executionRecovery.newTaskFailed'), {
+                          toasterId: 'global',
+                          description: String(error),
+                        });
+                      });
+                  }}
+                >
+                  {t('executionRecovery.runAgain')}
+                </Button>
+              ) : null}
+            </div>
             <WorkflowRunOutput
               readOnly
               isChat={workflowRun.mode === 'chat'}
@@ -232,27 +271,29 @@ function RunWorkspace() {
               workflowNodes={workflowRun.nodes}
               spans={activeRecord?.spans}
               onClose={() => setOpen(false)}
-              onRunAgain={requestFailedWorkflowRetry}
+              onRunAgain={requestInterruptedWorkflowRecovery}
             />
           </DrawerContent>
         </Drawer>
         <AlertDialog
-          open={Boolean(retrySourceRunId)}
-          onOpenChange={(open) => !open && setRetrySourceRunId(undefined)}
+          open={Boolean(recoverySourceRunId)}
+          onOpenChange={(open) => !open && setRecoverySourceRunId(undefined)}
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Retry from checkpoint?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {t('executionRecovery.continueTitle')}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                Earlier completed nodes will not run again. The failed node may
-                have already performed an external action, such as sending a
-                message or updating a record.
+                {t('executionRecovery.continueDescription')}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={retryFailedWorkflow}>
-                Retry failed node
+              <AlertDialogCancel>
+                {t('workflowEditor.output.cancelAction')}
+              </AlertDialogCancel>
+              <AlertDialogAction onClick={recoverInterruptedWorkflow}>
+                {t('workflowEditor.output.continueTask')}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -270,7 +311,9 @@ function RunWorkspace() {
     >
       <DrawerContent>
         <DrawerHeader className='border-b px-5 py-3 text-left'>
-          <DrawerTitle className='text-base'>Run workspace</DrawerTitle>
+          <DrawerTitle className='text-base'>
+            {t('executionRecovery.workspaceTitle')}
+          </DrawerTitle>
         </DrawerHeader>
         <div className='bg-muted/25 border-b px-3 py-2'>
           <div className='flex gap-1 overflow-x-auto'>
@@ -296,7 +339,9 @@ function RunWorkspace() {
                 </button>
                 {tab.pinned ? <PinIcon className='size-3' /> : null}
                 <button
-                  aria-label={`Close ${tab.targetName}`}
+                  aria-label={t('executionRecovery.closeTask', {
+                    name: tab.targetName,
+                  })}
                   className='text-muted-foreground hover:text-foreground'
                   type='button'
                   onClick={() => closeRun(tab.id)}
@@ -319,8 +364,10 @@ function RunWorkspace() {
                     {activeTab.targetName}
                   </h2>
                   <p className='text-muted-foreground mt-1 text-xs'>
-                    {new Date(activeRecord.startedAt).toLocaleString()} ·{' '}
-                    {activeRecord.status}
+                    {new Date(activeRecord.startedAt).toLocaleString(
+                      i18n.resolvedLanguage ?? i18n.language,
+                    )}{' '}
+                    · {statusLabel(activeRecord.status)}
                   </p>
                 </div>
                 <Button

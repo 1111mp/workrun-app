@@ -1122,7 +1122,6 @@ function WorkflowEditorContent({
             }
             onRun={workflowRun.startWorkflowRun}
             onResume={workflowRun.resumeWorkflowRun}
-            onRetryFailed={workflowRun.retryFailedWorkflowRun}
             chatSessions={
               viewingHistoricalChatSession
                 ? [viewingHistoricalChatSession]

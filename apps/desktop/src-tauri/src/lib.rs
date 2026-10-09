@@ -196,9 +196,10 @@ pub fn run() {
             // run manager
             cmd::run_manager::workflow_run_start,
             cmd::run_manager::workflow_run_resume,
-            cmd::run_manager::workflow_run_retry_failed,
+            cmd::run_manager::workflow_run_recover_interrupted,
             cmd::run_manager::workflow_run_resolve_action,
             cmd::run_manager::workflow_run_cancel,
+            cmd::run_manager::workflow_operation_review,
             cmd::run_manager::process_node_run_start,
             cmd::run_manager::process_node_run_cancel,
             cmd::run_manager::run_replay,

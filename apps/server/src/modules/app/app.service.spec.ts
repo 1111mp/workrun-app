@@ -90,6 +90,10 @@ describe('AppService', () => {
       description: '',
       version: '0.1.0',
       entry: 'main.py',
+      compensation: {
+        entry: 'compensate.py',
+        idempotencyContract: 'Deleting absent resources succeeds',
+      },
       kind: 'workflow',
       toolExecutionPolicy: 'ask_every_time',
       toolRiskLevel: 'low',
@@ -111,7 +115,10 @@ describe('AppService', () => {
       expect.objectContaining({
         appId: 'app-1',
         id: '123e4567-e89b-12d3-a456-426614174000',
-        definition: expect.objectContaining({ version: '1.2.3' }),
+        definition: expect.objectContaining({
+          version: '1.2.3',
+          compensation: app.compensation,
+        }),
         status: 'published',
         version: '1.2.3',
         releaseNote: 'Initial release',

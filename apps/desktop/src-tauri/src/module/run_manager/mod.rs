@@ -101,8 +101,18 @@ impl RunSupervisor {
         }
         AsyncHandler::spawn(move || async move {
             loop {
+                if !self.accepting.load(Ordering::Acquire) {
+                    break;
+                }
+                if let Err(error) = super_recovery_tick().await {
+                    log::warn!("recovery scheduler: {error:#}");
+                }
+                self.dispatch_compensation().await;
                 self.dispatch_available_runs().await;
-                self.wake.notified().await;
+                tokio::select! {
+                    _ = self.wake.notified() => {},
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+                }
             }
         });
         self.wake.notify_one();
@@ -130,6 +140,64 @@ impl RunSupervisor {
             }
         })
         .await;
+    }
+
+    async fn dispatch_compensation(&'static self) {
+        if !self.accepting.load(Ordering::Acquire) {
+            return;
+        }
+        let Ok(permit) = Arc::clone(&self.permits).try_acquire_owned() else {
+            return;
+        };
+        let Ok(pool) = crate::core::db::DBManager::global().pool() else {
+            return;
+        };
+        if let Ok(key) = crate::utils::dirs::get_encryption_key()
+            && let Err(error) = workflow_module::process_cleanup::recover_failed(&pool, &key).await
+        {
+            log::warn!("Failed to schedule App cleanup: {error:#}");
+        }
+
+        let run_id = match workflow_module::saga_scheduler::claim(&pool).await {
+            Ok(Some(id)) => id,
+            Ok(None) => return,
+            Err(error) => {
+                log::warn!("compensation claim: {error:#}");
+                return;
+            },
+        };
+        // Shutdown can begin while SQLite is claiming. Keep the durable claim
+        // for startup recovery rather than starting external work after exit.
+        if !self.accepting.load(Ordering::Acquire) {
+            return;
+        }
+        self.active_runs.fetch_add(1, Ordering::AcqRel);
+        AsyncHandler::spawn(move || async move {
+            let result = async {
+                // Reissue local Stop after a crash between durable abandonment
+                // and cancellation. Compensation starts only after owners stop.
+                let record = RunHistoryStore::inspect(&run_id).await?;
+                if matches!(record.summary.status.as_str(), "running" | "waiting_for_input") {
+                    let _ = workflow::cancel_waiting_workflow(&run_id).await;
+                }
+                let key = crate::utils::dirs::get_encryption_key()?;
+                workflow_module::saga_scheduler::tick(pool, key, &run_id).await
+            }
+            .await;
+            if result.is_err() {
+                log::warn!("compensation worker blocked for {run_id}");
+                let _ = workflow_module::saga_scheduler::block_claim(&run_id).await;
+            }
+            if let Ok(record) = RunHistoryStore::inspect(&run_id).await
+                && let Ok(status) = serde_json::from_value::<RunStatus>(json!(record.summary.status))
+            {
+                publish_run_status(&run_id, status).ok();
+            }
+            drop(permit);
+            self.active_runs.fetch_sub(1, Ordering::AcqRel);
+            self.idle.notify_waiters();
+            self.notify();
+        });
     }
 
     async fn dispatch_available_runs(&'static self) {
@@ -182,8 +250,32 @@ impl RunSupervisor {
     }
 }
 
+async fn super_recovery_tick() -> Result<()> {
+    let pool = crate::core::db::DBManager::global().pool()?;
+    let Some(id) = crate::module::run_history::recovery::claim_recovery(&pool).await? else {
+        return Ok(());
+    };
+    if let Err(error) = workflow::recover_workflow(&id, true).await {
+        crate::module::run_history::recovery::block_job(&pool, &id, &error.to_string()).await?;
+        let status = RunHistoryStore::inspect(&id).await?.summary.status;
+        if matches!(status.as_str(), "failed" | "interrupted") {
+            publish_run_status(
+                &id,
+                if status == "interrupted" {
+                    RunStatus::Interrupted
+                } else {
+                    RunStatus::Failed
+                },
+            )
+            .ok();
+        }
+    }
+    Ok(())
+}
+
 /// Called only after the database has completed migration and recovery. Recovery
-/// marks incomplete records interrupted, so this only dispatches new user work.
+/// marks incomplete records interrupted; journaled operations are reconciled
+/// by persisted recovery jobs before the original task is requeued.
 pub fn start_supervisor() {
     RunManager::global().start_supervisor();
 }
@@ -311,6 +403,9 @@ struct RunStatusChange {
     status: RunStatus,
 }
 
+mod startup_recovery;
+pub(crate) use startup_recovery::StartupRecovery;
+
 mod app;
 mod events;
 mod execution;
@@ -321,9 +416,11 @@ use execution::execute_claimed_run;
 
 pub use app::{cancel_running_app, start_app};
 pub use workflow::{
-    MissingReplayDependency, cancel_waiting_workflow, replay_missing_dependencies, replay_run, resolve_workflow_action,
-    resume_workflow, retry_failed_workflow, start_workflow,
+    MissingReplayDependency, cancel_waiting_workflow, recover_interrupted_workflow, replay_missing_dependencies,
+    replay_run, resolve_workflow_action, resume_workflow, review_operation, start_workflow,
 };
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use events::emit_cleanup_event;

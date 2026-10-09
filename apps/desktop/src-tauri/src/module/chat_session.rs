@@ -297,8 +297,8 @@ impl ChatSessionStore {
         }
         let pool = DBManager::global().pool()?;
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("INSERT INTO chat_sessions (id, workflow_id, workflow_snapshot_json, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)")
-            .bind(id).bind(workflow_id).bind(workflow_snapshot.to_string()).bind(&now).bind(&now)
+        sqlx::query("INSERT INTO chat_sessions (id, workflow_id, workflow_snapshot_json, status, created_at, updated_at, workspace_id) VALUES (?, ?, ?, 'active', ?, ?, ?)")
+            .bind(id).bind(workflow_id).bind(workflow_snapshot.to_string()).bind(&now).bind(&now).bind(crate::utils::dirs::active_workspace_id())
             .execute(&pool).await?;
         Self::get(id).await
     }
@@ -324,8 +324,9 @@ impl ChatSessionStore {
 
     pub async fn get(id: &str) -> Result<ChatSession> {
         let pool = DBManager::global().pool()?;
-        let row = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, summary_through_sequence, summary_status, summary_updated_at, summary_error, created_at, updated_at, workflow_snapshot_json, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE id = ?")
-            .bind(id).fetch_optional(&pool).await?
+        let row = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, summary_through_sequence, summary_status, summary_updated_at, summary_error, created_at, updated_at, workflow_snapshot_json, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE id = ? AND workspace_id = ?")
+            .bind(id)
+            .bind(crate::utils::dirs::active_workspace_id()).fetch_optional(&pool).await?
             .context("chat session was not found")?;
         Ok(ChatSession {
             id: row.try_get("id")?,
@@ -463,7 +464,8 @@ impl ChatSessionStore {
 
     pub async fn list(workflow_id: &str) -> Result<Vec<ChatSession>> {
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, summary_through_sequence, summary_status, summary_updated_at, summary_error, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE workflow_id = ? AND status = 'active' ORDER BY COALESCE((SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1), created_at) DESC, id DESC")
+        let rows = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, summary_through_sequence, summary_status, summary_updated_at, summary_error, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE workspace_id = ? AND workflow_id = ? AND status = 'active' ORDER BY COALESCE((SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1), created_at) DESC, id DESC")
+            .bind(crate::utils::dirs::active_workspace_id())
             .bind(workflow_id).fetch_all(&pool).await?;
         rows.into_iter()
             .map(|row| {
@@ -495,7 +497,8 @@ impl ChatSessionStore {
     /// session from the live picker, never from its durable execution record.
     pub async fn list_history(workflow_id: &str) -> Result<Vec<ChatSession>> {
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, summary_through_sequence, summary_status, summary_updated_at, summary_error, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE workflow_id = ? ORDER BY COALESCE((SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1), created_at) DESC, id DESC")
+        let rows = sqlx::query("SELECT id, workflow_id, status, active_run_id, state_json, summary, summary_through_sequence, summary_status, summary_updated_at, summary_error, created_at, updated_at, (SELECT status FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_status, (SELECT user_message FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_message, (SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1) AS latest_turn_at FROM chat_sessions WHERE workspace_id = ? AND workflow_id = ? ORDER BY COALESCE((SELECT COALESCE(completed_at, created_at) FROM chat_turns WHERE session_id = chat_sessions.id ORDER BY sequence DESC LIMIT 1), created_at) DESC, id DESC")
+            .bind(crate::utils::dirs::active_workspace_id())
             .bind(workflow_id)
             .fetch_all(&pool)
             .await?;

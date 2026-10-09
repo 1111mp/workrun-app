@@ -14,16 +14,19 @@ pub async fn run_history_create(record: CreateRunRecord) -> CmdResult {
 
 #[tauri::command]
 pub async fn run_history_append_events(id: String, request: AppendRunEvents) -> CmdResult {
+    RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
     RunHistoryStore::append_events(&id, request).await.stringify_err()
 }
 
 #[tauri::command]
 pub async fn run_history_finalize(id: String, record: FinalizeRunRecord) -> CmdResult {
+    RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
     RunHistoryStore::finalize(&id, record).await.stringify_err()
 }
 
 #[tauri::command]
 pub async fn run_history_mark_running(id: String) -> CmdResult {
+    RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
     RunHistoryStore::mark_running(&id).await.stringify_err()
 }
 
@@ -39,6 +42,7 @@ pub async fn run_history_list_timeline(query: RunHistoryTimelineQuery) -> CmdRes
 
 #[tauri::command]
 pub async fn run_history_inspect(id: String) -> CmdResult<RunRecord> {
+    RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
     RunHistoryStore::inspect(&id).await.stringify_err()
 }
 
@@ -54,6 +58,9 @@ pub async fn run_history_observability(query: RunObservabilityQuery) -> CmdResul
 
 #[tauri::command]
 pub async fn run_history_create_pending_action(action: CreatePendingAction) -> CmdResult {
+    RunHistoryStore::ensure_active_workspace(&action.run_id)
+        .await
+        .stringify_err()?;
     RunHistoryStore::create_pending_action(action).await.stringify_err()
 }
 

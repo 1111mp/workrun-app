@@ -34,6 +34,9 @@ export class App {
   @Prop({ default: 'main.py' })
   entry!: string;
 
+  @Prop({ type: Object, default: null })
+  compensation?: { entry: string; idempotencyContract?: string } | null;
+
   @Prop({ trim: true })
   projectRoot?: string;
 

@@ -107,6 +107,16 @@ export default defineConfig({
               link: '/guides/python-apps/',
             },
             {
+              label: 'App failure compensation',
+              translations: { 'zh-CN': 'App 失败补偿' },
+              link: '/guides/app-compensation/',
+            },
+            {
+              label: 'Remote Agents and A2A',
+              translations: { 'zh-CN': 'Remote Agent 与 A2A' },
+              link: '/guides/remote-agents/',
+            },
+            {
               label: 'Connect an MCP server',
               translations: { 'zh-CN': '连接 MCP Server' },
               link: '/guides/connect-an-mcp-server/',

@@ -15,6 +15,7 @@ fn definition() -> IProcessNode {
         created_at: "2026-01-01T00:00:00+00:00".into(),
         updated_at: "2026-01-01T00:00:00+00:00".into(),
         entry: "main.py".into(),
+        compensation: None,
         project_root: None,
         kind: ProcessNodeKind::Workflow,
         tool_execution_policy: ToolExecutionPolicy::AskEveryTime,
@@ -151,4 +152,21 @@ async fn installation_status_only_checks_for_a_project_directory() {
     assert!(error.is_none());
 
     tokio::fs::remove_dir_all(project).await.unwrap();
+}
+
+#[test]
+fn compensation_requires_separate_safe_entry_without_a_contract() {
+    let mut app = definition();
+    app.compensation = Some(crate::config::ProcessCompensation {
+        entry: "compensate.py".into(),
+        idempotency_contract: "Already deleted is success".into(),
+    });
+    assert!(validate_process_node_definition(&app).is_ok());
+    for entry in ["main.py", "../compensate.py", "/tmp/compensate.py", ""] {
+        app.compensation.as_mut().unwrap().entry = entry.into();
+        assert!(validate_process_node_definition(&app).is_err());
+    }
+    app.compensation.as_mut().unwrap().entry = "compensate.py".into();
+    app.compensation.as_mut().unwrap().idempotency_contract.clear();
+    assert!(validate_process_node_definition(&app).is_ok());
 }

@@ -468,7 +468,9 @@ function ApprovalCoordinator() {
   useEffect(
     () => () => {
       if (action && releasedAction.current !== action.id) {
-        void releasePendingAction(action.id, claimantId);
+        void releasePendingAction(action.id, claimantId).catch(() => {
+          // A workspace switch can make the previous reservation inaccessible.
+        });
       }
     },
     [action, claimantId],

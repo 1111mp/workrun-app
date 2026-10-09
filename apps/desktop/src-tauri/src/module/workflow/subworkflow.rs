@@ -12,6 +12,10 @@ pub(super) fn add_subworkflow_node(
     Ok(graph.add_node(SubworkflowNode {
         id: node.id.clone(),
         workflow_id,
+        #[cfg(test)]
+        test_storage: None,
+        #[cfg(test)]
+        test_dsl: None,
         config: context.config,
         on_event: context.on_event,
         state: context.state,
@@ -34,6 +38,10 @@ pub(super) struct SubworkflowNodeConfig {
 struct SubworkflowNode {
     id: String,
     workflow_id: String,
+    #[cfg(test)]
+    test_storage: Option<(sqlx::SqlitePool, Vec<u8>)>,
+    #[cfg(test)]
+    test_dsl: Option<WorkflowDsl>,
     config: IWorkrun,
     on_event: Option<Channel<StreamEvent>>,
     state: SharedWorkflowState,
@@ -51,23 +59,100 @@ impl Node for SubworkflowNode {
 
     async fn execute(&self, context: &NodeContext) -> adk_rust::graph::Result<NodeOutput> {
         let resume_key = format!("workflow.subworkflow.{}.resume", self.id);
-        let resume = context.get(&resume_key).and_then(Value::as_bool).unwrap_or(false);
-        let input = if resume {
-            adk_rust::graph::State::new()
-        } else {
-            let input = self
-                .state
-                .lock()
-                .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
-                .node_input(&self.id)
-                .map_err(|error| graph_node_error(&self.id, error))?;
-            serde_json::from_value(input).map_err(|error| graph_node_error(&self.id, error))?
-        };
-        let mut dsl = workflow_dsl(&self.workflow_id)
-            .await
+        let legacy_resume = context.get(&resume_key).and_then(Value::as_bool).unwrap_or(false);
+        let input = self
+            .state
+            .lock()
+            .map_err(|_| graph_node_error(&self.id, "workflow state lock is poisoned"))?
+            .node_input(&self.id)
             .map_err(|error| graph_node_error(&self.id, error))?;
+        let scope = context
+            .config
+            .metadata
+            .get("workrun.execution_path")
+            .and_then(Value::as_str)
+            .unwrap_or("root");
+        let run_id = context.config.metadata.get("workrun.run_id").and_then(Value::as_str);
+        let execution_id = context
+            .config
+            .metadata
+            .get("workrun.execution_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&context.config.thread_id);
+        let mut operation = if let Some(run_id) = run_id {
+            let (pool, key) = self.storage().map_err(|error| graph_node_error(&self.id, error))?;
+            Some(
+                super::subworkflow_journal::ChildOperation::enter(
+                    pool,
+                    key,
+                    execution_id,
+                    run_id,
+                    &context.config.thread_id,
+                    scope,
+                    &self.id,
+                    context.step,
+                    &input,
+                    self.load_dsl(),
+                )
+                .await
+                .map_err(|error| graph_node_error(&self.id, error))?,
+            )
+        } else {
+            None
+        };
+        if let Some(op) = &mut operation {
+            let saved = (|| -> Result<Option<Value>> {
+                let receipt = op.receipt()?;
+                if let Some(receipt) = &receipt {
+                    if !receipt["result"].is_object() {
+                        bail!("Invalid saved subworkflow output");
+                    }
+                    let references = crate::module::artifact::references(&receipt["result"])?;
+                    if !references.is_empty() {
+                        let store = crate::module::artifact::ArtifactStore::active()?;
+                        for reference in references {
+                            store.resolve(&reference)?;
+                        }
+                    }
+                }
+                Ok(receipt)
+            })();
+            match saved {
+                Ok(Some(receipt)) => {
+                    op.complete(&receipt)
+                        .await
+                        .map_err(|error| graph_node_error(&self.id, error))?;
+                    return self.publish_receipt(receipt);
+                },
+                Ok(None) => {},
+                Err(error) => {
+                    op.operation
+                        .fail_reuse("Saved subworkflow output or artifact unavailable")
+                        .await
+                        .map_err(|error| graph_node_error(&self.id, error))?;
+                    return Err(graph_node_error(&self.id, error));
+                },
+            }
+        }
+        let mut dsl = match &operation {
+            Some(op) => op.invocation.dsl.clone(),
+            None => workflow_dsl(&self.workflow_id)
+                .await
+                .map_err(|error| graph_node_error(&self.id, error))?,
+        };
         validate_workflow_path(&self.workflow_path, &dsl.id).map_err(|error| graph_node_error(&self.id, error))?;
-        let thread_id = format!("{}/{}", context.config.thread_id, self.id);
+        let thread_id = operation
+            .as_ref()
+            .map(|op| op.invocation.thread_id.clone())
+            .unwrap_or_else(|| format!("{}/{}", context.config.thread_id, self.id));
+        let child_scope = operation
+            .as_ref()
+            .map(|op| op.invocation.scope.clone())
+            .unwrap_or_else(|| json!([scope, self.id, context.step]).to_string());
+        let resume = operation
+            .as_ref()
+            .map(|op| !op.operation.can_submit)
+            .unwrap_or(legacy_resume);
         inject_workflow_context(&mut dsl, &thread_id, &self.id);
         let output_keys = dsl
             .output_schema
@@ -92,7 +177,7 @@ impl Node for SubworkflowNode {
         let mut child_path = self.workflow_path.clone();
         child_path.push(dsl.id.clone());
         let child = compile_with_path(
-            dsl,
+            dsl.clone(),
             &self.config,
             self.on_event.clone(),
             child_path,
@@ -100,21 +185,80 @@ impl Node for SubworkflowNode {
         )
         .await
         .map_err(|error| graph_node_error(&self.id, error))?;
+        if resume && operation.is_some() {
+            // No checkpoint is not permission to start a new child execution.
+            let validation = async {
+                let (pool, key) = self.storage()?;
+                let mut path = self.workflow_path.clone();
+                path.push(dsl.id.clone());
+                super::recovery::validate_frontier(
+                    &child,
+                    &dsl,
+                    &pool,
+                    &key,
+                    execution_id,
+                    run_id.unwrap(),
+                    &child_scope,
+                    &thread_id,
+                    &self.config,
+                    path,
+                    false,
+                )
+                .await
+            }
+            .await;
+            if let Err(error) = validation {
+                if let Some(op) = &mut operation {
+                    op.suspend().await.map_err(|error| graph_node_error(&self.id, error))?;
+                }
+                return Err(graph_node_error(&self.id, error));
+            }
+        }
+        if let Some(op) = &operation {
+            op.operation
+                .mark_dispatched()
+                .await
+                .map_err(|error| graph_node_error(&self.id, error))?;
+        }
+        let input = if resume {
+            adk_rust::graph::State::new()
+        } else {
+            serde_json::from_value(
+                operation
+                    .as_ref()
+                    .map(|op| op.invocation.input.clone())
+                    .unwrap_or(input),
+            )
+            .map_err(|error| graph_node_error(&self.id, error))?
+        };
         let result = child
-            .run_stream_tracked(
+            .run_stream_scoped(
                 input,
                 &thread_id,
                 resume,
                 None,
-                context.config.metadata.get("workrun.run_id").and_then(Value::as_str),
+                run_id,
+                execution_id,
+                &child_scope,
                 |_| {},
             )
-            .await
-            .map_err(|error| graph_node_error(&self.id, error))?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(op) = &mut operation {
+                    op.suspend().await.map_err(|error| graph_node_error(&self.id, error))?;
+                }
+                return Err(graph_node_error(&self.id, error));
+            },
+        };
         if result.interrupted {
+            if let Some(op) = &mut operation {
+                op.suspend().await.map_err(|error| graph_node_error(&self.id, error))?;
+            }
             return Ok(NodeOutput::interrupt_with_data(
                 "Subworkflow interrupted",
-                json!({ "workflowId": self.workflow_id, "threadId": thread_id }),
+                json!({"workflowId":self.workflow_id, "threadId":thread_id}),
             )
             .with_update(&resume_key, true));
         }
@@ -126,6 +270,43 @@ impl Node for SubworkflowNode {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let outputs = extract_outputs(&result.state, output_keys).map_err(|error| graph_node_error(&self.id, error))?;
+        let receipt = json!({"result":outputs, "workflowName":workflow_name, "execution":workflow_trace(&result.state, &node_names), "terminated":terminated});
+        if let Some(op) = &mut operation {
+            op.complete(&receipt)
+                .await
+                .map_err(|error| graph_node_error(&self.id, error))?;
+        }
+        self.publish_receipt(receipt)
+    }
+}
+
+impl SubworkflowNode {
+    fn storage(&self) -> Result<(sqlx::SqlitePool, Vec<u8>)> {
+        #[cfg(test)]
+        if let Some(storage) = &self.test_storage {
+            return Ok(storage.clone());
+        }
+        Ok((
+            crate::core::db::DBManager::global().pool()?,
+            crate::utils::dirs::get_encryption_key()?,
+        ))
+    }
+
+    async fn load_dsl(&self) -> Result<WorkflowDsl> {
+        #[cfg(test)]
+        if let Some(dsl) = &self.test_dsl {
+            return Ok(dsl.clone());
+        }
+        workflow_dsl(&self.workflow_id).await
+    }
+
+    fn publish_receipt(&self, receipt: Value) -> adk_rust::graph::Result<NodeOutput> {
+        let resume_key = format!("workflow.subworkflow.{}.resume", self.id);
+        let outputs = receipt["result"]
+            .as_object()
+            .ok_or_else(|| graph_node_error(&self.id, "Invalid subworkflow output"))?
+            .clone();
+        let terminated = receipt["terminated"].as_bool().unwrap_or(false);
         let global_updates = self
             .state
             .lock()
@@ -137,13 +318,12 @@ impl Node for SubworkflowNode {
                 &self.sensitive_fields,
             )
             .map_err(|error| graph_node_error(&self.id, error))?;
-        let execution = workflow_trace(&result.state, &node_names);
         let event = json!({
             "nodeId": self.id,
             "type": "subworkflow",
-            "workflowName": workflow_name,
+            "workflowName": receipt["workflowName"],
             "result": outputs,
-            "execution": execution,
+            "execution": receipt["execution"],
             "terminated": terminated,
         });
         if let Some(on_event) = &self.on_event {
@@ -192,7 +372,7 @@ fn workflow_trace(state: &State, node_names: &HashMap<String, String>) -> Vec<Va
         .unwrap_or_default()
 }
 
-fn validate_workflow_path(workflow_path: &[String], workflow_id: &str) -> Result<()> {
+pub(super) fn validate_workflow_path(workflow_path: &[String], workflow_id: &str) -> Result<()> {
     if workflow_path.iter().any(|id| id == workflow_id) {
         bail!(
             "subworkflow cycle detected: {} -> {workflow_id}",
@@ -245,6 +425,52 @@ pub fn inject_workflow_context(dsl: &mut WorkflowDsl, thread_id: &str, parent_no
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn journal_restores_child_checkpoint_without_parent_resume_flag_and_reuses_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("checkpoint.sqlite");
+        std::fs::write(&file, []).unwrap();
+        TEST_CHECKPOINT_DB.scope(format!("sqlite://{}", file.display()), async {
+            let pool = remote_tasks::test_pool().await;
+            let dsl: WorkflowDsl = serde_json::from_value(json!({
+                "id":"child", "name":"Original child",
+                "inputSchema":{"fields":[{"key":"summary", "type":"string"}]},
+                "outputSchema":{"fields":[{"key":"summary", "type":"string"}]},
+                "nodes":[{"id":"start","type":"start"},{"id":"review","type":"human_review","data":{}},{"id":"end","type":"end"}],
+                "edges":[{"source":"start","target":"review"},{"source":"review","target":"end","sourceHandle":"approved"},{"source":"review","target":"end","sourceHandle":"rejected"}]
+            })).unwrap();
+            let node = SubworkflowNode {
+                id:"child-node".into(), workflow_id:"child".into(), config:Default::default(),
+                test_storage:Some((pool.clone(), vec![42;32])), test_dsl:Some(dsl),
+                on_event:None, state:Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({"summary":"done"})).unwrap())),
+                global_keys:BTreeSet::new(), sensitive_fields:BTreeSet::new(),
+                workflow_path:vec!["parent".into()], execution_profile:WorkflowExecutionProfile::Production,
+            };
+            let context = NodeContext::new(HashMap::new(), ExecutionConfig::new("parent-thread")
+                .with_metadata("workrun.run_id", json!("run-1")), 2);
+            let first = node.execute(&context).await.unwrap();
+            assert!(first.interrupt.is_some());
+            let path = json!(["root", "child-node", 2, "subworkflow"]).to_string();
+            let invocation = super::super::subworkflow_journal::saved_invocation(&pool, &[42;32], "parent-thread", &path).await.unwrap().unwrap();
+            let mut saved = invocation.dsl.clone();
+            inject_workflow_context(&mut saved, &invocation.thread_id, "child-node");
+            let child = compile_with_path(saved.clone(), &Default::default(), None, vec!["parent".into(),"child".into()], WorkflowExecutionProfile::Production).await.unwrap();
+            child.update_state(&invocation.thread_id, [(human_review_approval_key(&saved, "review").unwrap(), json!(true))]).await.unwrap();
+            // Ignore the parent's returned resume update, as a parent failure
+            // before checkpoint commit would do. The durable invocation wins.
+            let completed = node.execute(&context).await.unwrap();
+            assert!(completed.interrupt.is_none());
+            assert_eq!(completed.updates["workflow.node"]["result"]["summary"], "done");
+            // Restore the parent bridge as well as graph position; keeping
+            // post-publication State would not model a missing checkpoint.
+            *node.state.lock().unwrap() = WorkflowStateBridge::from_initial_state(json!({"summary":"done"})).unwrap();
+            let reused = node.execute(&context).await.unwrap();
+            assert_eq!(reused.updates["workflow.node"], completed.updates["workflow.node"]);
+            let actions: Vec<String> = sqlx::query_scalar("SELECT action FROM workflow_operation_attempts ORDER BY sequence").fetch_all(&pool).await.unwrap();
+            assert_eq!(actions, ["submit", "reconcile", "reuse"]);
+        }).await;
+    }
 
     #[test]
     fn injects_resume_context_only_into_interactive_nodes() {

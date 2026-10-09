@@ -8,36 +8,26 @@ impl RunHistoryStore {
 
     pub async fn enqueue_workflow_resume(id: &str, runtime: Value) -> Result<()> {
         let pool = DBManager::global().pool()?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+        crate::module::workflow::saga_scheduler::ensure_continuable(&mut tx, id).await?;
         let result = sqlx::query(
             "UPDATE run_records SET status = 'queued', ended_at = NULL, error = NULL, runtime_json = ?, updated_at = ? WHERE id = ? AND status = 'waiting_for_input'",
         )
         .bind(runtime.to_string())
         .bind(chrono::Utc::now().to_rfc3339())
         .bind(id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
         if result.rows_affected() == 0 {
             bail!("workflow is no longer waiting for input: {id}");
         }
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn cancel_queued_run(id: &str) -> Result<()> {
         let pool = DBManager::global().pool()?;
-        let result = sqlx::query(
-            "UPDATE run_records SET status = 'cancelled', ended_at = ?, duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER), error = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
-        )
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind("Cancelled by user")
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(id)
-        .execute(&pool)
-        .await?;
-        if result.rows_affected() == 0 {
-            bail!("run is no longer queued: {id}");
-        }
-        Ok(())
+        cancel_queued_run_in_pool(&pool, id).await
     }
 
     pub async fn last_sequence(id: &str) -> Result<i64> {
@@ -54,10 +44,19 @@ pub(super) async fn claim_next_queued_run_from_pool(
     pool: &sqlx::SqlitePool,
     include_apps: bool,
 ) -> Result<Option<String>> {
+    claim_next_queued_run_for_workspace(pool, include_apps, &crate::utils::dirs::active_workspace_id()).await
+}
+
+pub(super) async fn claim_next_queued_run_for_workspace(
+    pool: &sqlx::SqlitePool,
+    include_apps: bool,
+    workspace_id: &str,
+) -> Result<Option<String>> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
     let id = sqlx::query_scalar::<_, String>(
-        "SELECT id FROM run_records WHERE status = 'queued' AND (target_type = 'workflow' OR ?) ORDER BY created_at ASC, id ASC LIMIT 1",
+        "SELECT id FROM run_records WHERE workspace_id = ? AND status = 'queued' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=run_records.id) AND (target_type = 'workflow' OR ?) ORDER BY created_at ASC, id ASC LIMIT 1",
     )
+    .bind(workspace_id)
     .bind(include_apps)
     .fetch_optional(&mut *transaction)
     .await?;
@@ -75,6 +74,25 @@ pub(super) async fn claim_next_queued_run_from_pool(
     if result.rows_affected() == 0 {
         bail!("queued run was no longer available: {id}");
     }
+    super::recovery::begin_attempt(&mut transaction, &id).await?;
     transaction.commit().await?;
     Ok(Some(id))
+}
+
+/// Preserve the queue claim race check before running terminal side effects.
+pub(crate) async fn cancel_queued_run_in_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
+    let result = sqlx::query(
+            "UPDATE run_records SET status = 'cancelled', ended_at = ?, duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER), error = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+        )
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind("Cancelled by user")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        bail!("run is no longer queued: {id}");
+    }
+    Ok(())
 }

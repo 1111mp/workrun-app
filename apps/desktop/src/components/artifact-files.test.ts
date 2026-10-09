@@ -20,6 +20,45 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 afterEach(() => vi.unstubAllGlobals());
 
+it('opens and closes a standalone attachment preview', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => {
+      root.render(
+        createElement(ArtifactFiles, {
+          value: {
+            $type: 'artifact',
+            id: 'one',
+            version: 1,
+            name: 'image.png',
+            mimeType: 'image/png',
+            size: 42,
+          },
+        }),
+      );
+    });
+    const preview = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="workflowEditor.artifacts.preview"]',
+    );
+    expect(preview).not.toBeNull();
+    await act(async () => preview!.click());
+    expect(document.querySelector('.yarl__root')).not.toBeNull();
+    const close = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="workflowEditor.artifacts.closePreview"]',
+    );
+    expect(close).not.toBeNull();
+    await act(async () => close!.click());
+    await act(async () => root.unmount());
+    expect(document.querySelector('.yarl__root')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 it('opens a nested media preview and closes it without dismissing the review', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   const onReviewClose = vi.fn();

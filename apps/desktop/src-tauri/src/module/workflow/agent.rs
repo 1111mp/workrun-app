@@ -46,6 +46,13 @@ pub(super) async fn add_local_agent_node(
     let tool_ids = string_array_data(node, "toolIds")?;
     let skills = crate::module::skill::SkillRegistry::resolve(&personal_skill_names(node)?)?;
     let tool_ids = crate::module::skill::allowed_tool_ids(&skills, tool_ids)?;
+    if let Some(declarations) = node.data.get("toolCompensations").and_then(Value::as_object) {
+        for tool in declarations.keys() {
+            if !tool_ids.contains(tool) {
+                bail!("Compensation declaration references an unselected tool");
+            }
+        }
+    }
     let mut state_bindings = tool_state_bindings(node, &tool_ids)?;
     let max_tool_calls = effective_max_tool_calls(integer_data(node, "maxToolCalls", 8, 1, 50)?, &execution_profile);
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
@@ -133,6 +140,11 @@ pub(super) async fn add_local_agent_node(
             executor,
             ManagedToolConfig {
                 agent_node_id: id.clone(),
+                compensation: node
+                    .data
+                    .get("toolCompensations")
+                    .and_then(|value| value.get(&tool_id))
+                    .cloned(),
                 on_event: on_event.clone(),
                 tool_calls: Arc::clone(&tool_calls),
                 tool_trace: Arc::clone(&tool_trace),
@@ -398,6 +410,8 @@ pub(super) fn instrumented_model(
 pub(super) struct StreamingAgentNode {
     id: String,
     inner: AdkAgentNode,
+    #[cfg(test)]
+    tracking_storage: Option<(sqlx::SqlitePool, Vec<u8>)>,
     codeact_workspace: Option<Arc<super::codeact_agent::CodeActWorkspace>>,
     kind: String,
     endpoint_or_model: String,
@@ -412,10 +426,18 @@ pub(super) struct StreamingAgentNode {
 }
 
 impl StreamingAgentNode {
+    #[cfg(test)]
+    pub(super) fn with_tracking_storage(mut self, pool: sqlx::SqlitePool, key: Vec<u8>) -> Self {
+        self.tracking_storage = Some((pool, key));
+        self
+    }
+
     pub(super) fn new(inner: AdkAgentNode, config: StreamingAgentNodeConfig) -> Self {
         Self {
             id: config.id,
             inner,
+            #[cfg(test)]
+            tracking_storage: None,
             codeact_workspace: None,
             kind: config.kind,
             endpoint_or_model: config.endpoint_or_model,
@@ -570,11 +592,39 @@ impl Node for StreamingAgentNode {
                     Err(error) => { yield Err(graph_node_error(&node.id, error)); return; },
                 }
             }
+            // Scope every poll, rather than only stream creation: ADK invokes
+            // tools while its lazy stream is being polled on this task.
+            let journal = if node.kind == "agent"
+                && let Some(run_id) = context.config.metadata.get("workrun.run_id").and_then(Value::as_str)
+            {
+                let prepared = async {
+                    #[cfg(test)]
+                    let storage = node.tracking_storage.clone();
+                    #[cfg(not(test))]
+                    let storage: Option<(sqlx::SqlitePool, Vec<u8>)> = None;
+                    let (pool, key) = match storage {
+                        Some(storage) => storage,
+                        None => (crate::core::db::DBManager::global().pool()?, crate::utils::dirs::get_encryption_key()?),
+                    };
+                    let execution_id = context.config.metadata.get("workrun.execution_id").and_then(Value::as_str).unwrap_or(run_id);
+                    let scope = context.config.metadata.get("workrun.execution_path").and_then(Value::as_str).unwrap_or("root");
+                    super::tool_journal::validate_recovery(&pool, execution_id, scope, &node.id, context.step).await?;
+                    super::tool_journal::ToolJournal::new(pool, key, execution_id, run_id, scope, &node.id, context.step).await
+                }.await;
+                match prepared {
+                    Ok(journal) => Some(Arc::new(journal)),
+                    Err(error) => { yield Err(graph_node_error(&node.id, error)); return; }
+                }
+            } else { None };
             let stream = node.inner.execute_stream(context);
             tokio::pin!(stream);
 
             let mut events = Vec::new();
-            while let Some(result) = stream.next().await {
+            loop {
+                let result = if let Some(journal) = &journal {
+                    super::tool_journal::CURRENT.scope(Arc::clone(journal), stream.next()).await
+                } else { stream.next().await };
+                let Some(result) = result else { break };
                 match result {
                     Ok(event) => {
                         if let StreamEvent::Custom { event_type, data, .. } = &event
@@ -618,6 +668,10 @@ impl Node for StreamingAgentNode {
                 }
             }
 
+            if let Some(journal) = &journal && let Err(error) = journal.check(true) {
+                yield Err(graph_node_error(&node.id, error));
+                return;
+            }
             let parsed_events = events
                 .iter()
                 .filter_map(|event| serde_json::from_value::<Event>(event.clone()).ok())

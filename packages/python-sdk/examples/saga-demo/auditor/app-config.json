@@ -1,0 +1,49 @@
+{
+  "name": "Saga Demo Auditor",
+  "description": "Local Saga verification fixture",
+  "version": "0.1.0",
+  "kind": "workflow",
+  "entry": "main.py",
+  "inputs": {
+    "caseId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "document": {
+      "type": "object",
+      "required": [
+        "caseId",
+        "token",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "outputs": {
+    "audit": {
+      "type": "object",
+      "required": [
+        "approved"
+      ],
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
