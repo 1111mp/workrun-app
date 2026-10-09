@@ -391,7 +391,7 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
     RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
     let pool = crate::core::db::DBManager::global().pool()?;
     crate::module::run_history::recovery::complete_attempt(&pool, run_id).await?;
-    if matches!(status, RunStatus::Completed | RunStatus::Cancelled) {
+    if matches!(status, RunStatus::Completed | RunStatus::Cancelled | RunStatus::Failed) {
         sqlx::query("UPDATE run_recovery_jobs SET status = 'done', updated_at = ? WHERE run_id = ?")
             .bind(chrono::Utc::now().to_rfc3339())
             .bind(run_id)
@@ -415,8 +415,6 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
         };
         if cleanup {
             RunManager::global().supervisor.notify();
-        } else if journaled {
-            crate::module::run_history::recovery::schedule(&pool, run_id, error.as_deref()).await?;
         }
     }
     if let Err(error) = crate::module::chat_session::ChatSessionStore::finish_turn(run_id, status).await {

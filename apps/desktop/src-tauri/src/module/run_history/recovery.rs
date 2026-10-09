@@ -59,23 +59,10 @@ pub(crate) async fn complete_attempt(pool: &sqlx::SqlitePool, id: &str) -> Resul
     Ok(())
 }
 
-pub(crate) async fn schedule(pool: &sqlx::SqlitePool, id: &str, error: Option<&str>) -> Result<()> {
-    let now = chrono::Utc::now();
-    let attempts: i64 =
-        sqlx::query_scalar("SELECT COALESCE((SELECT attempts FROM run_recovery_jobs WHERE run_id = ?), 0)")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
-    let delay = 10 * (1_i64 << attempts.min(5));
-    sqlx::query("INSERT INTO run_recovery_jobs (run_id, status, next_check_at, last_error, updated_at) VALUES (?, 'pending', ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET status = CASE WHEN attempts >= 5 THEN 'blocked' ELSE 'pending' END, next_check_at = excluded.next_check_at, last_error = excluded.last_error, updated_at = excluded.updated_at")
-        .bind(id).bind((now + chrono::Duration::seconds(delay)).to_rfc3339()).bind(error).bind(now.to_rfc3339()).execute(pool).await?;
-    Ok(())
-}
-
 pub(crate) async fn claim_recovery(pool: &sqlx::SqlitePool) -> Result<Option<String>> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let now = chrono::Utc::now().to_rfc3339();
-    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status IN ('failed','interrupted') AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) ORDER BY j.next_check_at LIMIT 1")
+    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status = 'interrupted' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) ORDER BY j.next_check_at LIMIT 1")
         .bind(&now).fetch_optional(&mut *tx).await?;
     if let Some(id) = &id {
         sqlx::query(
@@ -99,6 +86,10 @@ pub(crate) async fn recover_startup(pool: &sqlx::SqlitePool) -> Result<()> {
         .bind(&now)
         .execute(&mut *tx)
         .await?;
+    // Older versions scheduled failed tasks too. A failure now requests remote
+    // cancellation, so those jobs must never reopen or race that cancellation.
+    sqlx::query("UPDATE run_recovery_jobs SET status='done',updated_at=? WHERE status IN ('pending','running') AND run_id IN (SELECT id FROM run_records WHERE status IN ('failed','cancelled','completed'))")
+        .bind(&now).execute(&mut *tx).await?;
     // Only journaled Remote operations are candidates. The worker validates the
     // checkpoint frontier before executing; unjournaled adapters stay manual.
     sqlx::query("INSERT INTO run_recovery_jobs (run_id, status, next_check_at, updated_at) SELECT DISTINCT a.run_id, 'pending', ?, ? FROM workflow_operation_attempts a JOIN workflow_operations o ON o.id = a.operation_id JOIN run_records r ON r.id = a.run_id WHERE r.status = 'interrupted' AND o.adapter = 'remote_agent' ON CONFLICT(run_id) DO UPDATE SET status = CASE WHEN attempts >= 5 THEN 'blocked' ELSE 'pending' END, next_check_at = excluded.next_check_at, updated_at = excluded.updated_at WHERE run_recovery_jobs.status != 'blocked'")
@@ -238,6 +229,11 @@ mod tests {
         pool
     }
 
+    async fn seed_job(pool: &sqlx::SqlitePool) {
+        sqlx::query("INSERT INTO run_recovery_jobs (run_id,status,next_check_at,last_error,updated_at) VALUES ('task-1','pending','2999-01-01T00:00:00Z','query timeout','now')")
+            .execute(pool).await.unwrap();
+    }
+
     #[tokio::test]
     async fn same_task_recovery_preserves_failure_history_and_cursor() {
         let pool = pool().await;
@@ -275,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn crash_during_recovered_execution_reopens_its_persisted_job() {
         let pool = pool().await;
-        schedule(&pool, "task-1", None).await.unwrap();
+        seed_job(&pool).await;
         sqlx::raw_sql("UPDATE run_records SET status = 'interrupted' WHERE id = 'task-1'; UPDATE run_recovery_jobs SET status = 'done', attempts = 1; INSERT INTO workflow_operations (id, execution_id, execution_path, adapter, input_digest, snapshot_digest, status, created_at, updated_at) VALUES ('op-1','task-1','root/remote/0','remote_agent','input','snapshot','unknown','now','now'); INSERT INTO workflow_operation_attempts (id,operation_id,run_id,sequence,action,status,started_at) VALUES ('op-attempt-1','op-1','task-1',1,'submit','unknown','now');")
             .execute(&pool).await.unwrap();
         recover_startup(&pool).await.unwrap();
@@ -285,9 +281,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn worker_claims_once_and_survives_restart_with_bounded_backoff() {
+    async fn interrupted_worker_claims_once_and_survives_restart_with_bounded_attempts() {
         let pool = pool().await;
-        schedule(&pool, "task-1", Some("query timeout")).await.unwrap();
+        seed_job(&pool).await;
+        sqlx::query("UPDATE run_records SET status='interrupted'")
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(claim_recovery(&pool).await.unwrap().is_none());
         for index in 0..5 {
             sqlx::query("UPDATE run_recovery_jobs SET next_check_at = '2000-01-01T00:00:00Z'")
@@ -302,12 +302,56 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(status, if index == 4 { "blocked" } else { "pending" });
-            schedule(&pool, "task-1", Some("query timeout")).await.unwrap();
         }
         let history = inspect_history(&pool, "task-1").await.unwrap();
         let job = history.recovery.unwrap();
         assert_eq!(job.status, "blocked");
         assert_eq!(job.attempts, 5);
         assert!(claim_recovery(&pool).await.unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn failed_and_stopped_jobs_are_never_claimed_and_startup_retires_legacy_jobs() {
+        for status in ["failed", "cancelled", "completed"] {
+            for job_status in ["pending", "running"] {
+                let pool = pool().await;
+                seed_job(&pool).await;
+                sqlx::query("UPDATE run_records SET status=? WHERE id='task-1'")
+                    .bind(status)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query("UPDATE run_recovery_jobs SET status=?,next_check_at='2000-01-01T00:00:00Z'")
+                    .bind(job_status)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                assert!(claim_recovery(&pool).await.unwrap().is_none());
+                recover_startup(&pool).await.unwrap();
+                assert_eq!(
+                    inspect_history(&pool, "task-1").await.unwrap().recovery.unwrap().status,
+                    "done"
+                );
+                assert!(claim_recovery(&pool).await.unwrap().is_none());
+                assert_eq!(
+                    sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='task-1'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap(),
+                    status
+                );
+                if status == "failed" {
+                    enqueue_recovery_in_pool(&pool, "task-1", json!({"resume":true,"threadId":"original-thread"}))
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='task-1'")
+                            .fetch_one(&pool)
+                            .await
+                            .unwrap(),
+                        "queued"
+                    );
+                }
+            }
+        }
     }
 }

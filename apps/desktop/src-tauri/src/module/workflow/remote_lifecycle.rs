@@ -253,4 +253,59 @@ mod tests {
             .await
             .unwrap();
     }
+    #[tokio::test]
+    async fn stopping_queued_recovery_cancels_its_existing_remote_calls_once() {
+        let pool = fixture("queued").await;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let record = remote_tasks::list_remote_tasks(&pool, "run-1").await.unwrap().remove(0);
+        crate::module::run_history::cancel_queued_run_in_pool(&pool, "run-1")
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            cancel_in_pool(&pool, "run-1", |id| {
+                calls.lock().unwrap().push(id.clone());
+                let mut record = record.clone();
+                record.id = id;
+                record.status = "canceled".into();
+                async move { Ok(record) }
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(*calls.lock().unwrap(), vec!["input", "working"]);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='run-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "cancelled"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM run_events WHERE json_extract(event_json,'$.data.status')='canceled'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            2
+        );
+        // If the queue worker already owns execution, Stop must use its active
+        // cancellation token instead of overwriting that running record.
+        sqlx::query("UPDATE run_records SET status='running' WHERE id='run-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            crate::module::run_history::cancel_queued_run_in_pool(&pool, "run-1")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='run-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "running"
+        );
+    }
 }

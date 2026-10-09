@@ -49,11 +49,11 @@ before this boundary existed are treated as potentially dispatched on upgrade.
 
 ## Scheduling and UI
 
-The supervisor polls persisted jobs every two seconds. Transient, safe-to-recover
-Remote operations use exponential delays starting at 10 seconds, capped at five
-automatic claims per task. Startup closes abandoned attempts, releases recovery
-claims and reopens jobs for interrupted journaled tasks. It preserves the retry
-budget. There is no work while the application is exited.
+The supervisor polls persisted jobs every two seconds, claiming only application-
+interrupted tasks. Startup closes abandoned attempts, releases recovery claims
+and reopens jobs for interrupted journaled Remote tasks, capped at five automatic
+claims per task. It preserves the recovery budget. Failed executions are not
+automatically retried. There is no work while the application is exited.
 
 Before automatic requeue, the worker validates the original checkpoint. Every
 pending node must be Remote Agent; other executors stay manual. The Remote node
@@ -232,6 +232,20 @@ forward with deleted results; Run again creates a fresh business execution.
 Without eligible calls, existing recovery behavior remains available. App
 cleanup events stay on their original node messages without changing failure.
 
+
+## Failure versus application interruption
+
+A workflow execution failure stays failed. It can trigger automatic App cleanup
+and one best-effort remote cancellation, but never schedules automatic forward
+recovery. User Stop also remains stopped. Legacy pending/running recovery jobs
+for failed, cancelled or completed runs are retired at startup; the worker only
+claims interrupted runs.
+
+Application-exit interruptions retain startup recovery for journaled Remote
+frontiers. User-requested continuation of failed or interrupted tasks remains
+available after the existing checkpoint, operation and compensation checks.
+If startup recovery resumes execution and that execution fails, it stays failed
+rather than entering an automatic failure retry loop.
 
 ## Best-effort A2A cancellation
 

@@ -26,6 +26,9 @@ use queue::claim_next_queued_run_from_pool;
 use records::finish_execution_in_pool;
 
 #[cfg(test)]
+pub(crate) use queue::cancel_queued_run_in_pool;
+
+#[cfg(test)]
 mod tests {
     use super::{
         RunStatus, claim_next_pending_action_from_pool, claim_next_queued_run_from_pool, finish_execution_in_pool,

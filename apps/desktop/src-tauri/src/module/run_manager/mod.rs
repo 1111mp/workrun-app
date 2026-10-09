@@ -403,6 +403,9 @@ struct RunStatusChange {
     status: RunStatus,
 }
 
+mod startup_recovery;
+pub(crate) use startup_recovery::StartupRecovery;
+
 mod app;
 mod events;
 mod execution;

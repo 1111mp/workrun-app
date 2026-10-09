@@ -26,6 +26,12 @@ pub fn resolve_server_setup_async() {
             logging!(error, Type::Setup, "Failed to initialize database: {error:#}");
             return;
         }
+        // Recovery needs the migrated pool, and must finish before any worker
+        // can claim a Run or compensation plan from the previous process.
+        if let Err(error) = run_manager::StartupRecovery::recover().await {
+            logging!(error, Type::Setup, "Failed to recover execution state: {error:#}");
+            return;
+        }
         if let Err(error) = IpcServer::global().start().await {
             logging!(error, Type::Setup, "Failed to initialize IPC server: {error:#}");
             return;

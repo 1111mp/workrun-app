@@ -27,20 +27,7 @@ impl RunHistoryStore {
 
     pub async fn cancel_queued_run(id: &str) -> Result<()> {
         let pool = DBManager::global().pool()?;
-        let result = sqlx::query(
-            "UPDATE run_records SET status = 'cancelled', ended_at = ?, duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER), error = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
-        )
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind("Cancelled by user")
-        .bind(chrono::Utc::now().to_rfc3339())
-        .bind(id)
-        .execute(&pool)
-        .await?;
-        if result.rows_affected() == 0 {
-            bail!("run is no longer queued: {id}");
-        }
-        Ok(())
+        cancel_queued_run_in_pool(&pool, id).await
     }
 
     pub async fn last_sequence(id: &str) -> Result<i64> {
@@ -81,4 +68,22 @@ pub(super) async fn claim_next_queued_run_from_pool(
     super::recovery::begin_attempt(&mut transaction, &id).await?;
     transaction.commit().await?;
     Ok(Some(id))
+}
+
+/// Preserve the queue claim race check before running terminal side effects.
+pub(crate) async fn cancel_queued_run_in_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
+    let result = sqlx::query(
+            "UPDATE run_records SET status = 'cancelled', ended_at = ?, duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER), error = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+        )
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind("Cancelled by user")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        bail!("run is no longer queued: {id}");
+    }
+    Ok(())
 }

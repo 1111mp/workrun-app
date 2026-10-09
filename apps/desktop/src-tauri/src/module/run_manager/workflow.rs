@@ -354,6 +354,9 @@ pub(super) async fn recover_workflow(run_id: &str, automatic: bool) -> Result<Ru
     if source.summary.target_type != "workflow" || !matches!(source.summary.status.as_str(), "failed" | "interrupted") {
         bail!("only a failed or interrupted workflow can be continued");
     }
+    if automatic && source.summary.status != "interrupted" {
+        bail!("Only application-interrupted workflows can recover automatically");
+    }
     // A finished run can still be flushing its writer/session. Requeue only
     // after its native owner has actually released it.
     if RunManager::global().workflow_cancellations.lock().contains_key(run_id) {
@@ -493,7 +496,11 @@ fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     object.insert("executionId".to_string(), json!(uuid::Uuid::new_v4().to_string()));
     if object.get("kind").and_then(Value::as_str) == Some("workflow") {
         object.insert("compensationJournalVersion".to_string(), json!(1));
+        object.insert("processCleanupVersion".to_string(), json!(1));
     }
+    // These describe the old execution's cleanup decision, not its recipe.
+    object.remove("processCleanupConsidered");
+    object.remove("automaticProcessCleanup");
     object.remove("resume");
     object.remove("toolConfirmation");
     if object.contains_key("threadId") {
@@ -526,6 +533,22 @@ mod replay_tests {
         assert_eq!(runtime["compensationJournalVersion"], 1);
         assert!(runtime.get("resume").is_none());
         assert!(runtime.get("toolConfirmation").is_none());
+    }
+
+    #[test]
+    fn rerun_resets_cleanup_decisions_and_enables_cleanup_for_legacy_recipes() {
+        for old in [
+            json!({"kind":"workflow","threadId":"old-thread","executionId":"old-business","dsl":{"nodes":[]}}),
+            json!({"kind":"workflow","threadId":"old-thread","executionId":"old-business","dsl":{"nodes":[]},"processCleanupVersion":1,"processCleanupConsidered":true,"automaticProcessCleanup":true}),
+        ] {
+            let runtime = replay_runtime(old, "old-run").unwrap();
+            assert_eq!(runtime["processCleanupVersion"], 1);
+            assert!(runtime.get("processCleanupConsidered").is_none());
+            assert!(runtime.get("automaticProcessCleanup").is_none());
+            assert_ne!(runtime["executionId"], "old-business");
+            assert_ne!(runtime["threadId"], "old-thread");
+            assert_eq!(runtime["dsl"], json!({"nodes":[]}));
+        }
     }
 
     #[test]
@@ -730,9 +753,10 @@ fn required_bool(object: &serde_json::Map<String, Value>, key: &str) -> Result<b
 pub async fn cancel_waiting_workflow(run_id: &str) -> Result<()> {
     let run = RunHistoryStore::inspect(run_id).await?;
     if run.summary.target_type == "workflow" && run.summary.status == "queued" {
+        // Keep the queued-only compare-and-set so a concurrent worker claim
+        // cannot be overwritten, then run the same terminal effects as Stop.
         RunHistoryStore::cancel_queued_run(run_id).await?;
-        publish_run_status(run_id, RunStatus::Cancelled)?;
-        return Ok(());
+        return finish_run(run_id, RunStatus::Cancelled, Some("Cancelled by user".to_string())).await;
     }
     if run.summary.target_type == "workflow" && run.summary.status == "running" {
         let cancellation = RunManager::global()
