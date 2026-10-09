@@ -34,6 +34,7 @@ pub(crate) async fn ensure_continuable(tx: &mut sqlx::Transaction<'_, sqlx::Sqli
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) async fn request(pool: &sqlx::SqlitePool, run_id: &str) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let row = sqlx::query("SELECT target_type,status,runtime_json FROM run_records WHERE id=?")
@@ -66,6 +67,7 @@ pub(crate) async fn request(pool: &sqlx::SqlitePool, run_id: &str) -> Result<()>
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) async fn retry(pool: &sqlx::SqlitePool, run_id: &str) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let now = chrono::Utc::now().to_rfc3339();

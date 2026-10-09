@@ -809,31 +809,16 @@ pub(super) fn workflow_session_from_runtime(runtime: &Value) -> Result<WorkflowS
     })
 }
 
-/// Persist authorization before sending local Stop. The worker repeats Stop
-/// after startup if the process exited in that window.
-pub async fn abandon_workflow(run_id: &str) -> Result<()> {
-    let pool = DBManager::global().pool()?;
-    workflow_module::saga_scheduler::request(&pool, run_id).await?;
-    let record = RunHistoryStore::inspect(run_id).await?;
-    if matches!(record.summary.status.as_str(), "running" | "waiting_for_input") {
-        let _ = cancel_waiting_workflow(run_id).await;
-    }
-    RunManager::global().supervisor.notify();
-    let record = RunHistoryStore::inspect(run_id).await?;
-    let status = serde_json::from_value::<RunStatus>(json!(record.summary.status))?;
-    publish_run_status(run_id, status).ok();
-    Ok(())
-}
-
-pub async fn retry_workflow_compensation(run_id: &str) -> Result<()> {
-    workflow_module::saga_scheduler::retry(&DBManager::global().pool()?, run_id).await?;
-    RunManager::global().supervisor.notify();
-    Ok(())
-}
-
 /// Manual evidence changes operation facts, never the original execution status.
 pub async fn review_operation(request: workflow_module::operation_review::ReviewRequest) -> Result<()> {
     let pool = DBManager::global().pool()?;
+    // Reconciliation records original execution facts; it must not reopen a
+    // cleanup plan through the legacy Saga review path.
+    let eligible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_operations o JOIN workflow_operation_attempts a ON a.operation_id=o.id WHERE o.id=? AND a.run_id=? AND o.purpose='execution' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=a.run_id))")
+        .bind(&request.operation_id).bind(&request.run_id).fetch_one(&pool).await?;
+    if !eligible {
+        bail!("Only original execution operations outside compensation plans can be reconciled");
+    }
     let key = crate::utils::dirs::get_encryption_key()?;
     workflow_module::operation_review::resolve(&pool, &key, &request, |result| {
         let refs = crate::module::artifact::references(result)?;
@@ -846,13 +831,6 @@ pub async fn review_operation(request: workflow_module::operation_review::Review
         Ok(())
     })
     .await?;
-    RunManager::global().supervisor.notify();
-    Ok(())
-}
-
-pub async fn approve_compensation(run_id: &str, approval_id: &str, approved: bool) -> Result<()> {
-    workflow_module::operation_review::decide_approval(&DBManager::global().pool()?, run_id, approval_id, approved)
-        .await?;
     RunManager::global().supervisor.notify();
     Ok(())
 }

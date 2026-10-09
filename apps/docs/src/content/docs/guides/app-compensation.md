@@ -175,7 +175,7 @@ Check the corresponding Process or Agent node’s messages:
 | Failed                                | Check the entry, permissions, dependencies, and cleanup code; verify whether resources remain |
 | Blocked / result pending confirmation | Verify external state; do not assume nothing ran or blindly resubmit                          |
 
-Automatic cleanup currently has no separate retry button. Verify unfinished items and remediate them manually. A new business run does not clean old resources. Once old resources are handled, fix the problem and run again.
+Check cleanup output in the owning Process or Agent node messages. Verify unfinished items and remediate them manually. A new business run does not clean old resources. Once old resources are handled, fix the problem and run again.
 
 ## Application exit and current limits
 

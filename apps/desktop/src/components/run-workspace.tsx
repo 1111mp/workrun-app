@@ -26,12 +26,9 @@ import {
   AppRunOutputPanel,
   restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
-import { RunExecutionHistory } from '@/components/run-execution-history';
 import { WorkflowRunOutput } from '@/components/workflow-output-panel';
 import {
   inspectRunRecord,
-  abandonWorkflowRun,
-  retryWorkflowCompensation,
   replayRun,
   type RunRecord,
   type RunStatus,
@@ -91,24 +88,6 @@ function RunWorkspace() {
   const activeTab = tabs.find((tab) => tab.id === activeRunId);
   const [record, setRecord] = useState<RunRecord>();
   const [recoverySourceRunId, setRecoverySourceRunId] = useState<string>();
-  const [abandonSourceRunId, setAbandonSourceRunId] = useState<string>();
-  const [compensationBusy, setCompensationBusy] = useState(false);
-  const changeCompensation = (
-    runId: string,
-    action: (id: string) => Promise<void>,
-  ) => {
-    setCompensationBusy(true);
-    void action(runId)
-      .then(() => inspectRunRecord(runId))
-      .then(setRecord)
-      .catch((error: unknown) =>
-        toast.error(t('executionRecovery.updateFailed'), {
-          toasterId: 'global',
-          description: String(error),
-        }),
-      )
-      .finally(() => setCompensationBusy(false));
-  };
   // Keep the previous response while a new tab loads, but never render it for
   // a different run. This avoids a synchronous effect update just to clear UI.
   const activeRecord = record?.id === activeRunId ? record : undefined;
@@ -283,54 +262,8 @@ function RunWorkspace() {
                   {t('executionRecovery.runAgain')}
                 </Button>
               ) : null}
-              {activeRecord && !activeRecord.executionHistory?.compensation ? (
-                <Button
-                  variant='outline'
-                  disabled={compensationBusy}
-                  onClick={() => setAbandonSourceRunId(activeRecord.id)}
-                >
-                  {t('workflowEditor.output.abandonCompensate')}
-                </Button>
-              ) : null}
-              {!activeRecord?.executionHistory?.compensation?.automatic &&
-              activeRecord?.executionHistory?.compensation?.status ===
-                'blocked' ? (
-                <Button
-                  variant='outline'
-                  disabled={compensationBusy}
-                  onClick={() =>
-                    changeCompensation(
-                      activeRecord.id,
-                      retryWorkflowCompensation,
-                    )
-                  }
-                >
-                  {t('workflowEditor.output.retryCompensation')}
-                </Button>
-              ) : null}
             </div>
-            <RunExecutionHistory
-              nodeNames={Object.fromEntries(
-                (workflowRun?.nodes ?? []).map((node) => [
-                  node.id,
-                  typeof node.data.name === 'string' ? node.data.name : node.id,
-                ]),
-              )}
-              history={activeRecord?.executionHistory}
-              runId={activeRecord?.id}
-              inactive={
-                !!activeRecord &&
-                !['queued', 'running', 'waiting_for_input'].includes(
-                  activeRecord.status,
-                )
-              }
-              onChanged={async () => {
-                if (activeRecord)
-                  setRecord(await inspectRunRecord(activeRecord.id));
-              }}
-            />
             <WorkflowRunOutput
-              showOperationPanel={false}
               readOnly
               isChat={workflowRun.mode === 'chat'}
               isRunning={workflowRun.run.status === 'running'}
@@ -342,37 +275,6 @@ function RunWorkspace() {
             />
           </DrawerContent>
         </Drawer>
-        <AlertDialog
-          open={Boolean(abandonSourceRunId)}
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) setAbandonSourceRunId(undefined);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {t('workflowEditor.output.abandonTitle')}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {t('executionRecovery.abandonDescription')}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>
-                {t('executionRecovery.keepTask')}
-              </AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => {
-                  if (abandonSourceRunId)
-                    changeCompensation(abandonSourceRunId, abandonWorkflowRun);
-                  setAbandonSourceRunId(undefined);
-                }}
-              >
-                {t('workflowEditor.output.abandonCompensate')}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
         <AlertDialog
           open={Boolean(recoverySourceRunId)}
           onOpenChange={(open) => !open && setRecoverySourceRunId(undefined)}

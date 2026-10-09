@@ -87,6 +87,8 @@ After workflow failure or user Stop, Workrun sends one best-effort `CancelTask` 
 
 A failed or timed-out cancellation is shown as unconfirmed. There is no preliminary query, automatic polling, cancellation retry, or startup continuation of cancellation. Failed or stopped tasks must Run again. Application-exit interruptions retain their existing recovery path. Remote cancellation does not promise business undo. See [Remote Agents and A2A task handling](/guides/remote-agents/).
 
+Run output presents automatic App compensation and remote cancellation results in the owning node messages.
+
 ## After App compensation, fix the problem and run again
 
 When a workflow fails, successful App calls with a compensation entry are cleaned up automatically, including successful Tool App calls inside an Agent. Check compensation status in the corresponding node messages and verify unfinished or unknown resources. Once cleanup starts, checkpoint continuation cannot reuse cleaned-up results. Fix the problem and choose Run again to create a new task for a fresh business execution; the original retains failure and cleanup evidence.

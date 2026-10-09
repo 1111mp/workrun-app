@@ -115,6 +115,7 @@ pub(super) async fn require_approval(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) async fn decide_approval(pool: &sqlx::SqlitePool, run_id: &str, id: &str, approved: bool) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_compensation_approvals p JOIN workflow_operations o ON o.id=p.operation_id JOIN workflow_abandonments b ON b.run_id=? WHERE p.id=? AND p.status='pending' AND b.status='blocked' AND o.purpose='compensation' AND o.execution_id=? AND o.status!='running' AND (o.dispatched_at IS NULL OR o.confirmed_no_effect=1))")

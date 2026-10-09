@@ -370,14 +370,6 @@ export function resolvePendingAction(
   });
 }
 
-export function abandonWorkflowRun(runId: string) {
-  return invoke<void>('workflow_run_abandon', { runId });
-}
-
-export function retryWorkflowCompensation(runId: string) {
-  return invoke<void>('workflow_compensation_retry', { runId });
-}
-
 export type OperationReviewDecision =
   | { kind: 'completed'; result: unknown }
   | { kind: 'no_effect' };
@@ -390,15 +382,4 @@ export function reviewWorkflowOperation(request: {
   decision: OperationReviewDecision;
 }) {
   return invoke<void>('workflow_operation_review', { request });
-}
-export function approveWorkflowCompensation(
-  runId: string,
-  approvalId: string,
-  approved: boolean,
-) {
-  return invoke<void>('workflow_compensation_approve', {
-    runId,
-    approvalId,
-    approved,
-  });
 }

@@ -216,13 +216,15 @@ results are fixtures; this is not a live mixed-service integration evaluation.
 
 ## Operator reconciliation
 
-Dispatched unknown/failed leaves can be reviewed from Run Workspace while the
+Dispatched unknown/failed leaves retain an internal reconciliation API while the
 task and compensation worker are inactive. Completed receipts reuse the stable
 operation; verified no-effect evidence permits a new attempt with that same
 identity. Review is a durable encrypted assertion tied to the latest attempt,
 not an automatic inference from timeout. Imported artifact references must
-resolve. Attempt history is preserved; Continue remains explicit for forward
-execution. See SAGA.md for approval and compensation-specific behavior.
+resolve. Attempt history is preserved. Review only applies to original execution
+operations outside compensation plans; it cannot reopen cleanup. Continue is
+available only for application-interrupted tasks. Failed/stopped tasks must Run
+again. Compensation approval and retry commands are not exposed.
 
 ## Automatic App cleanup and continuation
 
@@ -267,3 +269,11 @@ Failed and stopped tasks never continue from a checkpoint, even when no App
 compensation was configured or selected. Their terminal records remain evidence.
 The interrupted recovery command is separate from normal waiting-for-input
 resume, which remains in the same task after the requested input is supplied.
+
+## Output presentation
+
+Workflow output and Run Workspace do not render a separate execution-history,
+operation-review, or compensation panel. Automatic App cleanup and Remote
+cancellation messages appear under the owning node. Attempts and operation facts
+remain persisted for diagnostics and recovery. Application-interrupted recovery
+remains available from Run Workspace.

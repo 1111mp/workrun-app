@@ -1,3 +1,9 @@
+# Current product policy
+
+Workflow failure automatically cleans successful Process App node/tool calls with a saved App entry. Stop only cancels unfinished Remote tasks; Remote cancellation is one best-effort CancelTask. Failed/stopped tasks require a new run. There are no user-facing abandon, compensation retry, or compensation approval commands. Unknown execution outcomes retain the internal reconciliation API; there is no separate execution-history/reconciliation panel. Only application-interrupted tasks can continue.
+
+The generic Saga design below documents legacy/internal machinery and its tests, not currently exposed product actions. Database records and internal recovery remain for compatibility with existing tasks. The automatic App cleanup section describes the active path.
+
 # Saga: contracts, durable abandonment and compensation scheduling
 
 Production workflow tasks can explicitly be abandoned and compensated from Run
@@ -154,9 +160,8 @@ new user task or feeding results into the original workflow State.
 - Tool targets execute the saved Tool App definition or an MCP tool whose saved
   contract and server routing/runtime configuration still match. Credentials
   can refresh independently. Tools requiring `ask_every_time` persist a separate
-  approval bound to the compensation operation and frozen arguments. The Run
-  Workspace displays redacted arguments; approval is consumed atomically at
-  dispatch. Preflight retries preserve an unused grant. Denial keeps this
+  approval bound to the compensation operation and frozen arguments. The internal legacy executor stores redacted arguments; approval is consumed atomically at
+  dispatch. This approval path is not exposed by the current UI or Tauri API. Preflight retries preserve an unused grant. Denial keeps this
   operation blocked; Retry cannot silently override it. Automatic tools can run.
 - Remote targets reuse the existing A2A discovery/submit/GetTask transport. A
   timeout with a saved task ID reconciles that same task; no task ID means
@@ -198,7 +203,7 @@ Process/upload/publish business workflow or real external undo services.
 
 ## Manual operation reconciliation
 
-Run Workspace can reconcile a dispatched failed/unknown leaf after execution and
+The internal reconciliation API can reconcile a dispatched failed/unknown leaf after execution and
 compensation processing have stopped. A latest-attempt check rejects stale
 submissions. The user must attest that related execution stopped and provide
 provider/resource evidence. Workrun records this assertion encrypted; it does
@@ -212,7 +217,7 @@ a future submit of the same logical identity and excludes that original leaf
 from reversal/dependency blocking. Historical attempts and Remote identities
 remain archived. Fresh dispatch clears the no-effect flag; an unknown new
 attempt again requires reconciliation. Compensation tools need a fresh approval
-for another dispatch. Forward execution remains a separate Continue action;
+for another dispatch. Only application-interrupted forward execution has a Continue action;
 a blocked abandoned plan is reopened for durable compensation scheduling.
 
 Subworkflow containers cannot import success to hide descendant effects. Legacy

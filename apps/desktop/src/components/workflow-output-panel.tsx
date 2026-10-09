@@ -67,7 +67,6 @@ import {
   RemoteTasksPanel,
   RemoteTaskRerunButton,
 } from '@/components/remote-tasks';
-import { RunOperationPanel } from '@/components/run-operation-panel';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
 import { artifactReferences } from '@/services/artifact';
@@ -81,7 +80,6 @@ import type {
 import { useWorkflowRunStore } from '@/stores';
 
 type WorkflowOutputPanelProps = {
-  showOperationPanel?: boolean;
   run: WorkflowRunView;
   workflowNodes: Node[];
   isRunning: boolean;
@@ -121,7 +119,6 @@ function rerunLabel(
   t: (key: string) => string,
 ) {
   if (status === 'interrupted') return t('workflowEditor.output.resume');
-  if (status === 'failed') return t('workflowEditor.output.retry');
   return t('workflowEditor.output.runAgain');
 }
 
@@ -2105,7 +2102,6 @@ function LiveWorkflowTaskOutput({
           </MessageScroller>
         </MessageScrollerProvider>
       </div>
-      <RunOperationPanel runId={runId} nodes={workflowNodes} />
       <DrawerFooter className='flex-row justify-end'>
         {!readOnly ? (
           <RemoteTaskRerunButton
@@ -2139,7 +2135,6 @@ function WorkflowRunOutput({
   onSend,
   fileInputs = [],
   readOnly = false,
-  showOperationPanel = true,
   spans = [],
   spansByTurn = {},
 }: WorkflowOutputPanelProps) {
@@ -2599,9 +2594,6 @@ function WorkflowRunOutput({
         </MessageScrollerProvider>
       </div>
 
-      {showOperationPanel ? (
-        <RunOperationPanel runId={run.runId} nodes={workflowNodes} />
-      ) : null}
       {isChat ? (
         <DrawerFooter>
           {!readOnly && run.status === 'failed' && (
