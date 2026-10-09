@@ -22,9 +22,9 @@ use std::{
 use tempfile::TempDir;
 use uuid::Uuid;
 
-const MAX_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_FILES: usize = 20_000;
-const MAX_JSON_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_FILES: usize = 20_000;
+pub(crate) const MAX_JSON_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,7 +53,7 @@ pub struct AppSharePreview {
     pub sha256: Option<String>,
 }
 
-fn ensure_personal() -> Result<()> {
+pub(crate) fn ensure_personal() -> Result<()> {
     if dirs::is_team_workspace() {
         bail!("App sharing is available in personal mode only");
     }
@@ -71,7 +71,7 @@ fn manifest(version: String) -> AppShareManifest {
 }
 
 // Use an allowlist so new local catalog fields never silently become public.
-fn portable_app(definition: &IProcessNode) -> Result<serde_json::Value> {
+pub(crate) fn portable_app(definition: &IProcessNode) -> Result<serde_json::Value> {
     let mut value = serde_json::to_value(definition)?;
     value.as_object_mut().context("Invalid App settings")?.retain(|key, _| {
         matches!(
@@ -92,7 +92,7 @@ fn portable_app(definition: &IProcessNode) -> Result<serde_json::Value> {
     Ok(value)
 }
 
-fn local_definition(mut value: serde_json::Value, name: Option<String>) -> Result<IProcessNode> {
+pub(crate) fn local_definition(mut value: serde_json::Value, name: Option<String>) -> Result<IProcessNode> {
     let object = value.as_object_mut().context("app.json must be an object")?;
     // Imported settings cannot select a local path, reuse an ID or impersonate a Team release.
     object.retain(|key, _| {
@@ -128,7 +128,7 @@ fn local_definition(mut value: serde_json::Value, name: Option<String>) -> Resul
     Ok(definition)
 }
 
-fn portable_path(path: &Path) -> Result<()> {
+pub(crate) fn portable_path(path: &Path) -> Result<()> {
     let text = path.to_str().context("Archive paths must be UTF-8")?;
     // Reject Windows separators/drive paths on every host, not just on Windows.
     if text.is_empty()
@@ -143,7 +143,7 @@ fn portable_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_source(root: &Path, definition: &IProcessNode, files: &[PathBuf]) -> Result<()> {
+pub(crate) fn validate_source(root: &Path, definition: &IProcessNode, files: &[PathBuf]) -> Result<()> {
     for required in [
         Some(&definition.entry),
         definition.compensation.as_ref().map(|item| &item.entry),
@@ -235,6 +235,42 @@ fn write_package(
     if metadata.iter().any(|(_, bytes)| bytes.len() as u64 > MAX_JSON_BYTES) {
         bail!("App metadata is too large");
     }
+    let files: Vec<_> = files
+        .iter()
+        .map(|path| {
+            (
+                format!("app/{}", path.to_string_lossy().replace('\\', "/")),
+                root.join(path),
+            )
+        })
+        .collect();
+    let metadata = metadata
+        .into_iter()
+        .map(|(name, bytes)| (name.to_owned(), bytes))
+        .collect::<Vec<_>>();
+    write_share_archive(destination, format, &metadata, &files)
+}
+
+pub(crate) fn write_share_archive(
+    destination: &Path,
+    format: AppShareFormat,
+    metadata: &[(String, Vec<u8>)],
+    files: &[(String, PathBuf)],
+) -> Result<()> {
+    let total = files.iter().try_fold(0u64, |sum, (_, path)| -> Result<u64> {
+        Ok(sum + path.metadata()?.len())
+    })?;
+    if files.len() + metadata.len() > MAX_FILES
+        || total + metadata.iter().map(|(_, bytes)| bytes.len() as u64).sum::<u64>() > MAX_BYTES
+    {
+        bail!("Sharing package exceeds the size or file-count limit");
+    }
+    for (name, _) in metadata {
+        portable_path(Path::new(name))?;
+    }
+    for (name, _) in files {
+        portable_path(Path::new(name))?;
+    }
     let parent = destination.parent().context("Export destination has no parent")?;
     let mut output = tempfile::NamedTempFile::new_in(parent)?;
     match format {
@@ -243,12 +279,12 @@ fn write_package(
             let options = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated)
                 .unix_permissions(0o644);
-            for (path, bytes) in &metadata {
-                archive.start_file(*path, options)?;
+            for (path, bytes) in metadata {
+                archive.start_file(path, options)?;
                 archive.write_all(bytes)?;
             }
-            for path in &files {
-                let mut source = File::open(root.join(path))?;
+            for (path, source_path) in files {
+                let mut source = File::open(source_path)?;
                 #[cfg(unix)]
                 let options = {
                     use std::os::unix::fs::PermissionsExt;
@@ -258,22 +294,22 @@ fn write_package(
                         0o644
                     })
                 };
-                archive.start_file(format!("app/{}", path.to_string_lossy().replace('\\', "/")), options)?;
+                archive.start_file(path, options)?;
                 std::io::copy(&mut source, &mut archive)?;
             }
             archive.finish()?;
         },
         AppShareFormat::Tar => {
             let mut archive = tar::Builder::new(output.as_file_mut());
-            for (path, bytes) in &metadata {
+            for (path, bytes) in metadata {
                 let mut header = tar::Header::new_gnu();
                 header.set_size(bytes.len() as u64);
                 header.set_mode(0o644);
                 header.set_cksum();
-                archive.append_data(&mut header, *path, bytes.as_slice())?;
+                archive.append_data(&mut header, path, bytes.as_slice())?;
             }
-            for path in &files {
-                archive.append_file(Path::new("app").join(path), &mut File::open(root.join(path))?)?;
+            for (path, source_path) in files {
+                archive.append_file(path, &mut File::open(source_path)?)?;
             }
             archive.finish()?;
         },
@@ -345,7 +381,14 @@ fn restore_executable(root: &Path, path: &Path, mode: u32, directory: bool) -> R
     Ok(())
 }
 
-fn read_package(path: &Path) -> Result<Package> {
+pub(crate) struct ExtractedShareArchive {
+    pub staging: TempDir,
+    pub seen: HashSet<PathBuf>,
+    pub total: u64,
+    pub sha256: String,
+}
+
+pub(crate) fn extract_share_archive(path: &Path) -> Result<ExtractedShareArchive> {
     let mut input = File::open(path)?;
     if input.metadata()?.len() > MAX_BYTES {
         bail!("Archive exceeds 512 MiB");
@@ -415,6 +458,18 @@ fn read_package(path: &Path) -> Result<Package> {
         },
         _ => bail!("Select a ZIP or TAR archive"),
     }
+    Ok(ExtractedShareArchive {
+        staging,
+        seen,
+        total,
+        sha256,
+    })
+}
+
+fn read_package(path: &Path) -> Result<Package> {
+    let ExtractedShareArchive {
+        staging, seen, sha256, ..
+    } = extract_share_archive(path)?;
     let manifest: AppShareManifest = serde_json::from_reader(
         File::open(staging.path().join("manifest.json")).context("Missing root manifest.json")?,
     )?;

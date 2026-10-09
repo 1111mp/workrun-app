@@ -95,3 +95,9 @@ The current source of truth for configuration is [`apps/server/.env.example`](ht
 - Verify that App resources download and that pinned dependencies of a published Workflow can be prepared.
 - Restart the Server container and verify that users, published releases, and resources persist.
 - Rehearse restoration of MongoDB data and file resources before storing real team assets.
+
+## Personal packages and Team publishing
+
+Personal App and Workflow sharing uses ZIP/TAR packages. A Workflow package includes its local App and child-Workflow dependencies, while external services must be configured on the receiving device. See [Use Python Apps](/guides/python-apps/#share-an-app-in-personal-mode) and [Build your first workflow](/guides/build-a-workflow/#share-or-delete-a-saved-workflow).
+
+Archive sharing does not migrate objects into the Team workspace or create Team releases. Team Workflows continue to use **Publish** and pinned Team App versions. The author can delete a Team Workflow from its detail-page **More (⋯)** menu; other members do not see the deletion action.

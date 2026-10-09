@@ -717,6 +717,7 @@ pub(super) async fn compile_with_path(
     execution_profile: WorkflowExecutionProfile,
 ) -> Result<CompiledWorkflow> {
     validate_output_schema(&dsl.output_schema)?;
+    crate::feat::validate_imported_workflow_dependencies(&dsl).await?;
     let nodes: HashMap<_, _> = dsl.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
     if nodes.len() != dsl.nodes.len() {
         bail!("workflow contains duplicate node ids");

@@ -8,6 +8,7 @@ mod skill;
 mod system;
 mod window;
 mod workflow;
+mod workflow_share;
 
 pub use app::*;
 pub use app_share::*;
@@ -19,3 +20,4 @@ pub use skill::*;
 pub use system::*;
 pub use window::*;
 pub use workflow::*;
+pub use workflow_share::*;

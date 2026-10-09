@@ -279,3 +279,11 @@ First run an App from the App page and confirm its form, stdout/stderr, and outp
 Run history retains App stdout/stderr, tool inputs and outputs, and node events. Locate the failing node first, then decide whether to change code, schema, permissions, instructions, or model configuration.
 
 For the complete runtime-form API, see [Apps, tools, and MCP](/concepts/apps-tools-and-mcp/#runtime-json-schema-forms-let-code-wait-for-a-person). To reuse an existing tool service, see [Connect an MCP Server](/guides/connect-an-mcp-server/).
+
+## Share an App in personal mode
+
+From the App detail page, choose **Export**, select ZIP or TAR, and review the source files before saving. Workrun includes the saved App settings and source selected by the same ignore rules as Team publishing, including `.gitignore`. You can deselect optional files; the configured entry points and `pyproject.toml` are required.
+
+From the Apps list, choose **Import** and select the archive. Review its settings and files, then confirm the name. Import creates a new local App rather than overwriting an existing one. **Install dependencies** is a separate action after import; importing itself does not run the App.
+
+The package contains `manifest.json`, `app.json`, and an `app/` source directory. Local installation state, project paths, and Team release identity are omitted. Review source files for private data before sharing. These archive actions are available in personal mode; Team Apps use version publishing.

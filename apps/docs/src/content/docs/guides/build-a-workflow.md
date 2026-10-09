@@ -18,12 +18,12 @@ Before you begin, configure an API key for at least one Provider under **Setting
 
 Do not make downstream nodes infer an answer from free text. First agree on what every step reads and produces. These keys appear in the App schema, Agent output, branch conditions, and review UI.
 
-| Producer | Reads | Writes and publishes to global state | Consumers |
-| --- | --- | --- | --- |
-| Run input | — | `feedback` (Label: Customer feedback) | Process |
-| Normalize feedback (Process) | `feedback` | `normalized_feedback` (Label: Normalized feedback) | Agent, Human Review |
-| Classify and recommend (Agent) | `normalized_feedback` | `category` (Feedback category), `priority` (Priority), `recommendation` (Recommended action) | If/Else, Human Review |
-| Human Review | `recommendation` and context | Review decision | Approved or rejected output |
+| Producer                       | Reads                        | Writes and publishes to global state                                                         | Consumers                   |
+| ------------------------------ | ---------------------------- | -------------------------------------------------------------------------------------------- | --------------------------- |
+| Run input                      | —                            | `feedback` (Label: Customer feedback)                                                        | Process                     |
+| Normalize feedback (Process)   | `feedback`                   | `normalized_feedback` (Label: Normalized feedback)                                           | Agent, Human Review         |
+| Classify and recommend (Agent) | `normalized_feedback`        | `category` (Feedback category), `priority` (Priority), `recommendation` (Recommended action) | If/Else, Human Review       |
+| Human Review                   | `recommendation` and context | Review decision                                                                              | Approved or rejected output |
 
 Run inputs are already global state. Output from a node stays in that node’s private namespace unless you list it under **Publish to global state → Published output keys**. Published keys can be used by branches, later nodes, and workflow output. This example uses global keys, so it does not need **Allowed readers**; use that setting only when intentionally sharing a node’s private namespace.
 
@@ -31,10 +31,10 @@ Run inputs are already global state. Output from a node stays in that node’s p
 
 Go to **Apps → New** and create an **App / Process Node** named, for example, “Normalize feedback.” Declare this data contract:
 
-| Direction | Label | Key | Type | Required |
-| --- | --- | --- | --- | --- |
-| Input | Customer feedback | `feedback` | string | Yes |
-| Output | Normalized feedback | `normalized_feedback` | string | Yes |
+| Direction | Label               | Key                   | Type   | Required |
+| --------- | ------------------- | --------------------- | ------ | -------- |
+| Input     | Customer feedback   | `feedback`            | string | Yes      |
+| Output    | Normalized feedback | `normalized_feedback` | string | Yes      |
 
 Replace the entry-point code with this minimal implementation. It collapses excess whitespace so later nodes always receive the same clean text:
 
@@ -74,7 +74,11 @@ Select the Agent, choose a model from a configured Provider, and paste this sche
   "type": "object",
   "properties": {
     "category": { "type": "string", "description": "Feedback category" },
-    "priority": { "type": "string", "description": "Priority", "enum": ["low", "medium", "high"] },
+    "priority": {
+      "type": "string",
+      "description": "Priority",
+      "enum": ["low", "medium", "high"]
+    },
     "recommendation": { "type": "string", "description": "Recommended action" }
   },
   "required": ["category", "priority", "recommendation"]
@@ -100,10 +104,10 @@ category, priority, recommendation
 
 Select **If/Else** and set a condition for each output:
 
-| Output | Condition |
-| --- | --- |
-| Yes | `priority == "high"` |
-| No | `priority != "high"` |
+| Output | Condition            |
+| ------ | -------------------- |
+| Yes    | `priority == "high"` |
+| No     | `priority != "high"` |
 
 A condition compares one state field at a time. Do not use `||` or `&&`, and do not match words in the natural-language `recommendation`. The schema limits `priority` to known values, so these two conditions cover every valid result.
 
@@ -121,11 +125,11 @@ This means that human review is complete and the run ends regardless of the deci
 
 Save the workflow, select **Run**, and inspect node status and global state in the run panel for each example.
 
-| Input | What you should see |
-| --- | --- |
-| `There is a typo in the page copy.` | Process publishes `normalized_feedback`; the Agent returns `low` or `medium`; the flow takes “no” to End. |
+| Input                                                                  | What you should see                                                                                                                         |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `There is a typo in the page copy.`                                    | Process publishes `normalized_feedback`; the Agent returns `low` or `medium`; the flow takes “no” to End.                                   |
 | `There is an unfamiliar payment on my account. Freeze it immediately.` | The Agent returns `high`; the flow pauses at Human Review; approve or reject to resume from the checkpoint without rerunning earlier nodes. |
-| `It does not work. Please fix it.` | The Agent identifies missing information while still returning complete `category`, `priority`, and `recommendation` fields. |
+| `It does not work. Please fix it.`                                     | The Agent identifies missing information while still returning complete `category`, `priority`, and `recommendation` fields.                |
 
 ![Low-priority feedback: If/Else takes the “no” output and reaches End.](/media/build-a-workflow/01-low-priority-to-end.png)
 
@@ -134,3 +138,15 @@ Save the workflow, select **Run**, and inspect node status and global state in t
 ![Insufficient-information feedback: the Agent still returns structured category, priority, and recommendation fields.](/media/build-a-workflow/03-insufficient-information.png)
 
 If a run differs, inspect in this order: the App’s stdout/stderr and `normalized_feedback`; the Agent’s model and schema; whether both producing nodes published their required keys; then the If/Else conditions and outgoing edges. Keep these three inputs as your first [evaluation cases](/quality/evaluations/).
+
+## Share or delete a saved Workflow
+
+In personal mode, save your changes, then open the **More (⋯)** menu in the Workflow detail page and choose **Export**. Select ZIP or TAR and review the package. It bundles the main definition, referenced Process Apps, Agent and CodeAct Tool Apps, and recursively referenced child Workflows. Repeated dependencies are included once. Missing dependencies and child-Workflow cycles prevent export.
+
+Choose **Import** from the Workflow list to open a package. Review the dependencies, choose a name, and bind the external configuration available on your device. Import creates fresh IDs for the Workflow, child Workflows, and Apps, and updates their references; it does not overwrite existing objects.
+
+Models, MCP tools, Skills, remote credentials, mounted host paths, environment values, and private URLs may require local configuration. Skill source and MCP server configuration are not bundled. Credentials, host paths, and environment values are removed from the exported definition. Review prompts and App source yourself for embedded private data.
+
+You can leave configuration pending and reopen **Configure imported dependencies** in the editor later. Pending items survive closing the editor and block execution until resolved. Use the separate dependency-installation action for bundled Apps before running. Run history, chat sessions, and schedules are not imported.
+
+To delete a Workflow, use **More (⋯) → Delete** in its detail page and confirm. Personal mode removes the local definition. In Team mode, only the author sees this action, and deletion removes the Workflow from the team catalog, including its published version. Associated Apps, child Workflows, and historical run records are retained. Deletion is not offered on list cards.

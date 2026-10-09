@@ -73,6 +73,23 @@ pub async fn update_workflow(id: &str, document: Value) -> Result<IWorkflow> {
         .await
 }
 
+pub async fn delete_workflow(id: &str) -> Result<()> {
+    validate_id(id)?;
+    let id = id.to_owned();
+    Config::workflows()
+        .await
+        .with_data_modify(|mut data| async move {
+            if data.find_workflow(&id).is_none() {
+                bail!("Workflow is not in the catalog: {id}");
+            }
+            // Delete only this definition; dependencies and historical snapshots remain independent.
+            data.workflows.retain(|workflow| workflow.id != id);
+            data.save_file().await?;
+            Ok((data, ()))
+        })
+        .await
+}
+
 fn validate_id(id: &str) -> Result<()> {
     if Uuid::parse_str(id).is_err() {
         bail!("Workflow id must be a UUID")
@@ -80,7 +97,7 @@ fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_document(document: &Value, workflow_id: Option<&str>) -> Result<()> {
+pub(crate) fn validate_document(document: &Value, workflow_id: Option<&str>) -> Result<()> {
     let Some(document) = document.as_object() else {
         bail!("Workflow document must be an object")
     };

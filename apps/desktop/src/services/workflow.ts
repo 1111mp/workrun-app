@@ -482,6 +482,11 @@ export function updateWorkflow(id: string, document: WorkflowDocument) {
   return invoke<StoredWorkflow>('update_workflow', { id, document });
 }
 
+export function deleteWorkflow(id: string) {
+  if (isTeamMode()) return fetchApi.delete(`/workflow/${id}`);
+  return invoke<void>('delete_workflow', { id });
+}
+
 export function publishWorkflow(
   id: string,
   version: string,

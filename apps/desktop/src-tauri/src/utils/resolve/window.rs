@@ -54,8 +54,8 @@ pub async fn build_new_window() -> Result<WebviewWindow, String> {
     let mut builder = tauri::WebviewWindowBuilder::new(app_handle, "main", tauri::WebviewUrl::App("index.html".into()))
         .title("Workrun")
         .decorations(DEFAULT_DECORATIONS)
-        .inner_size(1080.0, 800.0)
-        .min_inner_size(1080.0, 800.0)
+        .inner_size(1280.0, 860.0)
+        .min_inner_size(1280.0, 860.0)
         .resizable(true)
         .visible(false)
         // Because we use a self-signed certificate

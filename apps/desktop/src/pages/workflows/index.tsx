@@ -37,6 +37,8 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
 
+import { WorkflowImportButton } from '@/components/workflow-share-dialog';
+import { isTeamMode } from '@/lib/constant';
 import {
   clearLegacyWorkflowDocument,
   createWorkflow,
@@ -261,6 +263,7 @@ function WorkflowsPage() {
             )}
             {t('workflows.refresh')}
           </Button>
+          {!isTeamMode() ? <WorkflowImportButton /> : null}
           <Button
             size='sm'
             nativeButton={false}
