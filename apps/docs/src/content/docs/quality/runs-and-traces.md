@@ -28,10 +28,10 @@ Within one workflow, run history shows both health over a time range and the sta
 | `queued` / `running`        | The run is queued or still executing.                               | Wait for more events. If no events arrive for an unusual time, inspect timeouts on the active model or tool.           |
 | `waiting_for_input`         | Human review, a question response, or tool confirmation is pending. | Complete the action in the run panel; do not treat it as a failed run.                                                 |
 | `completed`                 | This execution has ended.                                           | Check final state and diagnostics. If the result is wrong, trace upstream from the node that produced the wrong value. |
-| `failed`                    | A node or runtime step could not complete.                          | Read its error, events, and node evidence. Retry from a checkpoint only after checking for duplicate side effects.     |
+| `failed`                    | A node or runtime step could not complete.                          | Read the error and cleanup/cancellation evidence, then Run again to create a new task.                                 |
 | `cancelled` / `interrupted` | A person cancelled it, or the app stopped during execution.         | Do not assume it had no effect. Check the last event and external system before starting another run.                  |
 
-> Waiting for input is a resumable pause. Retrying a failure creates a new run branch from an available checkpoint. They are not the same action.
+> Waiting for input is a resumable pause. Failed or stopped tasks must Run again; only application-interrupted tasks can recover their original checkpoint.
 
 ![Global run history: saved workflow and App runs can be filtered by target type, task or chat mode, and statuses such as queued, running, needs attention, and failed.](/media/runs/02-all-run-history.png)
 
@@ -85,7 +85,7 @@ For state boundaries, redaction, and checkpoints, see [Workflows and state](/con
 
 After workflow failure or user Stop, Workrun sends one best-effort `CancelTask` request for unfinished remote calls with a known task ID, without runtime confirmation. Node messages show the request and returned status without replacing the original error. Known terminal tasks are skipped; submissions without a task ID remain unknown and are not automatically resubmitted.
 
-A failed or timed-out cancellation is shown as unconfirmed. There is no preliminary query, automatic polling, cancellation retry, startup continuation of cancellation, or continuation restriction added by cancellation. Application-exit interruptions retain their existing recovery path. Remote cancellation does not promise business undo. See [Remote Agents and A2A task handling](/guides/remote-agents/).
+A failed or timed-out cancellation is shown as unconfirmed. There is no preliminary query, automatic polling, cancellation retry, or startup continuation of cancellation. Failed or stopped tasks must Run again. Application-exit interruptions retain their existing recovery path. Remote cancellation does not promise business undo. See [Remote Agents and A2A task handling](/guides/remote-agents/).
 
 ## After App compensation, fix the problem and run again
 
@@ -95,16 +95,11 @@ Stop and normal completion do not trigger automatic cleanup. See [App failure co
 
 ## Confirm side effects before recovering from a checkpoint
 
-The checkpoint actions below apply only when automatic cleanup has not started and continuation is available. For tasks with App cleanup already started, use Run again.
+Only application-interrupted tasks can recover from a checkpoint. Failed or stopped tasks use **Run again**, which creates a new business execution; it does not resume their checkpoint.
 
-A failed run can create a new retry run from its latest checkpoint. Earlier completed nodes do not run again, but the failed node **may already have** sent a message, written a record, or called an external service before it errored. Before retrying:
+For an application-interrupted task, Workrun checks the checkpoint and operation journal before recovering in the original task. Saved results can be reused; unknown outcomes require reconciliation and cannot be blindly submitted again. Unsupported recovery contracts block continuation.
 
-1. Check run events and the external system to learn how far the failed node progressed.
-2. For writes, verify an idempotency key, deduplication behavior, or a business rule that makes repetition safe.
-3. Fix credentials, parameters, code, or configuration, then choose **Retry failed node from checkpoint**.
-4. If side-effect state cannot be established, retain this run as evidence and start a controlled new run with deliberate input.
-
-Checkpoint retry currently requires one pending workflow node in the checkpoint. If a parallel branch fails, use run history to decide which branch should recover, or start a new run when appropriate.
+After a workflow failure, inspect the failed node and the automatic App cleanup or remote cancellation messages. Verify external resource state before choosing **Run again**: a new task repeats business execution and does not undo effects left by the previous task.
 
 ## Use runtime diagnostics to find slow and expensive work
 

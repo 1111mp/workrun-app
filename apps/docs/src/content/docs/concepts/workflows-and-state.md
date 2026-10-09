@@ -31,10 +31,10 @@ As a result, **More settings → Run inputs** defines the runtime form and field
 
 In **More settings**, a workflow can define four input types: string, multiline text, number, and boolean. Each has a user-facing label, a machine-facing key, help text, and a required flag. Keep keys clear and stable, such as `feedback`, `customer_id`, and `dry_run`. Changing a key can break Agent instructions, conditions, and downstream state references.
 
-| Mode | Best for | Input behavior |
-| --- | --- | --- |
-| Task | Independent, one-off automation such as routing feedback or executing an approval flow. | The run panel shows the defined run inputs. |
-| Chat | Assistants or collaborative flows that need continuous multi-turn context. | `input` is reserved for the message body; other defined fields can still be submitted with a chat turn. |
+| Mode | Best for                                                                                | Input behavior                                                                                          |
+| ---- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Task | Independent, one-off automation such as routing feedback or executing an approval flow. | The run panel shows the defined run inputs.                                                             |
+| Chat | Assistants or collaborative flows that need continuous multi-turn context.              | `input` is reserved for the message body; other defined fields can still be submitted with a chat turn. |
 
 Workflow output fields declare what a workflow delivers. An Agent can additionally define an output key or use JSON Schema to require structured model output. Naming fields that routing or downstream nodes depend on is more reliable than asking them to infer an answer from free text.
 
@@ -112,7 +112,7 @@ Wait for a review result or selected option
 Continue later nodes from the same checkpoint
 ```
 
-A review node can let a reviewer approve or reject and, when configured, edit content. A question node writes the selected option to its own state key. Resuming does not re-execute completed nodes. Failed background runs can also retry from a checkpoint, but currently that requires the checkpoint to contain one pending node. For a failure in a parallel fan-out, inspect run history first to decide which branch to retry or whether to begin a new run.
+A review node can let a reviewer approve or reject and, when configured, edit content. A question node writes the selected option to its own state key. Resuming does not re-execute completed nodes. Failed or stopped tasks do not continue from a checkpoint; fix the issue and use Run again to create a new task. Application-exit interruptions can separately recover after checkpoint and operation-journal validation.
 
 Subworkflows execute with parent workflow context and protect against recursive use: Workrun blocks cycles and limits nesting depth. `Terminate` explicitly ends the entire execution, rather than ending only one canvas path.
 

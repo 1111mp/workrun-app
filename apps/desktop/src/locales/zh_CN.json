@@ -1,8 +1,8 @@
 {
   "executionRecovery": {
     "workspaceTitle": "任务工作区",
-    "continueTitle": "继续这个任务？",
-    "continueDescription": "从本任务保存的 checkpoint 继续，复用已保存的远程和工具结果。结果未知时先对账；缺少恢复契约的步骤可能需要人工处理。",
+    "continueTitle": "恢复这个中断任务？",
+    "continueDescription": "从应用退出或崩溃造成的中断处恢复，复用已保存结果。失败或已停止的任务请使用“重新运行”；结果未知的操作需先对账。",
     "abandonDescription": "停止执行并放弃任务，之后无法继续。按保存的补偿契约处理已记录的副作用；未知结果、缺失契约和不可逆操作需要对账或人工补救。",
     "keepTask": "保留任务",
     "runAgain": "重新运行",

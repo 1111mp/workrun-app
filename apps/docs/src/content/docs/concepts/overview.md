@@ -64,7 +64,7 @@ Local Python Apps are not sandboxes. Run only projects you trust, and review the
 
 Workrun treats each execution as an identified run, not an untraceable chat request. While it runs, the interface streams node start, completion, failure, and waiting events. The run panel also exposes Agent model messages, tool calls, Python logs, and key outputs.
 
-When a flow reaches Human Review or Ask User Question, Workrun stores a checkpoint in local SQLite and waits. After a reviewer submits a result or a user chooses an option, it resumes at the pause point without running completed steps again. Failed background runs can also retry from a checkpoint. At present, retry requires a checkpoint with one pending node, so a failure at a parallel fan-out should be investigated in run history first.
+When a flow reaches Human Review or Ask User Question, Workrun stores a checkpoint in local SQLite and waits. After a reviewer submits a result or a user chooses an option, it resumes at the pause point without running completed steps again. Failed or stopped runs use Run again to create a new task. Only application-interrupted tasks can recover from a checkpoint after journal validation.
 
 Task workflows suit independent, one-off runs. Chat workflows keep a durable session and its turns so later messages can continue the same context.
 

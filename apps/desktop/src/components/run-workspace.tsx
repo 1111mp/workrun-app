@@ -37,7 +37,7 @@ import {
   type RunStatus,
 } from '@/services/run-history';
 import {
-  retryFailedBackgroundWorkflowRun,
+  recoverInterruptedWorkflowRun,
   type WorkflowRunEvent,
 } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
@@ -90,7 +90,7 @@ function RunWorkspace() {
   } = useRunWorkspaceStore();
   const activeTab = tabs.find((tab) => tab.id === activeRunId);
   const [record, setRecord] = useState<RunRecord>();
-  const [retrySourceRunId, setRetrySourceRunId] = useState<string>();
+  const [recoverySourceRunId, setRecoverySourceRunId] = useState<string>();
   const [abandonSourceRunId, setAbandonSourceRunId] = useState<string>();
   const [compensationBusy, setCompensationBusy] = useState(false);
   const changeCompensation = (
@@ -163,9 +163,9 @@ function RunWorkspace() {
     };
   }, [activeRecord, activeTab?.targetType]);
 
-  const retryFailedWorkflow = () => {
-    if (!retrySourceRunId) return;
-    void retryFailedBackgroundWorkflowRun(retrySourceRunId)
+  const recoverInterruptedWorkflow = () => {
+    if (!recoverySourceRunId) return;
+    void recoverInterruptedWorkflowRun(recoverySourceRunId)
       .then(openRun)
       .catch((error: unknown) => {
         toast.error(t('executionRecovery.continueFailed'), {
@@ -173,17 +173,17 @@ function RunWorkspace() {
           description: error instanceof Error ? error.message : String(error),
         });
       });
-    setRetrySourceRunId(undefined);
+    setRecoverySourceRunId(undefined);
   };
 
-  const requestFailedWorkflowRetry = () => {
+  const requestInterruptedWorkflowRecovery = () => {
     if (
       !activeRecord ||
       activeRecord.targetType !== 'workflow' ||
-      !['failed', 'interrupted'].includes(activeRecord.status)
+      activeRecord.status !== 'interrupted'
     )
       return;
-    setRetrySourceRunId(activeRecord.id);
+    setRecoverySourceRunId(activeRecord.id);
   };
 
   useEffect(() => {
@@ -258,8 +258,8 @@ function RunWorkspace() {
               ) : null}
               {activeRecord &&
               !activeRecord.executionHistory?.compensation &&
-              ['failed', 'interrupted'].includes(activeRecord.status) ? (
-                <Button onClick={requestFailedWorkflowRetry}>
+              activeRecord.status === 'interrupted' ? (
+                <Button onClick={requestInterruptedWorkflowRecovery}>
                   {t('workflowEditor.output.continueTask')}
                 </Button>
               ) : null}
@@ -338,7 +338,7 @@ function RunWorkspace() {
               workflowNodes={workflowRun.nodes}
               spans={activeRecord?.spans}
               onClose={() => setOpen(false)}
-              onRunAgain={requestFailedWorkflowRetry}
+              onRunAgain={requestInterruptedWorkflowRecovery}
             />
           </DrawerContent>
         </Drawer>
@@ -374,8 +374,8 @@ function RunWorkspace() {
           </AlertDialogContent>
         </AlertDialog>
         <AlertDialog
-          open={Boolean(retrySourceRunId)}
-          onOpenChange={(open) => !open && setRetrySourceRunId(undefined)}
+          open={Boolean(recoverySourceRunId)}
+          onOpenChange={(open) => !open && setRecoverySourceRunId(undefined)}
         >
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -390,7 +390,7 @@ function RunWorkspace() {
               <AlertDialogCancel>
                 {t('workflowEditor.output.cancelAction')}
               </AlertDialogCancel>
-              <AlertDialogAction onClick={retryFailedWorkflow}>
+              <AlertDialogAction onClick={recoverInterruptedWorkflow}>
                 {t('workflowEditor.output.continueTask')}
               </AlertDialogAction>
             </AlertDialogFooter>

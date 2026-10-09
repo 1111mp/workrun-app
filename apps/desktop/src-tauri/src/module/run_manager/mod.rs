@@ -417,7 +417,7 @@ use execution::execute_claimed_run;
 pub use app::{cancel_running_app, start_app};
 pub use workflow::{
     MissingReplayDependency, abandon_workflow, approve_compensation, cancel_waiting_workflow,
-    replay_missing_dependencies, replay_run, resolve_workflow_action, resume_workflow, retry_failed_workflow,
+    recover_interrupted_workflow, replay_missing_dependencies, replay_run, resolve_workflow_action, resume_workflow,
     retry_workflow_compensation, review_operation, start_workflow,
 };
 

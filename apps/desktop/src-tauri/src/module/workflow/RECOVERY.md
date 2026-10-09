@@ -1,6 +1,6 @@
 # Execution and recovery: Remote, tools, Process and child workflows
 
-A workflow run is the user-visible business task. Continuing a failed or
+A workflow run is the user-visible business task. Recovering an application-
 interrupted task requeues its original run ID and checkpoint thread. `executionId`
 and logical operation IDs stay stable. Replay creates a new run, thread and
 business execution ID. Recovery uses the original DSL recipe and validates the
@@ -45,7 +45,7 @@ before this boundary existed are treated as potentially dispatched on upgrade.
 | Dispatched, task identity missing | Await confirmation; never auto-resubmit |
 | Remote failed/rejected/canceled | Preserve failure; no business resubmission contract |
 | Another local execution is active | Reject competing recovery |
-| Permanent adapter error | Manual recovery; no automatic retry |
+| Permanent adapter error | Block interrupted recovery; failed tasks must Run again |
 
 ## Scheduling and UI
 
@@ -242,8 +242,9 @@ for failed, cancelled or completed runs are retired at startup; the worker only
 claims interrupted runs.
 
 Application-exit interruptions retain startup recovery for journaled Remote
-frontiers. User-requested continuation of failed or interrupted tasks remains
-available after the existing checkpoint, operation and compensation checks.
+frontiers. User-requested recovery is available only for interrupted tasks after checkpoint,
+operation and compensation checks. Failed or stopped tasks must Run again; the
+legacy failure-retry command is removed, and the enqueue boundary rejects them.
 If startup recovery resumes execution and that execution fails, it stays failed
 rather than entering an automatic failure retry loop.
 
@@ -261,3 +262,8 @@ submission without a task ID is shown as unknown and is never resubmitted. A
 failed cancellation does not prevent independent calls from receiving theirs.
 Application exit can interrupt this best-effort request; it is not retried on
 restart. Existing business recovery remains separate from this cancellation.
+
+Failed and stopped tasks never continue from a checkpoint, even when no App
+compensation was configured or selected. Their terminal records remain evidence.
+The interrupted recovery command is separate from normal waiting-for-input
+resume, which remains in the same task after the requested input is supplied.

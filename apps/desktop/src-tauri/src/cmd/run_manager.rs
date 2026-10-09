@@ -16,8 +16,10 @@ pub async fn workflow_run_resume(request: ResumeWorkflowRun) -> CmdResult {
 }
 
 #[tauri::command]
-pub async fn workflow_run_retry_failed(source_run_id: String) -> Result<RunRecordSummary, String> {
-    run_manager::retry_failed_workflow(&source_run_id).await.stringify_err()
+pub async fn workflow_run_recover_interrupted(source_run_id: String) -> Result<RunRecordSummary, String> {
+    run_manager::recover_interrupted_workflow(&source_run_id)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]

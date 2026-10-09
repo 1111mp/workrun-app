@@ -33,7 +33,7 @@ pub(crate) async fn enqueue_recovery_in_pool(pool: &sqlx::SqlitePool, id: &str, 
             .execute(&mut *tx)
             .await?;
     }
-    let changed = sqlx::query("UPDATE run_records SET status = 'queued', ended_at = NULL, error = NULL, duration_ms = NULL, runtime_json = ?, updated_at = ? WHERE id = ? AND target_type = 'workflow' AND status IN ('failed','interrupted')")
+    let changed = sqlx::query("UPDATE run_records SET status = 'queued', ended_at = NULL, error = NULL, duration_ms = NULL, runtime_json = ?, updated_at = ? WHERE id = ? AND target_type = 'workflow' AND status = 'interrupted'")
         .bind(runtime.to_string()).bind(&now).bind(id).execute(&mut *tx).await?.rows_affected();
     if changed != 1 {
         bail!("workflow is no longer available for recovery: {id}");
@@ -235,8 +235,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_task_recovery_preserves_failure_history_and_cursor() {
+    async fn interrupted_task_recovery_preserves_history_and_cursor() {
         let pool = pool().await;
+        sqlx::query("UPDATE run_records SET status='interrupted' WHERE id='task-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
         let recipe = json!({"threadId":"original-thread", "executionId":"business-1", "resume":true});
         let (first, second) = tokio::join!(
             enqueue_recovery_in_pool(&pool, "task-1", recipe.clone()),
@@ -339,18 +343,18 @@ mod tests {
                         .unwrap(),
                     status
                 );
-                if status == "failed" {
+                assert!(
                     enqueue_recovery_in_pool(&pool, "task-1", json!({"resume":true,"threadId":"original-thread"}))
                         .await
-                        .unwrap();
-                    assert_eq!(
-                        sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='task-1'")
-                            .fetch_one(&pool)
-                            .await
-                            .unwrap(),
-                        "queued"
-                    );
-                }
+                        .is_err()
+                );
+                assert_eq!(
+                    sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='task-1'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap(),
+                    status
+                );
             }
         }
     }

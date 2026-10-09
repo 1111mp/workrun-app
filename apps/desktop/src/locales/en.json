@@ -1,8 +1,8 @@
 {
   "executionRecovery": {
     "workspaceTitle": "Run workspace",
-    "continueTitle": "Continue this task?",
-    "continueDescription": "Continue from the saved checkpoint in this task. Saved Remote and tool results are reused; unknown outcomes are checked before proceeding. Steps without a recovery contract may require manual reconciliation.",
+    "continueTitle": "Recover this interrupted task?",
+    "continueDescription": "Recover an application-interrupted task from its saved checkpoint. Failed or stopped tasks must use Run again. Unknown outcomes are reconciled before continuing.",
     "abandonDescription": "Execution will stop and this task cannot be continued. Saved compensation contracts will handle recorded effects. Unknown outcomes, missing contracts and irreversible operations require reconciliation or manual remediation.",
     "keepTask": "Keep task",
     "runAgain": "Run again",

@@ -53,7 +53,7 @@ Remote task: Canceled
 
 If the request fails or times out, the message shows **Cancellation unconfirmed: request failed or timed out; no automatic retry**. The workflow retains its original failure; the remote response does not make the whole workflow successful.
 
-Cancellation messages do not add a same-task continuation restriction or suppress existing recovery behavior. Other recovery checks and App compensation can still restrict continuation independently. **Run again** creates a new business execution. See [Runs, debugging, and traces](/quality/runs-and-traces/).
+Failed or stopped workflows cannot continue their original task; **Run again** creates a new business execution. Application interruptions retain their separate recovery path. See [Runs, debugging, and traces](/quality/runs-and-traces/).
 
 ## Exit and restart
 

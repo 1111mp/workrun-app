@@ -18,7 +18,7 @@ import {
   inspectRunRecord,
   retryWorkflowCompensation,
 } from '@/services/run-history';
-import { retryFailedBackgroundWorkflowRun } from '@/services/workflow';
+import { recoverInterruptedWorkflowRun } from '@/services/workflow';
 
 /** Operation facts and review stay next to the graph output they explain. */
 export function RunOperationPanel({
@@ -108,13 +108,13 @@ export function RunOperationPanel({
         )}
       />
       <div className='flex flex-wrap items-center gap-2 px-6 pb-3'>
-        {!plan && ['failed', 'interrupted'].includes(record.status) ? (
+        {!plan && record.status === 'interrupted' ? (
           <Button
             variant='outline'
             size='sm'
             disabled={busy}
             onClick={() =>
-              void action(() => retryFailedBackgroundWorkflowRun(runId))
+              void action(() => recoverInterruptedWorkflowRun(runId))
             }
           >
             {t('workflowEditor.output.continueTask')}

@@ -344,18 +344,15 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
     Ok(RunHistoryStore::inspect(&run_id).await?.summary)
 }
 
-/// Continue the same business task; attempts and event sequences are append-only.
-pub async fn retry_failed_workflow(source_run_id: &str) -> Result<RunRecordSummary> {
+/// Recover an application-interrupted task; terminal failures require a new run.
+pub async fn recover_interrupted_workflow(source_run_id: &str) -> Result<RunRecordSummary> {
     recover_workflow(source_run_id, false).await
 }
 
 pub(super) async fn recover_workflow(run_id: &str, automatic: bool) -> Result<RunRecordSummary> {
     let source = RunHistoryStore::inspect(run_id).await?;
-    if source.summary.target_type != "workflow" || !matches!(source.summary.status.as_str(), "failed" | "interrupted") {
-        bail!("only a failed or interrupted workflow can be continued");
-    }
-    if automatic && source.summary.status != "interrupted" {
-        bail!("Only application-interrupted workflows can recover automatically");
+    if source.summary.target_type != "workflow" || source.summary.status != "interrupted" {
+        bail!("Only application-interrupted workflows can be recovered; failed or stopped tasks must run again");
     }
     // A finished run can still be flushing its writer/session. Requeue only
     // after its native owner has actually released it.
