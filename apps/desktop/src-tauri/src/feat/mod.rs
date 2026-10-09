@@ -1,4 +1,5 @@
 mod app;
+mod app_share;
 mod config;
 mod mcp_server;
 mod process_node;
@@ -9,6 +10,7 @@ mod window;
 mod workflow;
 
 pub use app::*;
+pub use app_share::*;
 pub use config::*;
 pub use mcp_server::*;
 pub use process_node::*;

@@ -24,7 +24,6 @@ use std::{
 };
 use tauri::{AppHandle, ipc::Channel};
 use uuid::Uuid;
-use walkdir::WalkDir;
 
 /// Metadata collected when a local Process Node project is first created.
 #[derive(Debug, Clone, Deserialize)]
@@ -451,33 +450,7 @@ pub(crate) async fn process_compensation_fingerprint(definition: &IProcessNode) 
         if !script.starts_with(&root) || !script.is_file() || !root.join("uv.lock").is_file() {
             bail!("Compensation entry must be inside the App and uv.lock must exist");
         }
-        let ignore = load_gitignore(&root)?;
-        let mut files = Vec::new();
-        for item in WalkDir::new(&root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|item| {
-                item.path()
-                    .strip_prefix(&root)
-                    .is_ok_and(|path| !is_ignored_source_path(path))
-            })
-        {
-            let item = item?;
-            let relative = item.path().strip_prefix(&root)?;
-            if ignore.as_ref().is_some_and(|ignore| {
-                ignore
-                    .matched_path_or_any_parents(relative, item.file_type().is_dir())
-                    .is_ignore()
-            }) {
-                continue;
-            }
-            if item.file_type().is_symlink() {
-                bail!("Compensatable App source cannot contain symlinks");
-            }
-            if item.file_type().is_file() {
-                files.push(relative.to_path_buf());
-            }
-        }
+        let files = collect_app_source_files(&root)?;
         if !files.contains(&business_entry)
             || !files.contains(&entry)
             || !files.contains(&PathBuf::from("uv.lock"))
@@ -485,7 +458,6 @@ pub(crate) async fn process_compensation_fingerprint(definition: &IProcessNode) 
         {
             bail!("Compensation entry, pyproject.toml and uv.lock must be included in App source");
         }
-        files.sort();
         let mut hash = Sha256::new();
         for path in files {
             let name = path.to_string_lossy();
@@ -502,7 +474,7 @@ pub(crate) async fn process_compensation_fingerprint(definition: &IProcessNode) 
 }
 
 fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive> {
-    let gitignore = load_gitignore(project_path)?;
+    let files = collect_app_source_files(project_path)?;
     let archive_path = std::env::temp_dir().join(format!("workrun-source-{}.tar.gz", Uuid::now_v7()));
     let output = OpenOptions::new()
         .read(true)
@@ -513,20 +485,8 @@ fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive
     let encoder = GzEncoder::new(output, Compression::default());
     let mut archive = tar::Builder::new(encoder);
 
-    for entry in WalkDir::new(project_path).follow_links(false) {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let relative = entry.path().strip_prefix(project_path)?;
-        if gitignore
-            .as_ref()
-            .is_some_and(|ignore| ignore.matched_path_or_any_parents(relative, false).is_ignore())
-            || gitignore.is_none() && is_ignored_source_path(relative)
-        {
-            continue;
-        }
-        archive.append_file(relative, &mut File::open(entry.path())?)?;
+    for relative in files {
+        archive.append_file(&relative, &mut File::open(project_path.join(&relative))?)?;
     }
 
     let mut output = archive.into_inner()?.finish()?;
@@ -542,19 +502,44 @@ fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive
     })
 }
 
-fn load_gitignore(project_path: &Path) -> Result<Option<ignore::gitignore::Gitignore>> {
-    let gitignore_path = project_path.join(".gitignore");
-    if !gitignore_path.is_file() {
-        return Ok(None);
+/// Publishing and personal sharing must select the same portable source files.
+pub(crate) fn collect_app_source_files(project_path: &Path) -> Result<Vec<PathBuf>> {
+    let root = std::fs::canonicalize(project_path)?;
+    let filter_root = root.clone();
+    let mut files = Vec::new();
+    let walker = ignore::WalkBuilder::new(&root)
+        .hidden(false)
+        .parents(false)
+        .ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(false)
+        .follow_links(false)
+        // Defaults always apply, even when a project has its own .gitignore.
+        .filter_entry(move |entry| {
+            entry.path().strip_prefix(&filter_root).is_ok_and(|relative| {
+                !is_ignored_source_path(relative)
+                    && !relative.file_name().is_some_and(|name| {
+                        let name = name.to_string_lossy();
+                        name == ".env" || name.starts_with(".env.") && name != ".env.example"
+                    })
+            })
+        })
+        .build();
+    for entry in walker {
+        let entry = entry?;
+        if let Some(error) = entry.error() {
+            bail!("Invalid App ignore rules: {error}");
+        }
+        if entry.file_type().is_some_and(|kind| kind.is_symlink()) {
+            bail!("App source cannot contain symbolic links: {}", entry.path().display());
+        }
+        if entry.file_type().is_some_and(|kind| kind.is_file()) {
+            files.push(entry.path().strip_prefix(&root)?.to_path_buf());
+        }
     }
-    let mut builder = ignore::gitignore::GitignoreBuilder::new(project_path);
-    if let Some(error) = builder.add(&gitignore_path) {
-        return Err(error).with_context(|| format!("failed to parse {}", gitignore_path.display()));
-    }
-    builder
-        .build()
-        .map(Some)
-        .with_context(|| format!("failed to parse {}", gitignore_path.display()))
+    files.sort();
+    Ok(files)
 }
 
 fn is_ignored_source_path(path: &Path) -> bool {

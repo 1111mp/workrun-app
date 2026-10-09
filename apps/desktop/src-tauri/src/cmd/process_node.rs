@@ -6,6 +6,49 @@ use crate::{
 };
 use tauri::{AppHandle, ipc::Channel};
 
+#[tauri::command]
+pub async fn app_share_export_preview(app: AppHandle, id: String) -> CmdResult<feat::AppSharePreview> {
+    feat::app_share_export_preview(id, app.package_info().version.to_string())
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn app_share_export(
+    app: AppHandle,
+    id: String,
+    destination: std::path::PathBuf,
+    format: feat::AppShareFormat,
+    excluded_files: Vec<String>,
+    expected_files: Vec<String>,
+) -> CmdResult<()> {
+    feat::app_share_export(
+        id,
+        destination,
+        format,
+        excluded_files,
+        expected_files,
+        app.package_info().version.to_string(),
+    )
+    .await
+    .stringify_err()
+}
+
+#[tauri::command]
+pub async fn app_share_import_preview(path: std::path::PathBuf) -> CmdResult<feat::AppSharePreview> {
+    feat::app_share_import_preview(path).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn app_share_import(path: std::path::PathBuf, sha256: String, name: String) -> CmdResult<ProcessNode> {
+    feat::app_share_import(path, sha256, name).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn app_share_prepare(id: String) -> CmdResult<()> {
+    feat::app_share_prepare(id).await.stringify_err()
+}
+
 /// List every Process Node in the source-owned catalog and its local state.
 #[tauri::command]
 pub async fn get_process_nodes() -> CmdResult<Vec<ProcessNode>> {
