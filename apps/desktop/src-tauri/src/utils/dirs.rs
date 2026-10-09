@@ -179,6 +179,14 @@ pub fn initialize_active_workspace_scope(scope: WorkspaceScope) {
     *ACTIVE_WORKSPACE_SCOPE.write() = scope;
 }
 
+/// Stable local ownership key; it does not depend on the filesystem path.
+pub fn active_workspace_id() -> String {
+    match &*ACTIVE_WORKSPACE_SCOPE.read() {
+        WorkspaceScope::Personal => "personal".to_string(),
+        WorkspaceScope::Team { team_id } => format!("team:{team_id}"),
+    }
+}
+
 pub fn is_team_workspace() -> bool {
     matches!(&*ACTIVE_WORKSPACE_SCOPE.read(), WorkspaceScope::Team { .. })
 }

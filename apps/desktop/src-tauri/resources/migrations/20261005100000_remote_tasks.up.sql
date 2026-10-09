@@ -165,3 +165,10 @@ CREATE TABLE remote_task_lifecycle (
  updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_remote_lifecycle_due ON remote_task_lifecycle(status,next_check_at);
+
+-- Local run and conversation ownership for workspace isolation.
+ALTER TABLE run_records ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'personal';
+ALTER TABLE chat_sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'personal';
+CREATE INDEX idx_run_records_workspace_time ON run_records(workspace_id, started_at DESC, id DESC);
+CREATE INDEX idx_run_records_workspace_queue ON run_records(workspace_id, status, created_at, id);
+CREATE INDEX idx_chat_sessions_workspace ON chat_sessions(workspace_id, workflow_id, updated_at DESC);

@@ -18,7 +18,9 @@ impl RunHistoryStore {
         sql.push(RUN_RECORD_SUMMARY_COLUMNS)
             // Evaluation runs retain a normal run record for trace inspection,
             // but are not production history or runtime-health evidence.
-            .push(" FROM run_records WHERE json_extract(runtime_json, '$.evaluationProfile') IS NULL");
+            .push(" FROM run_records WHERE json_extract(runtime_json, '$.evaluationProfile') IS NULL")
+            .push(" AND workspace_id = ")
+            .push_bind(crate::utils::dirs::active_workspace_id());
 
         if let Some(target_type) = query.target_type {
             sql.push(" AND target_type = ").push_bind(target_type.as_str());
@@ -68,7 +70,9 @@ impl RunHistoryStore {
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
         let rows = sql
             .push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(" FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') AND json_extract(runtime_json, '$.evaluationProfile') IS NULL ORDER BY started_at DESC, id DESC")
+            .push(" FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') AND json_extract(runtime_json, '$.evaluationProfile') IS NULL AND workspace_id = ")
+            .push_bind(crate::utils::dirs::active_workspace_id())
+            .push(" ORDER BY started_at DESC, id DESC")
             .build()
             .fetch_all(&pool)
             .await?;
@@ -80,6 +84,8 @@ impl RunHistoryStore {
         list_timeline_from_pool(&pool, query).await
     }
 
+    // Native workers may finish after the UI switches workspaces. The IPC
+    // boundary checks ownership; internal reads retain access to their run.
     pub async fn inspect(id: &str) -> Result<RunRecord> {
         let pool = DBManager::global().pool()?;
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
@@ -135,6 +141,14 @@ async fn list_timeline_from_pool(
     pool: &sqlx::SqlitePool,
     query: RunHistoryTimelineQuery,
 ) -> Result<RunHistoryTimelinePage> {
+    list_timeline_for_workspace(pool, query, &crate::utils::dirs::active_workspace_id()).await
+}
+
+async fn list_timeline_for_workspace(
+    pool: &sqlx::SqlitePool,
+    query: RunHistoryTimelineQuery,
+    workspace_id: &str,
+) -> Result<RunHistoryTimelinePage> {
     let page_size = query.page_size.unwrap_or(30).clamp(1, 100);
     if let Some(cursor) = &query.cursor
         && (cursor.id.trim().is_empty() || cursor.kind.trim().is_empty() || cursor.activity_at.trim().is_empty())
@@ -147,12 +161,12 @@ async fn list_timeline_from_pool(
     // boundaries and cross-mode ordering depend on loaded client state.
     let mut sql = QueryBuilder::<Sqlite>::new(
         "WITH timeline AS (\
-             SELECT 'task' AS kind, rr.id, rr.target_type, rr.target_id, rr.target_name, rr.status, rr.started_at AS activity_at, rr.ended_at, rr.duration_ms, rr.error, json_extract(rr.runtime_json, '$.releaseVersion') AS release_version, NULL AS turn_count, NULL AS latest_message \
+             SELECT rr.workspace_id, 'task' AS kind, rr.id, rr.target_type, rr.target_id, rr.target_name, rr.status, rr.started_at AS activity_at, rr.ended_at, rr.duration_ms, rr.error, json_extract(rr.runtime_json, '$.releaseVersion') AS release_version, NULL AS turn_count, NULL AS latest_message \
              FROM run_records rr \
              WHERE json_extract(rr.runtime_json, '$.evaluationProfile') IS NULL \
                AND NOT EXISTS (SELECT 1 FROM chat_turns ct WHERE ct.run_id = rr.id) \
              UNION ALL \
-             SELECT 'chat' AS kind, cs.id, 'workflow' AS target_type, cs.workflow_id AS target_id, \
+             SELECT cs.workspace_id, 'chat' AS kind, cs.id, 'workflow' AS target_type, cs.workflow_id AS target_id, \
                COALESCE((SELECT rr.target_name FROM chat_turns ct JOIN run_records rr ON rr.id = ct.run_id WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1), 'Workflow') AS target_name, \
                (SELECT ct.status FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1) AS status, \
                COALESCE((SELECT COALESCE(ct.completed_at, ct.created_at) FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1), cs.created_at) AS activity_at, \
@@ -162,8 +176,9 @@ async fn list_timeline_from_pool(
              FROM chat_sessions cs \
              WHERE EXISTS (SELECT 1 FROM chat_turns ct WHERE ct.session_id = cs.id)\
              ), filtered AS (\
-             SELECT kind, id, target_type, target_id, target_name, status, activity_at, ended_at, duration_ms, error, release_version, turn_count, latest_message FROM timeline WHERE 1 = 1",
+             SELECT kind, id, target_type, target_id, target_name, status, activity_at, ended_at, duration_ms, error, release_version, turn_count, latest_message FROM timeline WHERE workspace_id = ",
     );
+    sql.push_bind(workspace_id);
     if let Some(target_type) = query.target_type {
         sql.push(" AND target_type = ").push_bind(target_type.as_str());
     }
@@ -252,6 +267,8 @@ async fn observability_run_rows(
     );
     sql.push_bind(&query.workflow_id)
         .push(" AND status IN ('completed', 'failed', 'cancelled', 'interrupted') AND json_extract(runtime_json, '$.evaluationProfile') IS NULL");
+    sql.push(" AND run_records.workspace_id = ")
+        .push_bind(crate::utils::dirs::active_workspace_id());
     append_observability_version_filter(&mut sql, query);
     append_observability_time_filter(&mut sql, query);
     Ok(sql.build().fetch_all(pool).await?)
@@ -266,6 +283,8 @@ async fn observability_span_rows(
     );
     sql.push_bind(&query.workflow_id)
         .push(" AND run_records.status IN ('completed', 'failed', 'cancelled', 'interrupted') AND json_extract(run_records.runtime_json, '$.evaluationProfile') IS NULL");
+    sql.push(" AND run_records.workspace_id = ")
+        .push_bind(crate::utils::dirs::active_workspace_id());
     append_observability_version_filter(&mut sql, query);
     append_observability_time_filter(&mut sql, query);
     Ok(sql.build().fetch_all(pool).await?)
@@ -620,7 +639,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT, target_id TEXT, status TEXT, duration_ms INTEGER, runtime_json TEXT, started_at TEXT)",
+            "CREATE TABLE run_records (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, target_type TEXT, target_id TEXT, status TEXT, duration_ms INTEGER, runtime_json TEXT, started_at TEXT)",
         )
         .execute(&pool)
         .await
@@ -632,7 +651,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO run_records VALUES ('completed', 'workflow', 'workflow-1', 'completed', 100, '{\"releaseVersion\":\"1.0.0\"}', '2026-09-01T00:00:00Z'), ('failed', 'workflow', 'workflow-1', 'failed', 200, '{\"releaseVersion\":\"1.0.0\"}', '2026-09-02T00:00:00Z'), ('running', 'workflow', 'workflow-1', 'running', NULL, '{}', '2026-09-03T00:00:00Z'), ('other', 'workflow', 'workflow-2', 'completed', 50, '{}', '2026-09-01T00:00:00Z')",
+            "INSERT INTO run_records (id, target_type, target_id, status, duration_ms, runtime_json, started_at) VALUES ('completed', 'workflow', 'workflow-1', 'completed', 100, '{\"releaseVersion\":\"1.0.0\"}', '2026-09-01T00:00:00Z'), ('failed', 'workflow', 'workflow-1', 'failed', 200, '{\"releaseVersion\":\"1.0.0\"}', '2026-09-02T00:00:00Z'), ('running', 'workflow', 'workflow-1', 'running', NULL, '{}', '2026-09-03T00:00:00Z'), ('other', 'workflow', 'workflow-2', 'completed', 50, '{}', '2026-09-01T00:00:00Z')",
         )
         .execute(&pool)
         .await
@@ -643,6 +662,9 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+
+        sqlx::query("INSERT INTO run_records (workspace_id, id, target_type, target_id, status, duration_ms, runtime_json, started_at) VALUES ('team:default', 'team-completed', 'workflow', 'workflow-1', 'completed', 999, '{\"releaseVersion\":\"1.0.0\"}', '2026-09-01T00:00:00Z')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO run_spans (id, run_id, kind, status, total_tokens) VALUES ('team-span', 'team-completed', 'model_call', 'completed', 999)").execute(&pool).await.unwrap();
 
         let query = RunObservabilityQuery {
             workflow_id: "workflow-1".into(),
@@ -680,13 +702,13 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT NOT NULL, target_id TEXT NOT NULL, target_name TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT NOT NULL)",
+            "CREATE TABLE run_records (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, target_type TEXT NOT NULL, target_id TEXT NOT NULL, target_name TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT NOT NULL)",
         )
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
-            "CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, created_at TEXT NOT NULL)",
+            "CREATE TABLE chat_sessions (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, created_at TEXT NOT NULL)",
         )
         .execute(&pool)
         .await
@@ -699,7 +721,7 @@ mod tests {
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO run_records VALUES
+            "INSERT INTO run_records (id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, runtime_json) VALUES
              ('task-latest', 'workflow', 'workflow-1', 'Standalone task', 'completed', '2026-09-30T05:00:00Z', NULL, 100, NULL, '{}'),
              ('task-old', 'app', 'app-1', 'Old app task', 'failed', '2026-09-30T01:00:00Z', NULL, 200, 'failed', '{}'),
              ('chat-a-1', 'workflow', 'workflow-1', 'Chat workflow', 'completed', '2026-09-30T02:00:00Z', NULL, 100, NULL, '{}'),
@@ -710,7 +732,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO chat_sessions VALUES
+            "INSERT INTO chat_sessions (id, workflow_id, created_at) VALUES
              ('chat-a', 'workflow-1', '2026-09-30T02:00:00Z'),
              ('chat-b', 'workflow-2', '2026-09-30T04:00:00Z')",
         )
@@ -726,7 +748,45 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO run_records (workspace_id, id, target_type, target_id, target_name, status, started_at, runtime_json) VALUES ('team:default', 'team-standalone', 'workflow', 'workflow-1', 'Team standalone', 'completed', '2026-10-08T00:00:00Z', '{}'), ('team:default', 'team-task', 'workflow', 'workflow-1', 'Team task', 'completed', '2026-10-09T00:00:00Z', '{}')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO chat_sessions (workspace_id, id, workflow_id, created_at) VALUES ('team:default', 'team-chat', 'workflow-1', '2026-10-09T00:00:00Z')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO chat_turns (id, session_id, run_id, sequence, user_message, status, created_at) VALUES ('team-turn', 'team-chat', 'team-task', 0, 'team private prompt', 'completed', '2026-10-09T00:00:00Z')").execute(&pool).await.unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn timeline_isolates_tasks_chats_and_counts_in_both_workspaces() {
+        let pool = timeline_pool().await;
+        let query = || RunHistoryTimelineQuery {
+            target_type: None,
+            target_id: None,
+            status: None,
+            query: None,
+            mode: None,
+            page_size: Some(30),
+            cursor: None,
+        };
+        let personal = super::list_timeline_for_workspace(&pool, query(), "personal")
+            .await
+            .unwrap();
+        let team = super::list_timeline_for_workspace(&pool, query(), "team:default")
+            .await
+            .unwrap();
+        assert_eq!(personal.total_count, 4);
+        assert!(personal.items.iter().all(|item| !item.id.starts_with("team-")));
+        assert_eq!(team.total_count, 2);
+        assert_eq!(team.completed_count, 2);
+        assert_eq!(
+            team.items.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            ["team-chat", "team-standalone"]
+        );
+        assert_eq!(
+            super::list_timeline_for_workspace(&pool, query(), "personal")
+                .await
+                .unwrap()
+                .total_count,
+            4
+        );
     }
 
     #[tokio::test]

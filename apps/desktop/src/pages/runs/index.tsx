@@ -61,7 +61,7 @@ import {
   type RunStatus,
   type RunTargetType,
 } from '@/services/run-history';
-import { useRunWorkspaceStore } from '@/stores';
+import { useRunWorkspaceStore, useWorkrunStore } from '@/stores';
 
 const targetFilters: RunTargetType[] = ['workflow', 'app'];
 
@@ -102,6 +102,9 @@ function RunsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const workspaceMode = useWorkrunStore(
+    (state) => state.config?.workspace_mode ?? 'personal',
+  );
   const openWorkspaceRun = useRunWorkspaceStore((state) => state.openRun);
   const [runToReplay, setRunToReplay] = useState<RunRecordSummary>();
   const targetType = searchParams.get('targetType') as RunTargetType | null;
@@ -112,6 +115,7 @@ function RunsPage() {
   const runs = useInfiniteQuery({
     queryKey: [
       'run-history-timeline',
+      workspaceMode,
       targetType,
       targetId,
       status,

@@ -61,6 +61,12 @@ Cancellation messages and remote task records are stored locally. If Workrun exi
 
 Application exit alone does not trigger `CancelTask`. Interrupted runs retain their existing recovery path, separately from best-effort cancellation after failure or Stop. Current cancellation handling does not scan historical failed tasks on startup.
 
+## File attachments and outputs
+
+Select accessible State file fields, such as `document`, in the Remote Agent attachment-path configuration. Workrun resolves their artifact references and sends the contents as inline A2A file parts; local reference IDs are not sent as file-access credentials. A request accepts at most 10 files with a combined raw size of 20 MiB, and the encoded request must also fit the wire-size limit.
+
+Return file outputs as inline `raw` (base64) content with a filename and MIME type. Workrun saves them as local artifacts for downstream nodes to use by reference. URL file outputs are currently unsupported; Workrun does not automatically download remote file links. For references, node permissions, and local storage, see [File inputs and artifacts](/concepts/workflows-and-state/#file-inputs-and-artifacts).
+
 ## A2A protocol versus Workrun policy
 
 A2A defines task queries and cancellation. `GetTask` retrieves status and artifacts; `CancelTask` attempts cancellation and can return `TaskNotCancelableError` or `TaskNotFoundError`. See the official [Get Task](https://a2a-protocol.org/v1.0.1/specification/#313-get-task) and [Cancel Task](https://a2a-protocol.org/v1.0.1/specification/#315-cancel-task) definitions.

@@ -35,7 +35,7 @@ Within one workflow, run history shows both health over a time range and the sta
 
 ![Global run history: saved workflow and App runs can be filtered by target type, task or chat mode, and statuses such as queued, running, needs attention, and failed.](/media/runs/02-all-run-history.png)
 
-Global **Run history** combines local workflow and App executions. When a run’s source is unclear, or when you need to find interrupted and failed App runs, filter by name, target type, mode, and status before opening its output.
+Global **Run history** combines local workflow and App executions in the current workspace. When a run’s source is unclear, or when you need to find interrupted and failed App runs, filter by name, target type, mode, and status before opening its output.
 
 ## The run workspace: what each piece of evidence answers
 
@@ -120,3 +120,9 @@ The run workspace remains the first source of evidence for one execution. To inv
 Before configuring export, confirm that the collector and network policy allow only intended recipients, traces do not contain sensitive content or credentials that must not leave the device, and a non-sensitive run in an isolated environment verifies connection, fields, and retention first.
 
 OTLP is a diagnostic export. It does not replace local run records, state boundaries, or inspecting individual results.
+
+## File results and local storage
+
+History stores file outputs as artifact references; the actual files remain in the current workspace's local artifacts directory. Export files from the results, preview images and videos, or open PDFs. Access depends on the corresponding local snapshots: keeping run records without their artifact files cannot restore file contents.
+
+Personal and Team run history, chat sessions, and pending approvals are isolated by workspace. Switching modes shows only the current workspace; switching back restores access to its records. Team run history and artifacts also remain on the local device. Publishing a workflow does not upload them to the team server, and another device or team member does not automatically receive these results. Backups or device migrations need both the run database and the corresponding workspace artifact files.

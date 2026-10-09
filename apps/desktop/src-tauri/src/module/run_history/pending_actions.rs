@@ -29,8 +29,9 @@ impl RunHistoryStore {
     pub async fn list_pending_actions() -> Result<Vec<PendingAction>> {
         let pool = DBManager::global().pool()?;
         let rows = sqlx::query(
-            "SELECT id, run_id, kind, payload_json, status, created_at FROM run_pending_actions WHERE status = 'pending' ORDER BY created_at ASC, id ASC",
+            "SELECT id, run_id, kind, payload_json, status, created_at FROM run_pending_actions WHERE run_id IN (SELECT id FROM run_records WHERE workspace_id = ?) AND status = 'pending' ORDER BY created_at ASC, id ASC",
         )
+        .bind(crate::utils::dirs::active_workspace_id())
         .fetch_all(&pool)
         .await?;
         rows.into_iter()
@@ -57,6 +58,7 @@ impl RunHistoryStore {
 
     pub async fn release_pending_action(id: &str, claimant_id: &str) -> Result<()> {
         let pool = DBManager::global().pool()?;
+        ensure_pending_action_workspace(&pool, id).await?;
         let result = sqlx::query(
             "UPDATE run_pending_actions SET claimed_by = NULL, claimed_at = NULL WHERE id = ? AND status = 'pending' AND claimed_by = ?",
         )
@@ -72,6 +74,7 @@ impl RunHistoryStore {
 
     pub async fn inspect_pending_action(id: &str, claimant_id: &str) -> Result<PendingAction> {
         let pool = DBManager::global().pool()?;
+        ensure_pending_action_workspace(&pool, id).await?;
         let row = sqlx::query(
             "SELECT id, run_id, kind, payload_json, status, created_at FROM run_pending_actions WHERE id = ? AND status = 'pending' AND claimed_by = ?",
         )
@@ -89,6 +92,7 @@ impl RunHistoryStore {
         resolution: Value,
     ) -> Result<PendingAction> {
         let pool = DBManager::global().pool()?;
+        ensure_pending_action_workspace(&pool, id).await?;
         let mut transaction = pool.begin().await?;
         // A claimed action may only be resolved by its owner. The unclaimed
         // branch preserves the existing command's compatibility for callers
@@ -132,6 +136,7 @@ impl RunHistoryStore {
         runtime: Value,
     ) -> Result<PendingAction> {
         let pool = DBManager::global().pool()?;
+        ensure_pending_action_workspace(&pool, id).await?;
         let mut transaction = pool.begin().await?;
         let result = sqlx::query(
             "UPDATE run_pending_actions SET status = 'resolved', resolved_at = ?, resolution_json = ? WHERE id = ? AND status = 'pending' AND claimed_by = ?",
@@ -197,6 +202,14 @@ pub(super) async fn claim_next_pending_action_from_pool(
     pool: &sqlx::SqlitePool,
     claimant_id: &str,
 ) -> Result<Option<PendingAction>> {
+    claim_next_pending_action_for_workspace(pool, claimant_id, &crate::utils::dirs::active_workspace_id()).await
+}
+
+pub(super) async fn claim_next_pending_action_for_workspace(
+    pool: &sqlx::SqlitePool,
+    claimant_id: &str,
+    workspace_id: &str,
+) -> Result<Option<PendingAction>> {
     if claimant_id.trim().is_empty() {
         bail!("pending action claimant is required");
     }
@@ -208,9 +221,10 @@ pub(super) async fn claim_next_pending_action_from_pool(
     // reservation first, because the previous page may have been destroyed
     // before its asynchronous release command reached the native process.
     if let Some(row) = sqlx::query(
-        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.status = 'pending' AND a.claimed_by = ? AND r.status = 'waiting_for_input' ORDER BY a.created_at ASC, a.id ASC LIMIT 1",
+        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.status = 'pending' AND a.claimed_by = ? AND r.workspace_id = ? AND r.status = 'waiting_for_input' ORDER BY a.created_at ASC, a.id ASC LIMIT 1",
     )
     .bind(claimant_id)
+    .bind(workspace_id)
     .fetch_optional(&mut *transaction)
     .await?
     {
@@ -219,10 +233,11 @@ pub(super) async fn claim_next_pending_action_from_pool(
     }
     let claimed_at = chrono::Utc::now().to_rfc3339();
     let result = sqlx::query(
-        "UPDATE run_pending_actions SET claimed_by = ?, claimed_at = ? WHERE id = (SELECT a.id FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.status = 'pending' AND a.claimed_by IS NULL AND r.status = 'waiting_for_input' ORDER BY a.created_at ASC, a.id ASC LIMIT 1) AND status = 'pending' AND claimed_by IS NULL",
+        "UPDATE run_pending_actions SET claimed_by = ?, claimed_at = ? WHERE id = (SELECT a.id FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.status = 'pending' AND a.claimed_by IS NULL AND r.workspace_id = ? AND r.status = 'waiting_for_input' ORDER BY a.created_at ASC, a.id ASC LIMIT 1) AND status = 'pending' AND claimed_by IS NULL",
     )
     .bind(claimant_id)
     .bind(&claimed_at)
+    .bind(workspace_id)
     .execute(&mut *transaction)
     .await?;
     if result.rows_affected() == 0 {
@@ -230,10 +245,11 @@ pub(super) async fn claim_next_pending_action_from_pool(
         return Ok(None);
     }
     let row = sqlx::query(
-        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.claimed_by = ? AND a.claimed_at = ? AND r.status = 'waiting_for_input'",
+        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.claimed_by = ? AND a.claimed_at = ? AND r.workspace_id = ? AND r.status = 'waiting_for_input'",
     )
     .bind(claimant_id)
     .bind(&claimed_at)
+    .bind(workspace_id)
     .fetch_one(&mut *transaction)
     .await?;
     transaction.commit().await?;
@@ -242,4 +258,13 @@ pub(super) async fn claim_next_pending_action_from_pool(
 
 fn json_column(value: String) -> Result<Value> {
     serde_json::from_str(&value).context("stored run history contains invalid JSON")
+}
+
+async fn ensure_pending_action_workspace(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
+    let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.id = ? AND r.workspace_id = ?)")
+        .bind(id).bind(crate::utils::dirs::active_workspace_id()).fetch_one(pool).await?;
+    if !owned {
+        bail!("pending action was not found in the active workspace: {id}");
+    }
+    Ok(())
 }

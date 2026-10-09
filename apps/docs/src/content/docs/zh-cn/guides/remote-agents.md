@@ -61,6 +61,12 @@ Workrun 停止后续本地调度，根据保存的远程记录识别尚未结束
 
 仅退出应用不会触发 `CancelTask`。中断任务仍保留原有恢复路径，与失败或停止后的尽力取消分别处理。当前取消处理也不会在启动时扫描历史失败任务。
 
+## 文件附件与输出
+
+在 Remote Agent 的附件路径配置中选择可读取的 State 文件字段，例如 `document`。Workrun 解析这些 artifact 引用并把文件内容作为 A2A 内联文件 part 发送；本地引用 ID 不会作为文件访问凭据传给远端。当前一次请求最多附带 10 个文件，原始文件总大小不超过 20 MiB，编码后的请求仍须满足传输大小限制。
+
+远端文件输出应返回带文件名和 MIME 类型的内联 `raw`（base64）内容，Workrun 会将其保存为本地 artifacts 并让后续节点使用引用。当前不支持 URL 文件输出，也不会自动下载远端提供的文件链接。文件引用、节点权限和本地存储范围见 [文件输入与 artifacts](/zh-cn/concepts/workflows-and-state/#文件输入与-artifacts)。
+
 ## A2A 定义与 Workrun 策略的区别
 
 A2A 提供任务查询和取消：`GetTask` 获取状态与输出 artifacts；`CancelTask` 尝试取消，可能返回 `TaskNotCancelableError` 或 `TaskNotFoundError`。参见官方 [Get Task](https://a2a-protocol.org/v1.0.1/specification/#313-get-task) 与 [Cancel Task](https://a2a-protocol.org/v1.0.1/specification/#315-cancel-task) 定义。

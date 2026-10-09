@@ -1,3 +1,9 @@
+DROP INDEX idx_chat_sessions_workspace;
+DROP INDEX idx_run_records_workspace_queue;
+DROP INDEX idx_run_records_workspace_time;
+ALTER TABLE chat_sessions DROP COLUMN workspace_id;
+ALTER TABLE run_records DROP COLUMN workspace_id;
+
 DROP TABLE remote_task_lifecycle;
 DROP TABLE workflow_compensation_approvals;
 DROP TABLE workflow_operation_reviews;

@@ -10,6 +10,27 @@ mod types;
 pub use types::*;
 
 pub struct RunHistoryStore;
+
+impl RunHistoryStore {
+    /// UI commands must not address runs from another workspace by ID.
+    pub async fn ensure_active_workspace(id: &str) -> Result<()> {
+        let pool = DBManager::global().pool()?;
+        ensure_workspace_in_pool(&pool, id, &crate::utils::dirs::active_workspace_id()).await
+    }
+}
+
+async fn ensure_workspace_in_pool(pool: &sqlx::SqlitePool, id: &str, workspace_id: &str) -> Result<()> {
+    let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_records WHERE id = ? AND workspace_id = ?)")
+        .bind(id)
+        .bind(workspace_id)
+        .fetch_one(pool)
+        .await?;
+    if !owned {
+        bail!("run record was not found in the active workspace: {id}");
+    }
+    Ok(())
+}
+
 pub(crate) use records::create_in_transaction;
 
 mod pending_actions;
@@ -45,7 +66,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE run_records (id TEXT PRIMARY KEY, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, updated_at TEXT)",
+            "CREATE TABLE run_records (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, updated_at TEXT)",
         )
         .execute(&pool)
         .await
@@ -91,7 +112,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, ended_at TEXT, error TEXT, updated_at TEXT)",
+            "CREATE TABLE run_records (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, target_type TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, ended_at TEXT, error TEXT, updated_at TEXT)",
         )
         .execute(&pool)
         .await
@@ -115,6 +136,77 @@ mod tests {
                 .unwrap();
         }
         pool
+    }
+
+    #[tokio::test]
+    async fn queues_and_approvals_only_claim_the_requested_workspace() {
+        let queue = queued_run_pool().await;
+        sqlx::query("UPDATE run_records SET workspace_id = 'team:default' WHERE id = 'run-1'")
+            .execute(&queue)
+            .await
+            .unwrap();
+        assert!(
+            super::ensure_workspace_in_pool(&queue, "run-1", "personal")
+                .await
+                .is_err()
+        );
+        assert!(
+            super::ensure_workspace_in_pool(&queue, "run-1", "team:default")
+                .await
+                .is_ok()
+        );
+        assert!(
+            super::ensure_workspace_in_pool(&queue, "missing", "personal")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            super::queue::claim_next_queued_run_for_workspace(&queue, true, "personal")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("run-2")
+        );
+        assert!(
+            super::queue::claim_next_queued_run_for_workspace(&queue, true, "personal")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            super::queue::claim_next_queued_run_for_workspace(&queue, true, "team:default")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("run-1")
+        );
+
+        let actions = pending_action_pool().await;
+        sqlx::query("UPDATE run_records SET workspace_id = 'team:default'")
+            .execute(&actions)
+            .await
+            .unwrap();
+        assert!(
+            super::pending_actions::claim_next_pending_action_for_workspace(&actions, "drawer", "personal")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            super::pending_actions::claim_next_pending_action_for_workspace(&actions, "drawer", "team:default")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "action-1"
+        );
+        // A previous reservation must also remain hidden after switching away.
+        assert!(
+            super::pending_actions::claim_next_pending_action_for_workspace(&actions, "drawer", "personal")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -266,7 +358,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE run_records (id TEXT PRIMARY KEY, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, updated_at TEXT)",
+            "CREATE TABLE run_records (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, error TEXT, updated_at TEXT)",
         )
         .execute(&pool)
         .await

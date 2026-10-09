@@ -184,6 +184,37 @@ A Process App can also read workflow state. For example, to prefill or display a
 
 Workflow inputs are global state. Ordinary Process output is private until added to **Published output keys**. For a full Process, Agent, and branch example, see [Build your first workflow](/guides/build-a-workflow/).
 
+## File inputs and outputs
+
+State received by a Process node on stdin can contain file references. With a workflow file input named `document`, this App reads a UTF-8 text file and generates a report:
+
+```python
+import json
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from workrun_sdk import artifacts, process
+
+state = json.load(sys.stdin)
+source = artifacts.path(state["document"])
+text = source.read_text(encoding="utf-8")
+
+with TemporaryDirectory() as directory:
+    output = Path(directory) / "report.txt"
+    output.write_text(text.upper(), encoding="utf-8")
+    report = artifacts.save(output)
+
+process.result({"report": report})
+```
+
+- `artifacts.path(reference)` returns a `Path` to a private local copy for this process. Only files authorized through the process input can be read.
+- `artifacts.read(reference)` returns the file bytes directly.
+- `artifacts.save(path)` snapshots a generated file and returns its reference. Call it before deleting temporary files or leaving their temporary directory.
+- `process.result({"report": reference})` places the reference in node output; later nodes still follow workflow State permissions.
+
+Do not invent references or return a temporary path or base64 string as an artifact. An existing reference identifies the original snapshot; after editing a read copy, call `artifacts.save()` to create a new output reference. SDK file operations require a process launched by Workrun with its local IPC connection.
+
 ## 3. Tool App: let an Agent call a capability when needed
 
 Use a **Tool App** when the Agent should decide whether a lookup or action is needed. For example, create a Tool App named `lookup_order`. Start tool names with verbs; the description should say both when it may be used and its boundary: “Look up an order’s status and refund eligibility; use only when that information must be confirmed.”

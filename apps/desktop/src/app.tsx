@@ -33,8 +33,10 @@ function App() {
         <TeamAuthTauriHandler />
       ) : null}
       <PythonUiRequestDialog />
-      <ApprovalCoordinator />
-      <RunWorkspace />
+      <ApprovalCoordinator
+        key={`approval:${config.workspace_mode ?? 'personal'}`}
+      />
+      <RunWorkspace key={`runs:${config.workspace_mode ?? 'personal'}`} />
     </>
   );
 }

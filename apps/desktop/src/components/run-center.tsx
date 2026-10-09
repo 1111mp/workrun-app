@@ -32,7 +32,7 @@ import {
   type RunRecordSummary,
 } from '@/services/run-history';
 import { cancelBackgroundWorkflowRun } from '@/services/workflow';
-import { useRunWorkspaceStore } from '@/stores';
+import { useRunWorkspaceStore, useWorkrunStore } from '@/stores';
 
 function elapsed(startedAt: string, t: ReturnType<typeof useTranslation>['t']) {
   const seconds = Math.max(
@@ -117,15 +117,18 @@ function RunCenter() {
 
   const isRunSurface = pathname === '/workflows' || pathname === '/apps';
 
+  const workspaceMode = useWorkrunStore(
+    (state) => state.config?.workspace_mode ?? 'personal',
+  );
   const openWorkspaceRun = useRunWorkspaceStore((state) => state.openRun);
 
   const activeRuns = useQuery({
-    queryKey: ['run-history', 'active'],
+    queryKey: ['run-history', 'active', workspaceMode],
     queryFn: listActiveRuns,
     enabled: isRunSurface,
   });
   const pendingActions = useQuery({
-    queryKey: ['run-history', 'pending-actions'],
+    queryKey: ['run-history', 'pending-actions', workspaceMode],
     queryFn: listPendingActions,
     enabled: isRunSurface,
   });

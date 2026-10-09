@@ -7,13 +7,13 @@ Workrun has two separate workspace modes. **Personal mode** is for building and 
 
 ## Choose a workspace mode
 
-| | Personal mode | Team mode |
-| --- | --- | --- |
-| Best for | Exploration, local development, and independent runs | Collaborative workflows that need sharing, review, and reproducibility |
-| Data and assets | Stored in the current device's personal workspace | Workflow and App drafts, releases, and metadata are stored in the team service |
-| Sign-in and server | No sign-in or team service required | Requires a team-service connection and sign-in |
-| Execution | The desktop app runs local Workflows and Apps | The desktop app runs selected releases and prepares their pinned Team Apps |
-| Publishing | Save a draft and continue editing | Publish semantic versions for members to browse, run, and schedule |
+|                    | Personal mode                                        | Team mode                                                                      |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Best for           | Exploration, local development, and independent runs | Collaborative workflows that need sharing, review, and reproducibility         |
+| Data and assets    | Stored in the current device's personal workspace    | Workflow and App drafts, releases, and metadata are stored in the team service |
+| Sign-in and server | No sign-in or team service required                  | Requires a team-service connection and sign-in                                 |
+| Execution          | The desktop app runs local Workflows and Apps        | The desktop app runs selected releases and prepares their pinned Team Apps     |
+| Publishing         | Save a draft and continue editing                    | Publish semantic versions for members to browse, run, and schedule             |
 
 ![Choose Personal mode or Team mode when you first launch Workrun.](/media/workspace/01-select-workspace-mode.png)
 
@@ -36,6 +36,8 @@ The modes are not two views of the same assets. A local Workflow or App in perso
 ![Settings → Workspace: switch between Personal mode and Team mode.](/media/workspace/04-switch-workspace-mode.png)
 
 > Team mode requires an accessible Workrun Server. It is the collaboration control plane, not a remote executor that replaces a member's computer for Python Apps, model calls, or workflow runs.
+
+Run history, chat sessions, and generated artifacts remain on the device that executes the run, isolated by Personal/Team workspace. Team publishing shares Workflow and App versions without synchronizing these run records or files. Switching devices does not automatically restore earlier local results; see [File results and local storage](/quality/runs-and-traces/#file-results-and-local-storage).
 
 ## How team publishing works
 

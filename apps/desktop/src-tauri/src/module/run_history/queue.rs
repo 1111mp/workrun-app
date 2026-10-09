@@ -44,10 +44,19 @@ pub(super) async fn claim_next_queued_run_from_pool(
     pool: &sqlx::SqlitePool,
     include_apps: bool,
 ) -> Result<Option<String>> {
+    claim_next_queued_run_for_workspace(pool, include_apps, &crate::utils::dirs::active_workspace_id()).await
+}
+
+pub(super) async fn claim_next_queued_run_for_workspace(
+    pool: &sqlx::SqlitePool,
+    include_apps: bool,
+    workspace_id: &str,
+) -> Result<Option<String>> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
     let id = sqlx::query_scalar::<_, String>(
-        "SELECT id FROM run_records WHERE status = 'queued' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=run_records.id) AND (target_type = 'workflow' OR ?) ORDER BY created_at ASC, id ASC LIMIT 1",
+        "SELECT id FROM run_records WHERE workspace_id = ? AND status = 'queued' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=run_records.id) AND (target_type = 'workflow' OR ?) ORDER BY created_at ASC, id ASC LIMIT 1",
     )
+    .bind(workspace_id)
     .bind(include_apps)
     .fetch_optional(&mut *transaction)
     .await?;

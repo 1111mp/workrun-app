@@ -184,6 +184,37 @@ Process App 也可读取工作流状态。例如要在用户填写前显示已�
 
 工作流输入本身是全局状态。Process 的普通输出默认留在私有命名空间，只有列入“已发布的输出键”才会成为共享状态。有关将 Process、Agent 和分支组合为流程的完整示例，见[构建第一个工作流](/zh-cn/guides/build-a-workflow/)。
 
+## 文件输入与输出
+
+Process 节点从 stdin 接收的 State 可以包含文件引用。假设工作流有一个名为 `document` 的单文件输入，下面的 App 读取 UTF-8 文本文件并生成一个报告：
+
+```python
+import json
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from workrun_sdk import artifacts, process
+
+state = json.load(sys.stdin)
+source = artifacts.path(state["document"])
+text = source.read_text(encoding="utf-8")
+
+with TemporaryDirectory() as directory:
+    output = Path(directory) / "report.txt"
+    output.write_text(text.upper(), encoding="utf-8")
+    report = artifacts.save(output)
+
+process.result({"report": report})
+```
+
+- `artifacts.path(reference)` 为当前进程准备一份私有本地副本并返回 `Path`；仅能读取通过该进程输入获得授权的文件。
+- `artifacts.read(reference)` 直接返回该文件的字节。
+- `artifacts.save(path)` 保存生成文件的不可变快照并返回引用。应在删除临时文件或退出临时目录前调用。
+- `process.result({"report": reference})` 将文件引用写入节点输出；后续节点仍按工作流的 State 权限读取。
+
+不要手工构造引用，也不要把临时路径或 base64 字符串当作 artifact 返回。已有引用标识的是原快照，修改读取副本后应再次调用 `artifacts.save()`，得到新的输出引用。SDK 文件操作需要由 Workrun 启动的进程及本地 IPC 连接。
+
 ## 3. Tool App：让 Agent 按需调用能力
 
 当是否查询或行动取决于 Agent 对任务的判断时，使用 **Tool App**。例如新建 Tool App，命名为 `lookup_order`；工具名用动词开头，描述必须写清何时可以使用以及不能做什么，例如：“按订单号查询订单状态和退款资格；仅在需要确认订单状态或退款资格时调用。”

@@ -62,8 +62,8 @@ pub(crate) async fn complete_attempt(pool: &sqlx::SqlitePool, id: &str) -> Resul
 pub(crate) async fn claim_recovery(pool: &sqlx::SqlitePool) -> Result<Option<String>> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let now = chrono::Utc::now().to_rfc3339();
-    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status = 'interrupted' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) ORDER BY j.next_check_at LIMIT 1")
-        .bind(&now).fetch_optional(&mut *tx).await?;
+    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE r.workspace_id = ? AND j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status = 'interrupted' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) ORDER BY j.next_check_at LIMIT 1")
+        .bind(crate::utils::dirs::active_workspace_id()).bind(&now).fetch_optional(&mut *tx).await?;
     if let Some(id) = &id {
         sqlx::query(
             "UPDATE run_recovery_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE run_id = ?",
@@ -219,7 +219,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::raw_sql("CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT DEFAULT 'workflow', status TEXT, started_at TEXT DEFAULT '2026-10-07T00:00:00Z', created_at TEXT DEFAULT '2026-10-07T00:00:00Z', ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT DEFAULT '{}', output_view_json TEXT DEFAULT '{}', updated_at TEXT, last_sequence INTEGER DEFAULT 7); INSERT INTO run_records (id, status, error) VALUES ('task-1', 'failed', 'original failure');").execute(&pool).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE run_records (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, target_type TEXT DEFAULT 'workflow', status TEXT, started_at TEXT DEFAULT '2026-10-07T00:00:00Z', created_at TEXT DEFAULT '2026-10-07T00:00:00Z', ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT DEFAULT '{}', output_view_json TEXT DEFAULT '{}', updated_at TEXT, last_sequence INTEGER DEFAULT 7); INSERT INTO run_records (id, status, error) VALUES ('task-1', 'failed', 'original failure');").execute(&pool).await.unwrap();
         sqlx::raw_sql(include_str!(
             "../../../resources/migrations/20261005100000_remote_tasks.up.sql"
         ))
