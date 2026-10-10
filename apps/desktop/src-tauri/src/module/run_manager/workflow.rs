@@ -107,11 +107,11 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
         "releaseId": request.release_id,
         "releaseVersion": request.release_version,
         "dependencies": dependencies,
-        "trigger": request.schedule_trigger.map(|trigger| json!({
+        "trigger": request.deeplink_trigger.or_else(|| request.schedule_trigger.map(|trigger| json!({
             "type": "schedule",
             "scheduleId": trigger.schedule_id,
             "scheduledFor": trigger.scheduled_for,
-        })),
+        }))),
     });
     let record = CreateRunRecord {
         id: request.run_id.clone(),

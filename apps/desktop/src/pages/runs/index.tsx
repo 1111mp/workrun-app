@@ -414,7 +414,12 @@ function RunsPage() {
                   <Icon />
                 </ItemMedia>
                 <ItemContent>
-                  <ItemTitle>{run.targetName}</ItemTitle>
+                  <ItemTitle>
+                    {run.targetName}
+                    {run.triggerType === 'deeplink' ? (
+                      <Badge variant='outline'>{t('deeplink.source')}</Badge>
+                    ) : null}
+                  </ItemTitle>
                   <ItemDescription>
                     {isWorkflow ? t('runs.workflow') : t('apps.app')} ·{' '}
                     {new Date(run.startedAt).toLocaleString(i18n.language)}
@@ -552,6 +557,7 @@ function timelineItemAsRun(item: RunHistoryTimelineItem): RunRecordSummary {
     endedAt: item.endedAt,
     durationMs: item.durationMs,
     error: item.error,
+    triggerType: item.triggerType,
     releaseVersion: item.releaseVersion,
   };
 }

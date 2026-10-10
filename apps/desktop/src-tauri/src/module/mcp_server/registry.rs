@@ -1,7 +1,7 @@
 use super::{
     McpRuntime, McpServer, McpServerAuth, McpServerConnectionTest, McpServerHealth, McpServerRuntimeStore,
-    McpServerTransport, McpServerWorkflowReference, OAuthCredentialStore, stdio_restart_policy, tool_definition,
-    validate_definition, validate_id, workflow_uses_mcp_server,
+    McpServerTransport, McpServerWorkflowReference, OAuthCredentialStore, tool_definition, validate_definition,
+    validate_id, workflow_uses_mcp_server,
 };
 use crate::{
     config::IMcpServer,
@@ -11,9 +11,9 @@ use crate::{
 use adk_rust::{
     ReadonlyContext,
     tool::{
-        McpAuth, McpHttpClientBuilder, SimpleToolContext, Tool, Toolset,
+        McpAuth, McpHttpClientBuilder, SimpleToolContext, Tool,
         mcp::{
-            McpServerConfig, McpServerManager, ServerStatus,
+            ServerStatus,
             rmcp::{
                 self,
                 transport::auth::{AuthorizationManager, AuthorizationRequest, CredentialStore},
@@ -22,7 +22,7 @@ use adk_rust::{
     },
 };
 use anyhow::{Context, Result, bail};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use url::Url;
 use uuid::Uuid;
@@ -300,22 +300,7 @@ impl McpServerRegistry {
         }
         let runtime = match definition.transport {
             McpServerTransport::Stdio => {
-                let config = McpServerConfig {
-                    command: definition.command.clone(),
-                    args: definition.args.clone(),
-                    env: definition.env.clone(),
-                    disabled: !definition.enabled,
-                    auto_approve: Vec::new(),
-                    restart_policy: Some(stdio_restart_policy()),
-                    lifecycle: Default::default(),
-                    task_config: Default::default(),
-                };
-                let manager = Arc::new(
-                    McpServerManager::new(HashMap::from([(definition.id.clone(), config)]))
-                        .with_health_check_interval(Duration::from_secs(10)),
-                );
-                manager.start_monitoring();
-                Arc::new(McpRuntime::Stdio(manager))
+                Arc::new(McpRuntime::Stdio(super::stdio::StdioRuntime::new(definition.clone())))
             },
             McpServerTransport::StreamableHttp => {
                 let builder = McpHttpClientBuilder::new(&definition.url);
@@ -355,6 +340,7 @@ impl McpServerRegistry {
         if let Some(runtime) = manager {
             Self::shutdown_runtime(runtime).await?;
         }
+        super::notify_changed();
         Ok(())
     }
 
@@ -402,16 +388,16 @@ impl McpServerRegistry {
         }
     }
 
-    async fn start_runtime(runtime: &McpRuntime, id: &str) -> Result<()> {
+    async fn start_runtime(runtime: &McpRuntime, _id: &str) -> Result<()> {
         if let McpRuntime::Stdio(manager) = runtime {
-            manager.start_server(id).await?;
+            manager.start().await?;
         }
         Ok(())
     }
 
-    async fn runtime_status(runtime: &McpRuntime, id: &str) -> Result<ServerStatus> {
+    async fn runtime_status(runtime: &McpRuntime, _id: &str) -> Result<ServerStatus> {
         match runtime {
-            McpRuntime::Stdio(manager) => Ok(manager.server_status(id).await?),
+            McpRuntime::Stdio(manager) => Ok(manager.status().await),
             McpRuntime::Http(_) => Ok(ServerStatus::Running),
         }
     }
@@ -425,7 +411,7 @@ impl McpServerRegistry {
 
     async fn shutdown_runtime(runtime: Arc<McpRuntime>) -> Result<()> {
         if let McpRuntime::Stdio(manager) = runtime.as_ref() {
-            manager.shutdown().await?;
+            manager.shutdown().await;
         }
         Ok(())
     }

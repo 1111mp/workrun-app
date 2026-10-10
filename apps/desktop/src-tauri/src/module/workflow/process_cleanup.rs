@@ -77,8 +77,14 @@ pub(crate) async fn recover_failed(pool: &sqlx::SqlitePool, key: &[u8]) -> Resul
     Ok(())
 }
 
-pub(super) async fn tick(pool: &sqlx::SqlitePool, key: &[u8], run_id: &str) -> Result<()> {
+pub(super) async fn tick(
+    pool: &sqlx::SqlitePool,
+    key: &[u8],
+    run_id: &str,
+    permits: std::sync::Arc<tokio::sync::Semaphore>,
+) -> Result<()> {
     process_plan(pool, key, run_id, |intent, operation| async move {
+        let _permit = permits.acquire_owned().await?;
         saga::execute_compensation(pool, key, run_id, &intent, &operation).await
     })
     .await

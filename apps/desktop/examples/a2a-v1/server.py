@@ -7,9 +7,8 @@ import argparse
 import base64
 import json
 import os
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Lock
+from threading import Event, Lock, Timer
 from typing import cast
 
 MAX_BYTES = 20 * 1024 * 1024
@@ -117,6 +116,39 @@ class Handler(BaseHTTPRequestHandler):
 
         method = request.get("method")
         server = cast(FixtureHTTPServer, self.server)
+        if method == "SubscribeToTask":
+            task_id = request.get("params", {}).get("id")
+            with server.tasks_lock:
+                entry = server.tasks.get(task_id)
+                snapshot = json.loads(json.dumps(entry["task"])) if entry else None
+            if entry is None:
+                self.reply(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32001, "message": "Task not found"},
+                    }
+                )
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+
+            def push(task):
+                self.wfile.write(
+                    ("data: " + json.dumps(envelope({"task": task})) + "\n\n").encode()
+                )
+                self.wfile.flush()
+
+            push(snapshot)
+            if snapshot["status"]["state"] == "TASK_STATE_WORKING":
+                # Completion/cancellation signals subscribers even if the
+                # original submission connection has already disappeared.
+                entry["done"].wait()
+                with server.tasks_lock:
+                    snapshot = json.loads(json.dumps(entry["task"]))
+                push(snapshot)
+            return
         if method in ("GetTask", "CancelTask"):
             task_id = request.get("params", {}).get("id")
             with server.tasks_lock:
@@ -125,13 +157,6 @@ class Handler(BaseHTTPRequestHandler):
                     error = {"code": -32001, "message": "Task not found"}
                     result = None
                 else:
-                    # Completion is independent of the HTTP connection. A cancelled
-                    # task stays cancelled even after its original deadline passes.
-                    if (
-                        entry["task"]["status"]["state"] == "TASK_STATE_WORKING"
-                        and time.monotonic() >= entry["readyAt"]
-                    ):
-                        entry["task"] = entry["result"]
                     if method == "CancelTask":
                         if entry["task"]["status"]["state"] != "TASK_STATE_WORKING":
                             error = {
@@ -142,6 +167,7 @@ class Handler(BaseHTTPRequestHandler):
                         else:
                             entry["task"]["status"] = {"state": "TASK_STATE_CANCELED"}
                             result = entry["task"]
+                            entry["done"].set()
                             error = None
                     else:
                         result = entry["task"]
@@ -235,8 +261,22 @@ class Handler(BaseHTTPRequestHandler):
             server.tasks[task["id"]] = {
                 "task": working if server.delay_seconds else task,
                 "result": task,
-                "readyAt": time.monotonic() + server.delay_seconds,
+                "done": Event(),
             }
+            entry = server.tasks[task["id"]]
+
+        def finish():
+            with server.tasks_lock:
+                if entry["task"]["status"]["state"] == "TASK_STATE_WORKING":
+                    entry["task"] = entry["result"]
+                entry["done"].set()
+
+        if server.delay_seconds:
+            timer = Timer(server.delay_seconds, finish)
+            timer.daemon = True
+            timer.start()
+        else:
+            finish()
         if method == "SendMessage":
             self.reply(envelope({"task": working if server.delay_seconds else task}))
             return
@@ -278,7 +318,7 @@ class Handler(BaseHTTPRequestHandler):
                 if server.disconnect_stream:
                     self.close_connection = True
                     return
-                time.sleep(server.delay_seconds)
+                entry["done"].wait()
                 with server.tasks_lock:
                     cancelled = (
                         server.tasks[task["id"]]["task"]["status"]["state"]

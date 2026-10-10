@@ -5,6 +5,13 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
+use tauri::Emitter;
+
+pub(super) fn notify_changed() {
+    if let Some(app_handle) = crate::APP_HANDLE.get() {
+        let _ = app_handle.emit("remote-tasks-changed", ());
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +85,7 @@ impl RemoteTaskTracker {
             .bind(&tracker.id).bind(run_id).bind(node_id).bind(message_id)
             .bind(tauri_plugin_http::reqwest::Url::parse(&tracker.connection.service_url)?.origin().ascii_serialization())
             .bind(tracker.encrypt()?).bind(&now).bind(&now).execute(&tracker.pool).await?;
+        notify_changed();
         Ok(tracker)
     }
 
@@ -87,6 +95,7 @@ impl RemoteTaskTracker {
             .bind(operation_id)
             .execute(&self.pool)
             .await?;
+        notify_changed();
         Ok(())
     }
 
@@ -128,6 +137,7 @@ impl RemoteTaskTracker {
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query("UPDATE remote_tasks SET connection_ciphertext = ?, task_id = COALESCE(?, task_id), status = COALESCE(?, status), last_known_state = COALESCE(?, last_known_state), updated_at = ?, last_checked_at = ? WHERE id = ?")
             .bind(self.encrypt()?).bind(display_id).bind(status).bind(state).bind(&now).bind(&now).bind(&self.id).execute(&self.pool).await?;
+        notify_changed();
         Ok(())
     }
 
@@ -138,6 +148,7 @@ impl RemoteTaskTracker {
             .bind(&self.id)
             .execute(&self.pool)
             .await?;
+        notify_changed();
         Ok(())
     }
 }
@@ -155,6 +166,7 @@ pub(super) async fn complete_operation(
         .bind(chrono::Utc::now().to_rfc3339()).bind(&operation.id).execute(&mut *tx).await?;
     tx.commit().await?;
     operation.committed();
+    notify_changed();
     Ok(())
 }
 
@@ -171,6 +183,7 @@ impl Drop for RemoteTaskTracker {
             runtime.spawn(async move {
                 let _ = sqlx::query("UPDATE remote_tasks SET status = 'unknown', updated_at = ? WHERE id = ? AND status IN ('unknown', 'submitted', 'working')")
                     .bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await;
+                notify_changed();
             });
         }
     }
@@ -231,6 +244,11 @@ pub(super) async fn test_pool() -> SqlitePool {
         .await
         .unwrap();
     sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-1', 'running')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // The adapter migration also adds workspace ownership to conversations.
+    sqlx::query("CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, workflow_id TEXT, updated_at TEXT)")
         .execute(&pool)
         .await
         .unwrap();

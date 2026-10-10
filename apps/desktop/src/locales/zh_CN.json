@@ -1908,5 +1908,21 @@
     "title": "确定吗？",
     "cancel": "取消",
     "confirm": "确定"
+  },
+  "deeplink": {
+    "errorTitle": "无法打开 Workrun 链接",
+    "source": "外部链接",
+    "title": "外部调用",
+    "description": "通过浏览器、快捷指令或其他应用打开或运行已保存的目标。链接指向当前工作区，运行前需要确认。请勿在链接中包含密钥。",
+    "input": "Workflow 输入（JSON 对象）",
+    "invalidInput": "请输入有效的 JSON 对象。",
+    "openLink": "打开链接",
+    "runLink": "运行链接",
+    "copyOpen": "复制打开链接",
+    "copyRun": "复制运行链接",
+    "copied": "链接已复制",
+    "confirmTitle": "运行 {{name}}？",
+    "confirmDescription": "外部链接请求访问此目标。请检查已保存的目标与输入后再运行。",
+    "notInstalled": "请先在 Workrun 中安装此 App，再通过链接运行。"
   }
 }

@@ -437,6 +437,7 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
 }
 
 pub(super) fn publish_run_status(run_id: &str, status: RunStatus) -> Result<()> {
+    RunManager::global().supervisor.notify();
     emit_on_main_thread(
         "run-status-changed",
         RunStatusChange {
@@ -533,7 +534,10 @@ fn emit_on_main_thread<S>(event_name: &'static str, payload: S) -> Result<()>
 where
     S: Serialize + Clone + Send + 'static,
 {
-    let app = handle::Handle::app_handle();
+    let Some(app) = crate::APP_HANDLE.get() else {
+        // Persistence also runs before the renderer exists and in native tests.
+        return Ok(());
+    };
     let emit_app = app.clone();
     // Wry synchronously evaluates listeners for an emit from a background
     // worker. Queue it on the main loop so a concurrent WebView IPC request
@@ -562,9 +566,6 @@ fn pending_action(event: &Value) -> Option<(crate::module::run_history::PendingA
 
 /// Cleanup messages are already committed with their intent status.
 pub(crate) fn emit_cleanup_event(run_id: &str, sequence: i64, event: Value) {
-    if crate::APP_HANDLE.get().is_none() {
-        return;
-    }
     let _ = emit_on_main_thread(
         "run-event",
         RunEventEnvelope {

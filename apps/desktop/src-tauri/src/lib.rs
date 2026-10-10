@@ -79,6 +79,10 @@ pub fn run() {
                 logging!(error, Type::Setup, "Failed to setup window state: {}", e);
             }
 
+            if let Err(e) = module::deeplink::DeeplinkManager::global().setup(app) {
+                logging!(error, Type::Setup, "Failed to setup deeplink: {}", e);
+            }
+
             resolve::resolve_setup_async();
             resolve::resolve_server_setup_async();
 
@@ -87,6 +91,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // deeplink
+            cmd::deeplink::deeplink_snapshot,
+            cmd::deeplink::deeplink_dismiss,
+            cmd::deeplink::deeplink_submit,
             // app
             cmd::app::restart_app,
             cmd::artifact::artifact_pick,

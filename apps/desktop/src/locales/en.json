@@ -1934,5 +1934,21 @@
     "title": "Are you sure?",
     "cancel": "Cancel",
     "confirm": "Confirm"
+  },
+  "deeplink": {
+    "errorTitle": "Unable to open Workrun link",
+    "source": "Deeplink",
+    "title": "External invocation",
+    "description": "Open or run this saved target from a browser, shortcut, or another application. Links refer to the current workspace. Runs require confirmation. Do not include secrets in links.",
+    "input": "Workflow input (JSON object)",
+    "invalidInput": "Enter a valid JSON object.",
+    "openLink": "Open link",
+    "runLink": "Run link",
+    "copyOpen": "Copy open link",
+    "copyRun": "Copy run link",
+    "copied": "Link copied",
+    "confirmTitle": "Run {{name}}?",
+    "confirmDescription": "An external link requested access to this target. Review the saved target and input before running.",
+    "notInstalled": "Install this App in Workrun before running it from a link."
   }
 }

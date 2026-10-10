@@ -374,6 +374,7 @@ export async function prepareWorkflowProcessApps<T>(
   dsl: T,
   installationScope: string,
   onProgress?: (progress: WorkflowProcessNodePreparationProgress) => void,
+  options?: { allowInstall?: boolean },
 ): Promise<T> {
   if (!isTeamMode() || !dsl || typeof dsl !== 'object') return dsl;
   const cloned = structuredClone(dsl) as {
@@ -396,18 +397,21 @@ export async function prepareWorkflowProcessApps<T>(
         installationScope,
       },
     );
-    const local =
+    const ready =
       installed?.installStatus === 'installed' &&
-      installed.definition.remoteArchiveSha256 === ref.archiveSha256
-        ? installed
-        : await ensurePublishedProcessNode(
-            await getPublishedProcessNodeRelease(
-              ref.remoteAppId,
-              ref.releaseId,
-            ),
-            report,
-            installationScope,
-          );
+      installed.definition.remoteArchiveSha256 === ref.archiveSha256;
+    if (!ready && options?.allowInstall === false) {
+      throw new Error(
+        `Prepare ${appName} v${ref.version} in Workrun before running this workflow from a link.`,
+      );
+    }
+    const local = ready
+      ? installed
+      : await ensurePublishedProcessNode(
+          await getPublishedProcessNodeRelease(ref.remoteAppId, ref.releaseId),
+          report,
+          installationScope,
+        );
     if (!node.data) node.data = {};
     // Rust executes local IDs only; retain appRef in the snapshot for audit.
     node.data.processNodeId = local.definition.id;

@@ -57,7 +57,6 @@ export function RemoteTasksPanel({
     queryKey: ['remoteTasks', runId, isActive],
     queryFn: () => listRemoteTasks(runId!),
     enabled: Boolean(runId),
-    refetchInterval: isActive ? 2000 : false,
   });
   async function copyMessageId(messageId: string) {
     try {

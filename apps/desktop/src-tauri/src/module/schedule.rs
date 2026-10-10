@@ -436,6 +436,7 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                 output_view: json!({"isRunning": true, "node": due.target_snapshot}),
                 target_snapshot: due.target_snapshot,
                 schedule_trigger: Some(trigger),
+                deeplink_trigger: None,
             })
             .await?
         },
@@ -488,6 +489,7 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                 evaluation_profile: None,
                 evaluation_result_id: None,
                 schedule_trigger: Some(trigger),
+                deeplink_trigger: None,
             })
             .await?;
         },
