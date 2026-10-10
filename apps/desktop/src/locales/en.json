@@ -1929,6 +1929,7 @@
     "title": "External invocation",
     "description": "Open or run this saved target from a browser, shortcut, or another application. Links refer to the current workspace. Runs require confirmation. Do not include secrets in links.",
     "input": "Workflow input (JSON object)",
+    "inputDescription": "Input is used only to generate the current run link and is not saved to the Workflow. Reopening this dialog resets the input. Copy the run link to reuse these parameters without entering them again.",
     "invalidInput": "Enter a valid JSON object.",
     "openLink": "Open link",
     "runLink": "Run link",

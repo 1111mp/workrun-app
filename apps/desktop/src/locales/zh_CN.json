@@ -1903,6 +1903,7 @@
     "title": "外部调用",
     "description": "通过浏览器、快捷指令或其他应用打开或运行已保存的目标。链接指向当前工作区，运行前需要确认。请勿在链接中包含密钥。",
     "input": "Workflow 输入（JSON 对象）",
+    "inputDescription": "输入仅用于生成当前运行链接，不会保存到 Workflow。重新打开弹窗需重新填写；复制运行链接后可重复使用，无需再次配置。",
     "invalidInput": "请输入有效的 JSON 对象。",
     "openLink": "打开链接",
     "runLink": "运行链接",

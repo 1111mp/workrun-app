@@ -7,6 +7,7 @@ import {
   DialogFooter,
   DialogTitle,
   Field,
+  FieldDescription,
   FieldGroup,
   FieldLabel,
   InputGroup,
@@ -105,6 +106,9 @@ export function DeeplinkDialog({
               {targetType === 'workflows' ? (
                 <Field data-invalid={invalid || undefined}>
                   <FieldLabel>{t('deeplink.input')}</FieldLabel>
+                  <FieldDescription>
+                    {t('deeplink.inputDescription')}
+                  </FieldDescription>
                   <JsonEditorField
                     value={inputText}
                     onChange={setInputText}
