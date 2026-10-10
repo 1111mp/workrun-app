@@ -21,6 +21,7 @@ pub mod system;
 pub mod tool_registry;
 pub mod workflow;
 pub mod workflow_catalog;
+pub mod workflow_share;
 pub mod workrun;
 
 #[allow(unused)]

@@ -28,6 +28,7 @@ toml = "0.9.12"
 toml_edit = "0.25.13"
 uuid = { version = "1.26.0" }
 walkdir = "2.5.0"
+zip = "9.0.0"
 
 deelevate = "0.2.0"
 

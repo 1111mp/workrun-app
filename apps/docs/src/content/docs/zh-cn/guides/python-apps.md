@@ -279,3 +279,11 @@ Process App 和 Tool App 都可以在同一项目配置独立的 `compensate.py`
 运行记录会保留 App 的 stdout/stderr、工具输入输出和节点事件。先定位失败节点，再决定改代码、Schema、权限、指令还是模型配置。
 
 完整的表单 API 说明见[App、工具与 MCP](/zh-cn/concepts/apps-tools-and-mcp/#运行时-json-schema-表单让代码等待人的判断)；已有工具服务可通过[连接 MCP Server](/zh-cn/guides/connect-an-mcp-server/)接入。
+
+## 在个人模式下分享 App
+
+在 App 详情页选择 **导出**，选择 ZIP 或 TAR，检查源码文件后保存。Workrun 会包含已保存的 App 设置，并按照与 Team 发布相同的忽略规则选择源码，包括 `.gitignore`。可以取消勾选可选文件；配置的入口文件和 `pyproject.toml` 必须保留。
+
+在 App 列表选择 **导入**，打开压缩包，检查设置和文件并确认名称。导入会创建新的本地 App，不会覆盖已有 App。导入完成后可以单独 **安装依赖**；导入本身不会运行 App。
+
+包内包含 `manifest.json`、`app.json` 和 `app/` 源码目录，不包含本地安装状态、项目路径和 Team 发布身份。分享前请检查源码中的私有数据。压缩包导入导出用于个人模式；Team App 通过发布版本分享。

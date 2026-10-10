@@ -18,12 +18,12 @@ Start → 规范化反馈（Process） → 分类建议（Agent） → 优先级
 
 不要让下游节点从一段自由文本中猜测答案。先约定每一步读什么、产出什么；键名将同时出现在 App Schema、Agent 输出、分支条件和审核界面中。
 
-| 产生者 | 读取 | 写入并发布到全局状态 | 消费者 |
-| --- | --- | --- | --- |
-| 运行输入 | — | `feedback`（Label：客户反馈） | Process |
-| 规范化反馈（Process） | `feedback` | `normalized_feedback`（Label：规范化反馈） | Agent、Human Review |
-| 分类建议（Agent） | `normalized_feedback` | `category`（反馈类别）、`priority`（优先级）、`recommendation`（处理建议） | If/Else、Human Review |
-| Human Review | `recommendation` 和上下文 | 审核决定 | 批准或拒绝出口 |
+| 产生者                | 读取                      | 写入并发布到全局状态                                                       | 消费者                |
+| --------------------- | ------------------------- | -------------------------------------------------------------------------- | --------------------- |
+| 运行输入              | —                         | `feedback`（Label：客户反馈）                                              | Process               |
+| 规范化反馈（Process） | `feedback`                | `normalized_feedback`（Label：规范化反馈）                                 | Agent、Human Review   |
+| 分类建议（Agent）     | `normalized_feedback`     | `category`（反馈类别）、`priority`（优先级）、`recommendation`（处理建议） | If/Else、Human Review |
+| Human Review          | `recommendation` 和上下文 | 审核决定                                                                   | 批准或拒绝出口        |
 
 运行输入本身是全局状态。节点产生的输出默认留在节点私有命名空间；只有在该节点的 **发布到全局状态 → 已发布的输出键** 中列出后，才可供分支、后续节点和工作流输出使用。此示例使用全局键，因此不需要额外配置「允许读取的节点」；该设置仅用于有意共享某个节点私有命名空间的情况。
 
@@ -31,10 +31,10 @@ Start → 规范化反馈（Process） → 分类建议（Agent） → 优先级
 
 进入 **Apps → 新建**，创建一个 **App / Process Node**，例如「规范化反馈」。在数据契约中声明：
 
-| 方向 | Label | Key | 类型 | 必填 |
-| --- | --- | --- | --- | --- |
-| 输入 | 客户反馈 | `feedback` | string | 是 |
-| 输出 | 规范化反馈 | `normalized_feedback` | string | 是 |
+| 方向 | Label      | Key                   | 类型   | 必填 |
+| ---- | ---------- | --------------------- | ------ | ---- |
+| 输入 | 客户反馈   | `feedback`            | string | 是   |
+| 输出 | 规范化反馈 | `normalized_feedback` | string | 是   |
 
 将入口代码替换为下面的最小实现。它折叠多余空白，保证后续节点始终处理同一份干净文本：
 
@@ -74,7 +74,11 @@ normalized_feedback
   "type": "object",
   "properties": {
     "category": { "type": "string", "description": "反馈类别" },
-    "priority": { "type": "string", "description": "优先级", "enum": ["low", "medium", "high"] },
+    "priority": {
+      "type": "string",
+      "description": "优先级",
+      "enum": ["low", "medium", "high"]
+    },
     "recommendation": { "type": "string", "description": "处理建议" }
   },
   "required": ["category", "priority", "recommendation"]
@@ -100,10 +104,10 @@ category, priority, recommendation
 
 选中 **If/Else**。分别填写两个出口的条件：
 
-| 出口 | 条件 |
-| --- | --- |
-| 是 | `priority == "high"` |
-| 否 | `priority != "high"` |
+| 出口 | 条件                 |
+| ---- | -------------------- |
+| 是   | `priority == "high"` |
+| 否   | `priority != "high"` |
 
 条件一次只比较一个状态字段；不要写 `||`、`&&`，也不要从 `recommendation` 的自然语言里匹配词语。上面的 Schema 限定了 `priority` 的取值，两个条件因而覆盖所有有效结果。
 
@@ -121,11 +125,11 @@ category, priority, recommendation
 
 保存工作流，点击 **运行**，并在运行面板依次检查节点状态和全局状态。
 
-| 输入 | 应看到的结果 |
-| --- | --- |
-| `页面的说明文字有一处错别字。` | Process 发布 `normalized_feedback`；Agent 返回 `low` 或 `medium`；流程走「否」到 End。 |
+| 输入                                 | 应看到的结果                                                                                |
+| ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `页面的说明文字有一处错别字。`       | Process 发布 `normalized_feedback`；Agent 返回 `low` 或 `medium`；流程走「否」到 End。      |
 | `我的账户出现陌生付款，请立刻冻结。` | Agent 返回 `high`；流程在 Human Review 暂停；批准或拒绝后从检查点继续，不会重跑前面的节点。 |
-| `不能用，请处理。` | Agent 说明信息不足；确认它仍返回完整的 `category`、`priority` 和 `recommendation`。 |
+| `不能用，请处理。`                   | Agent 说明信息不足；确认它仍返回完整的 `category`、`priority` 和 `recommendation`。         |
 
 ![低优先级反馈：If/Else 走“否”出口并到达 End。](/media/build-a-workflow/01-low-priority-to-end.png)
 
@@ -134,3 +138,15 @@ category, priority, recommendation
 ![信息不足反馈：Agent 仍返回 category、priority 和 recommendation 三个结构化字段。](/media/build-a-workflow/03-insufficient-information.png)
 
 如果结果不符合预期，按这个顺序排查：先看 App 的 stdout/stderr 和 `normalized_feedback`，再确认 Agent 的模型与 Schema，随后检查两个节点是否发布了所需键，最后核对 If/Else 的条件和出口连线。将这三组输入保存下来，它们就是第一批[评测用例](/zh-cn/quality/evaluations/)。
+
+## 分享或删除已保存的 Workflow
+
+在个人模式下，先保存修改，再打开 Workflow 详情页的 **更多（⋯）** 菜单，选择 **导出**。选择 ZIP 或 TAR 并检查包内容。包内会包含主 Workflow 定义、Process App、Agent 和 CodeAct 使用的 Tool App，以及递归引用的子 Workflow。重复依赖只打包一次；缺失依赖或子 Workflow 循环引用会阻止导出。
+
+在 Workflow 列表选择 **导入**，打开压缩包，检查依赖、确认名称，并绑定当前设备上的外部配置。导入会为主 Workflow、子 Workflow 和 App 创建新 ID，同时更新引用，不会覆盖已有对象。
+
+模型、MCP 工具、Skill、远程凭证、挂载路径、环境变量值和私有 URL 可能需要在本地重新配置。包内不包含 Skill 源码和 MCP 服务配置；导出的定义会移除凭证、本机路径和环境变量值。提示词和 App 源码中手动写入的私有数据仍需自行检查。
+
+可以暂时留空配置，之后在编辑器中打开 **配置导入依赖** 补齐。待配置项会在关闭编辑器后保留，并阻止运行，直到配置完成。运行前可通过单独的依赖安装操作准备包内 App。运行历史、聊天会话和定时任务不会随包导入。
+
+删除入口位于详情页 **更多（⋯）→ 删除**，需要确认。个人模式删除本地定义；Team 模式仅作者显示入口，删除后会从团队列表移除，包括已发布版本。关联 App、子 Workflow 和历史运行记录会保留。列表卡片不展示删除入口。

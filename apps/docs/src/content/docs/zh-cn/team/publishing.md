@@ -95,3 +95,9 @@ Workrun 有两种彼此独立的工作区模式：**个人模式**用于在自�
 - 验证 App 附带资源可以下载，且发布 Workflow 的固定依赖能被准备；
 - 重启 Server 容器后确认用户、已发布版本与资源仍存在；
 - 对 MongoDB 的数据与文件资源执行一次恢复演练，再将服务用于真实团队资产。
+
+## 个人压缩包与 Team 发布
+
+个人模式通过 ZIP/TAR 分享 App 和 Workflow。Workflow 包会包含本地 App 和子 Workflow 依赖，接收方需要在自己的设备上配置外部服务。操作步骤见 [使用 Python App](/zh-cn/guides/python-apps/#在个人模式下分享-app) 和 [构建第一个工作流](/zh-cn/guides/build-a-workflow/#分享或删除已保存的-workflow)。
+
+压缩包分享不会把对象迁移到 Team 工作区，也不会创建 Team 发布版本。Team Workflow 仍通过 **发布** 分享，并固定依赖的 Team App 版本。作者可以在 Team Workflow 详情页的 **更多（⋯）** 菜单中删除 Workflow，其他成员不显示删除入口。

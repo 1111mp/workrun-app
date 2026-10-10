@@ -72,6 +72,7 @@ import {
   restoreProcessNodeRun,
 } from '@/components/app-run-output-panel';
 import { AppSchedules } from '@/components/app-schedules';
+import { AppExportButton } from '@/components/app-share-dialog';
 import { AppPublishForm } from '@/components/forms';
 import { JsonEditorField } from '@/components/json-editor';
 import { isTeamMode } from '@/lib/constant';
@@ -763,6 +764,12 @@ function ProcessNodeDetailEditor({
             </div>
           </div>
           <div className='relative flex shrink-0 flex-wrap gap-2'>
+            {!isTeamMode() ? (
+              <AppExportButton
+                id={processNode.definition.id}
+                disabled={save.isPending || publish.isPending}
+              />
+            ) : null}
             {canPublish ? (
               <Button
                 variant='outline'
@@ -856,65 +863,84 @@ function ProcessNodeDetailEditor({
             if (!remove.isPending) setDeleteOpen(open);
           }}
         >
-          <AlertDialogContent className='max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-2xl! overflow-y-auto'>
-            <AlertDialogHeader>
-              <AlertDialogMedia className='bg-destructive/10 text-destructive dark:bg-destructive/20 dark:text-destructive'>
-                <Trash2Icon />
-              </AlertDialogMedia>
-              <AlertDialogTitle>
-                {t('apps.detail.deleteTitle', {
-                  name: processNode.definition.name,
-                })}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {t('apps.detail.deleteDescription')}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            {!isCatalogApp && workflowReferences.isLoading ? (
-              <p className='text-muted-foreground text-sm'>
-                {t('apps.detail.checkingUsage')}
-              </p>
-            ) : workflowReferences.data?.length ? (
-              <Item variant='muted' size='sm'>
-                <ItemMedia variant='icon'>
-                  <CircleAlertIcon />
-                </ItemMedia>
-                <ItemContent>
-                  <ItemTitle>
-                    {t('apps.detail.affectedWorkflows', {
-                      count: workflowReferences.data.length,
+          <AlertDialogContent className='max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-2xl! gap-0 overflow-y-auto p-0'>
+            <div className='via-background from-destructive/12 to-muted/50 relative overflow-hidden border-b bg-linear-to-br px-5 pt-5 pb-4 sm:px-6 sm:pt-6'>
+              <div className='bg-destructive/10 absolute -top-12 -right-10 size-36 rounded-full blur-2xl' />
+              <AlertDialogHeader className='relative grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-3 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
+                <AlertDialogMedia className='border-destructive/20 bg-destructive/10 text-destructive mb-0 size-10 rounded-xl border shadow-sm'>
+                  <Trash2Icon className='size-5' />
+                </AlertDialogMedia>
+                <div className='flex min-w-0 flex-col gap-1.5'>
+                  <AlertDialogTitle className='text-lg font-semibold tracking-tight break-words'>
+                    {t('apps.detail.deleteTitle', {
+                      name: processNode.definition.name,
                     })}
-                  </ItemTitle>
-                  <ItemDescription>
-                    {t('apps.detail.affectedWorkflowsDescription')}
-                  </ItemDescription>
-                  <KbdGroup>
-                    {workflowReferences.data.map((workflow) => (
-                      <Kbd key={workflow.id} title={workflow.name}>
-                        {workflow.name}
-                      </Kbd>
-                    ))}
-                  </KbdGroup>
-                </ItemContent>
-              </Item>
-            ) : null}
-            {!isCatalogApp ? (
-              <Field orientation='horizontal'>
-                <Checkbox
-                  id='delete-process-node-files'
-                  checked={deleteProjectFiles}
-                  disabled={remove.isPending}
-                  onCheckedChange={setDeleteProjectFiles}
-                />
-                <FieldContent>
-                  <FieldLabel htmlFor='delete-process-node-files'>
-                    {t('apps.detail.deleteFiles')}
-                  </FieldLabel>
-                  <FieldDescription>{processNode.projectPath}</FieldDescription>
-                </FieldContent>
-              </Field>
-            ) : null}
-            <AlertDialogFooter>
+                  </AlertDialogTitle>
+                  <AlertDialogDescription className='text-sm leading-5'>
+                    {t('apps.detail.deleteDescription')}
+                  </AlertDialogDescription>
+                </div>
+              </AlertDialogHeader>
+            </div>
+            <div className='flex flex-col gap-5 px-5 py-5 sm:px-6'>
+              {!isCatalogApp && workflowReferences.isLoading ? (
+                <p
+                  role='status'
+                  className='text-muted-foreground flex items-center gap-2 text-sm'
+                >
+                  <Spinner />
+                  {t('apps.detail.checkingUsage')}
+                </p>
+              ) : workflowReferences.data?.length ? (
+                <Item variant='muted' size='sm'>
+                  <ItemMedia variant='icon'>
+                    <CircleAlertIcon />
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle>
+                      {t('apps.detail.affectedWorkflows', {
+                        count: workflowReferences.data.length,
+                      })}
+                    </ItemTitle>
+                    <ItemDescription>
+                      {t('apps.detail.affectedWorkflowsDescription')}
+                    </ItemDescription>
+                    <KbdGroup className='flex-wrap'>
+                      {workflowReferences.data.map((workflow) => (
+                        <Kbd key={workflow.id} title={workflow.name}>
+                          {workflow.name}
+                        </Kbd>
+                      ))}
+                    </KbdGroup>
+                  </ItemContent>
+                </Item>
+              ) : null}
+              {!isCatalogApp ? (
+                <FieldGroup>
+                  <Field
+                    orientation='horizontal'
+                    data-disabled={remove.isPending}
+                    className='items-start rounded-lg border p-4'
+                  >
+                    <Checkbox
+                      id='delete-process-node-files'
+                      checked={deleteProjectFiles}
+                      disabled={remove.isPending}
+                      onCheckedChange={setDeleteProjectFiles}
+                    />
+                    <FieldContent>
+                      <FieldLabel htmlFor='delete-process-node-files'>
+                        {t('apps.detail.deleteFiles')}
+                      </FieldLabel>
+                      <FieldDescription className='font-mono text-xs break-all'>
+                        {processNode.projectPath}
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                </FieldGroup>
+              ) : null}
+            </div>
+            <AlertDialogFooter className='mx-0 mb-0 px-5 py-4 sm:px-6'>
               <AlertDialogCancel disabled={remove.isPending}>
                 {t('apps.new.cancel')}
               </AlertDialogCancel>

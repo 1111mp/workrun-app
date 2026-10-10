@@ -50,6 +50,7 @@ import { toast } from 'sonner';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
+import { WorkflowActionsMenu } from '@/components/workflow-actions-menu';
 import { WorkflowEvaluations } from '@/components/workflow-evaluations';
 import {
   WorkflowHistory,
@@ -59,6 +60,7 @@ import { WorkflowNodeInspector } from '@/components/workflow-node-inspector';
 import { WorkflowRunPanel } from '@/components/workflow-run-panel';
 import { WorkflowSchedules } from '@/components/workflow-schedules';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
+import { WorkflowConfigureButton } from '@/components/workflow-share-dialog';
 import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
 import {
@@ -997,6 +999,37 @@ function WorkflowEditorContent({
               </Tabs>
             </div>
             <div className='flex items-center gap-2'>
+              {activeWorkflow && (!isTeamMode() || !readOnly) ? (
+                <WorkflowActionsMenu
+                  workflow={activeWorkflow}
+                  canDelete={!isTeamMode() || !readOnly}
+                  exportDisabled={isDirty}
+                />
+              ) : null}
+              {!isTeamMode() &&
+              activeWorkflow &&
+              nodes.some(
+                (node) =>
+                  Array.isArray(node.data.shareRequirements) &&
+                  node.data.shareRequirements.length > 0,
+              ) ? (
+                <WorkflowConfigureButton
+                  id={activeWorkflow.id}
+                  disabled={isDirty}
+                  onConfigured={(updated) => {
+                    workflowStore.getState().replaceWorkflow(updated.document);
+                    setSavedDocument(
+                      JSON.stringify(
+                        toWorkflowDocument(
+                          updated.document.nodes,
+                          updated.document.edges,
+                          updated.document.settings,
+                        ),
+                      ),
+                    );
+                  }}
+                />
+              ) : null}
               {!readOnly ? (
                 <Button
                   variant='ghost'

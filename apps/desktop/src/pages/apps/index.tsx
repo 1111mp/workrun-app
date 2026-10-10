@@ -76,6 +76,10 @@ import {
   type ProcessNodeOutput,
   type ProcessNodeRun,
 } from '@/components/app-run-output-panel';
+import {
+  AppExportButton,
+  AppImportButton,
+} from '@/components/app-share-dialog';
 import { isTeamMode } from '@/lib/constant';
 import {
   ensurePublishedProcessNode,
@@ -330,6 +334,13 @@ function AppItem({
           </div>
           {isLocalApp ? (
             <div className='flex shrink-0 items-center gap-1'>
+              {!isTeamMode() ? (
+                <AppExportButton
+                  id={definition.id}
+                  compact
+                  disabled={node.installStatus === 'invalid'}
+                />
+              ) : null}
               <Button
                 variant='ghost'
                 size='icon-sm'
@@ -968,6 +979,7 @@ function AppsPage() {
             )}
             {t('apps.refresh')}
           </Button>
+          {!isTeamMode() ? <AppImportButton /> : null}
           <Button
             size='sm'
             nativeButton={false}
