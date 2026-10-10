@@ -1141,7 +1141,6 @@ function WorkflowEditorContent({
         ) : null}
         {!readOnly || allowRun ? (
           <WorkflowRunPanel
-            workflowId={activeWorkflow?.id}
             settings={
               viewingHistoricalOutput
                 ? displayedRunSettings

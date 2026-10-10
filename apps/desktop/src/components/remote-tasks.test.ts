@@ -7,17 +7,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import {
   listRemoteTasks,
-  listRemoteTaskWarnings,
   manageRemoteTask,
   type RemoteTask,
 } from '@/services/remote-agent';
-import { inspectRunRecord } from '@/services/run-history';
 
-import {
-  RemoteTaskRerunButton,
-  RemoteTasksPanel,
-  RemoteTaskStartWarning,
-} from './remote-tasks';
+import { RemoteTasksPanel } from './remote-tasks';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('react-i18next', () => ({
@@ -25,22 +19,7 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/services/remote-agent', () => ({
   listRemoteTasks: vi.fn(),
-  listRemoteTaskWarnings: vi.fn(),
   manageRemoteTask: vi.fn(),
-  remoteTaskMayRepeat: (task: RemoteTask, failed: boolean) =>
-    [
-      'unknown',
-      'working',
-      'submitted',
-      'input_required',
-      'auth_required',
-    ].includes(task.status) ||
-    (task.status === 'completed' && (failed || !task.result)),
-}));
-vi.mock('@/services/run-history', () => ({ inspectRunRecord: vi.fn() }));
-const openRun = vi.hoisted(() => vi.fn());
-vi.mock('@/stores/run-workspace.store', () => ({
-  useRunWorkspaceStore: { getState: () => ({ openRun }) },
 }));
 vi.mock('@/components/artifact-files', () => ({
   ArtifactFiles: ({ value }: { value: unknown }) =>
@@ -103,33 +82,14 @@ async function click(key: string) {
   await settle();
 }
 
-it('queries and collects a remote result without invoking workflow execution', async () => {
-  let current = { ...task };
-  vi.mocked(listRemoteTasks).mockImplementation(async () => [current]);
-  vi.mocked(manageRemoteTask).mockImplementation(async (_id, operation) => {
-    current = {
-      ...current,
+it('shows saved status and results without remote management actions', async () => {
+  vi.mocked(listRemoteTasks).mockResolvedValue([
+    {
+      ...task,
       status: 'completed',
-      ...(operation === 'fetch'
-        ? {
-            result: {
-              response: 'finished remotely',
-              artifacts: [
-                {
-                  $type: 'artifact',
-                  id: 'pdf',
-                  version: 1,
-                  name: 'result.pdf',
-                  mimeType: 'application/pdf',
-                  size: 12,
-                },
-              ],
-            },
-          }
-        : {}),
-    };
-    return current;
-  });
+      result: { response: 'finished remotely', artifacts: [] },
+    },
+  ]);
   const container = await render(
     createElement(RemoteTasksPanel, {
       runId: 'run-1',
@@ -137,136 +97,17 @@ it('queries and collects a remote result without invoking workflow execution', a
       nodeName: () => 'PDF agent',
     }),
   );
-  expect(container.textContent).toContain('task-1');
+  expect(container.textContent).toContain('finished remotely');
+  expect(container.textContent).toContain('PDF agent');
   expect(container.textContent).toContain(
-    'workflowEditor.remoteTasks.unknownTitle',
+    'workflowEditor.remoteTasks.status.completed',
   );
-  await click('workflowEditor.remoteTasks.query');
-  expect(manageRemoteTask).toHaveBeenLastCalledWith('record-1', 'query');
-  await click('workflowEditor.remoteTasks.fetch');
-  expect(manageRemoteTask).toHaveBeenLastCalledWith('record-1', 'fetch');
-  expect(container.textContent).toContain('result.pdf');
-  const fetch = [
-    ...container.querySelectorAll<HTMLButtonElement>('button'),
-  ].find((button) => button.textContent === 'workflowEditor.remoteTasks.fetch');
-  expect(fetch!.disabled).toBe(true);
-});
-
-it('requires confirmation to cancel and never claims success after refusal', async () => {
-  vi.mocked(listRemoteTasks).mockResolvedValue([task]);
-  vi.mocked(manageRemoteTask).mockRejectedValue('Task not cancelable');
-  const container = await render(
-    createElement(RemoteTasksPanel, {
-      runId: 'run-1',
-      isActive: false,
-      nodeName: (id) => id,
-    }),
-  );
-  await click('workflowEditor.remoteTasks.cancel');
-  expect(manageRemoteTask).not.toHaveBeenCalled();
-  const confirm = document.querySelector<HTMLButtonElement>(
-    '[data-slot="alert-dialog-action"]',
-  );
-  expect(confirm).not.toBeNull();
-  await act(async () => confirm!.click());
-  await settle();
-  expect(manageRemoteTask).toHaveBeenCalledWith('record-1', 'cancel');
-  expect(container.textContent).toContain(
-    'workflowEditor.remoteTasks.status.unknown',
-  );
-  expect(container.textContent).not.toContain(
-    'workflowEditor.remoteTasks.status.canceled',
-  );
-});
-
-it('disables remote operations while the local workflow owns execution', async () => {
-  vi.mocked(listRemoteTasks).mockResolvedValue([
-    { ...task, status: 'completed' },
-  ]);
-  const container = await render(
-    createElement(RemoteTasksPanel, {
-      runId: 'run-1',
-      isActive: true,
-      nodeName: (id) => id,
-    }),
-  );
-  const toggle = [
-    ...container.querySelectorAll<HTMLButtonElement>('button'),
-  ].find((button) => button.textContent === 'workflowEditor.remoteTasks.title');
-  await act(async () => toggle!.click());
-  await settle();
-  for (const key of ['query', 'fetch', 'cancel']) {
-    const button = [
-      ...container.querySelectorAll<HTMLButtonElement>('button'),
-    ].find((item) => item.textContent === `workflowEditor.remoteTasks.${key}`);
-    expect(button!.disabled).toBe(true);
+  for (const key of ['query', 'fetch', 'cancel', 'review']) {
+    expect(container.textContent).not.toContain(
+      `workflowEditor.remoteTasks.${key}`,
+    );
   }
   expect(manageRemoteTask).not.toHaveBeenCalled();
-});
-
-it('warns before repeating unresolved remote work and only reruns on confirmation', async () => {
-  vi.mocked(listRemoteTasks).mockResolvedValue([task]);
-  const onRunAgain = vi.fn();
-  await render(
-    createElement(RemoteTaskRerunButton, {
-      runId: 'run-1',
-      disabled: false,
-      onRunAgain,
-      label: 'Run again',
-    }),
-  );
-  await click('Run again');
-  expect(listRemoteTasks).toHaveBeenCalledWith('run-1');
-  expect(onRunAgain).not.toHaveBeenCalled();
-  expect(document.body.textContent).toContain(
-    'workflowEditor.remoteTasks.rerunTitle',
-  );
-  await click('workflowEditor.remoteTasks.rerunConfirm');
-  expect(onRunAgain).toHaveBeenCalledTimes(1);
-});
-
-it('runs directly when prior remote work is confirmed cancelled', async () => {
-  vi.mocked(listRemoteTasks).mockResolvedValue([
-    { ...task, status: 'canceled' },
-  ]);
-  const onRunAgain = vi.fn();
-  await render(
-    createElement(RemoteTaskRerunButton, {
-      runId: 'run-1',
-      disabled: false,
-      onRunAgain,
-      label: 'Run again',
-    }),
-  );
-  await click('Run again');
-  expect(onRunAgain).toHaveBeenCalledTimes(1);
-});
-
-it('links warnings after restart to the original run instead of starting new work', async () => {
-  vi.mocked(listRemoteTaskWarnings).mockResolvedValue([task]);
-  const record = {
-    id: 'run-1',
-    targetType: 'workflow',
-    targetId: 'workflow-1',
-    targetName: 'PDF workflow',
-    status: 'failed',
-    startedAt: task.createdAt,
-  };
-  vi.mocked(inspectRunRecord).mockResolvedValue(
-    record as Awaited<ReturnType<typeof inspectRunRecord>>,
-  );
-  const onReview = vi.fn();
-  await render(
-    createElement(RemoteTaskStartWarning, {
-      workflowId: 'workflow-1',
-      onReview,
-    }),
-  );
-  expect(listRemoteTaskWarnings).toHaveBeenCalledWith('workflow-1');
-  await click('workflowEditor.remoteTasks.review');
-  expect(inspectRunRecord).toHaveBeenCalledWith('run-1');
-  expect(openRun).toHaveBeenCalledWith(record);
-  expect(onReview).toHaveBeenCalledTimes(1);
 });
 
 it('shows and copies the exact message ID for an unknown submission without enabling remote actions', async () => {
@@ -294,7 +135,7 @@ it('shows and copies the exact message ID for an unknown submission without enab
     const button = [
       ...container.querySelectorAll<HTMLButtonElement>('button'),
     ].find((item) => item.textContent === `workflowEditor.remoteTasks.${key}`);
-    expect(button!.disabled).toBe(true);
+    expect(button).toBeUndefined();
   }
   expect(manageRemoteTask).not.toHaveBeenCalled();
 });

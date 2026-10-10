@@ -220,6 +220,98 @@ impl StdioRuntime {
 mod tests {
     use super::*;
 
+    // A real stdio peer verifies RMCP closure reaches the lifecycle monitor,
+    // rather than testing the transport token in isolation.
+    #[tokio::test]
+    async fn process_disconnect_restarts_and_shutdown_stops_reconnects() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("server.py");
+        let starts = dir.path().join("starts");
+        std::fs::write(&script, r#"
+import json, os, pathlib, sys
+starts = pathlib.Path(sys.argv[1])
+count = int(starts.read_text()) + 1 if starts.exists() else 1
+starts.write_text(str(count))
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    method = request['method']
+    if method == 'initialize':
+        result = {'protocolVersion': request['params']['protocolVersion'], 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'lifecycle-test', 'version': '1'}}
+    elif method == 'tools/list':
+        if count == 1:
+            os._exit(1)
+        result = {'tools': []}
+    else:
+        raise RuntimeError('Unexpected request: ' + method)
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+"#).unwrap();
+        let definition = IMcpServer {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Lifecycle test".into(),
+            description: String::new(),
+            transport: super::super::McpServerTransport::Stdio,
+            command: "python3".into(),
+            args: vec![
+                "-u".into(),
+                script.to_string_lossy().into(),
+                starts.to_string_lossy().into(),
+            ],
+            env: Default::default(),
+            url: String::new(),
+            auth: super::super::McpServerAuth::None,
+            bearer_token: None,
+            oauth_credentials: None,
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let runtime = StdioRuntime::new(definition);
+        runtime.start().await.unwrap();
+        assert_eq!(runtime.status().await, ServerStatus::Running);
+        let context: Arc<dyn ReadonlyContext> = Arc::new(adk_rust::tool::SimpleToolContext::new("lifecycle-test"));
+        assert!(runtime.tools(context.clone()).await.is_err());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if runtime.status().await == ServerStatus::Restarting {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            McpServerRuntimeStore::global()
+                .health(&runtime.definition.id)
+                .last_error
+                .is_some()
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if runtime.status().await == ServerStatus::Running {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(runtime.tools(context).await.unwrap().is_empty());
+        assert!(
+            McpServerRuntimeStore::global()
+                .health(&runtime.definition.id)
+                .last_error
+                .is_none()
+        );
+        assert_eq!(std::fs::read_to_string(&starts).unwrap(), "2");
+        runtime.shutdown().await;
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        assert_eq!(runtime.status().await, ServerStatus::Stopped);
+        assert_eq!(std::fs::read_to_string(&starts).unwrap(), "2");
+    }
+
     #[tokio::test]
     async fn transport_eof_and_drop_signal_disconnection() {
         let closed = CancellationToken::new();

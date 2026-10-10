@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  QueryClient,
+  QueryClientProvider,
+  QueryObserver,
+} from '@tanstack/react-query';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
@@ -81,4 +85,63 @@ it('refreshes after subscribing, handles pushed updates, and releases late liste
     client.clear();
     host.remove();
   }
+});
+
+it('refreshes an active MCP list from pushed lifecycle events without polling', async () => {
+  (
+    globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
+  subscriptions.clear();
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  let status = 'Running';
+  const fetchServers = vi.fn(async () => [{ status }]);
+  const observer = new QueryObserver(client, {
+    queryKey: ['mcp-servers'],
+    queryFn: fetchServers,
+  });
+  const unsubscribe = observer.subscribe(() => {});
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const stop = vi.fn();
+  try {
+    await act(async () =>
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(RunEventTracker),
+        ),
+      ),
+    );
+    await act(async () =>
+      subscriptions.get('mcp-servers-changed')!.resolve(stop),
+    );
+    await vi.waitFor(() =>
+      expect(observer.getCurrentResult().data).toEqual([{ status: 'Running' }]),
+    );
+    for (const next of ['Restarting', 'Running', 'FailedToStart', 'Stopped']) {
+      status = next;
+      await act(async () =>
+        subscriptions
+          .get('mcp-servers-changed')!
+          .callback({ payload: { runId: '' } }),
+      );
+      await vi.waitFor(() =>
+        expect(observer.getCurrentResult().data).toEqual([{ status: next }]),
+      );
+    }
+    const requests = fetchServers.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fetchServers).toHaveBeenCalledTimes(requests);
+  } finally {
+    await act(async () => root.unmount());
+    for (const subscription of subscriptions.values())
+      subscription.resolve(() => {});
+    unsubscribe();
+    client.clear();
+    host.remove();
+  }
+  expect(stop).toHaveBeenCalledOnce();
 });

@@ -860,6 +860,28 @@ impl RemoteAgentNode {
                     tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
                 },
                 Err(error) => {
+                    if error.downcast_ref::<RpcError>().is_some_and(|error| error.0 == -32004) {
+                        // A task can finish between GetTask and SubscribeToTask;
+                        // terminal tasks cannot be subscribed to. Check once for
+                        // the final result without resubmitting or polling.
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let mut query = params.clone();
+                        query["historyLength"] = json!(1);
+                        let request = json!({"jsonrpc":"2.0","id":id,"method":"GetTask","params":query});
+                        let task = rpc_result(
+                            serde_json::from_slice(&read_with_retry(client, url, Some(&request), context).await?)?,
+                            &id,
+                        )?;
+                        let mut final_snapshot = RemoteResult {
+                            task_id: snapshot.task_id.clone(),
+                            tracking: snapshot.tracking.take(),
+                            ..Default::default()
+                        };
+                        final_snapshot.accept_tracked(json!({"task":task}), &self.auth).await?;
+                        if final_snapshot.complete {
+                            return Ok(final_snapshot);
+                        }
+                    }
                     return Err(error.context("A2A task subscription failed"));
                 },
             }
@@ -1033,7 +1055,9 @@ impl Node for RemoteAgentNode {
             Ok(output) => Ok(output),
             Err(error) if error.is::<RemoteInteractionRequired>() => {
                 let interaction = error.downcast_ref::<RemoteInteractionRequired>().unwrap();
-                // Only protocol-defined user interaction pauses the graph.
+                // Preserve protocol interaction pauses for future support. These states
+                // are not yet wired to pending actions, authorization prompts, or
+                // automatic resumption; the run is currently marked interrupted.
                 Ok(NodeOutput::interrupt_with_data(
                     &error.to_string(),
                     json!({"nodeId":self.id,"remoteState":interaction.0}),
@@ -1417,6 +1441,10 @@ mod tests {
                 "stream",
                 "send",
                 "subscribe",
+                "race_completed",
+                "race_failed",
+                "race_canceled",
+                "race_rejected",
                 "nonstream_pending",
                 "input_required",
                 "auth_required",
@@ -1446,6 +1474,10 @@ mod tests {
                     mode,
                     "disconnect"
                         | "subscribe"
+                        | "race_completed"
+                        | "race_failed"
+                        | "race_canceled"
+                        | "race_rejected"
                         | "unsupported_subscription"
                         | "method_missing"
                         | "discovery_retry"
@@ -1546,7 +1578,8 @@ mod tests {
                                         ("application/json", reply(task))
                                     }
                                 } else if method == "SubscribeToTask"
-                                    && matches!(mode, "unsupported_subscription" | "method_missing")
+                                    && (matches!(mode, "unsupported_subscription" | "method_missing")
+                                        || mode.starts_with("race_"))
                                 {
                                     ("application/json", json!({"jsonrpc":"2.0","id":rpc["id"],"error":{"code":if mode=="method_missing" {-32601} else {-32004},"message":"secret"}}).to_string())
                                 } else if method == "SubscribeToTask" {
@@ -1556,7 +1589,29 @@ mod tests {
                                         format!("data: {}\n\n", reply(json!({"task":task}))),
                                     )
                                 } else if method == "GetTask" {
-                                    if matches!(mode, "subscribe" | "unsupported_subscription" | "method_missing") {
+                                    if mode.starts_with("race_") {
+                                        let queries = calls
+                                            .lock()
+                                            .unwrap()
+                                            .iter()
+                                            .filter(|r| r["method"] == "GetTask")
+                                            .count();
+                                        task["status"]["state"] = json!(if queries == 1 {
+                                            "TASK_STATE_WORKING"
+                                        } else {
+                                            match mode {
+                                                "race_completed" => "TASK_STATE_COMPLETED",
+                                                "race_failed" => "TASK_STATE_FAILED",
+                                                "race_canceled" => "TASK_STATE_CANCELED",
+                                                "race_rejected" => "TASK_STATE_REJECTED",
+                                                _ => unreachable!(),
+                                            }
+                                        });
+                                        ("application/json", reply(task))
+                                    } else if matches!(
+                                        mode,
+                                        "subscribe" | "unsupported_subscription" | "method_missing"
+                                    ) {
                                         task["status"]["state"] = json!("TASK_STATE_WORKING");
                                         ("application/json", reply(task))
                                     } else if mode == "manual_notfound" {
@@ -1798,7 +1853,12 @@ mod tests {
                 }
                 if matches!(
                     mode,
-                    "nonstream_pending" | "unsupported_subscription" | "method_missing"
+                    "nonstream_pending"
+                        | "unsupported_subscription"
+                        | "method_missing"
+                        | "race_failed"
+                        | "race_canceled"
+                        | "race_rejected"
                 ) {
                     assert!(
                         matches!(result, Err(adk_rust::graph::GraphError::NodeExecutionFailed { .. })),
@@ -1806,23 +1866,78 @@ mod tests {
                     );
                     let records = remote_tasks::list_remote_tasks(&task_pool, "run-1").await.unwrap();
                     assert_eq!(records[0].task_id.as_deref(), Some("task-1"));
-                    let requests = calls.lock().unwrap();
+                    {
+                        let requests = calls.lock().unwrap();
+                        assert_eq!(
+                            requests
+                                .iter()
+                                .filter(|r| matches!(
+                                    r["method"].as_str(),
+                                    Some("SendMessage" | "SendStreamingMessage")
+                                ))
+                                .count(),
+                            1
+                        );
+                        assert_eq!(
+                            requests.iter().filter(|r| r["method"] == "SubscribeToTask").count(),
+                            if mode == "nonstream_pending" { 0 } else { 1 }
+                        );
+                        assert_eq!(
+                            requests.iter().filter(|r| r["method"] == "GetTask").count(),
+                            if mode == "nonstream_pending" {
+                                0
+                            } else if mode == "unsupported_subscription" || mode.starts_with("race_") {
+                                2
+                            } else {
+                                1
+                            }
+                        );
+                    }
+                    // Exercise the same one-shot lifecycle handler used after
+                    // the run manager persists a workflow failure.
+                    sqlx::query("UPDATE run_records SET status='failed' WHERE id='run-1'")
+                        .execute(&task_pool)
+                        .await
+                        .unwrap();
+                    sqlx::query("CREATE TABLE run_events (run_id TEXT,sequence INTEGER,event_json TEXT,created_at TEXT,PRIMARY KEY(run_id,sequence))")
+                        .execute(&task_pool).await.unwrap();
+                    for _ in 0..2 {
+                        super::super::remote_lifecycle::cancel_in_pool(&task_pool, "run-1", |id| {
+                            let pool = task_pool.clone();
+                            let store = store.clone();
+                            let auth_kind = auth_kind.clone();
+                            async move {
+                                remote_task_operation_in_pool(
+                                    pool,
+                                    vec![42; 32],
+                                    &store,
+                                    &id,
+                                    RemoteTaskOperation::Cancel,
+                                    &IWorkrun::default(),
+                                    Some(RemoteAuth::testing(auth_kind)),
+                                )
+                                .await
+                            }
+                        })
+                        .await
+                        .unwrap();
+                    }
                     assert_eq!(
-                        requests
+                        calls
+                            .lock()
+                            .unwrap()
                             .iter()
-                            .filter(|r| matches!(r["method"].as_str(), Some("SendMessage" | "SendStreamingMessage")))
+                            .filter(|r| r["method"] == "CancelTask")
                             .count(),
-                        1
+                        if mode.starts_with("race_") { 0 } else { 1 }
                     );
                     assert_eq!(
-                        requests.iter().filter(|r| r["method"] == "SubscribeToTask").count(),
-                        if mode == "nonstream_pending" { 0 } else { 1 }
+                        sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='run-1'")
+                            .fetch_one(&task_pool)
+                            .await
+                            .unwrap(),
+                        "failed"
                     );
-                    assert_eq!(
-                        requests.iter().filter(|r| r["method"] == "GetTask").count(),
-                        if mode == "nonstream_pending" { 0 } else { 1 }
-                    );
-                    drop(requests);
                     server.abort();
                     continue;
                 }
@@ -1993,7 +2108,7 @@ mod tests {
                         );
                         assert_eq!(
                             calls.iter().filter(|r| r["method"] == "GetTask").count(),
-                            if matches!(mode, "query_retry" | "query_close") {
+                            if matches!(mode, "query_retry" | "query_close" | "race_completed") {
                                 2
                             } else {
                                 1
@@ -2004,9 +2119,12 @@ mod tests {
                             assert_eq!(calls.iter().filter(|r| r["method"] == "Discovery").count(), 2);
                         }
                     }
-                    if mode == "subscribe" {
+                    if matches!(mode, "subscribe" | "race_completed") {
                         let requests = calls.lock().unwrap();
-                        assert_eq!(requests.iter().filter(|r| r["method"] == "GetTask").count(), 1);
+                        assert_eq!(
+                            requests.iter().filter(|r| r["method"] == "GetTask").count(),
+                            if mode == "race_completed" { 2 } else { 1 }
+                        );
                         assert_eq!(requests.iter().filter(|r| r["method"] == "SubscribeToTask").count(), 1);
                     }
                 }

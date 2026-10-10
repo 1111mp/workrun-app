@@ -49,7 +49,6 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 
 import { ArtifactFiles } from '@/components/artifact-files';
-import { RemoteTaskStartWarning } from '@/components/remote-tasks';
 import {
   LiveWorkflowTaskOutput,
   WorkflowRunOutput,
@@ -66,7 +65,6 @@ type RunValues = Record<
 >;
 
 type WorkflowRunPanelProps = {
-  workflowId?: string;
   settings: WorkflowSettings;
   nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
@@ -317,7 +315,6 @@ export function WorkflowRunForm({
 }
 
 function WorkflowRunPanel({
-  workflowId,
   settings,
   nodes,
   onRun,
@@ -562,12 +559,6 @@ function WorkflowRunPanel({
                   {t('workflowEditor.settings.contextCompressionFallback')}
                 </p>
               ) : null}
-              {!readOnly && (
-                <RemoteTaskStartWarning
-                  workflowId={workflowId}
-                  onReview={() => onOpenChange(false)}
-                />
-              )}
               <WorkflowRunOutput
                 run={run!}
                 workflowNodes={nodes}
@@ -616,10 +607,6 @@ function WorkflowRunPanel({
                   {t('workflowEditor.testRunDescription')}
                 </DrawerDescription>
               </DrawerHeader>
-              <RemoteTaskStartWarning
-                workflowId={workflowId}
-                onReview={() => onOpenChange(false)}
-              />
               <WorkflowRunForm
                 key={formKey}
                 settings={settings}

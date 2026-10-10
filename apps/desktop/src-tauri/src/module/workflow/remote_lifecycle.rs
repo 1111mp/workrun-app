@@ -25,7 +25,7 @@ pub(crate) fn cancel_for_run(run_id: &str) {
     });
 }
 
-async fn cancel_in_pool<F, Fut>(pool: &SqlitePool, run: &str, mut cancel: F) -> Result<()>
+pub(super) async fn cancel_in_pool<F, Fut>(pool: &SqlitePool, run: &str, mut cancel: F) -> Result<()>
 where
     F: FnMut(String) -> Fut,
     Fut: std::future::Future<Output = Result<remote_tasks::RemoteTaskRecord>>,

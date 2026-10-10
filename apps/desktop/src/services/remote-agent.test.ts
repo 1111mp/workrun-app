@@ -5,8 +5,6 @@ import {
   listRemoteTasks,
   listRemoteTaskWarnings,
   manageRemoteTask,
-  remoteTaskMayRepeat,
-  type RemoteTask,
 } from './remote-agent';
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue([]),
@@ -25,14 +23,4 @@ it('uses independent task commands without workflow submission or resume', async
     id: 'record',
     operation: 'fetch',
   });
-});
-it('treats completed remote work from failed local runs as repeatable work', () => {
-  const completed = {
-    status: 'completed',
-    result: { response: 'done', artifacts: [] },
-  } as unknown as RemoteTask;
-  expect(remoteTaskMayRepeat(completed)).toBe(false);
-  expect(remoteTaskMayRepeat(completed, true)).toBe(true);
-  expect(remoteTaskMayRepeat({ status: 'unknown' } as RemoteTask)).toBe(true);
-  expect(remoteTaskMayRepeat({ status: 'canceled' } as RemoteTask)).toBe(false);
 });

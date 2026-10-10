@@ -2,12 +2,9 @@
 
 pub use crate::config::{McpServerAuth, McpServerTransport};
 use crate::{config::IMcpServer, singleton};
-use adk_rust::tool::{
-    Toolset,
-    mcp::{
-        RestartPolicy, ServerStatus,
-        rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials},
-    },
+use adk_rust::tool::mcp::{
+    McpToolset, RestartPolicy, ServerStatus,
+    rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials},
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -142,7 +139,7 @@ where
 
 pub(super) enum McpRuntime {
     Stdio(Arc<super::stdio::StdioRuntime>),
-    Http(Arc<dyn Toolset>),
+    Http(Arc<McpToolset<()>>),
 }
 
 /// Process-local, thread-safe state for MCP server runtimes and their lifecycle.
