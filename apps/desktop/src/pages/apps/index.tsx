@@ -66,7 +66,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 
 import {
@@ -652,6 +652,26 @@ function AppHistoryDrawer({
 }
 
 function AppsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const externalRunId = searchParams.get('runId');
+  // Recover output already emitted before navigation and keep the drawer current
+  // until the native run reaches a terminal status.
+  const externalRun = useQuery({
+    queryKey: ['run-history', externalRunId],
+    queryFn: () => inspectRunRecord(externalRunId!),
+    enabled: Boolean(externalRunId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return !status ||
+        ['queued', 'running', 'waiting_for_input'].includes(status)
+        ? 500
+        : false;
+    },
+  });
+  const externalAppRun =
+    externalRun.data?.targetType === 'app'
+      ? restoreProcessNodeRun(externalRun.data)
+      : undefined;
   const [filter, setFilter] = useState<AppFilter>('all');
   const [query, setQuery] = useState<string>('');
   const [runs, setRuns] = useState<Record<string, ProcessNodeRun>>({});
@@ -1081,11 +1101,21 @@ function AppsPage() {
         ) : null}
       </main>
       <AppRunOutputPanel
-        open={outputOpen}
-        run={selectedRun}
+        open={Boolean(externalAppRun) || outputOpen}
+        run={externalAppRun ?? selectedRun}
         onOpenChange={(open) => {
           setOutputOpen(open);
+          if (!open && externalRunId) {
+            setSearchParams(
+              (current) => {
+                current.delete('runId');
+                return current;
+              },
+              { replace: true },
+            );
+          }
         }}
+        readOnly={Boolean(externalAppRun)}
         onClear={clearSelectedOutput}
         onRunAgain={() => selectedRun && void startRun(selectedRun.node)}
       />

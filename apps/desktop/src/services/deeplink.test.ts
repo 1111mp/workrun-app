@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createDeeplink,
+  deeplinkRunPath,
   subscribeDeeplinks,
   validateDeeplinkInput,
 } from './deeplink';
@@ -112,5 +113,21 @@ describe('deeplink push subscription', () => {
       'snapshot failed',
     );
     expect(stop).toHaveBeenCalledOnce();
+  });
+});
+
+describe('deeplink execution navigation', () => {
+  it('opens App output on the list page', () => {
+    expect(deeplinkRunPath('apps', 'app-1', 'run & 1')).toBe(
+      '/apps?runId=run%20%26%201',
+    );
+  });
+
+  it('opens Workflow output as an interactive run on its detail page', () => {
+    const path = deeplinkRunPath('workflows', 'workflow-1', 'run & 1');
+    const url = new URL(path, 'https://workrun.local');
+    expect(url.pathname).toBe('/workflows/workflow-1');
+    expect(url.searchParams.get('runId')).toBe('run & 1');
+    expect(url.searchParams.get('live')).toBe('true');
   });
 });

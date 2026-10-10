@@ -14,11 +14,12 @@ import {
 import { CircleAlertIcon, LinkIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
 import { WorkflowRunForm } from '@/components/workflow-run-panel';
 import {
+  deeplinkRunPath,
   dismissDeeplink,
   subscribeDeeplinks,
   submitDeeplink,
@@ -35,7 +36,6 @@ import {
   getWorkflow,
   toWorkflowDsl,
 } from '@/services/workflow';
-import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 
 export function DeeplinkHandler() {
   const [incoming, setIncoming] = useState<IncomingLink>();
@@ -46,6 +46,7 @@ export function DeeplinkHandler() {
   const dismissedId = useRef<string | undefined>(undefined);
   const lastIncomingId = useRef<string | undefined>(undefined);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { t } = useTranslation();
   const link = incoming?.request;
   const app = useQuery({
@@ -98,6 +99,18 @@ export function DeeplinkHandler() {
     };
   }, [t]);
 
+  const confirmationPath =
+    link?.action === 'run' && !incoming?.runId && !incoming?.error
+      ? `/${link.targetType}`
+      : undefined;
+
+  useEffect(() => {
+    if (!confirmationPath || processing.current) return;
+    // Establish the list page before showing confirmation, including links
+    // received on startup or while another target's detail page is open.
+    void navigate(confirmationPath, { replace: true });
+  }, [incoming?.id, confirmationPath, navigate]);
+
   const close = async () => {
     if (!incoming || processing.current) return;
     await dismissDeeplink(incoming.id);
@@ -123,8 +136,13 @@ export function DeeplinkHandler() {
     void (async () => {
       if (incoming.runId) {
         const record = await inspectRunRecord(incoming.runId);
-        await navigate('/runs');
-        useRunWorkspaceStore.getState().openRun(record);
+        await navigate(
+          deeplinkRunPath(
+            record.targetType === 'app' ? 'apps' : 'workflows',
+            record.targetId,
+            record.id,
+          ),
+        );
       } else {
         await navigate(
           `/${link.targetType}/${encodeURIComponent(link.targetId)}`,
@@ -169,7 +187,7 @@ export function DeeplinkHandler() {
           targetId: link.targetId,
           targetName: app.data.definition.name,
           targetSnapshot: app.data.definition,
-          outputView: { isRunning: true, node: app.data.definition },
+          outputView: { isRunning: true, node: app.data },
         });
       } else if (workflow.data) {
         const { document, releaseId, version } = workflow.data;
@@ -194,9 +212,7 @@ export function DeeplinkHandler() {
           threadId: crypto.randomUUID(),
         });
       } else return;
-      await navigate(
-        `/${link.targetType}/${encodeURIComponent(link.targetId)}?runId=${encodeURIComponent(runId)}`,
-      );
+      await navigate(deeplinkRunPath(link.targetType, link.targetId, runId));
       await dismissDeeplink(incoming.id);
       dismissedId.current = incoming.id;
       setIncoming((current) =>
@@ -229,7 +245,11 @@ export function DeeplinkHandler() {
     app.data?.definition.name ?? workflow.data?.document.settings.name;
   return (
     <Dialog
-      open={Boolean(incoming) && (link?.action === 'run' || Boolean(message))}
+      open={
+        Boolean(incoming) &&
+        (!confirmationPath || pathname === confirmationPath) &&
+        (link?.action === 'run' || Boolean(message))
+      }
       onOpenChange={(open) => {
         if (!open && !submitting) void close();
       }}
@@ -248,7 +268,7 @@ export function DeeplinkHandler() {
                     ? 'deeplink.errorTitle'
                     : 'deeplink.confirmTitle',
                   {
-                    name: name ?? link?.targetId ?? 'Workrun',
+                    name: name ?? 'Workrun',
                   },
                 )}
               </DialogTitle>
@@ -261,8 +281,7 @@ export function DeeplinkHandler() {
         <div className='flex flex-col gap-4 px-5 py-5 sm:px-6'>
           {name && link ? (
             <p className='text-muted-foreground text-sm break-all'>
-              {link.targetType === 'apps' ? 'App' : 'Workflow'} ·{' '}
-              {link.targetId}
+              {link.targetType === 'apps' ? 'App' : 'Workflow'} · {name}
               {app.data?.definition.version || workflow.data?.version
                 ? ` · v${app.data?.definition.version ?? workflow.data?.version}`
                 : ''}

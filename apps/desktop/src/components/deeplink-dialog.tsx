@@ -12,13 +12,13 @@ import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
-  Textarea,
 } from '@workspace/ui/components';
 import { CopyIcon, LinkIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
+import { JsonEditorField } from '@/components/json-editor/json-editor-field';
 import { createDeeplink, type LinkRequest } from '@/services/deeplink';
 
 export function DeeplinkDialog({
@@ -104,15 +104,12 @@ export function DeeplinkDialog({
             <FieldGroup>
               {targetType === 'workflows' ? (
                 <Field data-invalid={invalid || undefined}>
-                  <FieldLabel htmlFor='deeplink-input'>
-                    {t('deeplink.input')}
-                  </FieldLabel>
-                  <Textarea
-                    className='min-h-28 font-mono text-xs'
-                    id='deeplink-input'
+                  <FieldLabel>{t('deeplink.input')}</FieldLabel>
+                  <JsonEditorField
                     value={inputText}
-                    aria-invalid={invalid || undefined}
-                    onChange={(event) => setInputText(event.target.value)}
+                    onChange={setInputText}
+                    rootName='input'
+                    rootType='object'
                   />
                   {invalid ? (
                     <p role='alert' className='text-destructive text-sm'>

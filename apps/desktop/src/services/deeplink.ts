@@ -18,6 +18,19 @@ export type IncomingLink = {
   runId?: string;
 };
 
+// Both a newly accepted link and a deduplicated request must open the same
+// execution view without routing through an App detail or the Runs workspace.
+export function deeplinkRunPath(
+  targetType: LinkRequest['targetType'],
+  targetId: string,
+  runId: string,
+) {
+  const query = `runId=${encodeURIComponent(runId)}`;
+  return targetType === 'apps'
+    ? `/apps?${query}`
+    : `/workflows/${encodeURIComponent(targetId)}?${query}&live=true`;
+}
+
 export function createDeeplink(
   targetType: LinkRequest['targetType'],
   targetId: string,
