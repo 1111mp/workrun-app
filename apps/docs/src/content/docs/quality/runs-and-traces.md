@@ -29,19 +29,39 @@ Within one workflow, run history shows both health over a time range and the sta
 
 ## Read the run status before taking action
 
-| Status                      | What it means                                                       | Next step                                                                                                              |
-| --------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `queued` / `running`        | The run is queued or still executing.                               | Wait for more events. If no events arrive for an unusual time, inspect timeouts on the active model or tool.           |
-| `waiting_for_input`         | Human review, a question response, or tool confirmation is pending. | Complete the action in the run panel; do not treat it as a failed run.                                                 |
-| `completed`                 | This execution has ended.                                           | Check final state and diagnostics. If the result is wrong, trace upstream from the node that produced the wrong value. |
-| `failed`                    | A node or runtime step could not complete.                          | Read the error and cleanup/cancellation evidence, then Run again to create a new task.                                 |
-| `cancelled` / `interrupted` | A person cancelled it, or the app stopped during execution.         | Do not assume it had no effect. Check the last event and external system before starting another run.                  |
+| Status               | What it means                                                       | Next step                                                                                                              |
+| -------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `queued` / `running` | The run is queued or still executing.                               | Wait for more events. If no events arrive for an unusual time, inspect timeouts on the active model or tool.           |
+| `waiting_for_input`  | Human review, a question response, or tool confirmation is pending. | Complete the action in the run panel; do not treat it as a failed run.                                                 |
+| `completed`          | This execution has ended.                                           | Check final state and diagnostics. If the result is wrong, trace upstream from the node that produced the wrong value. |
+| `failed`             | A node or runtime step could not complete.                          | Read the error and cleanup/cancellation evidence, then Run again to create a new task.                                 |
+| `cancelled`          | A person stopped the run.                                           | Verify external outcomes; create a new task if execution is needed again.                                              |
+| `interrupted`        | Execution was interrupted or a recovery check could not pass.       | Read the reason in the output panel and try recovery, or choose Stop tracking.                                         |
 
 > Waiting for input is a resumable pause. Failed or stopped tasks must Run again; only application-interrupted tasks can recover their original checkpoint.
 
 ![Global run history: saved workflow and App runs can be filtered by target type, task or chat mode, and statuses such as queued, running, needs attention, and failed.](/media/runs/02-all-run-history.png)
 
 Global **Run history** combines local workflow and App executions in the current workspace. When a run’s source is unclear, or when you need to find interrupted and failed App runs, filter by name, target type, mode, and status before opening its output.
+
+## Run Center and restart recovery
+
+The **Run Center** lists runs in the current workspace that need follow-up: queued, running, waiting for input, and interrupted runs whose tracking has not been dismissed. Separate runs of the same workflow appear independently. Open a run to handle questions, human reviews, or tool authorizations on its node output cards, with other node results available for context.
+
+![Run Center showing one Weather workflow that needs attention, with a pending count of 1 and a request to answer a workflow question.](/media/runs/05-run-center-needs-attention.png)
+
+This run is waiting for a question response. Select it to open its output and answer on the question card in the node messages. You can inspect existing node results before responding or return later.
+
+| State when the app exits                                                         | Behavior after restart                                                          |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Waiting for input with a pending request                                         | Keep the wait and request; continue from its original card.                     |
+| Queued with complete saved execution information                                 | Keep it queued; check dependencies and any recovery checkpoint before dispatch. |
+| Running, waiting without a valid request, or missing saved execution information | Mark interrupted and retain the reason, without creating a fresh run.           |
+| Completed, failed, or cancelled                                                  | Preserve the original status and history.                                       |
+
+Evaluation executions do not use the ordinary task interaction recovery flow. Standalone App executions also cannot resume in place; verify their original outcome before running again.
+
+Choose **Try to recover** in workflow output to check and continue the same run. A failed recovery retains the record and displays the reason; retry after resolving it. If a remote task is being reconciled automatically, wait for that result. **Stop tracking** removes an interrupted run from the Run Center and stops recovery scheduling while keeping history. It does not cancel remote work or execute compensation. Completed, failed, or cancelled runs can use **Run again** to create a new task.
 
 ## The run workspace: what each piece of evidence answers
 

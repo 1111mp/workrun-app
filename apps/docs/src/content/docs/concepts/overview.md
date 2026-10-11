@@ -68,6 +68,8 @@ When a flow reaches Human Review or Ask User Question, Workrun stores a checkpoi
 
 Task workflows suit independent, one-off runs. Chat workflows keep a durable session and its turns so later messages can continue the same context.
 
+Questions, human reviews, and tool confirmations appear as interactive cards in the corresponding node output. They leave other output and pages accessible. Pending interaction requests survive restart and can be opened from the Run Center. Tasks interrupted during execution remain available for recovery checks. See [Human review and resume](/guides/human-in-the-loop/) and [Runs, debugging, and traces](/quality/runs-and-traces/).
+
 ## Security boundaries and observability
 
 Credentials are encrypted locally. Workflow inputs and node outputs can be marked sensitive: raw state is encrypted in checkpoints, while the default views sent to models, tools, and the interface are redacted. Workrun also applies input, output, and tool-argument guardrails for common PII and secret patterns, reducing the risk of sensitive values reaching tool calls or run evidence.

@@ -133,7 +133,9 @@ category, priority, recommendation
 
 ![低优先级反馈：If/Else 走“否”出口并到达 End。](/media/build-a-workflow/01-low-priority-to-end.png)
 
-![高优先级反馈：流程在 Human Review 暂停，等待人工批准或拒绝。](/media/build-a-workflow/02-high-priority-human-review.png)
+高优先级反馈会在对应节点输出中显示审核卡片。先查看 Process 和 Agent 的已有输出，再批准或拒绝；也可以稍后从运行中心回到该运行。
+
+![高优先级反馈：审核通过后，输出保留上游结果和批准记录。](/media/build-a-workflow/02-high-priority-human-review.png)
 
 ![信息不足反馈：Agent 仍返回 category、priority 和 recommendation 三个结构化字段。](/media/build-a-workflow/03-insufficient-information.png)
 

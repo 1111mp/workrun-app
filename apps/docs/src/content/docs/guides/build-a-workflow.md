@@ -133,7 +133,9 @@ Save the workflow, select **Run**, and inspect node status and global state in t
 
 ![Low-priority feedback: If/Else takes the “no” output and reaches End.](/media/build-a-workflow/01-low-priority-to-end.png)
 
-![High-priority feedback: the flow pauses at Human Review and waits for approval or rejection.](/media/build-a-workflow/02-high-priority-human-review.png)
+High-priority feedback displays a review card in the node output. Inspect the completed Process and Agent outputs before approving or rejecting, or return to this run later from the Run Center.
+
+![High-priority feedback: after approval, output retains upstream results and the approval record.](/media/build-a-workflow/02-high-priority-human-review.png)
 
 ![Insufficient-information feedback: the Agent still returns structured category, priority, and recommendation fields.](/media/build-a-workflow/03-insufficient-information.png)
 

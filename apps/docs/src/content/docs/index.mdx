@@ -91,6 +91,33 @@ Workflow configuration should not be a black box. It should remain visible and i
   </video>
 </div>
 
+Tool authorization, question responses, and human review appear directly in node messages, so you can inspect output and handle requests later. See the [screenshots and instructions](/guides/human-in-the-loop/).
+
+## An everyday example: check the weather, then plan a trip
+
+The video starts with “Plan a trip based on the weather in Hangzhou.” After choosing to begin, the reviewer changes “Hangzhou” to “Shanghai” in `input`, then approves and continues. A weather Agent calls its tool, and a trip-planning Agent reads the result to suggest an itinerary. Questions, human review, and tool authorization all happen in node messages.
+
+```text
+Hangzhou trip request → Choose to begin → Edit destination to Shanghai → Authorize weather lookup → Get Shanghai weather → Suggest a Shanghai itinerary
+```
+
+<div class='homepage-workflow-demo'>
+  <video controls playsinline preload="metadata" aria-label="Workflow demonstration: check weather and plan a trip">
+    <source src="/media/homepage/weather-trip-planning.mp4" type="video/mp4" />
+    Watch the workflow confirm requirements, authorize a weather lookup, and generate itinerary suggestions.
+  </video>
+</div>
+
+**Review can change the actual content.** The original request is “Plan a trip based on the weather in Hangzhou.” This review node uses `input` as its content key with **Allow editing** enabled; the reviewer changes “Hangzhou” to “Shanghai,” then approves and continues. Approval writes the edit back to that same state key, so the tool queries Shanghai weather and the planner follows the revised request. Check `city: "上海"` (Shanghai) on the tool authorization card to see that the edit reached downstream execution.
+
+| Step | Who handles it | What it produces |
+| --- | --- | --- |
+| Confirm requirements | You select, edit, or approve on question and review cards | Confirmed trip requirements; choosing not to plan or rejecting review ends the run |
+| Check the weather | The weather Agent calls its configured tool | Weather information in `weather_info`, accessible to the trip-planning Agent |
+| Plan the trip | The trip-planning Agent reads the requirements and upstream weather | Itinerary suggestions grounded in the tool result, without inventing weather |
+
+The video demonstrates orchestration and interaction. Actual weather depends on the connected tool's data source and query time. Suggestions based only on current weather are a reference, not a forecast for a future trip. Learn about [configuring human interactions](/guides/human-in-the-loop/) and [passing state between nodes](/concepts/workflows-and-state/).
+
 ## Whichever path you start with, evolve in one workspace
 
 | What you need to do | How Workrun helps |
