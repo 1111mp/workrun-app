@@ -64,6 +64,7 @@ function WorkflowPage() {
         readOnly={isPublishedView}
         allowRun={isPublishedView}
         autoStartRun={searchParams.get('run') === 'true'}
+        liveRun={searchParams.get('live') === 'true'}
         historicalRun={
           historicalRun.data?.targetType === 'workflow' &&
           historicalRun.data.targetId === workflow.data.id

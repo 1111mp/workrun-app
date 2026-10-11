@@ -13,6 +13,7 @@ import {
   DrawerContent,
   DrawerDescription,
   DrawerFooter,
+  DialogFooter,
   DrawerHeader,
   DrawerTitle,
   DropdownMenu,
@@ -32,6 +33,7 @@ import {
   Switch,
   Textarea,
 } from '@workspace/ui/components';
+import { cn } from '@workspace/ui/lib/utils';
 import type { Node } from '@xyflow/react';
 import {
   ArchiveIcon,
@@ -47,7 +49,6 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 
 import { ArtifactFiles } from '@/components/artifact-files';
-import { RemoteTaskStartWarning } from '@/components/remote-tasks';
 import {
   LiveWorkflowTaskOutput,
   WorkflowRunOutput,
@@ -64,7 +65,6 @@ type RunValues = Record<
 >;
 
 type WorkflowRunPanelProps = {
-  workflowId?: string;
   settings: WorkflowSettings;
   nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
@@ -143,18 +143,33 @@ type WorkflowRunFormProps = {
   isRunning: boolean;
   onClose: () => void;
   onRun: (initialState: Record<string, unknown>) => void;
+  initialInput?: Record<string, unknown>;
+  layout?: 'drawer' | 'dialog';
 };
 
-function WorkflowRunForm({
+export function WorkflowRunForm({
   settings,
   isRunning,
   onClose,
   onRun,
+  initialInput,
+  layout = 'drawer',
 }: WorkflowRunFormProps) {
   const { t } = useTranslation();
+  const Footer = layout === 'dialog' ? DialogFooter : DrawerFooter;
   const inputs = runInputs(settings);
-  const [values, setValues] = useState<RunValues>(() =>
-    initialValues(settings),
+  const [values, setValues] = useState<RunValues>(
+    () =>
+      ({
+        ...initialValues(settings),
+        // Number controls store text until submission converts it back.
+        ...Object.fromEntries(
+          Object.entries(initialInput ?? {}).map(([key, value]) => [
+            key,
+            typeof value === 'number' ? String(value) : value,
+          ]),
+        ),
+      }) as RunValues,
   );
   const [errors, setErrors] = useState<Set<string>>(new Set());
 
@@ -195,7 +210,12 @@ function WorkflowRunForm({
 
   return (
     <form className='flex min-h-0 flex-1 flex-col' onSubmit={submit}>
-      <div className='min-h-0 flex-1 overflow-y-auto px-4 py-4'>
+      <div
+        className={cn(
+          'min-h-0 flex-1 overflow-y-auto',
+          layout === 'dialog' ? 'px-5 py-5 sm:px-6' : 'px-4 py-4',
+        )}
+      >
         <FieldGroup>
           {inputs.map((input) => {
             const invalid = errors.has(input.key);
@@ -271,7 +291,13 @@ function WorkflowRunForm({
           })}
         </FieldGroup>
       </div>
-      <DrawerFooter>
+      <Footer
+        className={
+          layout === 'dialog'
+            ? 'bg-muted/15 border-t px-5 py-4 sm:px-6'
+            : undefined
+        }
+      >
         <Button type='button' variant='outline' onClick={onClose}>
           {t('apps.new.cancel')}
         </Button>
@@ -283,13 +309,12 @@ function WorkflowRunForm({
           )}
           {t('workflows.run')}
         </Button>
-      </DrawerFooter>
+      </Footer>
     </form>
   );
 }
 
 function WorkflowRunPanel({
-  workflowId,
   settings,
   nodes,
   onRun,
@@ -534,12 +559,6 @@ function WorkflowRunPanel({
                   {t('workflowEditor.settings.contextCompressionFallback')}
                 </p>
               ) : null}
-              {!readOnly && (
-                <RemoteTaskStartWarning
-                  workflowId={workflowId}
-                  onReview={() => onOpenChange(false)}
-                />
-              )}
               <WorkflowRunOutput
                 run={run!}
                 workflowNodes={nodes}
@@ -588,10 +607,6 @@ function WorkflowRunPanel({
                   {t('workflowEditor.testRunDescription')}
                 </DrawerDescription>
               </DrawerHeader>
-              <RemoteTaskStartWarning
-                workflowId={workflowId}
-                onReview={() => onOpenChange(false)}
-              />
               <WorkflowRunForm
                 key={formKey}
                 settings={settings}

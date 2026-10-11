@@ -160,6 +160,21 @@ App 可以从 Apps 页面独立运行，不需要先创建工作流；也可以�
 
 个人与团队工作区相互独立，切换模式不会自动共享个人资产。桌面端可连接自托管的 NestJS 团队服务并登录。团队服务负责身份、共享资产与发布版本，工作流和 Python App 仍由成员的桌面端执行。团队成员可以浏览和运行已发布的工作流，也可发布带语义版本的 Workflow 与 App。工作流发布时会校验引用；Team App 以不可变 release 固定到工作流版本，运行时按该 release 安装隔离副本，从而让历史运行和回归结果可复现。
 
+### 9. 通过 Deeplink 打开与运行
+
+在已保存的 App 或 Workflow 中点击 **外部调用**，即可复制打开链接或运行链接。Workflow 运行链接支持 URL 编码的 JSON 输入对象。Workrun 等待启动和登录完成后，展示确认与输入表单，再通过现有运行管理器执行。
+
+```text
+workrun://v1/apps/{appId}
+workrun://v1/apps/{appId}/run
+workrun://v1/workflows/{workflowId}
+workrun://v1/workflows/{workflowId}/run?input=%7B%22message%22%3A%22hello%22%7D&requestId=example-1
+```
+
+链接中的 ID 在当前工作区解析。App 与 Workflow 依赖需要提前准备好，链接不会自动安装。第一版暂不支持 App 输入参数、免确认执行和结果回调。请勿在 URL 中放入密钥或大文件；链接长度限制为 32 KB。
+
+`requestId` 可选。相同 ID、目标与原始输入会定位到已有运行，重启 Workrun 后依然有效；相同 ID 携带不同参数会提示冲突。不携带时，每次新点击都可以创建运行。待确认请求可以跨 WebView 刷新保留，但退出桌面进程后会清除。系统协议唤起需要使用安装后的构建验证，尤其是 macOS。
+
 ## 架构概览
 
 ```mermaid

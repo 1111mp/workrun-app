@@ -127,6 +127,11 @@ export default defineConfig({
               link: '/guides/human-in-the-loop/',
             },
             {
+              label: 'Open and run through Deeplinks',
+              translations: { 'zh-CN': '通过 Deeplink 打开与运行' },
+              link: '/guides/deeplinks/',
+            },
+            {
               label: 'Schedule Apps and Workflows',
               translations: { 'zh-CN': '为 App 和工作流配置定时运行' },
               link: '/guides/scheduled-runs/',

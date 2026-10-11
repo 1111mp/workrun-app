@@ -98,6 +98,8 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatc
         dirs::initialize_active_workspace_scope(scope);
         init::ensure_active_workspace_directories().await?;
         Config::reload_workspace().await;
+        crate::module::run_manager::notify_supervisor();
+        crate::module::deeplink::DeeplinkManager::global().notify_frontend();
     }
 
     Ok(())

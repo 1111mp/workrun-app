@@ -17,12 +17,13 @@ import {
   DropdownMenuTrigger,
   Spinner,
 } from '@workspace/ui/components';
-import { DownloadIcon, EllipsisIcon, Trash2Icon } from 'lucide-react';
+import { DownloadIcon, EllipsisIcon, LinkIcon, Trash2Icon } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
+import { DeeplinkDialog } from '@/components/deeplink-dialog';
 import { WorkflowExportButton } from '@/components/workflow-share-dialog';
 import { isTeamMode } from '@/lib/constant';
 import { deleteWorkflow, type StoredWorkflow } from '@/services/workflow';
@@ -39,6 +40,7 @@ export function WorkflowActionsMenu({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [deeplinkOpened, setDeeplinkOpened] = useState(false);
   const [exportOpened, setExportOpened] = useState(false);
   const [deleteOpened, setDeleteOpened] = useState(false);
   const personal = !isTeamMode();
@@ -73,6 +75,16 @@ export function WorkflowActionsMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent className='min-w-36'>
           <DropdownMenuGroup>
+            <DropdownMenuItem
+              disabled={exportDisabled}
+              title={
+                exportDisabled ? t('workflows.share.saveFirst') : undefined
+              }
+              onClick={() => setDeeplinkOpened(true)}
+            >
+              <LinkIcon />
+              {t('deeplink.title')}
+            </DropdownMenuItem>
             {personal ? (
               <DropdownMenuItem
                 disabled={exportDisabled}
@@ -85,7 +97,7 @@ export function WorkflowActionsMenu({
                 {t('workflows.share.export')}
               </DropdownMenuItem>
             ) : null}
-            {personal && canDelete ? <DropdownMenuSeparator /> : null}
+            {canDelete ? <DropdownMenuSeparator /> : null}
             {canDelete ? (
               <DropdownMenuItem
                 variant='destructive'
@@ -99,6 +111,14 @@ export function WorkflowActionsMenu({
         </DropdownMenuContent>
       </DropdownMenu>
       {/* Keep dialogs outside the menu so closing its popup does not unmount them. */}
+      {deeplinkOpened ? (
+        <DeeplinkDialog
+          targetType='workflows'
+          targetId={workflow.id}
+          open={deeplinkOpened}
+          onOpenChange={setDeeplinkOpened}
+        />
+      ) : null}
       {personal && exportOpened ? (
         <WorkflowExportButton
           id={workflow.id}
@@ -121,10 +141,10 @@ export function WorkflowActionsMenu({
                 <Trash2Icon className='size-5' />
               </AlertDialogMedia>
               <div className='flex min-w-0 flex-col gap-1.5'>
-                <AlertDialogTitle className='text-lg font-semibold tracking-tight break-words'>
+                <AlertDialogTitle className='text-lg font-semibold tracking-tight wrap-break-word'>
                   {t('workflows.deleteTitle')}
                 </AlertDialogTitle>
-                <AlertDialogDescription className='text-sm leading-5 break-words'>
+                <AlertDialogDescription className='text-sm leading-5 wrap-break-word'>
                   {t(
                     personal
                       ? 'workflows.deleteDescription'

@@ -644,8 +644,7 @@
   "workflowEditor": {
     "remoteTasks": {
       "title": "远程任务",
-      "description": "这些操作只管理远程任务，不会恢复 Workflow 或继续执行下游节点。",
-      "operationFailed": "远程任务操作失败",
+      "description": "远程任务状态与已收集的结果。Workflow 失败或停止时，会对未结束的任务自动尝试取消一次。",
       "loadFailed": "无法加载远程任务记录",
       "noTaskId": "尚未收到远程任务 ID",
       "messageId": "消息 ID（messageId）",
@@ -653,21 +652,10 @@
       "messageIdCopied": "消息 ID 已复制",
       "messageIdCopyFailed": "无法复制消息 ID",
       "unknownTitle": "远程执行结果尚不确定",
-      "unknownDescription": "本地运行已结束，但远程任务可能仍在执行或已经完成。请查询状态后再决定是否重新运行。",
+      "unknownDescription": "远程任务可能仍在执行或已经完成，最终结果尚未确认。",
       "unknownSubmission": "提交可能已被远程服务接受，但未收到任务 ID，无法查询或取消。重新执行可能产生重复任务。",
       "lastKnown": "最后已知状态：{{state}}",
       "lastChecked": "最后查询：{{time}}",
-      "query": "查询状态",
-      "fetch": "取回结果",
-      "cancel": "取消远程任务",
-      "cancelTitle": "取消这个远程任务？",
-      "cancelDescription": "此操作向远程服务发送取消请求。服务可能拒绝取消，已产生的费用或业务操作不会自动撤销。原 Workflow 的状态保持不变。",
-      "rerunTitle": "可能重复执行远程任务",
-      "rerunDescription": "上一次运行的远程任务可能仍在执行或已完成。再次执行可能重复处理文件、产生费用或业务操作，不会重新连接到原远程任务。",
-      "rerunConfirm": "仍然执行",
-      "previousTitle": "存在需要核对的远程任务",
-      "previousDescription": "该 Workflow 的历史运行中，有远程任务状态未知、尚未结束或已完成但本地运行失败。新运行可能重复执行，请先查看原任务。",
-      "review": "查看原运行",
       "status": {
         "unknown": "状态未知",
         "submitted": "已提交",
@@ -1908,5 +1896,22 @@
     "title": "确定吗？",
     "cancel": "取消",
     "confirm": "确定"
+  },
+  "deeplink": {
+    "errorTitle": "无法打开 Workrun 链接",
+    "source": "外部链接",
+    "title": "外部调用",
+    "description": "通过浏览器、快捷指令或其他应用打开或运行已保存的目标。链接指向当前工作区，运行前需要确认。请勿在链接中包含密钥。",
+    "input": "Workflow 输入（JSON 对象）",
+    "inputDescription": "输入仅用于生成当前运行链接，不会保存到 Workflow。重新打开弹窗需重新填写；复制运行链接后可重复使用，无需再次配置。",
+    "invalidInput": "请输入有效的 JSON 对象。",
+    "openLink": "打开链接",
+    "runLink": "运行链接",
+    "copyOpen": "复制打开链接",
+    "copyRun": "复制运行链接",
+    "copied": "链接已复制",
+    "confirmTitle": "运行 {{name}}？",
+    "confirmDescription": "外部链接请求访问此目标。请检查已保存的目标与输入后再运行。",
+    "notInstalled": "请先在 Workrun 中安装此 App，再通过链接运行。"
   }
 }

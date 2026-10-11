@@ -29,6 +29,12 @@ Submit the message
 
 Saved successful operation results can be reused when the same logical operation is recovered. A connection timeout or lost stream does not prove that remote business work failed. When a task ID is available, Workrun can query the original task instead of submitting the business request again.
 
+## Subscriptions and interaction limits
+
+For streaming-capable services, Workrun receives progress through streams or `SubscribeToTask` rather than periodically polling active tasks. Recovery of a known task or a dropped submission stream reads a task snapshot before subscribing to unfinished work. If the task finishes just before subscription, Workrun reads one more snapshot to recover the final outcome. The service must support the required subscription capability. For non-streaming services, `SendMessage` must wait for and return a final result; an unfinished task response is an error.
+
+A remote `INPUT_REQUIRED` or `AUTH_REQUIRED` state currently marks the run interrupted. These A2A states are not wired to Workrun pending actions, authorization prompts, or automatic resumption, so they cannot be handled like local Human Review / Ask Human nodes. The remote task panel displays saved status, messages, and file results; it does not offer manual query, fetch, or cancellation controls.
+
 ## After workflow failure or Stop
 
 Workrun stops subsequent local scheduling and uses the saved remote records to identify unfinished original calls, including calls in parallel branches. It sends `CancelTask` directly, without a preliminary status query:

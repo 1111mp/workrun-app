@@ -171,10 +171,14 @@ fn endpoint(card: &Value, base: &Url) -> Result<(Url, Option<String>, bool)> {
     ))
 }
 
-async fn bounded_body(mut response: Response, context: &NodeContext) -> Result<Vec<u8>> {
+async fn bounded_body(response: Response, context: &NodeContext) -> Result<Vec<u8>> {
     if !response.status().is_success() {
         return Err(HttpStatus(response.status().as_u16()).into());
     }
+    bounded_response_body(response, context).await
+}
+
+async fn bounded_response_body(mut response: Response, context: &NodeContext) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if body.len() + chunk.len() > MAX_EVENT {
@@ -256,13 +260,34 @@ fn rpc_result(value: Value, id: &str) -> Result<Value> {
     }
     if let Some(error) = value.get("error") {
         // A remote error message can contain echoed input or base64. Report only its code.
-        bail!(
-            "A2A JSON-RPC error (code {})",
-            error.get("code").unwrap_or(&Value::Null)
-        );
+        return Err(RpcError(
+            error
+                .get("code")
+                .and_then(Value::as_i64)
+                .context("Invalid A2A error code")?,
+        )
+        .into());
     }
     value.get("result").cloned().context("A2A JSON-RPC result missing")
 }
+
+#[derive(Debug)]
+struct RemoteInteractionRequired(String);
+impl std::fmt::Display for RemoteInteractionRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "A2A task requires interaction: {}", self.0)
+    }
+}
+impl std::error::Error for RemoteInteractionRequired {}
+
+#[derive(Debug)]
+struct RpcError(i64);
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "A2A JSON-RPC error (code {})", self.0)
+    }
+}
+impl std::error::Error for RpcError {}
 
 #[derive(Default)]
 struct RemoteResult {
@@ -316,11 +341,12 @@ impl RemoteResult {
         {
             "TASK_STATE_COMPLETED" => self.complete = true,
             "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING" => {},
-            "TASK_STATE_FAILED"
-            | "TASK_STATE_CANCELED"
-            | "TASK_STATE_REJECTED"
-            | "TASK_STATE_INPUT_REQUIRED"
-            | "TASK_STATE_AUTH_REQUIRED" => bail!("A2A task ended in {}", status["state"]),
+            "TASK_STATE_FAILED" | "TASK_STATE_CANCELED" | "TASK_STATE_REJECTED" => {
+                bail!("A2A task ended in {}", status["state"])
+            },
+            "TASK_STATE_INPUT_REQUIRED" | "TASK_STATE_AUTH_REQUIRED" => {
+                return Err(RemoteInteractionRequired(state.to_owned()).into());
+            },
             _ => bail!("Unsupported A2A task state"),
         }
         if let Some(message) = status.get("message") {
@@ -486,16 +512,24 @@ async fn receive_stream(
     output: &mut RemoteResult,
     auth: &RemoteAuth,
 ) -> Result<()> {
-    if !response.status().is_success() {
-        bail!("A2A HTTP stream failed with status {}", response.status());
-    }
+    let status = response.status();
     if !response
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("text/event-stream"))
     {
+        // Unsupported subscriptions commonly arrive as JSON, including HTTP
+        // 400. Validate the RPC identity before interpreting the error code.
+        if !status.is_success() && status.as_u16() != 400 {
+            return Err(HttpStatus(status.as_u16()).into());
+        }
+        let value = serde_json::from_slice(&bounded_response_body(response, context).await?)?;
+        rpc_result(value, id)?;
         bail!("A2A streaming response must be text/event-stream");
+    }
+    if !status.is_success() {
+        bail!("A2A HTTP stream failed with status {status}");
     }
     let mut buffer = Vec::new();
     let mut data = Vec::new();
@@ -713,33 +747,15 @@ impl RemoteAgentNode {
                 &id,
             )?, &self.auth).await?;
         }
-        // A server may return a nonterminal Task despite blocking configuration.
-        // Poll the same task; never resend the original message and its files.
-        while !result.complete {
-            let task = result
-                .task_id
-                .clone()
-                .context("A2A incomplete response has no task ID")?;
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            let id = uuid::Uuid::new_v4().to_string();
-            let mut params = json!({"id":task,"historyLength":1});
-            if let Some(tenant) = &tenant {
-                params["tenant"] = json!(tenant);
+        if !result.complete {
+            if !streaming {
+                bail!("A2A blocking SendMessage returned an unfinished task instead of waiting for completion");
             }
-            let request = json!({"jsonrpc":"2.0","id":id,"method":"GetTask","params":params});
-            let task = rpc_result(
-                serde_json::from_slice(&read_with_retry(&client, &url, Some(&request), context).await?)?,
-                &id,
-            )?;
-            // Snapshots replace partial streamed artifacts, including when the
-            // authoritative snapshot omits artifacts. Never append recovered files.
-            let mut snapshot = RemoteResult {
-                task_id: result.task_id.clone(),
-                tracking: result.tracking.take(),
-                ..Default::default()
-            };
-            snapshot.accept_tracked(json!({"task":task}), &self.auth).await?;
-            result = snapshot;
+            // Read one authoritative snapshot after a dropped submission stream,
+            // then subscribe to updates. Never repeatedly query an active task.
+            result = self
+                .follow_task(context, &client, &url, tenant.as_deref(), result, Some(true))
+                .await?;
         }
         Ok(result)
     }
@@ -754,30 +770,123 @@ impl RemoteAgentNode {
             bail!("Saved A2A endpoint has a different origin");
         }
         let client = self.auth.client()?;
-        let mut tracking = Some(tracker);
-        loop {
-            let id = uuid::Uuid::new_v4().to_string();
-            let mut params = json!({"id":task_id,"historyLength":1});
-            if let Some(tenant) = &tracking.as_ref().unwrap().connection.tenant {
-                params["tenant"] = json!(tenant);
-            }
-            let request = json!({"jsonrpc":"2.0","id":id,"method":"GetTask","params":params});
-            let task = rpc_result(
-                serde_json::from_slice(&read_with_retry(&client, &url, Some(&request), context).await?)?,
-                &id,
-            )?;
-            let mut result = RemoteResult {
-                task_id: Some(task_id.clone()),
-                tracking: tracking.take(),
+        let tenant = tracker.connection.tenant.clone();
+        self.follow_task(
+            context,
+            &client,
+            &url,
+            tenant.as_deref(),
+            RemoteResult {
+                task_id: Some(task_id),
+                tracking: Some(tracker),
                 ..Default::default()
-            };
-            result.accept_tracked(json!({"task":task}), &self.auth).await?;
-            if result.complete {
-                return Ok(result);
-            }
-            tracking = result.tracking.take();
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            },
+            None,
+        )
+        .await
+    }
+
+    async fn follow_task(
+        &self,
+        context: &NodeContext,
+        client: &Client,
+        url: &Url,
+        tenant: Option<&str>,
+        mut result: RemoteResult,
+        streaming: Option<bool>,
+    ) -> Result<RemoteResult> {
+        let task_id = result
+            .task_id
+            .clone()
+            .context("A2A incomplete response has no task ID")?;
+        let mut params = json!({"id":task_id,"historyLength":1});
+        if let Some(tenant) = tenant {
+            params["tenant"] = json!(tenant);
         }
+        let id = uuid::Uuid::new_v4().to_string();
+        let request = json!({"jsonrpc":"2.0","id":id,"method":"GetTask","params":params});
+        let task = rpc_result(
+            serde_json::from_slice(&read_with_retry(client, url, Some(&request), context).await?)?,
+            &id,
+        )?;
+        let mut snapshot = RemoteResult {
+            task_id: Some(task_id),
+            tracking: result.tracking.take(),
+            ..Default::default()
+        };
+        snapshot.accept_tracked(json!({"task":task}), &self.auth).await?;
+        if snapshot.complete {
+            return Ok(snapshot);
+        }
+        // Finished snapshots do not depend on Agent Card discovery succeeding.
+        let streaming = match streaming {
+            Some(streaming) => streaming,
+            None => {
+                let card_url = self.url.join("/.well-known/agent-card.json")?;
+                let card: Value = serde_json::from_slice(&read_with_retry(client, &card_url, None, context).await?)?;
+                self.auth.validate_card(&card)?;
+                endpoint(&card, &self.url)?.2
+            },
+        };
+        if !streaming {
+            bail!("A2A task is unfinished and the service does not support subscriptions");
+        }
+        params.as_object_mut().unwrap().remove("historyLength");
+        // SubscribeToTask starts with a full Task snapshot, then pushes changes.
+        // Bounded reconnects are recovery from transport failure, not polling.
+        for attempt in 0..3 {
+            let id = uuid::Uuid::new_v4().to_string();
+            let request = json!({"jsonrpc":"2.0","id":id,"method":"SubscribeToTask","params":params});
+            snapshot.response.clear();
+            snapshot.artifacts.clear();
+            let outcome = async {
+                let response = client
+                    .post(url.clone())
+                    .header("A2A-Version", "1.0")
+                    .header("Accept", "text/event-stream")
+                    .json(&request)
+                    .send()
+                    .await?;
+                receive_stream(response, &id, context, &mut snapshot, &self.auth).await?;
+                if !snapshot.complete {
+                    return Err(InterruptedStream.into());
+                }
+                Ok(())
+            }
+            .await;
+            match outcome {
+                Ok(()) => return Ok(snapshot),
+                Err(error) if transient(&error) && attempt < 2 => {
+                    tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+                },
+                Err(error) => {
+                    if error.downcast_ref::<RpcError>().is_some_and(|error| error.0 == -32004) {
+                        // A task can finish between GetTask and SubscribeToTask;
+                        // terminal tasks cannot be subscribed to. Check once for
+                        // the final result without resubmitting or polling.
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let mut query = params.clone();
+                        query["historyLength"] = json!(1);
+                        let request = json!({"jsonrpc":"2.0","id":id,"method":"GetTask","params":query});
+                        let task = rpc_result(
+                            serde_json::from_slice(&read_with_retry(client, url, Some(&request), context).await?)?,
+                            &id,
+                        )?;
+                        let mut final_snapshot = RemoteResult {
+                            task_id: snapshot.task_id.clone(),
+                            tracking: snapshot.tracking.take(),
+                            ..Default::default()
+                        };
+                        final_snapshot.accept_tracked(json!({"task":task}), &self.auth).await?;
+                        if final_snapshot.complete {
+                            return Ok(final_snapshot);
+                        }
+                    }
+                    return Err(error.context("A2A task subscription failed"));
+                },
+            }
+        }
+        unreachable!("task subscription attempts always return")
     }
 }
 
@@ -942,8 +1051,20 @@ impl Node for RemoteAgentNode {
                 .with_update("workflow.node", event.clone())
                 .with_update("workflow.trace", event))
         };
-        work.await
-            .map_err(|error: anyhow::Error| graph_node_error(&self.id, self.auth.redact(&error.to_string())))
+        match work.await {
+            Ok(output) => Ok(output),
+            Err(error) if error.is::<RemoteInteractionRequired>() => {
+                let interaction = error.downcast_ref::<RemoteInteractionRequired>().unwrap();
+                // Preserve protocol interaction pauses for future support. These states
+                // are not yet wired to pending actions, authorization prompts, or
+                // automatic resumption; the run is currently marked interrupted.
+                Ok(NodeOutput::interrupt_with_data(
+                    &error.to_string(),
+                    json!({"nodeId":self.id,"remoteState":interaction.0}),
+                ))
+            },
+            Err(error) => Err(graph_node_error(&self.id, self.auth.redact(&error.to_string()))),
+        }
     }
 }
 
@@ -1044,6 +1165,7 @@ async fn remote_task_operation_in_pool(
             Err(error) if error.downcast_ref::<HttpStatus>().is_some_and(|status| status.0 == 404) => {
                 sqlx::query("UPDATE remote_tasks SET status = 'not_found', updated_at = ?, last_checked_at = ? WHERE id = ?")
                     .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
+                remote_tasks::notify_changed();
                 return Ok(());
             },
             body => body?,
@@ -1053,6 +1175,7 @@ async fn remote_task_operation_in_pool(
         if envelope["jsonrpc"] == "2.0" && envelope["id"] == rpc_id && envelope.pointer("/error/code").and_then(Value::as_i64) == Some(-32001) {
             sqlx::query("UPDATE remote_tasks SET status = 'not_found', updated_at = ?, last_checked_at = ? WHERE id = ?")
                 .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
+                remote_tasks::notify_changed();
             return Ok(());
         }
         let task = rpc_result(envelope, &rpc_id)?;
@@ -1264,7 +1387,7 @@ mod tests {
     }
 
     // Real HTTP exercises discovery, wire names, tenant routing, SSE framing,
-    // task polling, timeout cancellation, immutable files and downstream State.
+    // task subscriptions, timeout cancellation, immutable files and downstream State.
     struct FailCheckpointOnce {
         inner: adk_rust::graph::checkpoint::MemoryCheckpointer,
         fail: std::sync::atomic::AtomicBool,
@@ -1293,7 +1416,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires loopback TCP sockets"]
-    async fn v1_http_files_stream_poll_and_timeout_closed_loop() {
+    async fn v1_http_files_stream_subscribe_and_timeout_closed_loop() {
         use crate::config::RemoteCredentialKind;
         for auth_kind in [
             None,
@@ -1317,7 +1440,16 @@ mod tests {
             for mode in [
                 "stream",
                 "send",
-                "poll",
+                "subscribe",
+                "race_completed",
+                "race_failed",
+                "race_canceled",
+                "race_rejected",
+                "nonstream_pending",
+                "input_required",
+                "auth_required",
+                "unsupported_subscription",
+                "method_missing",
                 "timeout",
                 "uri",
                 "unauthorized",
@@ -1341,6 +1473,13 @@ mod tests {
                 let recovery = matches!(
                     mode,
                     "disconnect"
+                        | "subscribe"
+                        | "race_completed"
+                        | "race_failed"
+                        | "race_canceled"
+                        | "race_rejected"
+                        | "unsupported_subscription"
+                        | "method_missing"
                         | "discovery_retry"
                         | "partial"
                         | "query_retry"
@@ -1438,8 +1577,44 @@ mod tests {
                                         task["status"]["state"] = json!("TASK_STATE_CANCELED");
                                         ("application/json", reply(task))
                                     }
+                                } else if method == "SubscribeToTask"
+                                    && (matches!(mode, "unsupported_subscription" | "method_missing")
+                                        || mode.starts_with("race_"))
+                                {
+                                    ("application/json", json!({"jsonrpc":"2.0","id":rpc["id"],"error":{"code":if mode=="method_missing" {-32601} else {-32004},"message":"secret"}}).to_string())
+                                } else if method == "SubscribeToTask" {
+                                    assert_eq!(rpc["params"]["id"], "task-1");
+                                    (
+                                        "text/event-stream",
+                                        format!("data: {}\n\n", reply(json!({"task":task}))),
+                                    )
                                 } else if method == "GetTask" {
-                                    if mode == "manual_notfound" {
+                                    if mode.starts_with("race_") {
+                                        let queries = calls
+                                            .lock()
+                                            .unwrap()
+                                            .iter()
+                                            .filter(|r| r["method"] == "GetTask")
+                                            .count();
+                                        task["status"]["state"] = json!(if queries == 1 {
+                                            "TASK_STATE_WORKING"
+                                        } else {
+                                            match mode {
+                                                "race_completed" => "TASK_STATE_COMPLETED",
+                                                "race_failed" => "TASK_STATE_FAILED",
+                                                "race_canceled" => "TASK_STATE_CANCELED",
+                                                "race_rejected" => "TASK_STATE_REJECTED",
+                                                _ => unreachable!(),
+                                            }
+                                        });
+                                        ("application/json", reply(task))
+                                    } else if matches!(
+                                        mode,
+                                        "subscribe" | "unsupported_subscription" | "method_missing"
+                                    ) {
+                                        task["status"]["state"] = json!("TASK_STATE_WORKING");
+                                        ("application/json", reply(task))
+                                    } else if mode == "manual_notfound" {
                                         ("application/json", json!({"jsonrpc":"2.0","id":rpc["id"],"error":{"code":-32001,"message":"missing test-secret"}}).to_string())
                                     } else {
                                         ("application/json", reply(task))
@@ -1489,7 +1664,10 @@ mod tests {
                                         ("text/event-stream", body)
                                     } else {
                                         assert_eq!(method, "SendMessage");
-                                        let result = if mode == "poll" {
+                                        assert_eq!(rpc["params"]["configuration"]["returnImmediately"], false);
+                                        let result = if matches!(mode, "input_required" | "auth_required") {
+                                            json!({"task":{"id":"task-1","status":{"state":if mode == "input_required" {"TASK_STATE_INPUT_REQUIRED"} else {"TASK_STATE_AUTH_REQUIRED"}}}})
+                                        } else if mode == "nonstream_pending" {
                                             json!({"task":{"id":"task-1","status":{"state":"TASK_STATE_WORKING"}}})
                                         } else if mode == "uri" {
                                             json!({"message":{"role":"ROLE_AGENT","parts":[{"url":"http://example.com/private.pdf"}]}})
@@ -1548,7 +1726,17 @@ mod tests {
                             } else if mode == "forbidden" {
                                 "403 Forbidden"
                             } else {
-                                "200 OK"
+                                if mode == "unsupported_subscription"
+                                    && calls
+                                        .lock()
+                                        .unwrap()
+                                        .last()
+                                        .is_some_and(|r| r["method"] == "SubscribeToTask")
+                                {
+                                    "400 Bad Request"
+                                } else {
+                                    "200 OK"
+                                }
                             };
                             // Close before response headers to exercise request transport errors,
                             // separately from a valid transient HTTP status.
@@ -1643,6 +1831,116 @@ mod tests {
                         ExecutionConfig::new("a2a-http").with_metadata("workrun.run_id", json!("run-1")),
                     )
                     .await;
+                if matches!(mode, "input_required" | "auth_required") {
+                    assert!(
+                        matches!(result, Err(adk_rust::graph::GraphError::Interrupted(_))),
+                        "protocol interaction must pause: {result:?}"
+                    );
+                    let records = remote_tasks::list_remote_tasks(&task_pool, "run-1").await.unwrap();
+                    assert_eq!(records[0].status, mode);
+                    assert_eq!(records[0].task_id.as_deref(), Some("task-1"));
+                    let requests = calls.lock().unwrap();
+                    assert_eq!(requests.iter().filter(|r| r["method"] == "SendMessage").count(), 1);
+                    assert!(
+                        !requests.iter().any(|r| matches!(
+                            r["method"].as_str(),
+                            Some("GetTask" | "SubscribeToTask" | "CancelTask")
+                        ))
+                    );
+                    drop(requests);
+                    server.abort();
+                    continue;
+                }
+                if matches!(
+                    mode,
+                    "nonstream_pending"
+                        | "unsupported_subscription"
+                        | "method_missing"
+                        | "race_failed"
+                        | "race_canceled"
+                        | "race_rejected"
+                ) {
+                    assert!(
+                        matches!(result, Err(adk_rust::graph::GraphError::NodeExecutionFailed { .. })),
+                        "invalid or unsupported protocol response must fail, not pause: {result:?}"
+                    );
+                    let records = remote_tasks::list_remote_tasks(&task_pool, "run-1").await.unwrap();
+                    assert_eq!(records[0].task_id.as_deref(), Some("task-1"));
+                    {
+                        let requests = calls.lock().unwrap();
+                        assert_eq!(
+                            requests
+                                .iter()
+                                .filter(|r| matches!(
+                                    r["method"].as_str(),
+                                    Some("SendMessage" | "SendStreamingMessage")
+                                ))
+                                .count(),
+                            1
+                        );
+                        assert_eq!(
+                            requests.iter().filter(|r| r["method"] == "SubscribeToTask").count(),
+                            if mode == "nonstream_pending" { 0 } else { 1 }
+                        );
+                        assert_eq!(
+                            requests.iter().filter(|r| r["method"] == "GetTask").count(),
+                            if mode == "nonstream_pending" {
+                                0
+                            } else if mode == "unsupported_subscription" || mode.starts_with("race_") {
+                                2
+                            } else {
+                                1
+                            }
+                        );
+                    }
+                    // Exercise the same one-shot lifecycle handler used after
+                    // the run manager persists a workflow failure.
+                    sqlx::query("UPDATE run_records SET status='failed' WHERE id='run-1'")
+                        .execute(&task_pool)
+                        .await
+                        .unwrap();
+                    sqlx::query("CREATE TABLE run_events (run_id TEXT,sequence INTEGER,event_json TEXT,created_at TEXT,PRIMARY KEY(run_id,sequence))")
+                        .execute(&task_pool).await.unwrap();
+                    for _ in 0..2 {
+                        super::super::remote_lifecycle::cancel_in_pool(&task_pool, "run-1", |id| {
+                            let pool = task_pool.clone();
+                            let store = store.clone();
+                            let auth_kind = auth_kind.clone();
+                            async move {
+                                remote_task_operation_in_pool(
+                                    pool,
+                                    vec![42; 32],
+                                    &store,
+                                    &id,
+                                    RemoteTaskOperation::Cancel,
+                                    &IWorkrun::default(),
+                                    Some(RemoteAuth::testing(auth_kind)),
+                                )
+                                .await
+                            }
+                        })
+                        .await
+                        .unwrap();
+                    }
+                    assert_eq!(
+                        calls
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|r| r["method"] == "CancelTask")
+                            .count(),
+                        if mode.starts_with("race_") { 0 } else { 1 }
+                    );
+                    assert_eq!(
+                        sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id='run-1'")
+                            .fetch_one(&task_pool)
+                            .await
+                            .unwrap(),
+                        "failed"
+                    );
+                    server.abort();
+                    continue;
+                }
                 if mode == "send" {
                     use adk_rust::graph::Checkpointer;
                     assert!(
@@ -1810,7 +2108,7 @@ mod tests {
                         );
                         assert_eq!(
                             calls.iter().filter(|r| r["method"] == "GetTask").count(),
-                            if matches!(mode, "query_retry" | "query_close") {
+                            if matches!(mode, "query_retry" | "query_close" | "race_completed") {
                                 2
                             } else {
                                 1
@@ -1821,8 +2119,13 @@ mod tests {
                             assert_eq!(calls.iter().filter(|r| r["method"] == "Discovery").count(), 2);
                         }
                     }
-                    if mode == "poll" {
-                        assert!(calls.lock().unwrap().iter().any(|r| r["method"] == "GetTask"));
+                    if matches!(mode, "subscribe" | "race_completed") {
+                        let requests = calls.lock().unwrap();
+                        assert_eq!(
+                            requests.iter().filter(|r| r["method"] == "GetTask").count(),
+                            if mode == "race_completed" { 2 } else { 1 }
+                        );
+                        assert_eq!(requests.iter().filter(|r| r["method"] == "SubscribeToTask").count(), 1);
                     }
                 }
                 for _ in 0..20 {
@@ -2203,18 +2506,62 @@ pub(super) async fn execute_compensation_remote(
 /// Query only original Remote operations after abandonment. Fetching an already
 /// completed task closes the external-success/local-save window atomically with
 /// the original compensation outcome; it never reschedules the forward graph.
-pub(super) async fn reconcile_abandoned_operations(pool: &sqlx::SqlitePool, key: &[u8], run_id: &str) -> Result<bool> {
+pub(super) async fn reconcile_abandoned_operations(pool: &sqlx::SqlitePool, key: &[u8], run_id: &str) -> Result<()> {
     let rows:Vec<(String,String)>=sqlx::query_as("SELECT DISTINCT o.id,o.adapter_record_id FROM workflow_operations o JOIN workflow_operation_attempts a ON a.operation_id=o.id WHERE a.run_id=? AND o.purpose='execution' AND o.adapter='remote_agent' AND o.status!='running' AND o.result_json IS NULL AND o.confirmed_no_effect=0 AND o.dispatched_at IS NOT NULL AND o.adapter_record_id IS NOT NULL")
         .bind(run_id).fetch_all(pool).await?;
     if rows.is_empty() {
-        return Ok(false);
+        return Ok(());
     }
     let config = BaseConfig::workrun().await.latest_arc();
-    let mut still_running = false;
     for (operation_id, record_id) in rows {
-        let record = remote_task_operation(&record_id, RemoteTaskOperation::Query, &config).await?;
+        let mut record = remote_task_operation(&record_id, RemoteTaskOperation::Query, &config).await?;
+        if matches!(record.status.as_str(), "submitted" | "working") {
+            // Hold a subscription to the original remote identity while the
+            // compensation worker waits; never periodically issue GetTask.
+            let tracker = RemoteTaskTracker::load(pool.clone(), key.to_vec(), &record_id).await?;
+            let connection = &tracker.connection;
+            let auth = RemoteAuth::resolve(connection.authentication.as_ref(), &connection.service_url, &config)?;
+            let client = auth.client()?;
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut params = json!({"id":connection.task_id});
+            if let Some(tenant) = &connection.tenant {
+                params["tenant"] = json!(tenant);
+            }
+            let request = json!({"jsonrpc":"2.0","id":id,"method":"SubscribeToTask","params":params});
+            let url = Url::parse(&connection.endpoint)?;
+            validate_url(&url)?;
+            anyhow::ensure!(
+                Url::parse(&connection.service_url)?.origin() == url.origin(),
+                "Saved A2A endpoint has a different origin"
+            );
+            let response = client
+                .post(url)
+                .header("A2A-Version", "1.0")
+                .header("Accept", "text/event-stream")
+                .json(&request)
+                .send()
+                .await?;
+            let context = NodeContext::new(
+                State::new(),
+                ExecutionConfig::new("remote-compensation-subscription"),
+                0,
+            );
+            let mut result = RemoteResult {
+                tracking: Some(tracker),
+                ..Default::default()
+            };
+            let outcome = receive_stream(response, &id, &context, &mut result, &auth).await;
+            record = remote_tasks::list_remote_tasks(pool, &record.run_id)
+                .await?
+                .into_iter()
+                .find(|item| item.id == record_id)
+                .context("Remote task record missing")?;
+            if matches!(record.status.as_str(), "submitted" | "working" | "unknown") {
+                outcome?;
+                bail!("Remote task subscription ended before a terminal outcome; review the saved task");
+            }
+        }
         if record.status != "completed" {
-            still_running |= matches!(record.status.as_str(), "submitted" | "working");
             continue;
         }
         let record = remote_task_operation(&record_id, RemoteTaskOperation::Fetch, &config).await?;
@@ -2230,7 +2577,7 @@ pub(super) async fn reconcile_abandoned_operations(pool: &sqlx::SqlitePool, key:
             .bind(uuid::Uuid::new_v4().to_string()).bind(&operation_id).bind(run_id).bind(&now).bind(now).bind(&operation_id).execute(&mut *tx).await?;
         tx.commit().await?;
     }
-    Ok(still_running)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2267,7 +2614,7 @@ mod compensation_http_tests {
                 let header = String::from_utf8_lossy(&request[..header_end]).to_lowercase();
                 let body=if header.starts_with("get ") {
                     received.lock().unwrap().push("Discovery".into());
-                    json!({"supportedInterfaces":[{"url":format!("{server_base}/rpc"),"protocolBinding":"JSONRPC","protocolVersion":"1.0"}],"capabilities":{"streaming":false}})
+                    json!({"supportedInterfaces":[{"url":format!("{server_base}/rpc"),"protocolBinding":"JSONRPC","protocolVersion":"1.0"}],"capabilities":{"streaming":true}})
                 } else {
                     let len:usize=header.lines().find_map(|line|line.strip_prefix("content-length: ")).unwrap().trim().parse().unwrap();
                     while request.len()<header_end+len {
@@ -2279,7 +2626,12 @@ mod compensation_http_tests {
                     let rpc:Value=serde_json::from_slice(&request[header_end..header_end+len]).unwrap();
                     let method=rpc["method"].as_str().unwrap();
                     received.lock().unwrap().push(method.into());
-                    let task=if method=="SendMessage" {
+                    // Keep the initial snapshot pending so cancellation lands
+                    // after identity persistence, before remote completion.
+                    if method == "GetTask" && received.lock().unwrap().iter().filter(|m| m.as_str() == "GetTask").count() == 1 {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    let task=if method=="SendStreamingMessage" {
                         let args:Value=serde_json::from_str(rpc["params"]["message"]["parts"][0]["text"].as_str().unwrap()).unwrap();
                         assert_eq!(args["requestId"],"stable-undo-id");
                         json!({"task":{"id":"undo-task","status":{"state":"TASK_STATE_WORKING"}}})
@@ -2290,8 +2642,18 @@ mod compensation_http_tests {
                     };
                     json!({"jsonrpc":"2.0","id":rpc["id"],"result":task})
                 }.to_string();
+                let streaming = received
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .is_some_and(|m| m == "SendStreamingMessage");
+                let (content_type, body) = if streaming {
+                    ("text/event-stream", format!("data: {body}\n\n"))
+                } else {
+                    ("application/json", body)
+                };
                 let reply = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = socket.write_all(reply.as_bytes()).await;
@@ -2391,7 +2753,10 @@ mod compensation_http_tests {
         .unwrap();
         assert!(reuse.result.is_some());
         reuse.finish(Some(&receipt), "succeeded", None).await.unwrap();
-        assert_eq!(*methods.lock().unwrap(), ["Discovery", "SendMessage", "GetTask"]);
+        assert_eq!(
+            *methods.lock().unwrap(),
+            ["Discovery", "SendStreamingMessage", "GetTask", "GetTask"]
+        );
         let attempts: Vec<String> =
             sqlx::query_scalar("SELECT action FROM workflow_operation_attempts ORDER BY sequence")
                 .fetch_all(&pool)

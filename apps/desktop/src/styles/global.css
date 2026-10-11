@@ -1,6 +1,8 @@
 @import '@xyflow/react/dist/style.css' layer(base);
 @import '@workspace/ui/globals.css';
 
+@custom-variant light (&:is(.light *));
+
 /* json-edit-react's custom editor is a non-stretching flex item. */
 .workrun-json-editor .jer-collection-text-edit-custom {
   align-self: stretch;

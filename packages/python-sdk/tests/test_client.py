@@ -167,13 +167,12 @@ def test_open_windows_named_pipe_retries_when_all_instances_are_busy(
 
     def open_pipe(*_: object, **kwargs: object) -> object:
         nonlocal attempts
-        assert kwargs == {"buffering": 0}
         attempts += 1
         if attempts == 1:
             raise PipeBusyError()
         return connection
 
-    monkeypatch.setattr(client_module, "open", open_pipe, raising=False)
+    monkeypatch.setattr(client_module, "WindowsPipe", open_pipe)
     monkeypatch.setattr(client_module, "sleep", sleeps.append)
 
     assert _open_windows_named_pipe(r"\\.\pipe\workrun") is connection
@@ -192,11 +191,10 @@ def test_open_windows_named_pipe_stops_after_maximum_attempts(
 
     def open_pipe(*_: object, **kwargs: object) -> object:
         nonlocal attempts
-        assert kwargs == {"buffering": 0}
         attempts += 1
         raise PipeBusyError()
 
-    monkeypatch.setattr(client_module, "open", open_pipe, raising=False)
+    monkeypatch.setattr(client_module, "WindowsPipe", open_pipe)
     monkeypatch.setattr(client_module, "sleep", sleeps.append)
 
     with pytest.raises(PipeBusyError):
@@ -221,9 +219,14 @@ def test_artifact_request_returns_host_reference() -> None:
     with tempfile.TemporaryDirectory(prefix="wr-") as directory:
         endpoint = Path(directory) / "workrun.sock"
         reference = {"$type": "artifact", "id": "resource", "version": 1}
-        thread, received = serve_once(endpoint, {"type": "artifact.response", "data": reference})
+        thread, received = serve_once(
+            endpoint, {"type": "artifact.response", "data": reference}
+        )
         with WorkrunClient(str(endpoint), "token", "run") as client:
-            assert client.emit({"type": "artifact.save", "path": "/tmp/report.pdf"}) == reference
+            assert (
+                client.emit({"type": "artifact.save", "path": "/tmp/report.pdf"})
+                == reference
+            )
         thread.join(timeout=5)
         assert not thread.is_alive()
         assert received[1]["type"] == "artifact.save"
@@ -233,7 +236,9 @@ def test_artifact_request_returns_host_reference() -> None:
 def test_artifact_request_surfaces_host_denial() -> None:
     with tempfile.TemporaryDirectory(prefix="wr-") as directory:
         endpoint = Path(directory) / "workrun.sock"
-        thread, _ = serve_once(endpoint, {"type": "artifact.error", "error": "Resource is not authorized"})
+        thread, _ = serve_once(
+            endpoint, {"type": "artifact.error", "error": "Resource is not authorized"}
+        )
         with WorkrunClient(str(endpoint), "token", "run") as client:
             with pytest.raises(WorkrunConnectionError, match="not authorized"):
                 client.emit({"type": "artifact.read", "reference": {"id": "other"}})

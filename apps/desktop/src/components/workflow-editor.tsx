@@ -112,6 +112,7 @@ type WorkflowEditorProps = {
   allowRun?: boolean;
   autoStartRun?: boolean;
   historicalRun?: RunRecord;
+  liveRun?: boolean;
   historicalChatSessionId?: string;
 };
 
@@ -144,6 +145,7 @@ function WorkflowEditor({
   allowRun,
   autoStartRun,
   historicalRun,
+  liveRun,
   historicalChatSessionId,
 }: WorkflowEditorProps) {
   const [draftDocument] = useState<WorkflowDocument>(() =>
@@ -161,6 +163,7 @@ function WorkflowEditor({
         allowRun={allowRun}
         autoStartRun={autoStartRun}
         historicalRun={historicalRun}
+        liveRun={liveRun}
         historicalChatSessionId={historicalChatSessionId}
       />
     </WorkflowStoreProvider>
@@ -173,6 +176,7 @@ function WorkflowEditorContent({
   allowRun = false,
   autoStartRun,
   historicalRun,
+  liveRun,
   historicalChatSessionId,
 }: WorkflowEditorProps) {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -432,10 +436,15 @@ function WorkflowEditorContent({
   });
 
   const runtime = historicalRun?.runtime as Record<string, unknown> | undefined;
-  const restoredRun =
-    typeof runtime?.threadId === 'string'
-      ? { id: historicalRun!.id, threadId: runtime.threadId }
-      : undefined;
+  const restoredRunId = historicalRun?.id;
+  const restoredThreadId = runtime?.threadId;
+  const restoredRun = useMemo(
+    () =>
+      restoredRunId && typeof restoredThreadId === 'string'
+        ? { id: restoredRunId, threadId: restoredThreadId }
+        : undefined,
+    [restoredRunId, restoredThreadId],
+  );
   const displayedHistoricalRun = historicalRun ?? viewingHistoricalRun;
   const displayedRunDocument = workflowDocumentFromSnapshot(
     displayedHistoricalRun?.targetSnapshot,
@@ -444,8 +453,10 @@ function WorkflowEditorContent({
     viewingHistoricalChatSession?.workflowSnapshot?.document;
   const displayedOutputDocument =
     displayedRunDocument ?? displayedHistoricalChatDocument;
+  // Deeplink runs recover their initial output from history, but keep the
+  // same approval and continuation controls as a run started in this editor.
   const viewingHistoricalOutput = Boolean(
-    displayedHistoricalRun || viewingHistoricalChatSession,
+    (!liveRun && displayedHistoricalRun) || viewingHistoricalChatSession,
   );
   // The output shell chooses its chat/task layout from these props, so it must
   // use the same run-time snapshot as event replay rather than editor state.
@@ -487,11 +498,11 @@ function WorkflowEditorContent({
       workflowRun.telemetryRevision,
     ],
     queryFn: () => inspectRunRecord(workflowRun.runId!),
-    // Historical output is an immutable snapshot. Only the editor's own run
-    // needs to refetch when the native runtime reports new model usage.
+    // Historical output is an immutable snapshot. Interactive runs, including
+    // deeplink runs, refresh when the native runtime reports new model usage.
     enabled:
       Boolean(workflowRun.runId) &&
-      !historicalRun &&
+      (!historicalRun || Boolean(liveRun)) &&
       !viewingHistoricalRunId &&
       !viewingHistoricalChatSession,
     // A model-call event changes only the revision portion of this key. Keep
@@ -1141,7 +1152,6 @@ function WorkflowEditorContent({
         ) : null}
         {!readOnly || allowRun ? (
           <WorkflowRunPanel
-            workflowId={activeWorkflow?.id}
             settings={
               viewingHistoricalOutput
                 ? displayedRunSettings
@@ -1181,7 +1191,11 @@ function WorkflowEditorContent({
               return archived;
             }}
             readOnly={viewingHistoricalOutput}
-            spans={displayedHistoricalRun?.spans ?? liveRunRecord.data?.spans}
+            spans={
+              liveRun
+                ? (liveRunRecord.data?.spans ?? displayedHistoricalRun?.spans)
+                : (displayedHistoricalRun?.spans ?? liveRunRecord.data?.spans)
+            }
             spansByTurn={
               viewingHistoricalChatSession
                 ? Object.fromEntries(

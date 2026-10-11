@@ -73,6 +73,7 @@ import {
 } from '@/components/app-run-output-panel';
 import { AppSchedules } from '@/components/app-schedules';
 import { AppExportButton } from '@/components/app-share-dialog';
+import { DeeplinkDialog } from '@/components/deeplink-dialog';
 import { AppPublishForm } from '@/components/forms';
 import { JsonEditorField } from '@/components/json-editor';
 import { isTeamMode } from '@/lib/constant';
@@ -764,6 +765,11 @@ function ProcessNodeDetailEditor({
             </div>
           </div>
           <div className='relative flex shrink-0 flex-wrap gap-2'>
+            <DeeplinkDialog
+              targetType='apps'
+              targetId={processNode.definition.id}
+              disabled={save.isPending || publish.isPending}
+            />
             {!isTeamMode() ? (
               <AppExportButton
                 id={processNode.definition.id}

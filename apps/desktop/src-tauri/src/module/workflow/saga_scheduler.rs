@@ -105,7 +105,7 @@ pub(crate) async fn recover_startup(pool: &sqlx::SqlitePool) -> Result<()> {
 pub(crate) async fn claim(pool: &sqlx::SqlitePool) -> Result<Option<String>> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let id:Option<String>=sqlx::query_scalar("SELECT run_id FROM workflow_abandonments WHERE status='pending' AND next_check_at<=? ORDER BY requested_at LIMIT 1")
+    let id:Option<String>=sqlx::query_scalar("SELECT run_id FROM workflow_abandonments WHERE status='pending' AND next_check_at<=? AND NOT (COALESCE(last_error,'')='Waiting for original execution to stop' AND EXISTS(SELECT 1 FROM run_records r WHERE r.id=workflow_abandonments.run_id AND r.status IN ('queued','running','waiting_for_input'))) ORDER BY requested_at LIMIT 1")
         .bind(&now).fetch_optional(&mut *tx).await?;
     if let Some(id) = &id {
         sqlx::query("UPDATE workflow_abandonments SET status='running',updated_at=? WHERE run_id=?")
@@ -126,7 +126,7 @@ pub(super) async fn plan_status(
 ) -> Result<()> {
     let now = chrono::Utc::now();
     sqlx::query("UPDATE workflow_abandonments SET status=?,last_error=?,updated_at=?,next_check_at=? WHERE run_id=? AND status='running'")
-        .bind(status).bind(error).bind(now.to_rfc3339()).bind((now+chrono::Duration::seconds(5)).to_rfc3339()).bind(run_id).execute(pool).await?;
+        .bind(status).bind(error).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(run_id).execute(pool).await?;
     Ok(())
 }
 
@@ -237,15 +237,25 @@ pub(super) async fn next_intent(pool: &sqlx::SqlitePool, run_id: &str) -> Result
 
 /// One bounded work item per tick. The SQLite claim survives renderer loss;
 /// shutdown never starts another item and startup reopens an interrupted claim.
-pub(crate) async fn tick(pool: sqlx::SqlitePool, key: Vec<u8>, run_id: &str) -> Result<()> {
+pub(crate) async fn tick(
+    pool: sqlx::SqlitePool,
+    key: Vec<u8>,
+    run_id: &str,
+    permits: std::sync::Arc<tokio::sync::Semaphore>,
+) -> Result<()> {
     if process_cleanup::is_automatic(&pool, run_id).await? {
-        return process_cleanup::tick(&pool, &key, run_id).await;
+        return process_cleanup::tick(&pool, &key, run_id, permits).await;
     }
 
     let result = process_plan(&pool, &key, run_id, |intent, operation| {
         let pool = &pool;
         let key = &key;
-        async move { saga::execute_compensation(pool, key, run_id, &intent, &operation).await }
+        async move {
+            // Remote reconciliation may wait indefinitely; reserve an execution
+            // slot only when an actual compensation is ready to execute.
+            let _permit = permits.acquire_owned().await?;
+            saga::execute_compensation(pool, key, run_id, &intent, &operation).await
+        }
     })
     .await;
     if result.is_err() {
@@ -270,16 +280,7 @@ where
         return Ok(());
     }
     // Reconcile existing Remote task identities, never create new forward work.
-    if super::remote_agent::reconcile_abandoned_operations(pool, key, run_id).await? {
-        plan_status(
-            pool,
-            run_id,
-            "pending",
-            Some("Waiting for existing Remote tasks to reach a confirmed terminal outcome"),
-        )
-        .await?;
-        return Ok(());
-    }
+    super::remote_agent::reconcile_abandoned_operations(pool, key, run_id).await?;
     if let Err(error) = prepare_plan(pool, key, run_id).await {
         plan_status(pool, run_id, "blocked", Some(&error.to_string())).await?;
         return Err(error);

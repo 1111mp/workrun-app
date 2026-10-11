@@ -107,6 +107,7 @@ pub async fn create_mcp_server(request: CreateMcpServerRequest) -> Result<McpSer
         })
         .await?;
 
+    crate::module::mcp_server::notify_changed();
     Ok(McpServerRegistry::stopped(definition))
 }
 

@@ -160,6 +160,21 @@ See the [scheduled runs guide](https://workrun-docs.pages.dev/guides/scheduled-r
 
 Personal and team workspaces are independent; switching modes does not automatically share personal assets. The desktop connects to a self-hosted NestJS team service with authentication. The service manages identity, shared assets, and published versions, while workflows and Python apps still execute on each member's desktop. Members can browse and run published workflows and publish semantically versioned workflows and apps. Publishing validates references and pins immutable Team App releases to the workflow version. At runtime, the desktop installs isolated copies of those releases so historical runs and regression results remain reproducible.
 
+### 9. Open and run through deep links
+
+Use **External invocation** on a saved App or Workflow to copy an open link or a run link. Workflow run links can include a URL-encoded JSON input object. Workrun waits for startup and login, then asks for confirmation and any missing inputs before submitting the run to its normal execution manager.
+
+```text
+workrun://v1/apps/{appId}
+workrun://v1/apps/{appId}/run
+workrun://v1/workflows/{workflowId}
+workrun://v1/workflows/{workflowId}/run?input=%7B%22message%22%3A%22hello%22%7D&requestId=example-1
+```
+
+Links resolve IDs in the current workspace. Apps and workflow dependencies must already be available; links do not install them. App input parameters, automatic execution, and result callbacks are outside this first version. Keep secrets and large files out of URLs; links are limited to 32 KB.
+
+`requestId` is optional. Reusing it with the same target and original input opens the existing run, including after restarting Workrun. Reusing it with different parameters reports a conflict. Without it, each new click can create a new run. Pending confirmations survive webview reloads, but are discarded when the desktop process exits. System protocol registration should be tested with an installed build, particularly on macOS.
+
 ## Architecture
 
 ```mermaid

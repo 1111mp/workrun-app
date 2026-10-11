@@ -242,6 +242,33 @@ describe('prepareWorkflowProcessApps', () => {
     expect(fetchApi.get).not.toHaveBeenCalled();
   });
 
+  it('does not download missing dependencies for external invocations', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValueOnce(null);
+    const dsl = {
+      nodes: [
+        {
+          type: 'process',
+          data: {
+            appRef: {
+              source: 'team',
+              remoteAppId: 'remote-app-1',
+              releaseId: 'release-1',
+              version: '1.2.3',
+              archiveSha256: 'a'.repeat(64),
+            },
+          },
+        },
+      ],
+    };
+    await expect(
+      prepareWorkflowProcessApps(dsl, 'release-workflow-1', undefined, {
+        allowInstall: false,
+      }),
+    ).rejects.toThrow('Prepare');
+    expect(fetchApi.get).not.toHaveBeenCalled();
+  });
+
   it('uses the release-scoped Team App installation for a published workflow', async () => {
     vi.mocked(isTeamMode).mockReturnValue(true);
     vi.mocked(invoke).mockResolvedValueOnce({

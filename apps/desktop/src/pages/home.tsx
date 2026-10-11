@@ -31,6 +31,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
+import { DeeplinkHandler } from '@/components/deeplink-handler';
 import { RunCenter } from '@/components/run-center';
 import { RunEventTracker } from '@/components/run-event-tracker';
 import { TeamSessionGate } from '@/components/team-session-gate';
@@ -54,6 +55,7 @@ const navigation = [
 function HomePage() {
   return (
     <TeamSessionGate>
+      <DeeplinkHandler />
       <HomeLayout />
     </TeamSessionGate>
   );

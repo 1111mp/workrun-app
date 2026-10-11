@@ -141,9 +141,7 @@ impl Drop for IpcSession {
 }
 
 fn publish_session_closed(session_id: String) {
-    let Some(app) = crate::APP_HANDLE.get() else {
-        return;
-    };
+    let app = handle::Handle::app_handle();
     let emit_app = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
         if let Err(error) = emit_app.emit("ipc-session-closed", serde_json::json!({"sessionId": session_id})) {

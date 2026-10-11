@@ -176,22 +176,6 @@ function McpServersPage() {
   const servers = useQuery({
     queryKey: ['mcp-servers'],
     queryFn: getMcpServers,
-    refetchInterval: (query) => {
-      const configuredServers = query.state.data ?? [];
-      if (
-        configuredServers.some(
-          (server) => server.definition.authorizationStatus === 'authorizing',
-        )
-      ) {
-        return 2_000;
-      }
-      return configuredServers.some(
-        (server) =>
-          server.status === 'Running' || server.status === 'Restarting',
-      )
-        ? 10_000
-        : false;
-    },
   });
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deleting, setDeleting] = useState<McpServerDefinition | null>(null);
@@ -274,7 +258,7 @@ function McpServersPage() {
     <div className='size-full overflow-y-auto'>
       <div className='mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8'>
         <section className='via-card relative overflow-hidden rounded-2xl border border-sky-200/70 bg-linear-to-br from-sky-500/12 to-violet-500/10 shadow-sm dark:border-sky-400/15'>
-          <div className='pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,hsl(214_90%_60%/0.14)_1px,transparent_1px),linear-gradient(to_bottom,hsl(214_90%_60%/0.14)_1px,transparent_1px)] [background-size:28px_28px]' />
+          <div className='pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,hsl(214_90%_60%/0.14)_1px,transparent_1px),linear-gradient(to_bottom,hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[28px_28px]' />
           <div className='relative flex flex-col gap-6 p-5 sm:p-7 lg:flex-row lg:items-end lg:justify-between'>
             <div className='max-w-xl'>
               <div className='text-muted-foreground mb-3 flex items-center gap-2 text-xs font-medium tracking-[0.16em] uppercase'>

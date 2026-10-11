@@ -40,6 +40,7 @@ pub fn resolve_server_setup_async() {
         // Start dispatch only after every native dependency they need is ready.
         run_manager::start_supervisor();
         schedule::start_scheduler();
+        crate::module::deeplink::DeeplinkManager::global().ready();
     });
 }
 

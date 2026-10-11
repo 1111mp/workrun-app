@@ -6,6 +6,7 @@ pub type CmdResult<T = ()> = Result<T, String>;
 pub mod app;
 pub mod artifact;
 pub mod chat_session;
+pub mod deeplink;
 pub mod evaluation;
 pub mod ipc;
 pub mod mcp_server;

@@ -63,8 +63,13 @@ function restoreProcessNodeRun(
   const view = record.outputView as Partial<ProcessNodeRun>;
   // A catalog entry can change after a run. Prefer the current one when the
   // caller has it, but retain the captured entry or snapshot for archive-only views.
+  // Older deeplink records stored a bare definition in outputView.node.
+  // Normalize that shape before the drawer reads node.definition.
+  const savedNode = view.node?.definition
+    ? view.node
+    : processNodeFromSnapshot(view.node);
   const node =
-    currentNode ?? view.node ?? processNodeFromSnapshot(record.targetSnapshot);
+    currentNode ?? savedNode ?? processNodeFromSnapshot(record.targetSnapshot);
   if (!node) throw new Error('The saved App definition is unavailable.');
   const run: ProcessNodeRun = {
     ...view,

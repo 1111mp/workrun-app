@@ -42,6 +42,7 @@ export type RunRecordSummary = {
   endedAt?: string;
   durationMs?: number;
   error?: string;
+  triggerType?: string;
   releaseId?: string;
   releaseVersion?: string;
   appVersion?: string;
@@ -109,6 +110,7 @@ export type RunHistoryTimelineItem = {
   endedAt?: string;
   durationMs?: number;
   error?: string;
+  triggerType?: string;
   releaseVersion?: string;
   turnCount?: number;
   latestMessage?: string;

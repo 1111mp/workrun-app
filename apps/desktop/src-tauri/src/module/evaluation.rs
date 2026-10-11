@@ -912,6 +912,7 @@ impl EvaluationStore {
             evaluation_profile: Some(profile),
             evaluation_result_id: Some(claimed.result_id.clone()),
             schedule_trigger: None,
+            deeplink_trigger: None,
         })
         .await?;
         let pool = DBManager::global().pool()?;

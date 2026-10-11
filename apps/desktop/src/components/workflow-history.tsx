@@ -218,6 +218,11 @@ function WorkflowHistory({
                         {new Date(entry.item.startedAt).toLocaleString(
                           i18n.language,
                         )}
+                        {entry.item.triggerType === 'deeplink' ? (
+                          <Badge variant='outline'>
+                            {t('deeplink.source')}
+                          </Badge>
+                        ) : null}
                       </ItemTitle>
                       <ItemDescription>
                         {entry.item.durationMs !== undefined

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 // Versions are immutable run metadata, so history lists read them from the
 // snapshot rather than the mutable App catalog.
-const RUN_RECORD_SUMMARY_COLUMNS: &str = "id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version, json_extract(target_snapshot_json, '$.version') AS app_version, (SELECT SUM(CASE WHEN total_tokens IS NOT NULL THEN total_tokens WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) END) FROM run_spans WHERE run_id = run_records.id AND kind = 'model_call') AS model_tokens, (SELECT SUM(estimated_cost_microusd) FROM run_spans WHERE run_id = run_records.id AND kind = 'model_call') AS model_estimated_cost_microusd";
+const RUN_RECORD_SUMMARY_COLUMNS: &str = "id, target_type, target_id, target_name, status, started_at, ended_at, duration_ms, error, json_extract(runtime_json, '$.trigger.type') AS trigger_type, json_extract(runtime_json, '$.releaseId') AS release_id, json_extract(runtime_json, '$.releaseVersion') AS release_version, json_extract(target_snapshot_json, '$.version') AS app_version, (SELECT SUM(CASE WHEN total_tokens IS NOT NULL THEN total_tokens WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) END) FROM run_spans WHERE run_id = run_records.id AND kind = 'model_call') AS model_tokens, (SELECT SUM(estimated_cost_microusd) FROM run_spans WHERE run_id = run_records.id AND kind = 'model_call') AS model_estimated_cost_microusd";
 
 impl RunHistoryStore {
     pub async fn list(query: RunHistoryQuery) -> Result<RunHistoryPage> {
@@ -161,7 +161,7 @@ async fn list_timeline_for_workspace(
     // boundaries and cross-mode ordering depend on loaded client state.
     let mut sql = QueryBuilder::<Sqlite>::new(
         "WITH timeline AS (\
-             SELECT rr.workspace_id, 'task' AS kind, rr.id, rr.target_type, rr.target_id, rr.target_name, rr.status, rr.started_at AS activity_at, rr.ended_at, rr.duration_ms, rr.error, json_extract(rr.runtime_json, '$.releaseVersion') AS release_version, NULL AS turn_count, NULL AS latest_message \
+             SELECT rr.workspace_id, 'task' AS kind, rr.id, rr.target_type, rr.target_id, rr.target_name, rr.status, rr.started_at AS activity_at, rr.ended_at, rr.duration_ms, rr.error, json_extract(rr.runtime_json, '$.trigger.type') AS trigger_type, json_extract(rr.runtime_json, '$.releaseVersion') AS release_version, NULL AS turn_count, NULL AS latest_message \
              FROM run_records rr \
              WHERE json_extract(rr.runtime_json, '$.evaluationProfile') IS NULL \
                AND NOT EXISTS (SELECT 1 FROM chat_turns ct WHERE ct.run_id = rr.id) \
@@ -170,13 +170,13 @@ async fn list_timeline_for_workspace(
                COALESCE((SELECT rr.target_name FROM chat_turns ct JOIN run_records rr ON rr.id = ct.run_id WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1), 'Workflow') AS target_name, \
                (SELECT ct.status FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1) AS status, \
                COALESCE((SELECT COALESCE(ct.completed_at, ct.created_at) FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1), cs.created_at) AS activity_at, \
-               NULL AS ended_at, NULL AS duration_ms, NULL AS error, NULL AS release_version, \
+               NULL AS ended_at, NULL AS duration_ms, NULL AS error, NULL AS trigger_type, NULL AS release_version, \
                (SELECT COUNT(*) FROM chat_turns ct WHERE ct.session_id = cs.id) AS turn_count, \
                (SELECT ct.user_message FROM chat_turns ct WHERE ct.session_id = cs.id ORDER BY ct.sequence DESC LIMIT 1) AS latest_message \
              FROM chat_sessions cs \
              WHERE EXISTS (SELECT 1 FROM chat_turns ct WHERE ct.session_id = cs.id)\
              ), filtered AS (\
-             SELECT kind, id, target_type, target_id, target_name, status, activity_at, ended_at, duration_ms, error, release_version, turn_count, latest_message FROM timeline WHERE workspace_id = ",
+             SELECT kind, id, target_type, target_id, target_name, status, activity_at, ended_at, duration_ms, error, trigger_type, release_version, turn_count, latest_message FROM timeline WHERE workspace_id = ",
     );
     sql.push_bind(workspace_id);
     if let Some(target_type) = query.target_type {
@@ -527,6 +527,7 @@ fn summary_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunRecordSummary> {
         ended_at: row.try_get("ended_at")?,
         duration_ms: row.try_get("duration_ms")?,
         error: row.try_get("error")?,
+        trigger_type: row.try_get("trigger_type")?,
         release_id: row.try_get("release_id")?,
         release_version: row.try_get("release_version")?,
         app_version: row.try_get("app_version")?,
@@ -562,6 +563,7 @@ fn timeline_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<RunHistoryTim
         ended_at: row.try_get("ended_at")?,
         duration_ms: row.try_get("duration_ms")?,
         error: row.try_get("error")?,
+        trigger_type: row.try_get("trigger_type")?,
         release_version: row.try_get("release_version")?,
         turn_count: row.try_get("turn_count")?,
         latest_message: row.try_get("latest_message")?,
@@ -592,7 +594,7 @@ mod tests {
         let row = sql
             .push("WITH run_spans(run_id, kind, total_tokens, input_tokens, output_tokens, estimated_cost_microusd) AS (VALUES ('run-1', 'model_call', NULL, 12, 8, 123), ('run-1', 'tool_call', 99, NULL, NULL, 999)) SELECT ")
             .push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(" FROM (SELECT 'run-1' AS id, 'app' AS target_type, 'app-1' AS target_id, 'App' AS target_name, 'running' AS status, '2026-09-11T00:00:00Z' AS started_at, NULL AS ended_at, NULL AS duration_ms, NULL AS error, '{\"releaseId\":\"release-1\",\"releaseVersion\":\"1.2.3\"}' AS runtime_json, '{\"version\":\"2.0.0\"}' AS target_snapshot_json) AS run_records")
+            .push(" FROM (SELECT 'run-1' AS id, 'app' AS target_type, 'app-1' AS target_id, 'App' AS target_name, 'running' AS status, '2026-09-11T00:00:00Z' AS started_at, NULL AS ended_at, NULL AS duration_ms, NULL AS error, '{\"releaseId\":\"release-1\",\"releaseVersion\":\"1.2.3\",\"trigger\":{\"type\":\"deeplink\"}}' AS runtime_json, '{\"version\":\"2.0.0\"}' AS target_snapshot_json) AS run_records")
             .build()
             .fetch_one(&pool)
             .await
@@ -602,6 +604,7 @@ mod tests {
         assert_eq!(summary.release_id.as_deref(), Some("release-1"));
         assert_eq!(summary.release_version.as_deref(), Some("1.2.3"));
         assert_eq!(summary.app_version.as_deref(), Some("2.0.0"));
+        assert_eq!(summary.trigger_type.as_deref(), Some("deeplink"));
         assert_eq!(summary.model_tokens, Some(20));
         assert_eq!(summary.model_estimated_cost_microusd, Some(123));
     }

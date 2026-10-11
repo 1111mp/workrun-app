@@ -655,8 +655,7 @@
   "workflowEditor": {
     "remoteTasks": {
       "title": "Remote tasks",
-      "description": "These actions manage remote tasks only. They do not resume the workflow or run downstream nodes.",
-      "operationFailed": "Remote task operation failed",
+      "description": "Remote task status and collected results. Unfinished tasks receive one automatic cancellation request when the workflow fails or is stopped.",
       "loadFailed": "Could not load remote task records",
       "noTaskId": "No remote task ID received",
       "messageId": "Message ID (messageId)",
@@ -664,21 +663,10 @@
       "messageIdCopied": "Message ID copied",
       "messageIdCopyFailed": "Could not copy message ID",
       "unknownTitle": "Remote execution outcome is unknown",
-      "unknownDescription": "The local run has ended, but the remote task may still be running or may have completed. Query its status before running again.",
+      "unknownDescription": "The remote task may still be running or may have completed. Its final outcome is unconfirmed.",
       "unknownSubmission": "The service may have accepted the submission, but no task ID was received. It cannot be queried or cancelled. Running again may create duplicate work.",
       "lastKnown": "Last known state: {{state}}",
       "lastChecked": "Last checked: {{time}}",
-      "query": "Query status",
-      "fetch": "Collect result",
-      "cancel": "Cancel remote task",
-      "cancelTitle": "Cancel this remote task?",
-      "cancelDescription": "This requests cancellation from the remote service, which may refuse. Existing charges or business actions are not undone. The original workflow status stays unchanged.",
-      "rerunTitle": "Remote work may be repeated",
-      "rerunDescription": "Remote tasks from the previous run may still be running or may have completed. Executing again may repeat file processing, charges or business actions. It does not reconnect to the original remote task.",
-      "rerunConfirm": "Execute anyway",
-      "previousTitle": "Remote tasks need checking",
-      "previousDescription": "Previous runs of this workflow have remote tasks whose status is unknown, which are still active, or which completed while the local run failed. A new run may repeat their work. Check the original tasks first.",
-      "review": "View original run",
       "status": {
         "unknown": "Unknown",
         "submitted": "Submitted",
@@ -1934,5 +1922,22 @@
     "title": "Are you sure?",
     "cancel": "Cancel",
     "confirm": "Confirm"
+  },
+  "deeplink": {
+    "errorTitle": "Unable to open Workrun link",
+    "source": "Deeplink",
+    "title": "External invocation",
+    "description": "Open or run this saved target from a browser, shortcut, or another application. Links refer to the current workspace. Runs require confirmation. Do not include secrets in links.",
+    "input": "Workflow input (JSON object)",
+    "inputDescription": "Input is used only to generate the current run link and is not saved to the Workflow. Reopening this dialog resets the input. Copy the run link to reuse these parameters without entering them again.",
+    "invalidInput": "Enter a valid JSON object.",
+    "openLink": "Open link",
+    "runLink": "Run link",
+    "copyOpen": "Copy open link",
+    "copyRun": "Copy run link",
+    "copied": "Link copied",
+    "confirmTitle": "Run {{name}}?",
+    "confirmDescription": "An external link requested access to this target. Review the saved target and input before running.",
+    "notInstalled": "Install this App in Workrun before running it from a link."
   }
 }

@@ -7,6 +7,12 @@ A run is not only “successful” or “failed.” Workrun keeps the workflow s
 
 Do not reverse-engineer a cause from the final answer. Build the evidence trail first, then change a prompt, code, schema, permission, or model configuration.
 
+## Deeplink-triggered runs
+
+App and Workflow runs started through external links are labeled **External link** in history. New runs require confirmation on the corresponding list page. App output opens in a drawer on the list; Workflow output opens in a drawer on its detail page. Execution completion keeps that page visible, and saved output remains accessible through history.
+
+Reopening the same original request with a `requestId` opens its existing run instead of executing again. See [Open and run through Deeplinks](/guides/deeplinks/) for link formats, input, and deduplication rules.
+
 ## After a failure, narrow the scope in five steps
 
 1. Open this run from run history and confirm its workflow version, run input, and start time. Do not mix it with another workflow revision or chat turn.

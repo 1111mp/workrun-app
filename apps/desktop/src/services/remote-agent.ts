@@ -65,19 +65,6 @@ export function manageRemoteTask(
   return invoke<RemoteTask>('remote_task_manage', { id, operation });
 }
 
-export function remoteTaskMayRepeat(task: RemoteTask, localFailed = false) {
-  return (
-    [
-      'unknown',
-      'submitted',
-      'working',
-      'input_required',
-      'auth_required',
-    ].includes(task.status) ||
-    (task.status === 'completed' && (localFailed || !task.result))
-  );
-}
-
 export function listRemoteTaskWarnings(workflowId: string) {
   return invoke<RemoteTask[]>('remote_task_warnings', { workflowId });
 }

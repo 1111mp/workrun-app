@@ -7,7 +7,7 @@ import socket
 from concurrent.futures import Future
 from threading import Lock, Thread
 from time import sleep
-from typing import BinaryIO, final
+from typing import BinaryIO, cast, final
 from uuid import uuid4
 
 from ._protocol import (
@@ -17,6 +17,7 @@ from ._protocol import (
     receive_message,
     send_message,
 )
+from ._windows_pipe import WindowsPipe
 
 ENDPOINT_ENV = "WORKRUN_IPC_ENDPOINT"
 TOKEN_ENV = "WORKRUN_IPC_TOKEN"
@@ -38,7 +39,7 @@ def _open_windows_named_pipe(endpoint: str) -> BinaryIO:
     """Open a named pipe, retrying a bounded number of times while it is busy."""
     for attempt in range(WINDOWS_PIPE_CONNECT_MAX_ATTEMPTS):
         try:
-            return open(endpoint, "r+b", buffering=0)
+            return cast(BinaryIO, WindowsPipe(endpoint))
         except OSError as error:
             if (
                 getattr(error, "winerror", None) != WINDOWS_ERROR_PIPE_BUSY
@@ -224,7 +225,11 @@ class WorkrunClient:
             elif message_type == "artifact.response":
                 future.set_result(message.get("data"))
             elif message_type == "artifact.error":
-                future.set_exception(WorkrunConnectionError(str(message.get("error", "Resource operation failed"))))
+                future.set_exception(
+                    WorkrunConnectionError(
+                        str(message.get("error", "Resource operation failed"))
+                    )
+                )
             elif message_type in {"process.result.accepted", "tool.result.accepted"}:
                 future.set_result(None)
             else:

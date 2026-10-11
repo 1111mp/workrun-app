@@ -219,7 +219,11 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::raw_sql("CREATE TABLE run_records (workspace_id TEXT NOT NULL DEFAULT 'personal', id TEXT PRIMARY KEY, target_type TEXT DEFAULT 'workflow', status TEXT, started_at TEXT DEFAULT '2026-10-07T00:00:00Z', created_at TEXT DEFAULT '2026-10-07T00:00:00Z', ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT DEFAULT '{}', output_view_json TEXT DEFAULT '{}', updated_at TEXT, last_sequence INTEGER DEFAULT 7); INSERT INTO run_records (id, status, error) VALUES ('task-1', 'failed', 'original failure');").execute(&pool).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT DEFAULT 'workflow', status TEXT, started_at TEXT DEFAULT '2026-10-07T00:00:00Z', created_at TEXT DEFAULT '2026-10-07T00:00:00Z', ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT DEFAULT '{}', output_view_json TEXT DEFAULT '{}', updated_at TEXT, last_sequence INTEGER DEFAULT 7); INSERT INTO run_records (id, status, error) VALUES ('task-1', 'failed', 'original failure');").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, workflow_id TEXT, updated_at TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::raw_sql(include_str!(
             "../../../resources/migrations/20261005100000_remote_tasks.up.sql"
         ))

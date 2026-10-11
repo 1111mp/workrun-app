@@ -16,6 +16,7 @@ function RunEventTracker() {
     let disposed = false;
     let unlistenRunEvents: (() => void) | undefined;
     let unlistenStatusChanges: (() => void) | undefined;
+    const stateSubscriptions: (() => void)[] = [];
     let unlistenPendingActions: (() => void) | undefined;
 
     void listen<WorkflowRunEventEnvelope>('run-event', ({ payload }) => {
@@ -31,6 +32,7 @@ function RunEventTracker() {
     });
     void listen<{ runId: string }>('run-status-changed', ({ payload }) => {
       announcedRuns.current.delete(payload.runId);
+      void queryClient.invalidateQueries({ queryKey: ['remoteTaskWarnings'] });
       void queryClient.invalidateQueries({ queryKey: ['run-history'] });
     }).then((stop) => {
       if (disposed) stop();
@@ -43,8 +45,28 @@ function RunEventTracker() {
       else unlistenPendingActions = stop;
     });
 
+    // Subscribe before refreshing once, so changes during webview startup are
+    // covered even when the initial query completed before listener setup.
+    for (const [event, keys] of [
+      ['remote-tasks-changed', ['remoteTasks', 'remoteTaskWarnings']],
+      ['mcp-servers-changed', ['mcp-servers']],
+    ] as const) {
+      const refresh = () => {
+        for (const key of keys)
+          void queryClient.invalidateQueries({ queryKey: [key] });
+      };
+      void listen(event, refresh).then((stop) => {
+        if (disposed) stop();
+        else {
+          stateSubscriptions.push(stop);
+          refresh();
+        }
+      });
+    }
+
     return () => {
       disposed = true;
+      stateSubscriptions.forEach((stop) => stop());
       unlistenRunEvents?.();
       unlistenStatusChanges?.();
       unlistenPendingActions?.();

@@ -2,7 +2,6 @@
 
 use crate::{
     config::BaseConfig,
-    core::handle,
     module::{
         python_runtime::PythonOutputChunk,
         run_history::{
@@ -75,6 +74,7 @@ singleton!(RunManager, RUN_MANAGER);
 struct RunSupervisor {
     permits: Arc<Semaphore>,
     app_permits: Arc<Semaphore>,
+    compensation_permits: Arc<Semaphore>,
     wake: Notify,
     idle: Notify,
     started: AtomicBool,
@@ -87,6 +87,7 @@ impl RunSupervisor {
         Self {
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_TOP_LEVEL_RUNS)),
             app_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_TOP_LEVEL_APP_RUNS)),
+            compensation_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_TOP_LEVEL_RUNS)),
             wake: Notify::new(),
             idle: Notify::new(),
             started: AtomicBool::new(false),
@@ -109,9 +110,17 @@ impl RunSupervisor {
                 }
                 self.dispatch_compensation().await;
                 self.dispatch_available_runs().await;
+                // Persisted retry deadlines wake once when due. With no work,
+                // sleep until a producer or a finishing worker notifies us.
+                let deadline = next_supervisor_deadline(self.compensation_permits.available_permits() > 0).await;
                 tokio::select! {
                     _ = self.wake.notified() => {},
-                    _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+                    _ = async {
+                        match deadline {
+                            Some(delay) => tokio::time::sleep(delay).await,
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => {},
                 }
             }
         });
@@ -126,7 +135,8 @@ impl RunSupervisor {
 
     async fn shutdown(&self) {
         self.accepting.store(false, Ordering::Release);
-        self.wake.notify_waiters();
+        self.permits.close();
+        self.wake.notify_one();
         // Let native tasks flush their final events before Tauri exits. The
         // timeout bounds shutdown when an external model or process ignores
         // cancellation; OS process teardown remains the final safeguard.
@@ -146,7 +156,7 @@ impl RunSupervisor {
         if !self.accepting.load(Ordering::Acquire) {
             return;
         }
-        let Ok(permit) = Arc::clone(&self.permits).try_acquire_owned() else {
+        let Ok(permit) = Arc::clone(&self.compensation_permits).try_acquire_owned() else {
             return;
         };
         let Ok(pool) = crate::core::db::DBManager::global().pool() else {
@@ -181,7 +191,7 @@ impl RunSupervisor {
                     let _ = workflow::cancel_waiting_workflow(&run_id).await;
                 }
                 let key = crate::utils::dirs::get_encryption_key()?;
-                workflow_module::saga_scheduler::tick(pool, key, &run_id).await
+                workflow_module::saga_scheduler::tick(pool, key, &run_id, Arc::clone(&self.permits)).await
             }
             .await;
             if result.is_err() {
@@ -248,6 +258,41 @@ impl RunSupervisor {
             });
         }
     }
+}
+
+async fn next_supervisor_deadline(compensation_available: bool) -> Option<Duration> {
+    let pool = crate::core::db::DBManager::global().pool().ok()?;
+    let next = match supervisor_deadline_in_pool(&pool, compensation_available).await {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!("Cannot read recovery deadline: {error}");
+            // A database error retries with backoff; idle state never polls.
+            return Some(Duration::from_secs(5));
+        },
+    };
+    let next = chrono::DateTime::parse_from_rfc3339(next.as_deref()?).ok()?;
+    Some(
+        (next.with_timezone(&chrono::Utc) - chrono::Utc::now())
+            .to_std()
+            .unwrap_or_default(),
+    )
+}
+
+async fn supervisor_deadline_in_pool(pool: &sqlx::SqlitePool, compensation_available: bool) -> Result<Option<String>> {
+    let deadline = sqlx::query_scalar(
+        "SELECT MIN(next_check_at) FROM (
+            SELECT j.next_check_at FROM run_recovery_jobs j JOIN run_records r ON r.id=j.run_id
+            WHERE r.workspace_id=? AND j.status='pending' AND j.attempts<5 AND r.status='interrupted'
+            AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id)
+            UNION ALL SELECT next_check_at FROM workflow_abandonments WHERE status='pending' AND ?
+            AND NOT (COALESCE(last_error,'')='Waiting for original execution to stop' AND EXISTS(SELECT 1 FROM run_records r WHERE r.id=workflow_abandonments.run_id AND r.status IN ('queued','running','waiting_for_input')))
+        )"
+    ).bind(crate::utils::dirs::active_workspace_id()).bind(compensation_available).fetch_one(pool).await?;
+    Ok(deadline)
+}
+
+pub(crate) fn notify_supervisor() {
+    RunManager::global().supervisor.notify();
 }
 
 async fn super_recovery_tick() -> Result<()> {
@@ -345,6 +390,8 @@ pub struct StartWorkflowRun {
     pub evaluation_result_id: Option<String>,
     #[serde(default)]
     pub schedule_trigger: Option<ScheduleTrigger>,
+    #[serde(default)]
+    pub deeplink_trigger: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -372,6 +419,8 @@ pub struct StartAppRun {
     pub target_snapshot: Value,
     #[serde(default)]
     pub schedule_trigger: Option<ScheduleTrigger>,
+    #[serde(default)]
+    pub deeplink_trigger: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

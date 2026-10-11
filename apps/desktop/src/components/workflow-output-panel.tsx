@@ -44,6 +44,7 @@ import {
   DatabaseIcon,
   Globe2Icon,
   Layers3Icon,
+  RotateCcwIcon,
   TerminalIcon,
 } from 'lucide-react';
 import {
@@ -63,10 +64,7 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { ArtifactFiles } from '@/components/artifact-files';
-import {
-  RemoteTasksPanel,
-  RemoteTaskRerunButton,
-} from '@/components/remote-tasks';
+import { RemoteTasksPanel } from '@/components/remote-tasks';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
 import { artifactReferences } from '@/services/artifact';
@@ -2104,14 +2102,10 @@ function LiveWorkflowTaskOutput({
       </div>
       <DrawerFooter className='flex-row justify-end'>
         {!readOnly ? (
-          <RemoteTaskRerunButton
-            key={runId}
-            runId={runId}
-            disabled={isRunning}
-            onRunAgain={onRunAgain}
-            localFailed={status === 'failed' || Boolean(error)}
-            label={rerunLabel(status, t)}
-          />
+          <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+            <RotateCcwIcon data-icon='inline-start' />
+            {rerunLabel(status, t)}
+          </Button>
         ) : null}
         <Button variant='outline' onClick={copyAll}>
           <ClipboardIcon data-icon='inline-start' />
@@ -2597,14 +2591,14 @@ function WorkflowRunOutput({
       {isChat ? (
         <DrawerFooter>
           {!readOnly && run.status === 'failed' && (
-            <RemoteTaskRerunButton
-              key={run.runId}
-              runId={run.runId}
+            <Button
+              variant='outline'
               disabled={chatIsBusy}
-              onRunAgain={onRunAgain}
-              localFailed={run.status === 'failed' || Boolean(run.error)}
-              label={rerunLabel(run.status, t)}
-            />
+              onClick={onRunAgain}
+            >
+              <RotateCcwIcon data-icon='inline-start' />
+              {rerunLabel(run.status, t)}
+            </Button>
           )}
           <WorkflowChatComposer
             key={run.runId}
@@ -2622,14 +2616,10 @@ function WorkflowRunOutput({
       ) : (
         <DrawerFooter className='flex-row justify-end'>
           {!readOnly && (
-            <RemoteTaskRerunButton
-              key={run.runId}
-              runId={run.runId}
-              disabled={isRunning}
-              onRunAgain={onRunAgain}
-              localFailed={run.status === 'failed' || Boolean(run.error)}
-              label={rerunLabel(run.status, t)}
-            />
+            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+              <RotateCcwIcon data-icon='inline-start' />
+              {rerunLabel(run.status, t)}
+            </Button>
           )}
           <Button variant='outline' disabled={!output} onClick={copyAll}>
             <ClipboardIcon data-icon='inline-start' />

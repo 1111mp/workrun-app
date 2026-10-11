@@ -2,12 +2,9 @@
 
 pub use crate::config::{McpServerAuth, McpServerTransport};
 use crate::{config::IMcpServer, singleton};
-use adk_rust::tool::{
-    Toolset,
-    mcp::{
-        McpServerManager, RestartPolicy, ServerStatus,
-        rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials},
-    },
+use adk_rust::tool::mcp::{
+    McpToolset, RestartPolicy, ServerStatus,
+    rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials},
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -141,8 +138,8 @@ where
 }
 
 pub(super) enum McpRuntime {
-    Stdio(Arc<McpServerManager>),
-    Http(Arc<dyn Toolset>),
+    Stdio(Arc<super::stdio::StdioRuntime>),
+    Http(Arc<McpToolset<()>>),
 }
 
 /// Process-local, thread-safe state for MCP server runtimes and their lifecycle.
@@ -164,15 +161,18 @@ impl McpServerRuntimeStore {
     }
 
     pub(super) fn begin_oauth(&self, id: String) -> Result<bool> {
-        Ok(self
+        let inserted = self
             .oauth_pending
             .lock()
             .map_err(|_| anyhow::anyhow!("OAuth authorization registry is unavailable"))?
-            .insert(id))
+            .insert(id);
+        super::notify_changed();
+        Ok(inserted)
     }
 
     pub(super) fn clear_oauth(&self, id: &str) {
         let _ = self.oauth_pending.lock().map(|mut pending| pending.remove(id));
+        super::notify_changed();
     }
 
     fn is_oauth_pending(&self, id: &str) -> bool {
@@ -233,6 +233,7 @@ impl McpServerRuntimeStore {
                 entry.tool_count = tool_count;
             }
         }
+        super::notify_changed();
     }
 
     pub(super) fn record_health_error(&self, id: &str, error: String) {
@@ -241,6 +242,7 @@ impl McpServerRuntimeStore {
             entry.last_checked_at = Some(Utc::now().to_rfc3339());
             entry.last_error = Some(error);
         }
+        super::notify_changed();
     }
 }
 
