@@ -1,12 +1,20 @@
 {
   "executionRecovery": {
+    "loadFailed": "无法加载恢复状态",
+    "awaitingRecovery": "已中断 · 待恢复",
+    "tryRecover": "尝试恢复",
+    "interruptedDescription": "本次执行已中断。恢复前会检查已保存的检查点及操作结果，符合条件后继续原运行。",
+    "confirmingRemote": "正在确认远程任务状态",
+    "remoteDescription": "正在核对原远程任务，确认后继续，不会重新提交任务。",
+    "dismiss": "不再跟进",
+    "dismissed": "已停止跟进，运行历史仍保留。",
+    "appRecoveryUnsupported": "此应用执行暂不支持恢复。请先核对原执行结果，再决定是否重新运行。",
+    "compensationBlocksRecovery": "此运行已进入补偿流程，不能继续正向执行。",
+    "requestBlocked": "暂时无法继续处理",
+    "checkingRequest": "检查中…",
     "workspaceTitle": "任务工作区",
-    "continueTitle": "恢复这个中断任务？",
-    "continueDescription": "从应用退出或崩溃造成的中断处恢复，复用已保存结果。失败或已停止的任务请使用“重新运行”；结果未知的操作需先对账。",
-    "keepTask": "保留任务",
     "runAgain": "重新运行",
     "updateFailed": "无法更新补偿",
-    "continueFailed": "无法继续任务",
     "newTaskFailed": "无法创建新任务",
     "closeTask": "关闭 {{name}}",
     "pin": "固定",
@@ -673,7 +681,7 @@
       "savingAnswer": "正在保存回答…"
     },
     "errors": {
-      "loadQueue": "无法加载交互请求",
+      "loadRequests": "无法加载交互请求",
       "continueWorkflow": "无法继续工作流"
     }
   },

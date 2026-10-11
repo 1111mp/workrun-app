@@ -1,13 +1,5 @@
 import { listen } from '@tauri-apps/api/event';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
   Badge,
   Button,
   Drawer,
@@ -33,10 +25,7 @@ import {
   type RunRecord,
   type RunStatus,
 } from '@/services/run-history';
-import {
-  recoverInterruptedWorkflowRun,
-  type WorkflowRunEvent,
-} from '@/services/workflow';
+import { type WorkflowRunEvent } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 import {
   replayWorkflowRunProjection,
@@ -87,7 +76,6 @@ function RunWorkspace() {
   } = useRunWorkspaceStore();
   const activeTab = tabs.find((tab) => tab.id === activeRunId);
   const [record, setRecord] = useState<RunRecord>();
-  const [recoverySourceRunId, setRecoverySourceRunId] = useState<string>();
   // Keep the previous response while a new tab loads, but never render it for
   // a different run. This avoids a synchronous effect update just to clear UI.
   const activeRecord = record?.id === activeRunId ? record : undefined;
@@ -152,29 +140,6 @@ function RunWorkspace() {
       },
     };
   }, [activeRecord, activeTab?.targetType]);
-
-  const recoverInterruptedWorkflow = () => {
-    if (!recoverySourceRunId) return;
-    void recoverInterruptedWorkflowRun(recoverySourceRunId)
-      .then(openRun)
-      .catch((error: unknown) => {
-        toast.error(t('executionRecovery.continueFailed'), {
-          toasterId: 'global',
-          description: error instanceof Error ? error.message : String(error),
-        });
-      });
-    setRecoverySourceRunId(undefined);
-  };
-
-  const requestInterruptedWorkflowRecovery = () => {
-    if (
-      !activeRecord ||
-      activeRecord.targetType !== 'workflow' ||
-      activeRecord.status !== 'interrupted'
-    )
-      return;
-    setRecoverySourceRunId(activeRecord.id);
-  };
 
   useEffect(() => {
     if (!activeRunId || !open) return;
@@ -248,14 +213,7 @@ function RunWorkspace() {
                 </Badge>
               ) : null}
               {activeRecord &&
-              !activeRecord.executionHistory?.compensation &&
-              activeRecord.status === 'interrupted' ? (
-                <Button onClick={requestInterruptedWorkflowRecovery}>
-                  {t('workflowEditor.output.continueTask')}
-                </Button>
-              ) : null}
-              {activeRecord &&
-              ['completed', 'failed', 'interrupted', 'cancelled'].includes(
+              ['completed', 'failed', 'cancelled'].includes(
                 activeRecord.status,
               ) ? (
                 <Button
@@ -283,33 +241,10 @@ function RunWorkspace() {
               workflowNodes={workflowRun.nodes}
               spans={activeRecord?.spans}
               onClose={() => setOpen(false)}
-              onRunAgain={requestInterruptedWorkflowRecovery}
+              onRunAgain={() => undefined}
             />
           </DrawerContent>
         </Drawer>
-        <AlertDialog
-          open={Boolean(recoverySourceRunId)}
-          onOpenChange={(open) => !open && setRecoverySourceRunId(undefined)}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {t('executionRecovery.continueTitle')}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {t('executionRecovery.continueDescription')}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>
-                {t('workflowEditor.output.cancelAction')}
-              </AlertDialogCancel>
-              <AlertDialogAction onClick={recoverInterruptedWorkflow}>
-                {t('workflowEditor.output.continueTask')}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
       </>
     );
   }

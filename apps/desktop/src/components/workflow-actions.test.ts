@@ -5,7 +5,10 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import type { PendingAction } from '@/services/run-history';
-import { resolveBackgroundWorkflowAction } from '@/services/workflow';
+import {
+  resolveBackgroundWorkflowAction,
+  validateWorkflowAction,
+} from '@/services/workflow';
 
 import { WorkflowActionCard } from './workflow-actions';
 
@@ -25,6 +28,7 @@ vi.mock('@/stores', () => ({
 }));
 vi.mock('@/services/workflow', () => ({
   resolveBackgroundWorkflowAction: vi.fn(),
+  validateWorkflowAction: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/components/artifact-files', () => ({ ArtifactFiles: () => null }));
 
@@ -33,10 +37,19 @@ vi.mock('@/components/artifact-files', () => ({ ArtifactFiles: () => null }));
 ).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => vi.clearAllMocks());
 
-async function mount(action: PendingAction) {
+async function mount(action: PendingAction, prefetch = true) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  if (prefetch && action.status === 'pending') {
+    await client.prefetchQuery({
+      queryKey: ['run-history', 'action-readiness', 'personal', action.id],
+      queryFn: async () => {
+        await validateWorkflowAction(action.id);
+        return true;
+      },
+    });
+  }
   const host = document.createElement('div');
   document.body.append(host);
   const root = createRoot(host);
@@ -247,3 +260,142 @@ it.each([null, undefined])(
     }
   },
 );
+
+it('keeps another request actionable while submission is in flight', async () => {
+  let complete!: () => void;
+  vi.mocked(resolveBackgroundWorkflowAction)
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+    )
+    .mockResolvedValueOnce(undefined);
+  const first = await mount(
+    request('in-flight', 'tool_approval', { name: 'First' }),
+  );
+  const second = await mount(
+    request('independent', 'tool_approval', { name: 'Second' }),
+  );
+  try {
+    await act(async () => button(first.host, 'approval.tool.run').click());
+    expect(button(first.host, 'approval.saving').disabled).toBe(true);
+    expect(button(second.host, 'approval.tool.run').disabled).toBe(false);
+    await act(async () =>
+      button(second.host, 'approval.cards.denyTool').click(),
+    );
+    expect(resolveBackgroundWorkflowAction).toHaveBeenLastCalledWith(
+      'independent',
+      expect.any(String),
+      { approved: false },
+    );
+    expect(second.host.textContent).toContain('approval.cards.rejected');
+    await act(async () => complete());
+    expect(first.host.textContent).toContain('approval.cards.approved');
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
+it.each(['tool_approval', 'human_review', 'ask_user_question'] as const)(
+  'makes an expired %s request read-only without submitting it',
+  async (kind) => {
+    const action = request(`expired-${kind}`, kind, {
+      content: 'Draft',
+      contentKey: 'report',
+      editable: true,
+      options: [{ id: 'a', label: 'A' }],
+    });
+    const view = await mount(action);
+    try {
+      await view.render({ ...action, status: 'expired' });
+      expect(view.host.textContent).toContain('approval.cards.expired');
+      expect(view.host.querySelector('textarea')).toBeNull();
+      expect(view.host.textContent).not.toContain(
+        'approval.review.approveContinue',
+      );
+      expect(view.host.textContent).not.toContain('approval.tool.run');
+      expect(view.host.textContent).not.toContain('approval.continue');
+      await act(async () =>
+        button(view.host, 'approval.cards.details').click(),
+      );
+      expect(view.host.querySelector('textarea')).toBeNull();
+      for (const input of view.host.querySelectorAll<HTMLInputElement>(
+        'input',
+      )) {
+        expect(input.matches(':disabled')).toBe(true);
+      }
+      expect(resolveBackgroundWorkflowAction).not.toHaveBeenCalled();
+    } finally {
+      await view.close();
+    }
+  },
+);
+
+it('retains an unrestorable request and disables submission with its validation reason', async () => {
+  vi.mocked(validateWorkflowAction).mockRejectedValue(
+    new Error('Saved checkpoint is missing'),
+  );
+  const view = await mount(
+    request('missing-checkpoint', 'human_review', {
+      contentKey: 'report',
+      content: 'Original report',
+      editable: true,
+    }),
+  );
+  try {
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(view.host.textContent).toContain('Saved checkpoint is missing');
+    });
+    expect(view.host.textContent).toContain('executionRecovery.requestBlocked');
+    expect(view.host.querySelector('textarea')?.value).toBe('Original report');
+    expect(button(view.host, 'approval.review.approveContinue').disabled).toBe(
+      true,
+    );
+    await act(async () =>
+      button(view.host, 'approval.review.approveContinue').click(),
+    );
+    expect(resolveBackgroundWorkflowAction).not.toHaveBeenCalled();
+  } finally {
+    await view.close();
+    vi.mocked(validateWorkflowAction).mockResolvedValue(undefined);
+  }
+});
+
+it('keeps request validation in the action area and enables actions when it finishes', async () => {
+  let finish!: () => void;
+  vi.mocked(validateWorkflowAction).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const view = await mount(
+    request('checking-tool', 'tool_approval', {
+      toolName: 'weather',
+      args: { city: 'Hangzhou' },
+    }),
+    false,
+  );
+  try {
+    expect(view.host.querySelector('[role="alert"]')).toBeNull();
+    expect(view.host.querySelector('[role="status"]')?.textContent).toContain(
+      'executionRecovery.checkingRequest',
+    );
+    expect(view.host.textContent).not.toContain(
+      'executionRecovery.checkingDescription',
+    );
+    expect(button(view.host, 'approval.tool.run').disabled).toBe(true);
+    await act(async () => finish());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(button(view.host, 'approval.tool.run').disabled).toBe(false);
+    });
+    expect(view.host.querySelector('[role="status"]')).toBeNull();
+  } finally {
+    await view.close();
+    vi.mocked(validateWorkflowAction).mockResolvedValue(undefined);
+  }
+});

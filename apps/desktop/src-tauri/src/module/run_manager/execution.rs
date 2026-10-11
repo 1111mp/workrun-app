@@ -35,7 +35,28 @@ async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
     result
 }
 
-async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Value) -> Result<()> {
+async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, mut runtime: Value) -> Result<()> {
+    if runtime.get("restoredQueue").and_then(Value::as_bool) == Some(true) {
+        if let Err(error) = super::workflow::validate_restored_queue(run_id, &runtime).await {
+            // Validation is not a failed execution and must not trigger cleanup
+            // or turn a saved authorization into a fresh run.
+            finish_run(run_id, RunStatus::Interrupted, Some(error.to_string())).await?;
+            return Ok(());
+        }
+        let pool = crate::core::db::DBManager::global().pool()?;
+        sqlx::query("UPDATE run_records SET runtime_json = json_remove(runtime_json, '$.restoredQueue') WHERE id = ?")
+            .bind(run_id)
+            .execute(&pool)
+            .await?;
+    }
+    if runtime.get("pendingCheckpointUpdate").is_some()
+        && let Err(error) = apply_pending_checkpoint_update(run_id, &mut runtime).await
+    {
+        // An accepted decision stays durable and retryable. A preparation
+        // failure must never execute business nodes or trigger compensation.
+        finish_run(run_id, RunStatus::Interrupted, Some(error.to_string())).await?;
+        return Ok(());
+    }
     publish_value_event(
         run_id,
         json!({"type":"custom", "node":"", "event_type":"workflow.attempt_started", "data":{}}),
@@ -90,6 +111,33 @@ async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Valu
     .await;
     RunManager::global().workflow_cancellations.lock().remove(run_id);
     result
+}
+
+async fn apply_pending_checkpoint_update(run_id: &str, runtime: &mut Value) -> Result<()> {
+    let Some(update) = super::workflow::pending_checkpoint_update(runtime)? else {
+        return Ok(());
+    };
+    let session = workflow_session_from_runtime(runtime)?;
+    workflow_module::apply_action_checkpoint_updates(
+        session.dsl,
+        session.thread_id,
+        update.workflow_context,
+        update.updates,
+    )
+    .await?;
+    // These are assignments, so a crash before this marker is cleared can
+    // safely reapply the same decision. Clear it before any business node runs.
+    let pool = crate::core::db::DBManager::global().pool()?;
+    let result = sqlx::query("UPDATE run_records SET runtime_json = json_remove(runtime_json, '$.pendingCheckpointUpdate') WHERE id = ? AND status = 'running'")
+        .bind(run_id).execute(&pool).await?;
+    if result.rows_affected() != 1 {
+        bail!("Workflow is no longer running; cannot finish applying its interaction decision");
+    }
+    runtime
+        .as_object_mut()
+        .context("workflow runtime metadata is invalid")?
+        .remove("pendingCheckpointUpdate");
+    Ok(())
 }
 
 pub(super) fn workflow_resume_runtime(

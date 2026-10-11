@@ -33,7 +33,7 @@ pub(crate) async fn enqueue_recovery_in_pool(pool: &sqlx::SqlitePool, id: &str, 
             .execute(&mut *tx)
             .await?;
     }
-    let changed = sqlx::query("UPDATE run_records SET status = 'queued', ended_at = NULL, error = NULL, duration_ms = NULL, runtime_json = ?, updated_at = ? WHERE id = ? AND target_type = 'workflow' AND status = 'interrupted'")
+    let changed = sqlx::query("UPDATE run_records SET status = 'queued', ended_at = NULL, error = NULL, duration_ms = NULL, runtime_json = ?, updated_at = ? WHERE id = ? AND target_type = 'workflow' AND status = 'interrupted' AND COALESCE(json_extract(runtime_json, '$.recoveryDismissed'), 0) = 0")
         .bind(runtime.to_string()).bind(&now).bind(id).execute(&mut *tx).await?.rows_affected();
     if changed != 1 {
         bail!("workflow is no longer available for recovery: {id}");
@@ -43,6 +43,23 @@ pub(crate) async fn enqueue_recovery_in_pool(pool: &sqlx::SqlitePool, id: &str, 
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) async fn dismiss_recovery_in_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let changed = sqlx::query("UPDATE run_records SET runtime_json = json_set(runtime_json, '$.recoveryDismissed', json('true')), updated_at = ? WHERE id = ? AND status = 'interrupted'")
+        .bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&mut *tx).await?;
+    if changed.rows_affected() != 1 {
+        bail!("Only interrupted runs can be removed from follow-up");
+    }
+    sqlx::query(
+        "UPDATE run_recovery_jobs SET status = 'blocked', last_error = 'Recovery dismissed by user' WHERE run_id = ?",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -62,7 +79,7 @@ pub(crate) async fn complete_attempt(pool: &sqlx::SqlitePool, id: &str) -> Resul
 pub(crate) async fn claim_recovery(pool: &sqlx::SqlitePool) -> Result<Option<String>> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let now = chrono::Utc::now().to_rfc3339();
-    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE r.workspace_id = ? AND j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status = 'interrupted' AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) ORDER BY j.next_check_at LIMIT 1")
+    let id: Option<String> = sqlx::query_scalar("SELECT j.run_id FROM run_recovery_jobs j JOIN run_records r ON r.id = j.run_id WHERE r.workspace_id = ? AND j.status = 'pending' AND j.attempts < 5 AND j.next_check_at <= ? AND r.status = 'interrupted' AND COALESCE(json_extract(r.runtime_json, '$.recoveryDismissed'), 0) = 0 AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id) ORDER BY j.next_check_at LIMIT 1")
         .bind(crate::utils::dirs::active_workspace_id()).bind(&now).fetch_optional(&mut *tx).await?;
     if let Some(id) = &id {
         sqlx::query(
@@ -92,7 +109,7 @@ pub(crate) async fn recover_startup(pool: &sqlx::SqlitePool) -> Result<()> {
         .bind(&now).execute(&mut *tx).await?;
     // Only journaled Remote operations are candidates. The worker validates the
     // checkpoint frontier before executing; unjournaled adapters stay manual.
-    sqlx::query("INSERT INTO run_recovery_jobs (run_id, status, next_check_at, updated_at) SELECT DISTINCT a.run_id, 'pending', ?, ? FROM workflow_operation_attempts a JOIN workflow_operations o ON o.id = a.operation_id JOIN run_records r ON r.id = a.run_id WHERE r.status = 'interrupted' AND o.adapter = 'remote_agent' ON CONFLICT(run_id) DO UPDATE SET status = CASE WHEN attempts >= 5 THEN 'blocked' ELSE 'pending' END, next_check_at = excluded.next_check_at, updated_at = excluded.updated_at WHERE run_recovery_jobs.status != 'blocked'")
+    sqlx::query("INSERT INTO run_recovery_jobs (run_id, status, next_check_at, updated_at) SELECT DISTINCT a.run_id, 'pending', ?, ? FROM workflow_operation_attempts a JOIN workflow_operations o ON o.id = a.operation_id JOIN run_records r ON r.id = a.run_id WHERE r.status = 'interrupted' AND COALESCE(json_extract(r.runtime_json, '$.recoveryDismissed'), 0) = 0 AND o.adapter = 'remote_agent' ON CONFLICT(run_id) DO UPDATE SET status = CASE WHEN attempts >= 5 THEN 'blocked' ELSE 'pending' END, next_check_at = excluded.next_check_at, updated_at = excluded.updated_at WHERE run_recovery_jobs.status != 'blocked'")
         .bind(&now).bind(&now).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
@@ -109,6 +126,9 @@ pub(crate) async fn block_job(pool: &sqlx::SqlitePool, id: &str, error: &str) ->
 }
 
 impl RunHistoryStore {
+    pub async fn dismiss_recovery(id: &str) -> Result<()> {
+        dismiss_recovery_in_pool(&DBManager::global().pool()?, id).await
+    }
     pub async fn enqueue_recovery(id: &str, runtime: Value) -> Result<()> {
         enqueue_recovery_in_pool(&DBManager::global().pool()?, id, runtime).await
     }
@@ -361,5 +381,58 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod dismissal_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn dismissal_preserves_history_and_blocks_manual_and_automatic_recovery() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE run_records (id TEXT PRIMARY KEY, workspace_id TEXT, target_type TEXT, status TEXT, runtime_json TEXT, updated_at TEXT, ended_at TEXT, error TEXT, duration_ms INTEGER)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE run_recovery_jobs (run_id TEXT PRIMARY KEY, status TEXT, last_error TEXT, next_check_at TEXT, attempts INTEGER, updated_at TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE workflow_abandonments (run_id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE workflow_operations (id TEXT, execution_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO run_records VALUES ('run', 'personal', 'workflow', 'interrupted', '{}', NULL, NULL, 'interrupted', NULL)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO run_recovery_jobs VALUES ('run', 'pending', NULL, '2000-01-01', 0, NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        dismiss_recovery_in_pool(&pool, "run").await.unwrap();
+        let state: (String, String) = sqlx::query_as("SELECT status, runtime_json FROM run_records WHERE id = 'run'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(state.0, "interrupted");
+        assert_eq!(
+            serde_json::from_str::<Value>(&state.1).unwrap()["recoveryDismissed"],
+            json!(true)
+        );
+        assert!(claim_recovery(&pool).await.unwrap().is_none());
+        // Even a worker that was already validating before dismissal cannot
+        // enqueue afterwards: the queue transition checks the durable flag.
+        assert!(
+            enqueue_recovery_in_pool(&pool, "run", json!({"resume":true}))
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE run_records SET status='running' WHERE id='run'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(dismiss_recovery_in_pool(&pool, "run").await.is_err());
     }
 }

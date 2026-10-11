@@ -1,12 +1,20 @@
 {
   "executionRecovery": {
+    "loadFailed": "Could not load recovery state",
+    "awaitingRecovery": "Interrupted · awaiting recovery",
+    "tryRecover": "Try to recover",
+    "interruptedDescription": "This execution was interrupted. Recovery checks the saved checkpoint and operation outcomes before continuing the same run.",
+    "confirmingRemote": "Confirming remote task state",
+    "remoteDescription": "Workrun is checking the original remote task. It will not submit a replacement task.",
+    "dismiss": "Stop tracking",
+    "dismissed": "Removed from follow-up; history is retained.",
+    "appRecoveryUnsupported": "This app execution cannot be resumed automatically. Check its original outcome before starting another run.",
+    "compensationBlocksRecovery": "This run has entered compensation and cannot continue forward.",
+    "requestBlocked": "Cannot continue this request yet",
+    "checkingRequest": "Checking…",
     "workspaceTitle": "Run workspace",
-    "continueTitle": "Recover this interrupted task?",
-    "continueDescription": "Recover an application-interrupted task from its saved checkpoint. Failed or stopped tasks must use Run again. Unknown outcomes are reconciled before continuing.",
-    "keepTask": "Keep task",
     "runAgain": "Run again",
     "updateFailed": "Could not update compensation",
-    "continueFailed": "Could not retry failed workflow",
     "newTaskFailed": "Could not start a new task",
     "closeTask": "Close {{name}}",
     "pin": "Pin",
@@ -685,7 +693,7 @@
       "savingAnswer": "Saving answer…"
     },
     "errors": {
-      "loadQueue": "Could not load interaction requests",
+      "loadRequests": "Could not load interaction requests",
       "continueWorkflow": "Could not continue the workflow"
     }
   },

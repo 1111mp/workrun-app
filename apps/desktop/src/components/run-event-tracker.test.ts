@@ -15,14 +15,21 @@ const subscriptions = vi.hoisted(
     new Map<
       string,
       {
-        callback: (event: { payload: { runId: string } }) => void;
+        callback: (event: {
+          payload: { runId: string; event?: { type: string } };
+        }) => void;
         resolve: (stop: () => void) => void;
       }
     >(),
 );
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(
-    (name: string, callback: (event: { payload: { runId: string } }) => void) =>
+    (
+      name: string,
+      callback: (event: {
+        payload: { runId: string; event?: { type: string } };
+      }) => void,
+    ) =>
       new Promise<() => void>((resolve) =>
         subscriptions.set(name, { callback, resolve }),
       ),
@@ -69,9 +76,13 @@ it('refreshes after subscribing, handles pushed updates, and releases late liste
     subscriptions.get('run-event')!.callback({ payload: { runId: 'run' } });
     expect(invalidate).toHaveBeenCalledTimes(3);
     subscriptions
+      .get('run-event')!
+      .callback({ payload: { runId: 'run', event: { type: 'interrupted' } } });
+    expect(invalidate).toHaveBeenCalledTimes(4);
+    subscriptions
       .get('run-status-changed')!
       .callback({ payload: { runId: 'run' } });
-    expect(invalidate).toHaveBeenCalledTimes(5);
+    expect(invalidate).toHaveBeenCalledTimes(6);
     await act(async () => root.unmount());
     invalidate.mockClear();
     await act(async () => {

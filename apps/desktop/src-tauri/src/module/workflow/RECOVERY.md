@@ -61,11 +61,39 @@ reconciles the existing operation before permitting downstream graph progress.
 Taskless unknown outcomes and definite remote failures block the job. Startup
 never turns an unknown submission into a fresh business request.
 
-Run details expose Continue task, Run again, task attempts, stable operation IDs,
+Run details expose recovery, Run again, task attempts, stable operation IDs,
 operation attempts, awaiting-confirmation state and recovery scheduling status.
 Completed outputs and failed execution rows remain visible after continuation.
 Only the latest inactive conversation turn can be continued, preventing a retry
 from overwriting a newer conversation's state.
+
+## Restarted queues and human interactions
+
+Startup preserves `waiting_for_input` runs with pending requests and clears
+submission claims. Questions, human reviews and tool authorizations remain
+independently selectable in task details or the output panel; viewing a card
+never claims it and there is no global popup queue. Orphaned waits, evaluations
+and executions that were running become interrupted. Queued runs with complete
+saved recipes retain their queue position and validate dependencies/checkpoints
+before dispatch. Invalid recipes become interrupted with a durable reason.
+
+Submitting an interaction validates the original request and checkpoint, then
+atomically saves its resolution and queues the same run. Questions/reviews also
+save `pendingCheckpointUpdate` in that transaction. Preparation does not mutate
+the graph. Before running any business node, the dispatcher applies those saved
+assignments and clears the marker. A crash before application leaves the recipe
+available; a crash after application but before clearing may safely repeat the
+same assignments. Missing checkpoints or application/persistence failures retain
+the recipe and interrupt the run with a visible error, without starting cleanup.
+Tool decisions stay in `toolConfirmation` and survive same-task manual recovery.
+A new Run again clears both decision recipes and uses a new business identity.
+
+Interrupted runs remain in the task center until recovered or explicitly removed
+from follow-up. Stop tracking sets `recoveryDismissed`, blocks recovery scheduling
+and retains history; it does not cancel or compensate external work. The output
+panel provides the shared recovery entry, including durable errors and automatic
+Remote reconciliation progress. Completed, failed and cancelled tasks can start a
+new run. Top-level App executions do not support in-place recovery.
 
 ## Agent/tool recovery
 

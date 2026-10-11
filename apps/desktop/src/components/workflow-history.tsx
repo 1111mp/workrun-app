@@ -15,6 +15,7 @@ import {
   ItemTitle,
   Spinner,
 } from '@workspace/ui/components';
+import type { Node } from '@xyflow/react';
 import {
   ActivityIcon,
   HistoryIcon,
@@ -72,8 +73,10 @@ function WorkflowHistory({
   onView,
   chatSessions = [],
   onViewChatSession,
+  workflowNodes = [],
 }: {
   runs: RunRecordSummary[];
+  workflowNodes?: Node[];
   isLoading: boolean;
   hasMore: boolean;
   isLoadingMore: boolean;
@@ -157,6 +160,7 @@ function WorkflowHistory({
           onPeriodChange={onPeriodChange}
           selectedVersion={selectedVersion}
           onSelectedVersionChange={onSelectedVersionChange}
+          workflowNodes={workflowNodes}
           processNodes={processNodes.data ?? []}
         />
         {isLoading ? (
@@ -465,6 +469,7 @@ function ObservabilitySummary({
   selectedVersion,
   onSelectedVersionChange,
   processNodes,
+  workflowNodes,
 }: {
   observability?: RunObservability;
   scopedObservability?: RunObservability;
@@ -474,6 +479,7 @@ function ObservabilitySummary({
   selectedVersion: string;
   onSelectedVersionChange: (version: string) => void;
   processNodes: ProcessNode[];
+  workflowNodes: Node[];
 }) {
   const { t, i18n } = useTranslation();
   if (isLoading) {
@@ -598,6 +604,7 @@ function ObservabilitySummary({
                 key={spanKey(span)}
                 span={span}
                 processNodes={processNodes}
+                workflowNodes={workflowNodes}
               />
             ))}
           </div>
@@ -653,14 +660,27 @@ function MetricCell({
 function AttentionRow({
   span,
   processNodes,
+  workflowNodes,
 }: {
   span: SpanMetricSummary;
   processNodes: ProcessNode[];
+  workflowNodes: Node[];
 }) {
   const { t } = useTranslation();
+  const data = workflowNodes.find((node) => node.id === span.nodeId)?.data;
+  const nodeName = [
+    data?.workflowName,
+    data?.name,
+    data?.label,
+    data?.title,
+  ].find(
+    (value): value is string =>
+      typeof value === 'string' && Boolean(value.trim()),
+  );
   const label =
     processToolDisplayName(span.toolName, processNodes) ??
     span.model ??
+    nodeName ??
     span.nodeId ??
     span.kind.replaceAll('_', ' ');
   return (

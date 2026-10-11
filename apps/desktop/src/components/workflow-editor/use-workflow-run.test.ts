@@ -25,7 +25,6 @@ vi.mock('@/stores', async () => ({
 vi.mock('@/services/run-history', () => ({
   listActiveRuns: vi.fn(),
   inspectRunRecord: vi.fn(),
-  resolvePendingAction: vi.fn(),
 }));
 vi.mock('@/services/workflow', () => ({
   startBackgroundWorkflowRun: vi.fn(),

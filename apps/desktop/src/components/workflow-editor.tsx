@@ -854,6 +854,7 @@ function WorkflowEditorContent({
             />
           ) : historyOpen && activeWorkflow ? (
             <WorkflowHistory
+              workflowNodes={nodes}
               runs={(
                 workflowHistory.data?.pages.flatMap((page) => page.items) ?? []
               ).filter((run) => !chatHistoryRunIds.has(run.id))}

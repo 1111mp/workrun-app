@@ -72,6 +72,7 @@ import {
 } from '@/components/workflow-actions';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
+import { WorkflowRecoveryNotice } from '@/components/workflow-recovery-notice';
 import { artifactReferences } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
 import type {
@@ -424,11 +425,13 @@ function toolCallOutput(value: unknown) {
 
 const ToolCalls = memo(function ToolCalls({ calls }: { calls: unknown[] }) {
   const { t } = useTranslation();
-  if (calls.length === 0) return null;
 
+  // Keep the summary mounted before the first result arrives so allowing a
+  // tool does not insert a new row above model usage and shift the timeline.
   return (
     <Collapsible className='mt-3 rounded-md border'>
       <CollapsibleTrigger
+        disabled={calls.length === 0}
         render={<Button variant='ghost' className='w-full justify-between' />}
       >
         <span className='text-sm'>
@@ -742,6 +745,26 @@ function CleanupMessages({ entry }: { entry: WorkflowTraceEntry }) {
 }
 
 function TraceResult({
+  actions,
+  ...props
+}: Parameters<typeof TraceResultContent>[0]) {
+  const inlineActions =
+    ['agent', 'remote_agent'].includes(props.entry.type) &&
+    typeof props.entry.error !== 'string' &&
+    props.entry.status !== 'cancelled';
+  return (
+    <>
+      {!inlineActions && actions}
+      <TraceResultContent
+        {...props}
+        actions={inlineActions ? actions : undefined}
+      />
+    </>
+  );
+}
+
+function TraceResultContent({
+  actions,
   entry,
   showAgentResponse = true,
   spans = [],
@@ -749,6 +772,7 @@ function TraceResult({
   onResponsePresentationComplete,
 }: {
   entry: WorkflowTraceEntry;
+  actions?: ReactNode;
   showAgentResponse?: boolean;
   spans?: RunSpan[];
   /** Historical output is a snapshot and must never replay live typing. */
@@ -876,6 +900,7 @@ function TraceResult({
               : t('workflowEditor.output.messages.responseReady')}
           </p>
           <ToolCalls calls={toolCalls} />
+          {actions}
           <ModelUsage nodeId={entry.nodeId} spans={spans} />
         </>
       );
@@ -895,6 +920,7 @@ function TraceResult({
     return (
       <>
         <ToolCalls calls={toolCalls} />
+        {actions}
         <ModelUsage nodeId={entry.nodeId} spans={spans} />
         {responses.length > 0 ? (
           <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
@@ -1370,17 +1396,19 @@ const LiveTaskExecution = memo(function LiveTaskExecution({
         log={log}
       />
       <TraceResult
+        actions={
+          <WorkflowActionCards
+            runId={runId}
+            actionIds={entry.actionIds ?? []}
+            nodeName={displayNodeName}
+          />
+        }
         entry={entry}
         spans={spans}
         animateResponses
         onResponsePresentationComplete={markResponsePresented}
       />
       <CleanupMessages entry={entry} />
-      <WorkflowActionCards
-        runId={runId}
-        actionIds={entry.actionIds ?? []}
-        nodeName={displayNodeName}
-      />
     </MessageScrollerItem>
   );
 });
@@ -1983,6 +2011,7 @@ function LiveWorkflowTaskOutput({
         </DrawerDescription>
       </DrawerHeader>
 
+      <WorkflowRecoveryNotice key={runId} runId={runId} />
       <WorkflowActionNotice runId={runId} />
       <div className='relative flex min-h-0 flex-1 flex-col'>
         {error &&
@@ -2162,12 +2191,8 @@ function LiveWorkflowTaskOutput({
         </MessageScrollerProvider>
       </div>
       <DrawerFooter className='flex-row justify-end'>
-        {!readOnly ? (
-          <Button
-            variant='outline'
-            disabled={isRunning || (status === 'interrupted' && !error)}
-            onClick={onRunAgain}
-          >
+        {!readOnly && status !== 'interrupted' ? (
+          <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
             <RotateCcwIcon data-icon='inline-start' />
             {rerunLabel(status, t)}
           </Button>
@@ -2370,6 +2395,7 @@ function WorkflowRunOutput({
         </div>
       </DrawerHeader>
 
+      <WorkflowRecoveryNotice key={run.runId} runId={run.runId} />
       <WorkflowActionNotice runId={run.runId} />
       <div className='flex min-h-0 flex-1 flex-col'>
         {!isChat && isRunning && (
@@ -2460,13 +2486,18 @@ function WorkflowRunOutput({
                           label={t('workflowEditor.output.processOutput')}
                           log={log}
                         />
-                        <TraceResult entry={entry} spans={spans} />
-                        <CleanupMessages entry={entry} />
-                        <WorkflowActionCards
-                          runId={run.runId}
-                          actionIds={entry.actionIds ?? []}
-                          nodeName={displayNodeName}
+                        <TraceResult
+                          entry={entry}
+                          spans={spans}
+                          actions={
+                            <WorkflowActionCards
+                              runId={run.runId}
+                              actionIds={entry.actionIds ?? []}
+                              nodeName={displayNodeName}
+                            />
+                          }
                         />
+                        <CleanupMessages entry={entry} />
                       </MessageScrollerItem>
                     );
                   })}
@@ -2726,7 +2757,7 @@ function WorkflowRunOutput({
         </DrawerFooter>
       ) : (
         <DrawerFooter className='flex-row justify-end'>
-          {!readOnly && (
+          {!readOnly && run.status !== 'interrupted' && (
             <Button
               variant='outline'
               disabled={isRunning || waitingForAction}

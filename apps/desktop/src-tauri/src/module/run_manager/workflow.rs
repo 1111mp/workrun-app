@@ -346,13 +346,27 @@ pub async fn replay_run(source_run_id: &str) -> Result<RunRecordSummary> {
 
 /// Recover an application-interrupted task; terminal failures require a new run.
 pub async fn recover_interrupted_workflow(source_run_id: &str) -> Result<RunRecordSummary> {
-    recover_workflow(source_run_id, false).await
+    let result = recover_workflow(source_run_id, false).await;
+    if let Err(error) = &result {
+        let pool = DBManager::global().pool()?;
+        sqlx::query("UPDATE run_records SET error = ?, updated_at = ? WHERE id = ? AND status = 'interrupted'")
+            .bind(error.to_string())
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(source_run_id)
+            .execute(&pool)
+            .await?;
+        publish_run_status(source_run_id, RunStatus::Interrupted)?;
+    }
+    result
 }
 
 pub(super) async fn recover_workflow(run_id: &str, automatic: bool) -> Result<RunRecordSummary> {
     let source = RunHistoryStore::inspect(run_id).await?;
     if source.summary.target_type != "workflow" || source.summary.status != "interrupted" {
         bail!("Only application-interrupted workflows can be recovered; failed or stopped tasks must run again");
+    }
+    if source.runtime.get("recoveryDismissed").and_then(Value::as_bool) == Some(true) {
+        bail!("Recovery was dismissed for this run. Its execution history is retained.");
     }
     // A finished run can still be flushing its writer/session. Requeue only
     // after its native owner has actually released it.
@@ -390,7 +404,7 @@ pub(super) async fn recover_workflow(run_id: &str, automatic: bool) -> Result<Ru
         automatic,
     )
     .await?;
-    let mut runtime = workflow_resume_runtime(source.runtime, None)?;
+    let mut runtime = recovery_resume_runtime(source.runtime)?;
     runtime
         .as_object_mut()
         .unwrap()
@@ -402,7 +416,18 @@ pub(super) async fn recover_workflow(run_id: &str, automatic: bool) -> Result<Ru
     Ok(RunHistoryStore::inspect(run_id).await?.summary)
 }
 
-async fn ensure_replay_dependencies_installed(runtime: &Value) -> Result<()> {
+fn recovery_resume_runtime(runtime: Value) -> Result<Value> {
+    validate_resume_metadata(&runtime)?;
+    let confirmation = runtime
+        .get("toolConfirmation")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?;
+    workflow_resume_runtime(runtime, confirmation)
+}
+
+pub(super) async fn ensure_replay_dependencies_installed(runtime: &Value) -> Result<()> {
     let missing = missing_replay_dependencies(runtime).await?;
     if !missing.is_empty() {
         bail!(
@@ -500,6 +525,9 @@ fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     object.remove("automaticProcessCleanup");
     object.remove("resume");
     object.remove("toolConfirmation");
+    object.remove("pendingCheckpointUpdate");
+    object.remove("restoredQueue");
+    object.remove("recoveryDismissed");
     if object.contains_key("threadId") {
         object.insert("threadId".to_string(), json!(uuid::Uuid::new_v4()));
     }
@@ -520,6 +548,9 @@ mod replay_tests {
                 "dsl": { "nodes": [] },
                 "resume": true,
                 "toolConfirmation": { "approved": true },
+                "pendingCheckpointUpdate": {"updates":[["answer","old"]]},
+                "recoveryDismissed":true,
+                "restoredQueue":true,
             }),
             "old-run",
         )
@@ -530,6 +561,9 @@ mod replay_tests {
         assert_eq!(runtime["compensationJournalVersion"], 1);
         assert!(runtime.get("resume").is_none());
         assert!(runtime.get("toolConfirmation").is_none());
+        assert!(runtime.get("pendingCheckpointUpdate").is_none());
+        assert!(runtime.get("recoveryDismissed").is_none());
+        assert!(runtime.get("restoredQueue").is_none());
     }
 
     #[test]
@@ -620,6 +654,97 @@ pub async fn resume_workflow(request: ResumeWorkflowRun) -> Result<()> {
     Ok(())
 }
 
+pub async fn dismiss_interrupted_run(id: &str) -> Result<()> {
+    RunHistoryStore::dismiss_recovery(id).await?;
+    publish_run_status(id, RunStatus::Interrupted)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PendingCheckpointUpdate {
+    pub updates: Vec<(String, Value)>,
+    pub workflow_context: Option<workflow_module::SubworkflowContext>,
+}
+
+pub(super) fn pending_checkpoint_update(runtime: &Value) -> Result<Option<PendingCheckpointUpdate>> {
+    runtime
+        .get("pendingCheckpointUpdate")
+        .map(|value| {
+            if runtime.get("resume").and_then(Value::as_bool) != Some(true) {
+                bail!("Saved interaction decision requires a resumed execution");
+            }
+            let update: PendingCheckpointUpdate =
+                serde_json::from_value(value.clone()).context("Saved interaction decision is incomplete")?;
+            if update.updates.is_empty() {
+                bail!("Saved interaction decision has no checkpoint updates");
+            }
+            Ok(update)
+        })
+        .transpose()
+}
+
+fn validate_resume_metadata(runtime: &Value) -> Result<()> {
+    pending_checkpoint_update(runtime)?;
+    if runtime.get("resume").is_some_and(|value| !value.is_boolean()) {
+        bail!("Saved resume flag is invalid; refusing to start this task from the beginning");
+    }
+    if let Some(confirmation) = runtime.get("toolConfirmation").filter(|value| !value.is_null()) {
+        if runtime.get("resume").and_then(Value::as_bool) != Some(true) {
+            bail!("Saved tool authorization requires a resumed execution");
+        }
+        let _: ToolConfirmationDecisionRequest =
+            serde_json::from_value(confirmation.clone()).context("Saved tool authorization is incomplete")?;
+    }
+    Ok(())
+}
+
+pub(super) async fn validate_restored_queue(run_id: &str, runtime: &Value) -> Result<()> {
+    validate_resume_metadata(runtime)?;
+    ensure_replay_dependencies_installed(runtime).await?;
+    let session = workflow_session_from_runtime(runtime)?;
+    let dsl: WorkflowDsl = serde_json::from_value(session.dsl)?;
+    let config = BaseConfig::workrun().await.latest_arc();
+    let compiled = workflow_module::compile(dsl.clone(), &config, None).await?;
+    if runtime.get("resume").and_then(Value::as_bool) == Some(true) {
+        let pool = DBManager::global().pool()?;
+        let key = crate::utils::dirs::get_encryption_key()?;
+        let path = if dsl.id.is_empty() {
+            vec![]
+        } else {
+            vec![dsl.id.clone()]
+        };
+        workflow_module::recovery::validate_frontier(
+            &compiled,
+            &dsl,
+            &pool,
+            &key,
+            runtime.get("executionId").and_then(Value::as_str).unwrap_or(run_id),
+            run_id,
+            "root",
+            &session.thread_id,
+            &config,
+            path,
+            false,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn validate_workflow_action(id: &str) -> Result<()> {
+    let action = RunHistoryStore::get_pending_action(id).await?;
+    let record = RunHistoryStore::inspect(&action.run_id).await?;
+    if record.summary.status != "waiting_for_input" || record.summary.target_type != "workflow" {
+        bail!("Workflow is no longer waiting for input");
+    }
+    if record.execution_history.compensation.is_some() {
+        bail!("Task compensation or cleanup has started; this request cannot continue the workflow");
+    }
+    ensure_replay_dependencies_installed(&record.runtime).await?;
+    let session = workflow_session_from_runtime(&record.runtime)?;
+    workflow_module::validate_action_checkpoint(session.dsl, session.thread_id, &action.kind, &action.payload).await
+}
+
 /// Complete an explicitly selected action from durable data. The browser never
 /// supplies a DSL or checkpoint identity here; both are taken from the run
 /// record that originally paused, preventing a stale page from resuming a
@@ -643,23 +768,14 @@ async fn resolve_claimed_workflow_action(request: &ResolveWorkflowAction) -> Res
     if record.summary.target_type != "workflow" || record.summary.status != "waiting_for_input" {
         bail!("only a workflow waiting for input can be resumed");
     }
-    let session = if let Some(session) = RunManager::global()
-        .workflow_sessions
-        .lock()
-        .get(&action.run_id)
-        .cloned()
-    {
-        session
-    } else {
-        let session = workflow_session_from_runtime(&record.runtime)?;
-        RunManager::global()
-            .workflow_sessions
-            .lock()
-            .insert(action.run_id.clone(), session.clone());
-        session
-    };
-    let tool_confirmation = apply_pending_action_checkpoint(&session, &action, &request.resolution).await?;
-    let runtime = workflow_resume_runtime(record.runtime, tool_confirmation)?;
+    validate_workflow_action(&request.id).await?;
+    let session = workflow_session_from_runtime(&record.runtime)?;
+    let (tool_confirmation, checkpoint_update) =
+        prepare_pending_action_checkpoint(&session, &action, &request.resolution).await?;
+    let mut runtime = workflow_resume_runtime(record.runtime, tool_confirmation)?;
+    if let Some(update) = checkpoint_update {
+        runtime["pendingCheckpointUpdate"] = update;
+    }
     RunHistoryStore::resolve_claimed_action_and_enqueue(
         &action.id,
         &request.claimant_id,
@@ -667,19 +783,18 @@ async fn resolve_claimed_workflow_action(request: &ResolveWorkflowAction) -> Res
         runtime,
     )
     .await?;
-    // The checkpoint is already applied above. The durable recipe now tells the
-    // dispatcher to continue it when a top-level execution permit is available.
-    drop(session);
+    // No checkpoint has changed yet. The dispatcher applies the durable decision
+    // only after the decision and queue transition commit together.
     publish_run_status(&action.run_id, RunStatus::Queued)?;
     RunManager::global().supervisor.notify();
     Ok(())
 }
 
-async fn apply_pending_action_checkpoint(
+async fn prepare_pending_action_checkpoint(
     session: &WorkflowSession,
     action: &crate::module::run_history::PendingAction,
     resolution: &Value,
-) -> Result<Option<ToolConfirmationDecisionRequest>> {
+) -> Result<(Option<ToolConfirmationDecisionRequest>, Option<Value>)> {
     let payload = action
         .payload
         .as_object()
@@ -690,11 +805,14 @@ async fn apply_pending_action_checkpoint(
             let function_call_id = required_string(payload, "functionCallId")?;
             let fingerprint = required_string(payload, "fingerprint")?;
             let approved = required_bool(decision, "approved")?;
-            Ok(Some(ToolConfirmationDecisionRequest {
-                function_call_id,
-                fingerprint,
-                approved,
-            }))
+            Ok((
+                Some(ToolConfirmationDecisionRequest {
+                    function_call_id,
+                    fingerprint,
+                    approved,
+                }),
+                None,
+            ))
         },
         "human_review" => {
             let node_id = required_string(payload, "nodeId")?;
@@ -708,16 +826,19 @@ async fn apply_pending_action_checkpoint(
                 .map(serde_json::from_value)
                 .transpose()
                 .context("review workflow context is invalid")?;
-            workflow_module::resolve_human_review_checkpoint(
+            let updates = workflow_module::prepare_human_review_checkpoint(
                 session.dsl.clone(),
                 session.thread_id.clone(),
                 node_id,
                 approved,
                 edits,
-                workflow_context,
+                workflow_context.clone(),
             )
             .await?;
-            Ok(None)
+            Ok((
+                None,
+                Some(json!({"updates":updates,"workflowContext":workflow_context})),
+            ))
         },
         "ask_user_question" => {
             let node_id = required_string(payload, "nodeId")?;
@@ -729,15 +850,18 @@ async fn apply_pending_action_checkpoint(
                 .map(serde_json::from_value)
                 .transpose()
                 .context("question workflow context is invalid")?;
-            workflow_module::resolve_ask_user_question_checkpoint(
+            let updates = workflow_module::prepare_ask_user_question_checkpoint(
                 session.dsl.clone(),
                 session.thread_id.clone(),
                 node_id,
                 option_id,
-                workflow_context,
+                workflow_context.clone(),
             )
             .await?;
-            Ok(None)
+            Ok((
+                None,
+                Some(json!({"updates":updates,"workflowContext":workflow_context})),
+            ))
         },
         kind => bail!("unsupported pending action kind: {kind}"),
     }
@@ -848,4 +972,47 @@ pub async fn review_operation(request: workflow_module::operation_review::Review
     .await?;
     RunManager::global().supervisor.notify();
     Ok(())
+}
+
+#[cfg(test)]
+mod restored_queue_tests {
+    use super::*;
+
+    #[test]
+    fn same_task_recovery_preserves_accepted_decisions() {
+        for approved in [true, false] {
+            let confirmation =
+                json!({"functionCallId":"original-call","fingerprint":"original-input","approved":approved});
+            let decision = json!({"updates":[["answer","a"]],"workflowContext":null});
+            let runtime = recovery_resume_runtime(json!({"resume":true,"threadId":"original-thread","executionId":"original-execution","toolConfirmation":confirmation,"pendingCheckpointUpdate":decision})).unwrap();
+            assert_eq!(runtime["toolConfirmation"], confirmation);
+            assert_eq!(runtime["pendingCheckpointUpdate"], decision);
+            assert_eq!(runtime["threadId"], "original-thread");
+            assert_eq!(runtime["executionId"], "original-execution");
+        }
+    }
+
+    #[test]
+    fn invalid_resume_metadata_never_falls_back_to_a_fresh_execution() {
+        assert!(validate_resume_metadata(&json!({"resume":"true"})).is_err());
+        assert!(validate_resume_metadata(&json!({"toolConfirmation":{"approved":true}})).is_err());
+        assert!(validate_resume_metadata(&json!({"resume":true,"toolConfirmation":{"approved":true}})).is_err());
+        let runtime = json!({"resume":true,"toolConfirmation":{"functionCallId":"original-call","fingerprint":"original-args","approved":true}});
+        validate_resume_metadata(&runtime).unwrap();
+        validate_resume_metadata(&json!({})).unwrap();
+        for runtime in [
+            json!({"pendingCheckpointUpdate":{"updates":[["answer","a"]]}}),
+            json!({"resume":true,"pendingCheckpointUpdate":{}}),
+            json!({"resume":true,"pendingCheckpointUpdate":{"updates":[]}}),
+        ] {
+            assert!(validate_resume_metadata(&runtime).is_err());
+        }
+        let runtime =
+            json!({"resume":true,"pendingCheckpointUpdate":{"updates":[["answer","a"]],"workflowContext":null}});
+        validate_resume_metadata(&runtime).unwrap();
+        assert_eq!(
+            pending_checkpoint_update(&runtime).unwrap().unwrap().updates,
+            vec![("answer".into(), json!("a"))]
+        );
+    }
 }

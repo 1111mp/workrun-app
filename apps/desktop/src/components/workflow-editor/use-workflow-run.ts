@@ -6,15 +6,12 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { prepareWorkflowProcessApps } from '@/services/process-node';
-import { resolvePendingAction } from '@/services/run-history';
 import { inspectRunRecord, listActiveRuns } from '@/services/run-history';
 import {
   archiveChatSession as archiveChatSessionRequest,
   createChatSession,
   getChatSession,
   listChatSessionTurns,
-  resolveAskUserQuestion,
-  resolveHumanReview,
   resumeBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
   subscribeWorkflowRun,
@@ -29,12 +26,6 @@ import {
 } from '@/services/workflow';
 import { useWorkflowRunStore, useWorkrunStore } from '@/stores';
 import { workflowRunView } from '@/stores/workflow-run.store';
-
-type SubworkflowContext = {
-  workflowId: string;
-  threadId: string;
-  path: string[];
-};
 
 function preparationDescription({
   appName,
@@ -61,17 +52,6 @@ function preparationDescription({
     completed: 'Ready',
   };
   return `${appName} · v${version} — ${labels[stage]}`;
-}
-
-function getSubworkflowContext(value: unknown): SubworkflowContext | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const { workflowId, threadId, path } = value as Record<string, unknown>;
-  return typeof workflowId === 'string' &&
-    typeof threadId === 'string' &&
-    Array.isArray(path) &&
-    path.every((part) => typeof part === 'string')
-    ? { workflowId, threadId, path }
-    : undefined;
 }
 
 function unconfiguredSubworkflow(nodes: Node[]) {
@@ -149,9 +129,6 @@ function useWorkflowRun(
   });
   const starting = useRef(false);
   const [isStarting, setIsStarting] = useState(false);
-  const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
-  const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
-    useState(false);
   const [isRestoringChatSession, setIsRestoringChatSession] = useState(false);
   // `undefined` follows a restored history run, while `null` records that the
   // restored run has finished or been closed during this editor session.
@@ -630,140 +607,6 @@ function useWorkflowRun(
     }
   };
 
-  const resolvePendingToolApproval = async (approved: boolean) => {
-    const approval = store.toolApproval;
-    const { functionCallId, fingerprint } = approval ?? {};
-    if (typeof functionCallId !== 'string' || typeof fingerprint !== 'string')
-      return;
-    const nodeId = approval?.nodeId;
-    if (!approved && typeof nodeId === 'string') {
-      // The native graph only records the decision on resume. Add the UI event
-      // now so the rejected invocation remains visible in this execution.
-      store.applyRunEvents(
-        [
-          {
-            runId: runId.current ?? 'local',
-            // Insert between the last persisted event and the next native
-            // sequence, so the local denial cannot suppress resume events.
-            sequence:
-              useWorkflowRunStore.getState().projection.eventSequence + 0.5,
-            event: {
-              type: 'custom',
-              node: nodeId,
-              event_type: 'agent.tool_denied',
-              data: {
-                tool: approval?.tool,
-                name: approval?.name,
-                input: approval?.input,
-                status: 'denied',
-                message: 'Denied by user',
-              },
-            },
-          },
-        ],
-        context(),
-      );
-    }
-
-    const actionId = approval?.runActionId;
-    if (actionId) {
-      try {
-        if (typeof actionId !== 'string')
-          throw new Error('run action is invalid');
-        await resolvePendingAction(actionId, { approved });
-      } catch (error) {
-        toast.error('Could not resume the run', {
-          toasterId: 'global',
-          description: error instanceof Error ? error.message : String(error),
-        });
-        return;
-      }
-    }
-    store.clearToolApproval();
-    resumeWorkflowRun({ functionCallId, fingerprint, approved });
-  };
-
-  const resolvePendingHumanReview = async (
-    approved: boolean,
-    edits: Record<string, string> = {},
-  ) => {
-    if (isResolvingHumanReview) return false;
-    const review = store.humanReview;
-    const nodeId = review?.nodeId;
-    if (typeof nodeId !== 'string') return false;
-    const threadId = runThreadId.current;
-    if (!threadId) return false;
-
-    setIsResolvingHumanReview(true);
-    try {
-      const workflowContext = getSubworkflowContext(review?.workflowContext);
-      await resolveHumanReview(
-        toWorkflowDsl(workflowId, nodes, edges, settings),
-        threadId,
-        nodeId,
-        approved,
-        edits,
-        workflowContext,
-      );
-      const actionId = review?.runActionId;
-      if (actionId) {
-        if (typeof actionId !== 'string')
-          throw new Error('run action is invalid');
-        await resolvePendingAction(actionId, { approved, edits });
-      }
-      store.clearHumanReview();
-      resumeWorkflowRun();
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error('Could not record the review decision', {
-        toasterId: 'global',
-        description: message,
-      });
-      return false;
-    } finally {
-      setIsResolvingHumanReview(false);
-    }
-  };
-
-  const resolvePendingAskUserQuestion = async (optionId: string) => {
-    if (isResolvingAskUserQuestion) return;
-    const nodeId = store.askUserQuestion?.nodeId;
-    if (typeof nodeId !== 'string') return;
-    const threadId = runThreadId.current;
-    if (!threadId) return;
-
-    setIsResolvingAskUserQuestion(true);
-    try {
-      const workflowContext = getSubworkflowContext(
-        store.askUserQuestion?.workflowContext,
-      );
-      await resolveAskUserQuestion(
-        toWorkflowDsl(workflowId, nodes, edges, settings),
-        threadId,
-        nodeId,
-        optionId,
-        workflowContext,
-      );
-      const actionId = store.askUserQuestion?.runActionId;
-      if (actionId) {
-        if (typeof actionId !== 'string')
-          throw new Error('run action is invalid');
-        await resolvePendingAction(actionId, { optionId });
-      }
-      store.clearAskUserQuestion();
-      resumeWorkflowRun();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error('Could not record the selected option', {
-        toasterId: 'global',
-        description: message,
-      });
-    } finally {
-      setIsResolvingAskUserQuestion(false);
-    }
-  };
-
   return {
     hasActiveRun,
     runStartDisabled:
@@ -776,11 +619,6 @@ function useWorkflowRun(
     toolApproval: store.toolApproval,
     humanReview: store.humanReview,
     askUserQuestion: store.askUserQuestion,
-    isResolvingHumanReview,
-    isResolvingAskUserQuestion,
-    resolvePendingToolApproval,
-    resolvePendingHumanReview,
-    resolvePendingAskUserQuestion,
     resumeWorkflowRun,
     restoreChatSession,
     archiveChatSession,

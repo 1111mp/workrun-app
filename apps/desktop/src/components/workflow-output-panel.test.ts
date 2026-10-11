@@ -23,6 +23,9 @@ vi.mock('@/components/workflow-chat-composer', () => ({
 vi.mock('@/components/workflow-code-block', () => ({
   WorkflowCodeBlock: () => null,
 }));
+vi.mock('@/components/workflow-recovery-notice', () => ({
+  WorkflowRecoveryNotice: () => null,
+}));
 vi.mock('@/components/workflow-actions', () => ({
   WorkflowActionCards: () => null,
   WorkflowActionNotice: () => null,

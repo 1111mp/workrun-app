@@ -103,7 +103,7 @@ mod test_cases {
 async fn supervisor_waits_for_work_and_skips_plans_waiting_for_execution() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     sqlx::raw_sql(
-        "CREATE TABLE run_records(id TEXT,status TEXT,workspace_id TEXT);
+        "CREATE TABLE run_records(id TEXT,status TEXT,workspace_id TEXT,runtime_json TEXT DEFAULT '{}');
         CREATE TABLE run_recovery_jobs(run_id TEXT,status TEXT,attempts INTEGER,next_check_at TEXT);
         CREATE TABLE workflow_abandonments(run_id TEXT,status TEXT,last_error TEXT,next_check_at TEXT,requested_at TEXT,updated_at TEXT);",
     )
@@ -111,7 +111,7 @@ async fn supervisor_waits_for_work_and_skips_plans_waiting_for_execution() {
     .await
     .unwrap();
     assert!(supervisor_deadline_in_pool(&pool, true).await.unwrap().is_none());
-    sqlx::raw_sql("INSERT INTO run_records VALUES ('run','running','personal');
+    sqlx::raw_sql("INSERT INTO run_records(id,status,workspace_id) VALUES ('run','running','personal');
         INSERT INTO workflow_abandonments(run_id,status,last_error,next_check_at) VALUES ('run','pending','Waiting for original execution to stop','2000-01-01T00:00:00Z');")
         .execute(&pool).await.unwrap();
     assert!(supervisor_deadline_in_pool(&pool, true).await.unwrap().is_none());

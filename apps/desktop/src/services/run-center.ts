@@ -6,8 +6,7 @@ export type RunCenterEntry = {
   runCount: number;
 };
 
-/** One entry per target. Keep the selected run ID so navigation opens the
- * precise invocation that needs attention, rather than starting another run. */
+/** Keep each invocation selectable, including interrupted tasks from the same workflow. */
 export function runCenterEntries(
   runs: RunRecordSummary[],
   actions: PendingAction[],
@@ -24,28 +23,19 @@ export function runCenterEntries(
       ? 0
       : run.status === 'waiting_for_input'
         ? 1
-        : run.status === 'running'
+        : run.status === 'interrupted'
           ? 2
-          : 3;
+          : run.status === 'running'
+            ? 3
+            : 4;
   const compare = (a: RunRecordSummary, b: RunRecordSummary) =>
     priority(a) - priority(b) ||
     Date.parse(b.startedAt) - Date.parse(a.startedAt);
-  const grouped = new Map<string, RunCenterEntry>();
-  for (const run of [...runs].sort(compare)) {
-    const key = `${run.targetType}:${run.targetId}`;
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.runCount++;
-      existing.actions.push(...(actionsByRun.get(run.id) ?? []));
-    } else {
-      grouped.set(key, {
-        run,
-        runCount: 1,
-        actions: [...(actionsByRun.get(run.id) ?? [])],
-      });
-    }
-  }
-  return [...grouped.values()];
+  return [...runs].sort(compare).map((run) => ({
+    run,
+    runCount: 1,
+    actions: actionsByRun.get(run.id) ?? [],
+  }));
 }
 
 export function runDetailsPath(run: RunRecordSummary) {

@@ -13,6 +13,7 @@ import { CheckCircle2Icon, CircleAlertIcon, ClipboardIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { WorkflowRecoveryNotice } from '@/components/workflow-recovery-notice';
 import type {
   ProcessNode,
   ProcessNodeDefinition,
@@ -128,6 +129,7 @@ function AppRunOutputContent({ run }: { run: ProcessNodeRun }) {
 
   return (
     <div className='flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-3'>
+      <WorkflowRecoveryNotice key={run.runId} runId={run.runId} />
       {run.error ? (
         <div className='border-destructive/30 bg-destructive/5 text-destructive mb-3 flex items-start gap-2 rounded-md border p-3 text-sm'>
           <CircleAlertIcon className='mt-0.5 size-4 shrink-0' />

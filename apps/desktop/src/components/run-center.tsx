@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
   Button,
@@ -36,6 +36,7 @@ import {
   type RunCenterEntry,
 } from '@/services/run-center';
 import {
+  dismissRunRecovery,
   listActiveRuns,
   listPendingActions,
   type PendingAction,
@@ -102,14 +103,16 @@ function ActiveRunRow({
 }) {
   const { t } = useTranslation();
   const { run, actions, runCount } = entry;
-  const status = actions.length ? 'waiting_for_input' : run.status;
+  const status = run.status;
   const tone = statusTone[status];
   const Icon =
     status === 'waiting_for_input'
       ? CircleAlertIcon
-      : status === 'queued'
-        ? Clock3Icon
-        : PlayIcon;
+      : status === 'interrupted'
+        ? CircleAlertIcon
+        : status === 'queued'
+          ? Clock3Icon
+          : PlayIcon;
   return (
     <div className='hover:bg-muted/70 flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors'>
       <button
@@ -134,11 +137,19 @@ function ActiveRunRow({
         </span>
       </button>
       <Badge variant='outline' className={tone.badge}>
-        {t(`runs.runStatus.${status}`)}
+        {t(
+          status === 'interrupted'
+            ? 'executionRecovery.awaitingRecovery'
+            : `runs.runStatus.${status}`,
+        )}
       </Badge>
       {onCancel ? (
         <Button size='sm' variant='ghost' onClick={onCancel}>
-          {t('runCenter.cancel')}
+          {t(
+            run.status === 'interrupted'
+              ? 'executionRecovery.dismiss'
+              : 'runCenter.cancel',
+          )}
         </Button>
       ) : null}
     </div>
@@ -166,6 +177,7 @@ function actionLabel(
  */
 function RunCenter() {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string>();
 
@@ -173,7 +185,9 @@ function RunCenter() {
   const navigate = useNavigate();
 
   const isRunSurface =
-    pathname.startsWith('/workflows') || pathname.startsWith('/apps');
+    pathname.startsWith('/workflows') ||
+    pathname.startsWith('/apps') ||
+    pathname.startsWith('/runs');
 
   const workspaceMode = useWorkrunStore(
     (state) => state.config?.workspace_mode ?? 'personal',
@@ -197,7 +211,9 @@ function RunCenter() {
     pendingActions.data ?? [],
   );
   const waitingEntries = entries.filter(
-    (entry) => entry.actions.length || entry.run.status === 'waiting_for_input',
+    (entry) =>
+      entry.actions.length ||
+      ['waiting_for_input', 'interrupted'].includes(entry.run.status),
   );
   const attentionCount = waitingEntries.length;
   const runningCount = entries.filter(
@@ -222,14 +238,23 @@ function RunCenter() {
   const cancelRun = async (run: RunRecordSummary) => {
     setCancellingRunId(run.id);
     try {
-      if (run.targetType === 'workflow')
+      if (run.status === 'interrupted') await dismissRunRecovery(run.id);
+      else if (run.targetType === 'workflow')
         await cancelBackgroundWorkflowRun(run.id);
       else await cancelBackgroundProcessNodeRun(run.id);
+      await queryClient.invalidateQueries({ queryKey: ['run-history'] });
       toast.success(
-        t('runCenter.cancelled', {
-          targetType:
-            run.targetType === 'workflow' ? t('runs.workflow') : t('apps.app'),
-        }),
+        t(
+          run.status === 'interrupted'
+            ? 'executionRecovery.dismissed'
+            : 'runCenter.cancelled',
+          {
+            targetType:
+              run.targetType === 'workflow'
+                ? t('runs.workflow')
+                : t('apps.app'),
+          },
+        ),
         { toasterId: 'global' },
       );
     } catch (error) {
@@ -277,7 +302,7 @@ function RunCenter() {
       ) : null}
       {(filter === 'pending' ? waitingEntries : entries).map((entry) => (
         <ActiveRunRow
-          key={`${entry.run.targetType}:${entry.run.targetId}`}
+          key={entry.run.id}
           entry={entry}
           onCancel={
             cancellingRunId !== entry.run.id

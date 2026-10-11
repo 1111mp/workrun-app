@@ -36,7 +36,10 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { ArtifactFiles } from '@/components/artifact-files';
 import { humanReviewAttachments } from '@/services/human-review';
 import { listPendingActions, type PendingAction } from '@/services/run-history';
-import { resolveBackgroundWorkflowAction } from '@/services/workflow';
+import {
+  resolveBackgroundWorkflowAction,
+  validateWorkflowAction,
+} from '@/services/workflow';
 import { useRunWorkspaceStore, useWorkrunStore } from '@/stores';
 
 type Draft = { optionId?: string; edit?: string };
@@ -95,7 +98,7 @@ export function WorkflowActionNotice({ runId }: { runId?: string }) {
   if (query.isError)
     return (
       <Alert variant='destructive' className='mx-4 w-auto'>
-        <AlertTitle>{t('approval.errors.loadQueue')}</AlertTitle>
+        <AlertTitle>{t('approval.errors.loadRequests')}</AlertTitle>
         <AlertDescription>
           <Button variant='outline' onClick={() => void query.refetch()}>
             {t('approval.cards.retry')}
@@ -213,6 +216,18 @@ export function WorkflowActionCard({
   const payload = actionPayload(action);
   const pending = action.status === 'pending' && !submitted;
   const resolution = submitted ?? action.resolution;
+  const readiness = useQuery({
+    queryKey: ['run-history', 'action-readiness', workspace, action.id],
+    queryFn: async () => {
+      await validateWorkflowAction(action.id);
+      return true;
+    },
+    enabled: pending,
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+  const unavailable = submitting || !readiness.isSuccess;
+
   const [expanded, setExpanded] = useState(false);
   const isQuestion = action.kind === 'ask_user_question';
   const isReview = action.kind === 'human_review';
@@ -290,7 +305,7 @@ export function WorkflowActionCard({
           );
 
   const submit = async (value: Record<string, unknown>) => {
-    if (submission.current || !pending) return;
+    if (submission.current || !pending || !readiness.isSuccess) return;
     submission.current = true;
     setSubmitting(true);
     setError(undefined);
@@ -429,7 +444,7 @@ export function WorkflowActionCard({
                     {pending && canEdit ? (
                       <Textarea
                         id={`${action.id}-content`}
-                        disabled={submitting}
+                        disabled={unavailable}
                         className='min-h-64'
                         value={draft?.edit ?? originalContent ?? ''}
                         onChange={(event) =>
@@ -470,7 +485,7 @@ export function WorkflowActionCard({
                 event.preventDefault();
                 if (
                   pending &&
-                  !submitting &&
+                  !unavailable &&
                   options.some((option) => option.id === draft?.optionId)
                 ) {
                   void submit({ optionId: draft?.optionId });
@@ -480,7 +495,7 @@ export function WorkflowActionCard({
               <QuestionnaireItem
                 name={action.id}
                 required
-                disabled={!pending || submitting}
+                disabled={!pending || unavailable}
               >
                 <QuestionnaireTitle>
                   {t('approval.question.availableOptions')}
@@ -495,7 +510,7 @@ export function WorkflowActionCard({
                         option.id
                       }
                       onChange={(event) => {
-                        if (pending && !submitting && event.target.checked) {
+                        if (pending && !unavailable && event.target.checked) {
                           updateDraft(draftKey, { optionId: option.id });
                         }
                       }}
@@ -512,6 +527,25 @@ export function WorkflowActionCard({
               </QuestionnaireItem>
             </Questionnaire>
           )}
+          {pending && readiness.isError && (
+            <Alert variant='destructive'>
+              <AlertTitle>{t('executionRecovery.requestBlocked')}</AlertTitle>
+              <AlertDescription>
+                {String(
+                  readiness.error instanceof Error
+                    ? readiness.error.message
+                    : readiness.error,
+                )}
+                <Button
+                  variant='outline'
+                  disabled={readiness.isFetching}
+                  onClick={() => void readiness.refetch()}
+                >
+                  {t('approval.cards.retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
           {error && (
             <Alert variant='destructive'>
               <AlertTitle>{t('approval.errors.continueWorkflow')}</AlertTitle>
@@ -525,11 +559,20 @@ export function WorkflowActionCard({
           <p className='text-muted-foreground mr-auto basis-full text-xs leading-relaxed'>
             {t(`approval.cards.hints.${kindKey}`)}
           </p>
+          {pending && !readiness.isSuccess && readiness.isFetching && (
+            <span
+              role='status'
+              className='text-muted-foreground flex items-center gap-2 text-xs'
+            >
+              <Spinner />
+              {t('executionRecovery.checkingRequest')}
+            </span>
+          )}
           {submitting && <Spinner />}
           {isQuestion ? (
             <Button
               disabled={
-                submitting ||
+                unavailable ||
                 !options.some((option) => option.id === draft?.optionId)
               }
               onClick={() => void submit({ optionId: draft?.optionId })}
@@ -544,7 +587,7 @@ export function WorkflowActionCard({
             <>
               <Button
                 variant='outline'
-                disabled={submitting}
+                disabled={unavailable}
                 onClick={() => decision(false)}
               >
                 {t(
@@ -553,7 +596,7 @@ export function WorkflowActionCard({
                     : 'approval.cards.denyTool',
                 )}
               </Button>
-              <Button disabled={submitting} onClick={() => decision(true)}>
+              <Button disabled={unavailable} onClick={() => decision(true)}>
                 {t(
                   submitting
                     ? 'approval.saving'

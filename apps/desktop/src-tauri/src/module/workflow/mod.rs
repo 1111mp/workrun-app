@@ -302,7 +302,7 @@ fn empty_json_object() -> Value {
     json!({})
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubworkflowContext {
     workflow_id: String,
@@ -310,46 +310,117 @@ pub struct SubworkflowContext {
     path: Vec<String>,
 }
 
-pub async fn resolve_human_review_checkpoint(
+/// Verify the saved request against the durable frontier without applying a
+/// decision. A restart must never turn an old card into permission for new work.
+pub async fn validate_action_checkpoint(dsl: Value, thread_id: String, kind: &str, payload: &Value) -> Result<()> {
+    let config = BaseConfig::workrun().await.latest_arc();
+    validate_action_checkpoint_with_config(dsl, thread_id, kind, payload, &config).await
+}
+
+async fn validate_action_checkpoint_with_config(
+    dsl: Value,
+    thread_id: String,
+    kind: &str,
+    payload: &Value,
+    config: &IWorkrun,
+) -> Result<()> {
+    let workflow_context = payload
+        .get("workflowContext")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("Invalid request workflow context")?;
+    let (dsl, thread_id) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
+    let node_id = payload
+        .get("nodeId")
+        .and_then(Value::as_str)
+        .context("Request is missing its node ID")?;
+    let node = dsl
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id)
+        .context("Request node is missing from the saved workflow")?;
+    match kind {
+        "human_review" if node.kind == "human_review" => {},
+        "ask_user_question" if node.kind == "ask_user_question" => {},
+        "tool_approval" if matches!(node.kind.as_str(), "agent" | "subworkflow") => {},
+        _ => bail!("Request type does not match the saved workflow node"),
+    }
+    let compiled = compile(dsl, config, None).await?;
+    let checkpoint = compiled
+        .state_checkpointer
+        .load(&thread_id)
+        .await?
+        .context("No resumable checkpoint was found for this request")?;
+    validate_action_frontier(&checkpoint, node_id, kind, payload)
+}
+
+fn validate_action_frontier(
+    checkpoint: &adk_rust::graph::Checkpoint,
+    node_id: &str,
+    kind: &str,
+    payload: &Value,
+) -> Result<()> {
+    if !checkpoint.pending_nodes.iter().any(|node| node == node_id) {
+        bail!("Request no longer matches the waiting checkpoint node");
+    }
+    if kind == "tool_approval"
+        && payload.get("checkpointId").and_then(Value::as_str) != Some(checkpoint.checkpoint_id.as_str())
+    {
+        bail!("Tool authorization no longer matches the saved checkpoint");
+    }
+    Ok(())
+}
+
+/// Validate a decision without changing the checkpoint. The resulting updates
+/// can be journaled with the queue transition before the dispatcher applies them.
+pub async fn prepare_human_review_checkpoint(
     dsl: Value,
     thread_id: String,
     node_id: String,
     approved: bool,
     edits: HashMap<String, String>,
     workflow_context: Option<SubworkflowContext>,
-) -> Result<()> {
-    let (dsl, thread_id) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
+) -> Result<Vec<(String, Value)>> {
+    let (dsl, _) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
     let approval_key = human_review_approval_key(&dsl, &node_id)?;
     let editable_key = human_review_editable_key(&dsl, &node_id)?;
     if edits.len() > usize::from(editable_key.is_some()) || edits.keys().any(|key| Some(key) != editable_key.as_ref()) {
         bail!("review edits do not match the configured editable key");
     }
-    let config = BaseConfig::workrun().await.latest_arc();
-    let compiled = compile(dsl, &config, None).await?;
     let mut updates = vec![(approval_key, Value::Bool(approved))];
     if let Some(editable_key) = editable_key
         && let Some(value) = edits.get(&editable_key)
     {
         updates.push((editable_key, Value::String(value.clone())));
     }
-    compiled.update_state(&thread_id, updates).await
+    Ok(updates)
 }
 
-pub async fn resolve_ask_user_question_checkpoint(
+pub async fn prepare_ask_user_question_checkpoint(
     dsl: Value,
     thread_id: String,
     node_id: String,
     option_id: String,
     workflow_context: Option<SubworkflowContext>,
-) -> Result<()> {
-    let (dsl, thread_id) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
+) -> Result<Vec<(String, Value)>> {
+    let (dsl, _) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
     let answer_key = ask_user_question_answer_key(&dsl, &node_id)?;
     let option_id = ask_user_question_option_id(&dsl, &node_id, &option_id)?;
+    Ok(vec![(answer_key, Value::String(option_id))])
+}
+
+pub async fn apply_action_checkpoint_updates(
+    dsl: Value,
+    thread_id: String,
+    workflow_context: Option<SubworkflowContext>,
+    updates: Vec<(String, Value)>,
+) -> Result<()> {
+    let (dsl, thread_id) = resolve_checkpoint_context(dsl, thread_id, workflow_context).await?;
     let config = BaseConfig::workrun().await.latest_arc();
     let compiled = compile(dsl, &config, None).await?;
-    compiled
-        .update_state(&thread_id, [(answer_key, Value::String(option_id))])
-        .await
+    compiled.update_state(&thread_id, updates).await
 }
 
 async fn resolve_checkpoint_context(
@@ -1834,5 +1905,83 @@ mod tests {
             kind: "codeact_agent".into(),
             data: Value::Null,
         }));
+    }
+}
+
+#[cfg(test)]
+mod restart_interaction_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn waiting_questions_and_reviews_resume_from_a_fresh_compilation() {
+        for kind in ["ask_user_question", "human_review"] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("checkpoint.sqlite");
+            std::fs::File::create(&path).unwrap();
+            TEST_CHECKPOINT_DB.scope(format!("sqlite://{}", path.display()), async {
+                let data = if kind == "ask_user_question" {
+                    json!({"options": [{"id": "a", "label": "A"}]})
+                } else { json!({"title": "Review"}) };
+                let dsl: WorkflowDsl = serde_json::from_value(json!({
+                    "id": "restart-test", "nodes": [
+                        {"id":"start", "type":"start"},
+                        {"id":"gate", "type":kind, "data":data},
+                        {"id":"end", "type":"end"}
+                    ], "edges": [
+                        {"source":"start", "target":"gate"},
+                        {"source":"gate", "target":"end", "sourceHandle": if kind == "human_review" { "approved" } else { "option:a" }}
+                    ]
+                })).unwrap();
+                let config = IWorkrun::default();
+                let result = compile(dsl.clone(), &config, None).await.unwrap()
+                    .run_stream(State::new(), "original-thread", false, None, |_| {}).await.unwrap();
+                assert!(result.interrupted);
+                let payload = json!({"nodeId": "gate"});
+                validate_action_checkpoint_with_config(serde_json::to_value(&dsl).unwrap(), "original-thread".into(), kind, &payload, &config).await.unwrap();
+                assert!(validate_action_checkpoint_with_config(serde_json::to_value(&dsl).unwrap(), "missing-thread".into(), kind, &payload, &config).await.is_err());
+                // No compiled graph or native session from the first attempt is
+                // reused: both the decision and execution reload durable state.
+                let before = compile(dsl.clone(), &config, None).await.unwrap().state_checkpointer.load("original-thread").await.unwrap().unwrap();
+                let saved_dsl = serde_json::to_value(&dsl).unwrap();
+                let updates = if kind == "human_review" {
+                    prepare_human_review_checkpoint(saved_dsl.clone(), "original-thread".into(), "gate".into(), true, HashMap::new(), None).await.unwrap()
+                } else {
+                    assert!(prepare_ask_user_question_checkpoint(saved_dsl.clone(), "original-thread".into(), "gate".into(), "missing-option".into(), None).await.is_err());
+                    prepare_ask_user_question_checkpoint(saved_dsl.clone(), "original-thread".into(), "gate".into(), "a".into(), None).await.unwrap()
+                };
+                let after = compile(dsl.clone(), &config, None).await.unwrap().state_checkpointer.load("original-thread").await.unwrap().unwrap();
+                assert_eq!(before.checkpoint_id, after.checkpoint_id);
+                assert_eq!(before.state, after.state);
+                // Simulate restart after committing the recipe, then a second
+                // restart after applying it but before clearing its marker.
+                let durable = serde_json::to_string(&updates).unwrap();
+                assert!(compile(dsl.clone(), &config, None).await.unwrap().update_state("missing-thread", updates.clone()).await.is_err());
+                for _ in 0..2 {
+                    let restored: Vec<(String, Value)> = serde_json::from_str(&durable).unwrap();
+                    compile(dsl.clone(), &config, None).await.unwrap().update_state("original-thread", restored).await.unwrap();
+                }
+                let resumed = compile(dsl, &config, None).await.unwrap()
+                    .run_stream(State::new(), "original-thread", true, None, |_| {}).await.unwrap();
+                assert!(!resumed.interrupted);
+            }).await;
+        }
+    }
+
+    #[test]
+    fn stale_nodes_and_tool_checkpoint_ids_cannot_authorize_another_pause() {
+        let checkpoint = adk_rust::graph::Checkpoint::new("thread", State::new(), 2, vec!["agent".into()]);
+        assert!(validate_action_frontier(&checkpoint, "other", "human_review", &json!({})).is_err());
+        assert!(
+            validate_action_frontier(&checkpoint, "agent", "tool_approval", &json!({"checkpointId":"old"})).is_err()
+        );
+        assert!(
+            validate_action_frontier(
+                &checkpoint,
+                "agent",
+                "tool_approval",
+                &json!({"checkpointId":checkpoint.checkpoint_id})
+            )
+            .is_ok()
+        );
     }
 }

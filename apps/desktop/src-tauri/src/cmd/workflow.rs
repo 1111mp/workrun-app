@@ -5,7 +5,6 @@ use crate::{
 };
 use adk_rust::graph::State;
 use serde_json::Value;
-use std::collections::HashMap;
 use tauri::ipc::Channel;
 
 /// Validate and compile the exact `{ nodes, edges }` document emitted by React
@@ -53,34 +52,4 @@ pub async fn workflow_run(
         .stringify_err()?;
     result.state = workflow::redact_state_for_transport(&result.state);
     Ok(result)
-}
-
-/// Persist one human-review decision before resuming the workflow checkpoint.
-/// The requested node determines the only state key this command may write.
-#[tauri::command]
-pub async fn workflow_resolve_human_review(
-    dsl: Value,
-    thread_id: String,
-    node_id: String,
-    approved: bool,
-    edits: HashMap<String, String>,
-    workflow_context: Option<workflow::SubworkflowContext>,
-) -> CmdResult<()> {
-    workflow::resolve_human_review_checkpoint(dsl, thread_id, node_id, approved, edits, workflow_context)
-        .await
-        .stringify_err()
-}
-
-/// Persist a validated option selection before resuming the workflow checkpoint.
-#[tauri::command]
-pub async fn workflow_resolve_ask_user_question(
-    dsl: Value,
-    thread_id: String,
-    node_id: String,
-    option_id: String,
-    workflow_context: Option<workflow::SubworkflowContext>,
-) -> CmdResult<()> {
-    workflow::resolve_ask_user_question_checkpoint(dsl, thread_id, node_id, option_id, workflow_context)
-        .await
-        .stringify_err()
 }
