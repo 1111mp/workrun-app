@@ -2,7 +2,6 @@ import { Toaster, TooltipProvider } from '@workspace/ui/components';
 import { RouterProvider } from 'react-router';
 
 import { ConfirmProvider, UpdateDialog } from '@/components';
-import { ApprovalCoordinator } from '@/components/approval-coordinator';
 import { PythonUiRequestDialog } from '@/components/python-ui-request-dialog';
 import { RunWorkspace } from '@/components/run-workspace';
 import { TeamAuthTauriHandler } from '@/components/team-auth-tauri-handler';
@@ -33,9 +32,6 @@ function App() {
         <TeamAuthTauriHandler />
       ) : null}
       <PythonUiRequestDialog />
-      <ApprovalCoordinator
-        key={`approval:${config.workspace_mode ?? 'personal'}`}
-      />
       <RunWorkspace key={`runs:${config.workspace_mode ?? 'personal'}`} />
     </>
   );

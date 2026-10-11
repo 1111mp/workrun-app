@@ -3,13 +3,15 @@ import {
   Background,
   Controls,
   MiniMap,
+  NodeToolbar,
+  Position,
   Panel,
   ReactFlow,
   type Node,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import type { TFunction } from 'i18next';
-import { Play, Redo2Icon, Undo2Icon } from 'lucide-react';
+import { PanelRightOpenIcon, Play, Redo2Icon, Undo2Icon } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from 'zustand';
@@ -29,8 +31,14 @@ import {
   SwitchNode,
   TerminateNode,
 } from '@/components/nodes';
+import {
+  actionPayload,
+  useWorkflowActions,
+} from '@/components/workflow-actions';
 import { WorkflowSidebar } from '@/components/workflow-sidebar';
 import { useWorkflowStoreApi, useWorkrunStore } from '@/stores';
+import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
+import { useWorkflowRunStore } from '@/stores/workflow-run.store';
 
 const nodeTypes = {
   agent: AgentNode,
@@ -213,7 +221,10 @@ type WorkflowCanvasProps = {
   children: ReactNode;
   header: ReactNode;
   isRunning: boolean;
+  hasActiveRun: boolean;
+  runStartDisabled: boolean;
   runningNodeId: string | null;
+  runId?: string;
   onRun: () => void;
   canRun?: boolean;
   readOnly?: boolean;
@@ -224,12 +235,23 @@ function WorkflowCanvas({
   canvasContent,
   header,
   isRunning,
+  hasActiveRun,
+  runStartDisabled,
   runningNodeId,
+  runId,
   onRun,
   canRun = true,
   readOnly = false,
 }: WorkflowCanvasProps) {
   const { t } = useTranslation();
+  const { data: actions = [] } = useWorkflowActions(runId);
+  const pending = actions.filter((action) => action.status === 'pending');
+  const openAction = (id: string) => {
+    useRunWorkspaceStore.getState().requestAction(id);
+    const output = useWorkflowRunStore.getState();
+    output.setShowRunOutput(true);
+    output.setRunPanelOpen(true);
+  };
   const workflowStore = useWorkflowStoreApi();
   const nodes = useStore(workflowStore, (state) => state.nodes);
   const edges = useStore(workflowStore, (state) => state.edges);
@@ -362,10 +384,45 @@ function WorkflowCanvas({
               onNodeDragStop={readOnly ? undefined : onNodeDragStop}
               onNodesChange={readOnly ? undefined : onNodesChange}
               onEdgesChange={readOnly ? undefined : onEdgesChange}
-              onSelectionChange={({ nodes: selectedNodes }) =>
-                setSelectedNodeId(selectedNodes.at(-1)?.id ?? null)
-              }
+              onSelectionChange={({ nodes: selectedNodes }) => {
+                const nodeId = selectedNodes.at(-1)?.id ?? null;
+                if (nodeId && !readOnly) {
+                  useWorkflowRunStore.getState().setRunPanelOpen(false);
+                }
+                setSelectedNodeId(nodeId);
+              }}
             >
+              {pending.map((action) => {
+                const nodeId = actionPayload(action).nodeId;
+                if (
+                  typeof nodeId !== 'string' ||
+                  !nodes.some((node) => node.id === nodeId)
+                )
+                  return null;
+                return (
+                  <NodeToolbar
+                    key={action.id}
+                    nodeId={nodeId}
+                    isVisible
+                    position={Position.Bottom}
+                  >
+                    <Button
+                      size='sm'
+                      variant='secondary'
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        workflowStore.getState().clearSelection();
+                        openAction(action.id);
+                      }}
+                    >
+                      {t(
+                        `runCenter.actions.${action.kind === 'tool_approval' ? 'toolApproval' : action.kind === 'human_review' ? 'humanReview' : 'askQuestion'}`,
+                      )}{' '}
+                      · {t('approval.cards.pending')}
+                    </Button>
+                  </NodeToolbar>
+                );
+              })}
               <MiniMap />
               <Controls />
               <Background className='bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]' />
@@ -401,10 +458,36 @@ function WorkflowCanvas({
                   </Button>
                 </div>
               </Panel>
-              <Panel position='top-right'>
+              <Panel position='top-right' className='flex items-center gap-2'>
+                {runId && (hasActiveRun || pending.length > 0) && (
+                  <Button
+                    variant='outline'
+                    onClick={() => {
+                      workflowStore.getState().clearSelection();
+                      const output = useWorkflowRunStore.getState();
+                      output.setShowRunOutput(true);
+                      output.setRunPanelOpen(true);
+                    }}
+                  >
+                    <PanelRightOpenIcon data-icon='inline-start' />
+                    {t('workflowEditor.output.runOutput')}
+                    {pending.length > 0 && (
+                      <span className='text-muted-foreground text-xs'>
+                        {t('runCenter.attentionCount', {
+                          count: pending.length,
+                        })}
+                      </span>
+                    )}
+                  </Button>
+                )}
                 <Button
                   variant='secondary'
-                  disabled={!canRun || isRunning}
+                  disabled={!canRun || runStartDisabled}
+                  title={
+                    hasActiveRun
+                      ? t('workflowEditor.activeRunExists')
+                      : undefined
+                  }
                   onClick={onRun}
                 >
                   {isRunning ? (

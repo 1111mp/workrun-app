@@ -8,7 +8,12 @@ import {
   DrawerHeader,
   DrawerTitle,
   ScrollArea,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
 } from '@workspace/ui/components';
+import { cn } from '@workspace/ui/lib/utils';
 import {
   AppWindowIcon,
   ChevronUpIcon,
@@ -21,15 +26,21 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
 import { cancelBackgroundProcessNodeRun } from '@/services/process-node';
+import {
+  runCenterEntries,
+  runDetailsPath,
+  type RunCenterEntry,
+} from '@/services/run-center';
 import {
   listActiveRuns,
   listPendingActions,
   type PendingAction,
   type RunRecordSummary,
+  type RunStatus,
 } from '@/services/run-history';
 import { cancelBackgroundWorkflowRun } from '@/services/workflow';
 import { useRunWorkspaceStore, useWorkrunStore } from '@/stores';
@@ -46,39 +57,84 @@ function elapsed(startedAt: string, t: ReturnType<typeof useTranslation>['t']) {
     : t('runCenter.elapsedSeconds', { seconds: remainingSeconds });
 }
 
+const statusTone: Record<RunStatus, { icon: string; badge: string }> = {
+  waiting_for_input: {
+    icon: 'text-amber-600 dark:text-amber-400',
+    badge:
+      'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+  },
+  running: {
+    icon: 'text-sky-600 dark:text-sky-400',
+    badge: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400',
+  },
+  queued: {
+    icon: 'text-muted-foreground',
+    badge: 'bg-muted text-muted-foreground',
+  },
+  completed: {
+    icon: 'text-emerald-600 dark:text-emerald-400',
+    badge:
+      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+  },
+  failed: {
+    icon: 'text-destructive',
+    badge: 'border-destructive/30 bg-destructive/10 text-destructive',
+  },
+  cancelled: {
+    icon: 'text-muted-foreground',
+    badge: 'bg-muted text-muted-foreground',
+  },
+  interrupted: {
+    icon: 'text-amber-600 dark:text-amber-400',
+    badge:
+      'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+  },
+};
+
 function ActiveRunRow({
-  run,
+  entry,
   onCancel,
-  onOpenHistory,
+  onOpen,
 }: {
-  run: RunRecordSummary;
+  entry: RunCenterEntry;
   onCancel?: () => void;
-  onOpenHistory: () => void;
+  onOpen: () => void;
 }) {
   const { t } = useTranslation();
-  const isWaiting = run.status === 'waiting_for_input';
+  const { run, actions, runCount } = entry;
+  const status = actions.length ? 'waiting_for_input' : run.status;
+  const tone = statusTone[status];
+  const Icon =
+    status === 'waiting_for_input'
+      ? CircleAlertIcon
+      : status === 'queued'
+        ? Clock3Icon
+        : PlayIcon;
   return (
     <div className='hover:bg-muted/70 flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors'>
       <button
         className='focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-3 text-left outline-none focus-visible:ring-2'
         type='button'
-        onClick={onOpenHistory}
+        onClick={onOpen}
       >
-        {isWaiting ? (
-          <CircleAlertIcon className='size-4 shrink-0 text-amber-600 dark:text-amber-400' />
-        ) : (
-          <PlayIcon className='size-4 shrink-0 text-sky-600 dark:text-sky-400' />
-        )}
+        <Icon className={cn('size-4 shrink-0', tone.icon)} />
         <span className='min-w-0 flex-1'>
           <span className='block truncate font-medium'>{run.targetName}</span>
           <span className='text-muted-foreground mt-0.5 block text-xs'>
             {run.targetType === 'workflow' ? t('runs.workflow') : t('apps.app')}{' '}
             · {t('runCenter.started', { elapsed: elapsed(run.startedAt, t) })}
+            {actions[0] ? ` · ${actionLabel(actions[0], t)}` : ''}
+            {actions.length > 1
+              ? ` · ${t('runCenter.attentionCount', { count: actions.length })}`
+              : ''}
+            {runCount > 1
+              ? ` · ${t('runCenter.concurrentCount', { count: runCount })}`
+              : ''}
           </span>
         </span>
       </button>
-      <Badge variant={isWaiting ? 'outline' : 'secondary'}>
-        {t(`runs.runStatus.${run.status}`)}
+      <Badge variant='outline' className={tone.badge}>
+        {t(`runs.runStatus.${status}`)}
       </Badge>
       {onCancel ? (
         <Button size='sm' variant='ghost' onClick={onCancel}>
@@ -114,13 +170,14 @@ function RunCenter() {
   const [cancellingRunId, setCancellingRunId] = useState<string>();
 
   const { pathname } = useLocation();
+  const navigate = useNavigate();
 
-  const isRunSurface = pathname === '/workflows' || pathname === '/apps';
+  const isRunSurface =
+    pathname.startsWith('/workflows') || pathname.startsWith('/apps');
 
   const workspaceMode = useWorkrunStore(
     (state) => state.config?.workspace_mode ?? 'personal',
   );
-  const openWorkspaceRun = useRunWorkspaceStore((state) => state.openRun);
 
   const activeRuns = useQuery({
     queryKey: ['run-history', 'active', workspaceMode],
@@ -129,24 +186,37 @@ function RunCenter() {
   });
   const pendingActions = useQuery({
     queryKey: ['run-history', 'pending-actions', workspaceMode],
-    queryFn: listPendingActions,
+    queryFn: () => listPendingActions(),
     enabled: isRunSurface,
   });
 
   if (!isRunSurface) return null;
 
-  const runs = activeRuns.data ?? [];
-  const attentionCount = pendingActions.data?.length ?? 0;
-  const runningCount = runs.filter((run) => run.status === 'running').length;
-  const queuedCount = runs.filter((run) => run.status === 'queued').length;
-  const activeWorkCount = runs.filter(
-    (run) => run.status !== 'waiting_for_input',
+  const entries = runCenterEntries(
+    activeRuns.data ?? [],
+    pendingActions.data ?? [],
+  );
+  const waitingEntries = entries.filter(
+    (entry) => entry.actions.length || entry.run.status === 'waiting_for_input',
+  );
+  const attentionCount = waitingEntries.length;
+  const runningCount = entries.filter(
+    (entry) => entry.run.status === 'running' && !entry.actions.length,
   ).length;
-  const isIdle = runs.length === 0 && attentionCount === 0;
+  const queuedCount = entries.filter(
+    (entry) => entry.run.status === 'queued' && !entry.actions.length,
+  ).length;
+  const isIdle = entries.length === 0;
 
-  const openRun = (run: RunRecordSummary) => {
+  const openRun = (entry: RunCenterEntry) => {
     setOpen(false);
-    openWorkspaceRun(run);
+    const action = entry.actions.find(
+      (action) => action.runId === entry.run.id,
+    );
+    const workspace = useRunWorkspaceStore.getState();
+    workspace.setOpen(false);
+    workspace.requestAction(action?.id);
+    void navigate(runDetailsPath(entry.run));
   };
 
   const cancelRun = async (run: RunRecordSummary) => {
@@ -171,6 +241,54 @@ function RunCenter() {
       setCancellingRunId(undefined);
     }
   };
+
+  const runList = (filter: 'all' | 'pending') => (
+    <ScrollArea className='min-h-0 flex-1 px-3 py-3'>
+      {isIdle || (filter === 'pending' && attentionCount === 0) ? (
+        <div className='flex min-h-52 flex-col items-center justify-center px-5 py-8 text-center'>
+          <span className='mb-4 flex size-11 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'>
+            <CircleCheckIcon className='size-5' />
+          </span>
+          <p className='text-sm font-medium'>
+            {t(
+              filter === 'pending'
+                ? 'runCenter.noPending'
+                : 'runCenter.emptyTitle',
+            )}
+          </p>
+          <p className='text-muted-foreground mt-1 max-w-sm text-sm leading-5'>
+            {t(
+              filter === 'pending'
+                ? 'runCenter.noPendingDescription'
+                : 'runCenter.emptyDescription',
+            )}
+          </p>
+          <div className='text-muted-foreground mt-5 flex items-center gap-4 text-xs'>
+            <span className='flex items-center gap-1.5'>
+              <WorkflowIcon className='size-3.5 text-sky-600 dark:text-sky-400' />
+              {t('runs.targetFilters.workflow')}
+            </span>
+            <span className='flex items-center gap-1.5'>
+              <AppWindowIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
+              {t('runs.targetFilters.app')}
+            </span>
+          </div>
+        </div>
+      ) : null}
+      {(filter === 'pending' ? waitingEntries : entries).map((entry) => (
+        <ActiveRunRow
+          key={`${entry.run.targetType}:${entry.run.targetId}`}
+          entry={entry}
+          onCancel={
+            cancellingRunId !== entry.run.id
+              ? () => void cancelRun(entry.run)
+              : undefined
+          }
+          onOpen={() => openRun(entry)}
+        />
+      ))}
+    </ScrollArea>
+  );
 
   return (
     <>
@@ -231,7 +349,7 @@ function RunCenter() {
             </Badge>
           ) : (
             <Badge variant='secondary'>
-              {t('runCenter.activeCount', { count: runs.length })}
+              {t('runCenter.activeCount', { count: entries.length })}
             </Badge>
           )}
         </span>
@@ -248,106 +366,20 @@ function RunCenter() {
             </DrawerTitle>
             <DrawerDescription>{t('runCenter.description')}</DrawerDescription>
           </DrawerHeader>
-          <ScrollArea className='min-h-0 flex-1 px-3 py-3'>
-            {isIdle ? (
-              <div className='flex min-h-52 flex-col items-center justify-center px-5 py-8 text-center'>
-                <span className='mb-4 flex size-11 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'>
-                  <CircleCheckIcon className='size-5' />
-                </span>
-                <p className='text-sm font-medium'>
-                  {t('runCenter.emptyTitle')}
-                </p>
-                <p className='text-muted-foreground mt-1 max-w-sm text-sm leading-5'>
-                  {t('runCenter.emptyDescription')}
-                </p>
-                <div className='text-muted-foreground mt-5 flex items-center gap-4 text-xs'>
-                  <span className='flex items-center gap-1.5'>
-                    <WorkflowIcon className='size-3.5 text-sky-600 dark:text-sky-400' />
-                    {t('runs.targetFilters.workflow')}
-                  </span>
-                  <span className='flex items-center gap-1.5'>
-                    <AppWindowIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
-                    {t('runs.targetFilters.app')}
-                  </span>
-                </div>
-              </div>
-            ) : null}
-            {attentionCount > 0 ? (
-              <section className='mb-4'>
-                <div className='text-muted-foreground mb-1.5 px-2 text-xs font-medium tracking-wide uppercase'>
-                  {t('runCenter.attentionHeading', { count: attentionCount })}
-                </div>
-                {runs
-                  .filter((run) => run.status === 'waiting_for_input')
-                  .map((run) => (
-                    <ActiveRunRow
-                      key={run.id}
-                      run={run}
-                      onCancel={
-                        run.targetType === 'workflow' &&
-                        cancellingRunId !== run.id
-                          ? () => void cancelRun(run)
-                          : undefined
-                      }
-                      onOpenHistory={() => openRun(run)}
-                    />
-                  ))}
-              </section>
-            ) : null}
-            {activeWorkCount > 0 ? (
-              <section>
-                <div className='text-muted-foreground mb-1.5 px-2 text-xs font-medium tracking-wide uppercase'>
-                  {t('runCenter.activeHeading', { count: activeWorkCount })}
-                </div>
-                {runs
-                  .filter((run) => run.status !== 'waiting_for_input')
-                  .map((run) => (
-                    <ActiveRunRow
-                      key={run.id}
-                      run={run}
-                      onCancel={
-                        cancellingRunId !== run.id
-                          ? () => void cancelRun(run)
-                          : undefined
-                      }
-                      onOpenHistory={() => openRun(run)}
-                    />
-                  ))}
-              </section>
-            ) : null}
-            {attentionCount > 0 ? (
-              <section className='mt-4 border-t pt-4'>
-                <div className='text-muted-foreground mb-1.5 px-2 text-xs font-medium tracking-wide uppercase'>
-                  {t('runCenter.approvalHeading')}
-                </div>
-                {(pendingActions.data ?? []).map((action) => {
-                  const run = runs.find((item) => item.id === action.runId);
-                  if (!run) return null;
-                  return (
-                    <button
-                      key={action.id}
-                      className='hover:bg-muted/70 focus-visible:ring-ring flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2'
-                      type='button'
-                      onClick={() => openRun(run)}
-                    >
-                      <CircleAlertIcon className='size-4 shrink-0 text-amber-600 dark:text-amber-400' />
-                      <span className='min-w-0 flex-1'>
-                        <span className='block font-medium'>
-                          {actionLabel(action, t)}
-                        </span>
-                        <span className='text-muted-foreground mt-0.5 block truncate text-xs'>
-                          {run.targetName}
-                        </span>
-                      </span>
-                      <Badge variant='outline'>
-                        {t('runs.runStatus.waiting_for_input')}
-                      </Badge>
-                    </button>
-                  );
-                })}
-              </section>
-            ) : null}
-          </ScrollArea>
+          <Tabs defaultValue='all' className='min-h-0 flex-1'>
+            <TabsList className='mx-5 mt-3'>
+              <TabsTrigger value='all'>{t('runCenter.all')}</TabsTrigger>
+              <TabsTrigger value='pending'>
+                {t('runCenter.pending')} · {attentionCount}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value='all' className='flex min-h-0 flex-1'>
+              {runList('all')}
+            </TabsContent>
+            <TabsContent value='pending' className='flex min-h-0 flex-1'>
+              {runList('pending')}
+            </TabsContent>
+          </Tabs>
           <div className='flex shrink-0 justify-end border-t px-5 py-3'>
             <Button variant='outline' onClick={() => setOpen(false)}>
               {t('apps.close')}

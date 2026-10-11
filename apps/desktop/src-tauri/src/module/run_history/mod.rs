@@ -72,7 +72,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "CREATE TABLE run_pending_actions (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT, resolved_at TEXT)",
+            "CREATE TABLE run_pending_actions (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT, resolved_at TEXT, resolution_json TEXT)",
         )
         .execute(&pool)
         .await

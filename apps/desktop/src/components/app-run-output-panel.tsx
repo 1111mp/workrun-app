@@ -216,8 +216,9 @@ function AppRunOutputPanel({
       modal={false}
       open={open}
       showSwipeHandle
-      snapPoints={['31rem', 1]}
-      swipeDirection='down'
+      defaultHorizontalSnapPoint='48rem'
+      horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
+      swipeDirection='right'
       onOpenChange={onOpenChange}
     >
       <DrawerContent>

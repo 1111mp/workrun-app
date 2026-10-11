@@ -302,6 +302,7 @@ export type WorkflowProcessLog = {
 };
 
 export type WorkflowRunExecution = {
+  actionIds?: string[];
   nodeId: string;
   type: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
@@ -312,6 +313,7 @@ export type WorkflowRunExecution = {
 };
 
 export type WorkflowRunTurn = {
+  runId?: string;
   status: WorkflowRunStatus;
   startedAt?: number;
   endedAt?: number;

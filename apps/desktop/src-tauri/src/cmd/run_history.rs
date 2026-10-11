@@ -65,8 +65,10 @@ pub async fn run_history_create_pending_action(action: CreatePendingAction) -> C
 }
 
 #[tauri::command]
-pub async fn run_history_list_pending_actions() -> CmdResult<Vec<PendingAction>> {
-    RunHistoryStore::list_pending_actions().await.stringify_err()
+pub async fn run_history_list_pending_actions(run_id: Option<String>) -> CmdResult<Vec<PendingAction>> {
+    RunHistoryStore::list_pending_actions(run_id.as_deref())
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]

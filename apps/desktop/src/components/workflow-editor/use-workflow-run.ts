@@ -1,11 +1,13 @@
+import { useQuery } from '@tanstack/react-query';
 import type { Edge, Node } from '@xyflow/react';
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { prepareWorkflowProcessApps } from '@/services/process-node';
 import { resolvePendingAction } from '@/services/run-history';
-import { inspectRunRecord } from '@/services/run-history';
+import { inspectRunRecord, listActiveRuns } from '@/services/run-history';
 import {
   archiveChatSession as archiveChatSessionRequest,
   createChatSession,
@@ -25,7 +27,7 @@ import {
   type WorkflowRunEvent,
   type WorkflowRunEventEnvelope,
 } from '@/services/workflow';
-import { useWorkflowRunStore } from '@/stores';
+import { useWorkflowRunStore, useWorkrunStore } from '@/stores';
 import { workflowRunView } from '@/stores/workflow-run.store';
 
 type SubworkflowContext = {
@@ -137,6 +139,16 @@ function useWorkflowRun(
   releaseVersion?: string,
   ensureWorkflowId?: () => Promise<string>,
 ) {
+  const { t } = useTranslation();
+  const workspace = useWorkrunStore(
+    (state) => state.config?.workspace_mode ?? 'personal',
+  );
+  const activeRuns = useQuery({
+    queryKey: ['run-history', 'active', workspace],
+    queryFn: listActiveRuns,
+  });
+  const starting = useRef(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
   const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
     useState(false);
@@ -151,6 +163,7 @@ function useWorkflowRun(
     useShallow((state) => ({
       runningNodeId: state.runningNodeId,
       runStatus: state.projection.status,
+      awaitingInput: state.projection.awaitingInput,
       toolApproval: state.toolApproval,
       humanReview: state.humanReview,
       askUserQuestion: state.askUserQuestion,
@@ -169,6 +182,16 @@ function useWorkflowRun(
       activeChatSession: state.activeChatSession,
       setActiveChatSession: state.setActiveChatSession,
     })),
+  );
+  const hasActiveRun = Boolean(
+    activeRuns.data?.some(
+      (run) =>
+        run.targetType === 'workflow' &&
+        run.targetId === workflowId &&
+        ['queued', 'running', 'waiting_for_input'].includes(run.status),
+    ) ||
+    store.runStatus === 'running' ||
+    store.awaitingInput,
   );
   const runThreadId = useRef<string | undefined>(undefined);
   const chatSessionId = useRef<string | undefined>(undefined);
@@ -205,15 +228,11 @@ function useWorkflowRun(
   };
 
   const drain = () => {
-    const event = pendingEvents.current.shift();
-    if (event) store.applyRunEvents([event], context());
-    if (pendingEvents.current.length) {
-      // Preserve native ordering at visual boundaries. In particular, two
-      // quick node_start events must not first appear as one combined list.
-      pendingFrame.current = requestAnimationFrame(drain);
-      return;
-    }
+    const events = pendingEvents.current.splice(0);
     pendingFrame.current = undefined;
+    // Preserve event order inside one store update, without painting transient
+    // node_end / approval / interrupt states on separate animation frames.
+    if (events.length) store.applyRunEvents(events, context());
     const callbacks = afterDrain.current;
     afterDrain.current = [];
     callbacks.forEach((callback) => callback());
@@ -293,6 +312,40 @@ function useWorkflowRun(
   };
 
   const beginWorkflowRun = async (input: Record<string, unknown>) => {
+    if (starting.current || hasActiveRun) return;
+    starting.current = true;
+    setIsStarting(true);
+    try {
+      // Check durable runs again at submission, including runs started in
+      // another window since this editor's last active-run refresh.
+      const active = await listActiveRuns();
+      if (
+        active.some(
+          (run) =>
+            run.targetType === 'workflow' &&
+            run.targetId === workflowId &&
+            ['queued', 'running', 'waiting_for_input'].includes(run.status),
+        )
+      ) {
+        void activeRuns.refetch();
+        toast.error(t('workflowEditor.activeRunExists'), {
+          toasterId: 'global',
+        });
+        return;
+      }
+      await executeWorkflowRun(input);
+    } catch (error) {
+      toast.error(t('workflowEditor.checkActiveRunFailed'), {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      starting.current = false;
+      setIsStarting(false);
+    }
+  };
+
+  const executeWorkflowRun = async (input: Record<string, unknown>) => {
     const subworkflow = unconfiguredSubworkflow(nodes);
     if (subworkflow) {
       const workflowName = subworkflow.data?.workflowName;
@@ -558,6 +611,7 @@ function useWorkflowRun(
   };
 
   const startRun = () => {
+    if (hasActiveRun || isStarting || activeRuns.isLoading) return;
     if (settings.mode === 'chat') {
       const activeSession = store.activeChatSession;
       if (activeSession?.workflowId === workflowId) {
@@ -711,6 +765,9 @@ function useWorkflowRun(
   };
 
   return {
+    hasActiveRun,
+    runStartDisabled:
+      hasActiveRun || isStarting || activeRuns.isLoading || activeRuns.isError,
     isRunning: store.runStatus === 'running',
     runStatus: store.runStatus,
     startRun,

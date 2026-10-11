@@ -392,6 +392,7 @@ function WorkflowRunPanel({
   return (
     <>
       <Drawer
+        modal={false}
         open={open}
         defaultHorizontalSnapPoint='48rem'
         horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}

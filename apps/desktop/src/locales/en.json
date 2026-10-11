@@ -491,6 +491,12 @@
     }
   },
   "runCenter": {
+    "concurrentCount_one": "{{count}} active run",
+    "concurrentCount_other": "{{count}} active runs",
+    "all": "All runs",
+    "pending": "Needs attention",
+    "noPending": "No pending requests",
+    "noPendingDescription": "Requests for authorization, answers, and review will appear here.",
     "title": "Run Center",
     "open": "Open Run Center",
     "view": "View",
@@ -512,7 +518,7 @@
     "emptyDescription": "Start a run from Workflows or Apps. Its progress and any requests for input will show up here.",
     "attentionHeading": "Needs attention · {{count}}",
     "activeHeading": "Active runs · {{count}}",
-    "approvalHeading": "Approval queue · choose one to handle",
+    "approvalHeading": "Pending requests · choose when to handle",
     "cancel": "Cancel",
     "cancelled": "{{targetType}} cancelled",
     "cancelFailed": "Could not cancel run",
@@ -617,6 +623,31 @@
     }
   },
   "approval": {
+    "cards": {
+      "processed": "Processed",
+      "types": {
+        "tool": "Tool authorization",
+        "question": "Your answer is needed",
+        "review": "Human review"
+      },
+      "hints": {
+        "tool": "Review the input before allowing execution. You can check earlier outputs and return later.",
+        "question": "Select an option, then submit your answer to continue. You can return later.",
+        "review": "Review the content and context before deciding. You can check earlier outputs and return later."
+      },
+      "pending": "Waiting for you",
+      "later": "You can leave and return later.",
+      "retry": "Retry",
+      "cancelled": "Run cancelled",
+      "expired": "Request expired",
+      "answered": "Answered: {{answer}}",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "resolved": "Processed",
+      "details": "View details",
+      "hideDetails": "Hide details",
+      "denyTool": "Deny execution"
+    },
     "cancel": "Cancel",
     "continue": "Continue",
     "saving": "Saving…",
@@ -628,6 +659,12 @@
       "fallbackSource": "Tool App",
       "input": "Call input",
       "risk": "Risk",
+      "riskLevels": {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "unknown": "Unknown"
+      },
       "unknown": "unknown",
       "run": "Run tool"
     },
@@ -648,11 +685,13 @@
       "savingAnswer": "Saving answer…"
     },
     "errors": {
-      "loadQueue": "Could not load the approval queue",
+      "loadQueue": "Could not load interaction requests",
       "continueWorkflow": "Could not continue the workflow"
     }
   },
   "workflowEditor": {
+    "activeRunExists": "This workflow has an active run. Complete or cancel it before starting another.",
+    "checkActiveRunFailed": "Could not check active runs. Try again before starting.",
     "remoteTasks": {
       "title": "Remote tasks",
       "description": "Remote task status and collected results. Unfinished tasks receive one automatic cancellation request when the workflow fails or is stopped.",
@@ -1038,6 +1077,35 @@
       "turnCount_other": "{{count}} turns",
       "stepCount_one": "{{count}} step",
       "stepCount_other": "{{count}} steps",
+      "messages": {
+        "tool": "Tool",
+        "denied": "Denied by user",
+        "input": "Input",
+        "result": "Result",
+        "output": "Output",
+        "status": "Status",
+        "cancelledStep": "Cancelled before this step completed.",
+        "waitingReview": "Waiting for review…",
+        "approved": "Approved.",
+        "rejected": "Rejected.",
+        "reviewCompleted": "Review completed.",
+        "waitingAnswer": "Waiting for an answer…",
+        "answerReceived": "Answer received.",
+        "runningSubworkflow": "Running subworkflow…",
+        "subworkflowCompleted": "Subworkflow completed.",
+        "terminated": "Workflow terminated.",
+        "evaluatingConditions": "Evaluating conditions…",
+        "noCondition": "No condition matched; this path ended.",
+        "evaluatingCases": "Evaluating cases…",
+        "noCase": "No case condition matched; using the default branch.",
+        "generating": "Generating response…",
+        "responseReady": "Response ready.",
+        "waitingResponse": "Waiting for a response…",
+        "noResponse": "Completed without a text response.",
+        "running": "Running…",
+        "completed": "Completed.",
+        "selected": "Selected: {{label}}."
+      },
       "toolCount_one": "{{count}} tool call",
       "toolCount_other": "{{count}} tool calls",
       "processOutput": "Process output",

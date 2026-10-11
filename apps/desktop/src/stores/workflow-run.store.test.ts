@@ -541,3 +541,78 @@ describe('remote lifecycle messages', () => {
     expect(run.execution[1].messages ?? []).toEqual([]);
   });
 });
+
+it('replays waiting requests without exposing the checkpoint reason as an error', () => {
+  const projection = replayWorkflowRunProjection(
+    'run-1',
+    events(
+      { type: 'node_start', node: 'research', step: 0 },
+      {
+        type: 'custom',
+        node: 'research',
+        event_type: 'workflow.human_review_required',
+        data: { runActionId: 'review-1' },
+      },
+      {
+        type: 'interrupted',
+        node: 'research',
+        message: 'Internal checkpoint reason',
+      },
+    ),
+    {
+      mode: 'chat',
+      nodes: [node],
+      turnId: 'turn-1',
+      input: { input: 'Review this' },
+    },
+  );
+  expect(projection.status).toBe('interrupted');
+  expect(projection.error).toBeUndefined();
+  expect(projection.turnsById['turn-1'].runId).toBe('run-1');
+  expect(projection.turnsById['turn-1'].error).toBeUndefined();
+});
+
+it('keeps review requests on their original invocation when a node runs again', () => {
+  const projection = replayWorkflowRunProjection(
+    'run-1',
+    events(
+      { type: 'node_start', node: 'research', step: 0 },
+      {
+        type: 'custom',
+        node: 'research',
+        event_type: 'workflow.human_review_required',
+        data: { runActionId: 'review-1' },
+      },
+      { type: 'interrupted', node: 'research', message: 'Review required' },
+      { type: 'resumed', step: 0, pending_nodes: ['research'] },
+      { type: 'node_start', node: 'research', step: 0 },
+      { type: 'node_end', node: 'research', step: 0, duration_ms: 1 },
+      { type: 'node_start', node: 'research', step: 1 },
+      {
+        type: 'custom',
+        node: 'research',
+        event_type: 'workflow.human_review_required',
+        data: { runActionId: 'review-2' },
+      },
+    ),
+    { mode: 'task', nodes: [node] },
+  );
+  const execution = workflowRunView(projection).execution;
+  expect(execution[0].actionIds).toEqual(['review-1']);
+  expect(execution[1].actionIds).toEqual(['review-2']);
+});
+
+it('refreshes a restored run without reopening a panel the user closed', () => {
+  const projection = replayWorkflowRunProjection('run-1', [], {
+    mode: 'task',
+    nodes: [node],
+  });
+  const store = useWorkflowRunStore.getState();
+  store.restoreWorkflowRun(projection);
+  expect(useWorkflowRunStore.getState().runPanelOpen).toBe(true);
+  store.setRunPanelOpen(false);
+  store.restoreWorkflowRun(projection, false);
+  expect(useWorkflowRunStore.getState().runPanelOpen).toBe(false);
+  store.restoreWorkflowRun(projection);
+  expect(useWorkflowRunStore.getState().runPanelOpen).toBe(true);
+});

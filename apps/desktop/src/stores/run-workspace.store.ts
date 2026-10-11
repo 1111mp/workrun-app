@@ -14,6 +14,8 @@ type RunWorkspaceState = {
   tabs: RunWorkspaceTab[];
   activeRunId?: string;
   open: boolean;
+  requestedActionId?: string;
+  requestAction: (id?: string) => void;
   openRun: (run: RunRecordSummary) => void;
   closeRun: (runId: string) => void;
   focusRun: (runId: string) => void;
@@ -29,6 +31,7 @@ type RunWorkspaceState = {
 export const useRunWorkspaceStore = create<RunWorkspaceState>()((set) => ({
   tabs: [],
   open: false,
+  requestAction: (requestedActionId) => set({ requestedActionId }),
   openRun: (run) =>
     set((state) => {
       const existing = state.tabs.find((tab) => tab.id === run.id);

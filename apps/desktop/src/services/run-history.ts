@@ -22,6 +22,8 @@ export type PendingAction = {
   payload: unknown;
   status: 'pending' | 'resolved' | 'cancelled' | 'expired';
   createdAt: string;
+  resolution?: Record<string, unknown> | null;
+  resolvedAt?: string | null;
 };
 
 export type CreatePendingAction = {
@@ -342,8 +344,8 @@ export function listActiveRuns() {
   return invoke<RunRecordSummary[]>('run_history_list_active');
 }
 
-export function listPendingActions() {
-  return invoke<PendingAction[]>('run_history_list_pending_actions');
+export function listPendingActions(runId?: string) {
+  return invoke<PendingAction[]>('run_history_list_pending_actions', { runId });
 }
 
 export function createPendingAction(action: CreatePendingAction) {

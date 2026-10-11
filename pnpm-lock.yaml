@@ -162,6 +162,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@shadcn/react@0.3.1': 95c435578fe5032a32d3344013875a91d9e46846a049d44921b42f70f9dad9a7
+
 importers:
 
   .:
@@ -579,7 +582,7 @@ importers:
         version: 5.3.0
       '@shadcn/react':
         specifier: ^0.3.1
-        version: 0.3.1(@types/react@19.3.0)(react@19.3.0)
+        version: 0.3.1(patch_hash=95c435578fe5032a32d3344013875a91d9e46846a049d44921b42f70f9dad9a7)(@types/react@19.3.0)(react@19.3.0)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -9748,7 +9751,7 @@ snapshots:
 
   '@sec-ant/readable-stream@0.4.1': {}
 
-  '@shadcn/react@0.3.1(@types/react@19.3.0)(react@19.3.0)':
+  '@shadcn/react@0.3.1(patch_hash=95c435578fe5032a32d3344013875a91d9e46846a049d44921b42f70f9dad9a7)(@types/react@19.3.0)(react@19.3.0)':
     optionalDependencies:
       '@types/react': 19.3.0
       react: 19.3.0

@@ -370,6 +370,8 @@ pub struct PendingAction {
     pub payload: Value,
     pub status: String,
     pub created_at: String,
+    pub resolution: Option<Value>,
+    pub resolved_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

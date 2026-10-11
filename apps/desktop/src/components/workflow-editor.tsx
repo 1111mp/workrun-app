@@ -104,6 +104,8 @@ import {
 } from '@/stores';
 
 import { useWorkflowRun } from './workflow-editor/use-workflow-run';
+import { useWorkflowRunRecord } from './workflow-editor/use-workflow-run-record';
+import { useWorkflowRunSnapshot } from './workflow-editor/use-workflow-run-snapshot';
 import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
 
 type WorkflowEditorProps = {
@@ -491,28 +493,13 @@ function WorkflowEditorContent({
     activeWorkflow?.version,
     isTeamMode() && !activeWorkflow ? createWorkflowForTeamRun : undefined,
   );
-  const liveRunRecord = useQuery({
-    queryKey: [
-      'run-history-inspect',
-      workflowRun.runId,
-      workflowRun.telemetryRevision,
-    ],
-    queryFn: () => inspectRunRecord(workflowRun.runId!),
-    // Historical output is an immutable snapshot. Interactive runs, including
-    // deeplink runs, refresh when the native runtime reports new model usage.
-    enabled:
-      Boolean(workflowRun.runId) &&
-      (!historicalRun || Boolean(liveRun)) &&
+  const liveRunRecord = useWorkflowRunRecord(
+    workflowRun.runId,
+    workflowRun.telemetryRevision,
+    (!historicalRun || Boolean(liveRun)) &&
       !viewingHistoricalRunId &&
       !viewingHistoricalChatSession,
-    // A model-call event changes only the revision portion of this key. Keep
-    // the current run's spans during that refetch so RunModelUsage does not
-    // unmount for one render and flash back in when SQLite responds.
-    placeholderData: (previousData, previousQuery) =>
-      previousQuery?.queryKey[1] === workflowRun.runId
-        ? keepPreviousData(previousData)
-        : undefined,
-  });
+  );
   const chatSessions = useQuery({
     queryKey: ['chat-sessions', activeWorkflow?.id],
     queryFn: () => listChatSessions(activeWorkflow!.id),
@@ -614,30 +601,12 @@ function WorkflowEditorContent({
     }
   }, [historicalRun, restoreHistoricalRun]);
 
-  useEffect(() => {
-    if (!historicalRun) return;
-    const runDocument = workflowDocumentFromSnapshot(
-      historicalRun.targetSnapshot,
-    );
-    restoreHistoricalRun.restoreWorkflowRun(
-      replayWorkflowRunProjection(
-        historicalRun.id,
-        historicalRun.events.map(({ sequence, event }) => ({
-          runId: historicalRun.id,
-          sequence,
-          event: event as WorkflowRunEvent,
-        })),
-        {
-          mode: runDocument?.settings.mode ?? workflowSettings.mode,
-          nodes: runDocument?.nodes ?? nodes,
-          // Older run-detail payloads can omit `input`, but workflow runtime
-          // snapshots retain the initial state required to render a chat turn.
-          input: replayInput(historicalRun),
-          turnId: `history:${historicalRun.id}`,
-        },
-      ),
-    );
-  }, [historicalRun, nodes, workflowSettings.mode, restoreHistoricalRun]);
+  useWorkflowRunSnapshot(
+    historicalRun,
+    nodes,
+    workflowSettings.mode,
+    Boolean(liveRun),
+  );
 
   const openHistoricalRun = async (id: string) => {
     try {
@@ -868,7 +837,10 @@ function WorkflowEditorContent({
       <WorkflowCanvas
         readOnly={readOnly}
         isRunning={workflowRun.isRunning}
+        hasActiveRun={workflowRun.hasActiveRun}
+        runStartDisabled={workflowRun.runStartDisabled}
         runningNodeId={workflowRun.runningNodeId}
+        runId={workflowRun.runId}
         onRun={workflowRun.startRun}
         // A catalog release is immutable, but its pinned execution recipe is
         // safe to run. All editing controls remain governed by readOnly.

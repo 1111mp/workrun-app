@@ -102,7 +102,18 @@ function RunWorkspace() {
           sequence,
           event: event as WorkflowRunEvent,
         })),
-        snapshot,
+        {
+          ...snapshot,
+          // Run Center opens one durable chat turn. Recreate its user message
+          // so both node output and interactive requests have a visible owner.
+          turnId: snapshot.mode === 'chat' ? activeRecord.id : undefined,
+          input:
+            snapshot.mode === 'chat'
+              ? activeRecord.input && typeof activeRecord.input === 'object'
+                ? (activeRecord.input as Record<string, unknown>)
+                : { input: '' }
+              : undefined,
+        },
       ),
     );
     const startedAt = Date.parse(activeRecord.startedAt);
@@ -223,6 +234,7 @@ function RunWorkspace() {
     return (
       <>
         <Drawer
+          modal={false}
           open={open}
           showSwipeHandle
           snapPoints={['31rem', 1]}
@@ -304,6 +316,7 @@ function RunWorkspace() {
 
   return (
     <Drawer
+      modal={false}
       open={open}
       showSwipeHandle
       onOpenChange={setOpen}

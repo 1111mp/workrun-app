@@ -620,7 +620,7 @@ pub async fn resume_workflow(request: ResumeWorkflowRun) -> Result<()> {
     Ok(())
 }
 
-/// Complete a globally claimed action from durable data. The browser never
+/// Complete an explicitly selected action from durable data. The browser never
 /// supplies a DSL or checkpoint identity here; both are taken from the run
 /// record that originally paused, preventing a stale page from resuming a
 /// different workflow.
@@ -628,6 +628,16 @@ pub async fn resolve_workflow_action(request: ResolveWorkflowAction) -> Result<(
     if request.id.trim().is_empty() || request.claimant_id.trim().is_empty() {
         bail!("pending action id and claimant are required");
     }
+    RunHistoryStore::claim_pending_action(&request.id, &request.claimant_id).await?;
+    let result = resolve_claimed_workflow_action(&request).await;
+    if result.is_err() {
+        // Failed validation or persistence must leave the request retryable.
+        let _ = RunHistoryStore::release_pending_action(&request.id, &request.claimant_id).await;
+    }
+    result
+}
+
+async fn resolve_claimed_workflow_action(request: &ResolveWorkflowAction) -> Result<()> {
     let action = RunHistoryStore::inspect_pending_action(&request.id, &request.claimant_id).await?;
     let record = RunHistoryStore::inspect(&action.run_id).await?;
     if record.summary.target_type != "workflow" || record.summary.status != "waiting_for_input" {
@@ -650,8 +660,13 @@ pub async fn resolve_workflow_action(request: ResolveWorkflowAction) -> Result<(
     };
     let tool_confirmation = apply_pending_action_checkpoint(&session, &action, &request.resolution).await?;
     let runtime = workflow_resume_runtime(record.runtime, tool_confirmation)?;
-    RunHistoryStore::resolve_claimed_action_and_enqueue(&action.id, &request.claimant_id, request.resolution, runtime)
-        .await?;
+    RunHistoryStore::resolve_claimed_action_and_enqueue(
+        &action.id,
+        &request.claimant_id,
+        request.resolution.clone(),
+        runtime,
+    )
+    .await?;
     // The checkpoint is already applied above. The durable recipe now tells the
     // dispatcher to continue it when a top-level execution permit is available.
     drop(session);

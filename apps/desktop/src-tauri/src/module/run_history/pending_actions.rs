@@ -26,26 +26,35 @@ impl RunHistoryStore {
         Ok(())
     }
 
-    pub async fn list_pending_actions() -> Result<Vec<PendingAction>> {
+    pub async fn list_pending_actions(run_id: Option<&str>) -> Result<Vec<PendingAction>> {
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query(
-            "SELECT id, run_id, kind, payload_json, status, created_at FROM run_pending_actions WHERE run_id IN (SELECT id FROM run_records WHERE workspace_id = ?) AND status = 'pending' ORDER BY created_at ASC, id ASC",
-        )
-        .bind(crate::utils::dirs::active_workspace_id())
-        .fetch_all(&pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(PendingAction {
-                    id: row.try_get("id")?,
-                    run_id: row.try_get("run_id")?,
-                    kind: row.try_get("kind")?,
-                    payload: json_column(row.try_get("payload_json")?)?,
-                    status: row.try_get("status")?,
-                    created_at: row.try_get("created_at")?,
-                })
-            })
-            .collect()
+        if let Some(run_id) = run_id {
+            Self::ensure_active_workspace(run_id).await?;
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "SELECT id, run_id, kind, payload_json, status, created_at, resolution_json, resolved_at FROM run_pending_actions WHERE run_id IN (SELECT id FROM run_records WHERE workspace_id = ",
+        );
+        query.push_bind(crate::utils::dirs::active_workspace_id()).push(")");
+        if let Some(run_id) = run_id {
+            // A run view includes decisions and invalidated requests as history.
+            query.push(" AND run_id = ").push_bind(run_id);
+        } else {
+            query.push(" AND status = 'pending'");
+        }
+        let rows = query
+            .push(" ORDER BY created_at ASC, id ASC")
+            .build()
+            .fetch_all(&pool)
+            .await?;
+        rows.iter().map(pending_action_from_row).collect()
+    }
+
+    /// Viewing never reserves a request. Reserve only the explicitly submitted
+    /// ID, before touching its checkpoint, so concurrent windows cannot apply
+    /// two different decisions to the same workflow.
+    pub async fn claim_pending_action(id: &str, claimant_id: &str) -> Result<()> {
+        let pool = DBManager::global().pool()?;
+        claim_pending_action_for_workspace(&pool, id, claimant_id, &crate::utils::dirs::active_workspace_id()).await
     }
 
     /// Atomically reserve the oldest unclaimed action for one UI coordinator.
@@ -76,7 +85,7 @@ impl RunHistoryStore {
         let pool = DBManager::global().pool()?;
         ensure_pending_action_workspace(&pool, id).await?;
         let row = sqlx::query(
-            "SELECT id, run_id, kind, payload_json, status, created_at FROM run_pending_actions WHERE id = ? AND status = 'pending' AND claimed_by = ?",
+            "SELECT id, run_id, kind, payload_json, status, created_at, resolution_json, resolved_at FROM run_pending_actions WHERE id = ? AND status = 'pending' AND claimed_by = ?",
         )
         .bind(id)
         .bind(claimant_id)
@@ -116,7 +125,7 @@ impl RunHistoryStore {
             bail!("pending action is no longer available: {id}");
         }
         let row = sqlx::query(
-            "SELECT id, run_id, kind, payload_json, status, created_at FROM run_pending_actions WHERE id = ?",
+            "SELECT id, run_id, kind, payload_json, status, created_at, resolution_json, resolved_at FROM run_pending_actions WHERE id = ?",
         )
         .bind(id)
         .fetch_one(&mut *transaction)
@@ -151,7 +160,7 @@ impl RunHistoryStore {
             bail!("pending action is no longer available: {id}");
         }
         let row = sqlx::query(
-            "SELECT id, run_id, kind, payload_json, status, created_at FROM run_pending_actions WHERE id = ?",
+            "SELECT id, run_id, kind, payload_json, status, created_at, resolution_json, resolved_at FROM run_pending_actions WHERE id = ?",
         )
         .bind(id)
         .fetch_one(&mut *transaction)
@@ -195,6 +204,11 @@ pub(super) fn pending_action_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<P
         payload: json_column(row.try_get("payload_json")?)?,
         status: row.try_get("status")?,
         created_at: row.try_get("created_at")?,
+        resolution: row
+            .try_get::<Option<String>, _>("resolution_json")?
+            .map(json_column)
+            .transpose()?,
+        resolved_at: row.try_get("resolved_at")?,
     })
 }
 
@@ -221,7 +235,7 @@ pub(super) async fn claim_next_pending_action_for_workspace(
     // reservation first, because the previous page may have been destroyed
     // before its asynchronous release command reached the native process.
     if let Some(row) = sqlx::query(
-        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.status = 'pending' AND a.claimed_by = ? AND r.workspace_id = ? AND r.status = 'waiting_for_input' ORDER BY a.created_at ASC, a.id ASC LIMIT 1",
+        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at, a.resolution_json, a.resolved_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.status = 'pending' AND a.claimed_by = ? AND r.workspace_id = ? AND r.status = 'waiting_for_input' ORDER BY a.created_at ASC, a.id ASC LIMIT 1",
     )
     .bind(claimant_id)
     .bind(workspace_id)
@@ -245,7 +259,7 @@ pub(super) async fn claim_next_pending_action_for_workspace(
         return Ok(None);
     }
     let row = sqlx::query(
-        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.claimed_by = ? AND a.claimed_at = ? AND r.workspace_id = ? AND r.status = 'waiting_for_input'",
+        "SELECT a.id, a.run_id, a.kind, a.payload_json, a.status, a.created_at, a.resolution_json, a.resolved_at FROM run_pending_actions a JOIN run_records r ON r.id = a.run_id WHERE a.claimed_by = ? AND a.claimed_at = ? AND r.workspace_id = ? AND r.status = 'waiting_for_input'",
     )
     .bind(claimant_id)
     .bind(&claimed_at)
@@ -267,4 +281,108 @@ async fn ensure_pending_action_workspace(pool: &sqlx::SqlitePool, id: &str) -> R
         bail!("pending action was not found in the active workspace: {id}");
     }
     Ok(())
+}
+
+async fn claim_pending_action_for_workspace(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    claimant_id: &str,
+    workspace_id: &str,
+) -> Result<()> {
+    if claimant_id.trim().is_empty() {
+        bail!("pending action claimant is required");
+    }
+    let result = sqlx::query(
+        "UPDATE run_pending_actions SET claimed_by = ?, claimed_at = ? WHERE id = ? AND status = 'pending' AND claimed_by IS NULL AND run_id IN (SELECT id FROM run_records WHERE workspace_id = ? AND status = 'waiting_for_input') AND NOT EXISTS (SELECT 1 FROM run_pending_actions other WHERE other.run_id = run_pending_actions.run_id AND other.status = 'pending' AND other.claimed_by IS NOT NULL)",
+    )
+    .bind(claimant_id)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(id)
+    .bind(workspace_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() != 1 {
+        bail!("pending action is no longer available or is being submitted: {id}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod selected_action_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn selected_claims_skip_queue_order_and_exclude_other_windows_and_workspaces() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE run_records (id TEXT PRIMARY KEY, workspace_id TEXT, status TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE run_pending_actions (id TEXT PRIMARY KEY, run_id TEXT, status TEXT, claimed_by TEXT, claimed_at TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO run_records VALUES ('first', 'personal', 'waiting_for_input'), ('second', 'personal', 'waiting_for_input'), ('team', 'team:default', 'waiting_for_input'), ('cancelled', 'personal', 'cancelled')").execute(&pool).await.unwrap();
+        for id in ["first", "second", "team", "cancelled"] {
+            sqlx::query("INSERT INTO run_pending_actions (id, run_id, status) VALUES (?, ?, 'pending')")
+                .bind(id)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // A newer request may be submitted without touching the oldest one.
+        claim_pending_action_for_workspace(&pool, "second", "window-a", "personal")
+            .await
+            .unwrap();
+        let oldest_owner: Option<String> =
+            sqlx::query_scalar("SELECT claimed_by FROM run_pending_actions WHERE id = 'first'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(oldest_owner.is_none());
+        sqlx::query("INSERT INTO run_pending_actions (id, run_id, status) VALUES ('same-run', 'second', 'pending')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Different prompts must not mutate one checkpoint concurrently either.
+        assert!(
+            claim_pending_action_for_workspace(&pool, "same-run", "window-b", "personal")
+                .await
+                .is_err()
+        );
+        assert!(
+            claim_pending_action_for_workspace(&pool, "second", "window-b", "personal")
+                .await
+                .is_err()
+        );
+        assert!(
+            claim_pending_action_for_workspace(&pool, "second", "window-a", "personal")
+                .await
+                .is_err()
+        );
+        assert!(
+            claim_pending_action_for_workspace(&pool, "team", "window-a", "personal")
+                .await
+                .is_err()
+        );
+        assert!(
+            claim_pending_action_for_workspace(&pool, "cancelled", "window-a", "personal")
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE run_pending_actions SET status = 'resolved', claimed_by = NULL WHERE id = 'second'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            claim_pending_action_for_workspace(&pool, "second", "window-b", "personal")
+                .await
+                .is_err()
+        );
+        claim_pending_action_for_workspace(&pool, "first", "window-b", "personal")
+            .await
+            .unwrap();
+    }
 }
