@@ -38,35 +38,78 @@ args = ["exec", "lint-staged"]
 # --- Git Hooks ---
 
 [tasks.pre-commit]
-description = "Pre-commit hook: format Rust files and lint staged frontend files"
-script_runner = "@duckscript"
+description = "Pre-commit hook: format and lint Rust, and lint staged frontend files"
+script_runner = "bash"
 script = '''
-# rust related changes
-has_rust = exec git diff --cached --quiet -- "*.rs" Cargo.toml Cargo.lock
-if eq ${has_rust.code} 1
-  cm_run_task rust-fmt
-end
+set -e
 
-# frontend checks
-has_frontend = exec git diff --cached --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.md" "*.css" "*.html"
-if eq ${has_frontend.code} 1
-  cm_run_task lint-staged
-end
+# git diff returns 1 for changes; other failures must stop the hook.
+has_changes() {
+  local status=0
+  git diff --quiet "$@" || status=$?
+  case "$status" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) exit "$status" ;;
+  esac
+}
+
+if has_changes --cached -- "*.rs" Cargo.toml Cargo.lock; then
+  # Compare worktree changes so existing unstaged edits are not staged implicitly.
+  before_format=$(git diff --binary -- "*.rs")
+  cargo make --makefile apps/desktop/Makefile.toml rust-fmt
+  after_format=$(git diff --binary -- "*.rs")
+  if [ "$before_format" != "$after_format" ]; then
+    echo "Rust formatting changed files. Review and stage the changes, then commit again."
+    exit 1
+  fi
+  cargo make --makefile apps/desktop/Makefile.toml rust-clippy
+fi
+
+if has_changes --cached -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.md" "*.css" "*.html"; then
+  cargo make --makefile apps/desktop/Makefile.toml lint-staged
+fi
 '''
 
 [tasks.pre-push]
 description = "Pre-push hook: run clippy for Rust and type checking for frontend"
-script_runner = "@duckscript"
+script_runner = "bash"
 script = '''
-# rust related changes
-has_rust = exec git diff @{u}..HEAD --quiet -- "*.rs" Cargo.toml Cargo.lock
-if eq ${has_rust.code} 1
-  cm_run_task rust-clippy
-end
+set -e
 
-# frontend related changes
-has_frontend = exec git diff @{u}..HEAD --quiet -- "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.css" "*.html"
-if eq ${has_frontend.code} 1
-  cm_run_task typecheck
-end
+has_changes() {
+  local status=0
+  git diff --quiet "$base" HEAD -- "$@" || status=$?
+  case "$status" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) exit "$status" ;;
+  esac
+}
+
+branch=$(git symbolic-ref --quiet HEAD) || {
+  status=$?
+  if [ "$status" -ne 1 ]; then
+    exit "$status"
+  fi
+  branch=""
+}
+upstream=""
+if [ -n "$branch" ]; then
+  upstream=$(git for-each-ref --format='%(upstream)' "$branch")
+fi
+if [ -n "$upstream" ]; then
+  base=$(git rev-parse --verify "$upstream")
+else
+  # A first push (or detached HEAD) has no upstream: check the complete tree.
+  base=$(git hash-object -t tree /dev/null)
+fi
+
+if has_changes "*.rs" Cargo.toml Cargo.lock; then
+  cargo make --makefile apps/desktop/Makefile.toml rust-clippy
+fi
+
+if has_changes "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.json" "*.css" "*.html"; then
+  cargo make --makefile apps/desktop/Makefile.toml typecheck
+fi
 '''
