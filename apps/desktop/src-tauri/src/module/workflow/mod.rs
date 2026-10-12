@@ -1635,6 +1635,33 @@ mod tests {
     }
 
     #[test]
+    fn complete_agent_snapshot_does_not_duplicate_structured_output() {
+        let mut partial = adk_rust::Event::new("invocation");
+        partial.llm_response.partial = true;
+        partial.set_content(Content::new("model").with_text(r#"{"summary":"Done"#));
+        let mut terminal = partial.clone();
+        terminal.llm_response.partial = false;
+        terminal.llm_response.provider_metadata = Some(json!({"content_complete": true}));
+        terminal.set_content(Content::new("model").with_text(r#"{"summary":"Done","score":92}"#));
+        let updates = agent_output_updates(
+            &[partial, terminal],
+            AgentOutputContext {
+                node_id: "agent",
+                kind: "agent",
+                endpoint_or_model: "model",
+                on_event: None,
+                tool_calls: &[],
+                output_key: Some("result"),
+                output_schema: Some(&json!({"type":"object","properties":{"summary":{"type":"string"},"score":{"type":"integer"}},"required":["summary","score"]})),
+            },
+        ).unwrap();
+        assert_eq!(
+            updates["workflow.node"]["messages"][0]["content"],
+            r#"{"summary":"Done","score":92}"#
+        );
+    }
+
+    #[test]
     fn records_tool_calls_in_the_agent_trace() {
         let tool_calls = vec![json!({
             "tool": "uppercase",

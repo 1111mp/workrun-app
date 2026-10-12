@@ -7,9 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@rjsf/core": "^6.10.1",
-    "@rjsf/utils": "^6.10.1",
-    "@rjsf/validator-ajv8": "^6.10.1",
+    "@rjsf/core": "^6.11.0",
+    "@rjsf/utils": "^6.11.0",
+    "@rjsf/validator-ajv8": "^6.11.0",
     "@workspace/ui": "workspace:*"
   },
   "peerDependencies": {

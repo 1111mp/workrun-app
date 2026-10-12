@@ -12,7 +12,6 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fs::File,
@@ -393,9 +392,7 @@ pub(crate) fn extract_share_archive(path: &Path) -> Result<ExtractedShareArchive
     if input.metadata()?.len() > MAX_BYTES {
         bail!("Archive exceeds 512 MiB");
     }
-    let mut digest = Sha256::new();
-    std::io::copy(&mut input, &mut digest)?;
-    let sha256 = format!("{:x}", digest.finalize());
+    let sha256 = crate::utils::hash::sha256_reader(&mut input)?;
     use std::io::{Seek, SeekFrom};
     input.seek(SeekFrom::Start(0))?;
     let staging = tempfile::tempdir()?;

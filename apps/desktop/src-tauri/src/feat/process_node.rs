@@ -374,7 +374,7 @@ fn verify_and_extract_source_archive(
 ) -> Result<()> {
     let bytes = std::fs::read(archive_path)
         .with_context(|| format!("failed to read downloaded source archive {}", archive_path.display()))?;
-    let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let actual_sha256 = hex::encode(Sha256::digest(&bytes));
     if actual_sha256 != expected_sha256 {
         bail!("downloaded source archive SHA-256 does not match");
     }
@@ -467,7 +467,7 @@ pub(crate) async fn process_compensation_fingerprint(definition: &IProcessNode) 
             hash.update((bytes.len() as u64).to_le_bytes());
             hash.update(bytes);
         }
-        Ok(format!("{:x}", hash.finalize()))
+        Ok(hex::encode(hash.finalize()))
     })
     .await
     .context("App source fingerprint task failed")?
@@ -492,13 +492,12 @@ fn create_source_archive(project_path: &Path) -> Result<ProcessNodeSourceArchive
     let mut output = archive.into_inner()?.finish()?;
     use std::io::{Seek, SeekFrom};
     output.seek(SeekFrom::Start(0))?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut output, &mut hasher)?;
+    let sha256 = crate::utils::hash::sha256_reader(&mut output)?;
     let size = output.metadata()?.len() as usize;
     Ok(ProcessNodeSourceArchive {
         path: archive_path.to_string_lossy().into_owned(),
         size,
-        sha256: format!("{:x}", hasher.finalize()),
+        sha256,
     })
 }
 

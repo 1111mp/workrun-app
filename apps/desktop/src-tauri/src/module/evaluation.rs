@@ -30,7 +30,7 @@ fn empty_json_object() -> Value {
 fn workflow_snapshot_fingerprint(snapshot: &Value) -> String {
     // A draft has no release version until publication. Hashing the immutable
     // snapshot lets the quality gate distinguish it from an earlier draft.
-    format!("{:x}", Sha256::digest(snapshot.to_string().as_bytes()))
+    hex::encode(Sha256::digest(snapshot.to_string().as_bytes()))
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

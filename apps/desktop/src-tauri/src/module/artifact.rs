@@ -143,7 +143,7 @@ impl ArtifactStore {
                 name,
                 size,
             };
-            fs::write(dir.join("sha256"), format!("{:x}", hash.finalize()))?;
+            fs::write(dir.join("sha256"), hex::encode(hash.finalize()))?;
             // Metadata is the commit marker: incomplete imports cannot be resolved.
             fs::write(dir.join("metadata.json"), serde_json::to_vec(&reference)?)?;
             Ok(reference)
@@ -179,7 +179,7 @@ impl ArtifactStore {
             }
             hash.update(&buffer[..count]);
         }
-        if format!("{:x}", hash.finalize()) != fs::read_to_string(dir.join("sha256"))? {
+        if hex::encode(hash.finalize()) != fs::read_to_string(dir.join("sha256"))? {
             bail!("Resource snapshot is corrupted");
         }
         Ok(path)

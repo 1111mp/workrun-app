@@ -1,4 +1,5 @@
 pub mod dirs;
+pub(crate) mod hash;
 pub mod help;
 pub mod i18n;
 pub mod init;

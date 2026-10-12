@@ -716,11 +716,20 @@ pub(super) fn agent_input_mapper(
 }
 
 fn agent_response_text(events: &[adk_rust::Event]) -> String {
-    events
-        .iter()
-        .filter_map(|event| event.content())
-        .flat_map(|content| content.parts.iter().filter_map(|part| part.text()))
-        .collect()
+    // ADK 2.3 terminal events contain the full response, after earlier partial chunks.
+    let mut deltas = adk_rust::EventTextDeltas::default();
+    let mut text = String::new();
+    for event in events {
+        let event = deltas.push(event);
+        if let Some(content) = event.content() {
+            for part in &content.parts {
+                if let Some(chunk) = part.text() {
+                    text.push_str(chunk);
+                }
+            }
+        }
+    }
+    text
 }
 
 fn tool_confirmation_was_denied(events: &[adk_rust::Event]) -> bool {

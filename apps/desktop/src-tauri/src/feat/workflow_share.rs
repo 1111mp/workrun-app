@@ -346,7 +346,7 @@ impl ExportPlan {
             &self.settings,
             self.files.iter().map(|(path, _)| path).collect::<Vec<_>>(),
         ))?;
-        Ok(format!("{:x}", Sha256::digest(bytes)))
+        Ok(hex::encode(Sha256::digest(bytes)))
     }
     fn preview(&self) -> Result<WorkflowSharePreview> {
         Ok(WorkflowSharePreview {
@@ -1068,7 +1068,7 @@ fn configuration_plan(
         apps: Vec::new(),
         requirements,
     };
-    let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&documents)?));
+    let fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(&documents)?));
     let bindings = suggested_bindings(&manifest.requirements);
     Ok((
         WorkflowSharePreview {

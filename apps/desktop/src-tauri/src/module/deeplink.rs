@@ -272,8 +272,8 @@ impl DeeplinkManager {
     fn run_id_for(link: &LinkRequest, id: &str, workspace: &str) -> Result<String> {
         Ok(match &link.request_id {
             Some(request_id) => format!(
-                "deeplink-{:x}",
-                Sha256::digest(serde_json::to_vec(&json!([workspace, request_id]))?)
+                "deeplink-{}",
+                hex::encode(Sha256::digest(serde_json::to_vec(&json!([workspace, request_id]))?))
             ),
             None => format!("deeplink-{id}"),
         })
