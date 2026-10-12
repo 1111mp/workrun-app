@@ -199,3 +199,34 @@ it('keeps completed messages and the viewport mounted through the recorded tool 
     host.remove();
   }
 });
+
+it('shows restored task output immediately without scheduling typing frames', async () => {
+  const requestFrame = vi.fn();
+  vi.stubGlobal('requestAnimationFrame', requestFrame);
+  const nodes = recording.nodes as Node[];
+  const store = useWorkflowRunStore.getState();
+  store.startWorkflowRun('recorded-run', {}, 'task');
+  store.applyRunEvents(recording.events as WorkflowRunEventEnvelope[], {
+    mode: 'task',
+    nodes,
+  });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => {
+      root.render(
+        createElement(LiveWorkflowTaskOutput, {
+          workflowNodes: nodes,
+          onRunAgain: vi.fn(),
+          onClose: vi.fn(),
+        }),
+      );
+    });
+    expect(host.textContent).toContain('Recorded response at event 31.');
+    expect(host.textContent).not.toContain('workflowEditor.output.running');
+    expect(requestFrame).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});

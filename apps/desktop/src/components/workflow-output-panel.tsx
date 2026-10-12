@@ -1334,7 +1334,9 @@ const LiveTaskExecution = memo(function LiveTaskExecution({
   workflowNodes,
   spans,
   onResponsePresentationComplete,
+  animateResponses,
 }: {
+  animateResponses: boolean;
   runId?: string;
   id: string;
   index: number;
@@ -1405,7 +1407,7 @@ const LiveTaskExecution = memo(function LiveTaskExecution({
         }
         entry={entry}
         spans={spans}
-        animateResponses
+        animateResponses={animateResponses}
         onResponsePresentationComplete={markResponsePresented}
       />
       <CleanupMessages entry={entry} />
@@ -1917,6 +1919,15 @@ function LiveWorkflowTaskOutput({
       thoughtIds: state.projection.thoughtIds,
     })),
   );
+  // Restored runs already contain complete output. Only runs observed live
+  // may keep revealing responses after the backend finishes.
+  const animatedRunStartedAt = useRef<typeof startedAt>(undefined);
+  if (!readOnly && status === 'running')
+    animatedRunStartedAt.current = startedAt;
+  const animateResponses =
+    !readOnly &&
+    startedAt !== undefined &&
+    animatedRunStartedAt.current === startedAt;
   const [presentation, setPresentation] = useState(() => ({
     startedAt,
     responses: new Set<string>(),
@@ -1942,7 +1953,9 @@ function LiveWorkflowTaskOutput({
   });
   const terminal = status !== 'idle' && status !== 'running';
   const presentationComplete =
-    !terminal || responseIds.every((id) => presentedResponses.has(id));
+    !animateResponses ||
+    !terminal ||
+    responseIds.every((id) => presentedResponses.has(id));
   const presentationStatus = presentationComplete ? status : 'running';
   const onResponsePresentationComplete = useCallback(
     (executionId: string, responseIndex: number) => {
@@ -2077,6 +2090,7 @@ function LiveWorkflowTaskOutput({
                     index={index}
                     workflowNodes={workflowNodes}
                     spans={spans}
+                    animateResponses={animateResponses}
                     onResponsePresentationComplete={
                       onResponsePresentationComplete
                     }
@@ -2287,7 +2301,7 @@ function WorkflowRunOutput({
       ]
     : [];
 
-  if (isRunning) {
+  if (!readOnly && isRunning) {
     // A response earns animation only while a real workflow is live. Its ID
     // is retained through the terminal event so an in-progress local
     // typewriter is never replaced by restored, complete text.
@@ -2302,27 +2316,28 @@ function WorkflowRunOutput({
     });
   }, []);
 
-  const chatPresentationPending = isChat
-    ? run.messages.some((item) => {
-        if (item.role === 'assistant')
-          return (
-            animatedChatResponseIds.current.has(item.id) &&
-            !item.isStreaming &&
-            !presentedChatResponses.has(item.id)
+  const chatPresentationPending =
+    isChat && !readOnly
+      ? run.messages.some((item) => {
+          if (item.role === 'assistant')
+            return (
+              animatedChatResponseIds.current.has(item.id) &&
+              !item.isStreaming &&
+              !presentedChatResponses.has(item.id)
+            );
+          if (item.role !== 'user') return false;
+          const response = chatTurnResponse(
+            execution.filter((entry) => entry.turnId === item.turnId),
+            item.turnId,
           );
-        if (item.role !== 'user') return false;
-        const response = chatTurnResponse(
-          execution.filter((entry) => entry.turnId === item.turnId),
-          item.turnId,
-        );
-        return Boolean(
-          response &&
-          animatedChatResponseIds.current.has(response.id) &&
-          !response.isStreaming &&
-          !presentedChatResponses.has(response.id),
-        );
-      })
-    : false;
+          return Boolean(
+            response &&
+            animatedChatResponseIds.current.has(response.id) &&
+            !response.isStreaming &&
+            !presentedChatResponses.has(response.id),
+          );
+        })
+      : false;
   const { data: actions = [] } = useWorkflowActions(run.runId);
   const waitingForAction = actions.some(
     (action) => action.status === 'pending',
@@ -2596,10 +2611,12 @@ function WorkflowRunOutput({
                         !presentedChatResponses.has(assistantResponse.id),
                       );
                       const shouldAnimateMessage =
+                        !readOnly &&
                         message.role === 'assistant' &&
                         (isRunning ||
                           animatedChatResponseIds.current.has(message.id));
                       const shouldAnimateResponse = Boolean(
+                        !readOnly &&
                         assistantResponse &&
                         (isRunning ||
                           animatedChatResponseIds.current.has(
