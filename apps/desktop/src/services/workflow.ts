@@ -302,6 +302,7 @@ export type WorkflowProcessLog = {
 };
 
 export type WorkflowRunExecution = {
+  actionIds?: string[];
   nodeId: string;
   type: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
@@ -312,6 +313,7 @@ export type WorkflowRunExecution = {
 };
 
 export type WorkflowRunTurn = {
+  runId?: string;
   status: WorkflowRunStatus;
   startedAt?: number;
   endedAt?: number;
@@ -592,36 +594,6 @@ export function subscribeWorkflowRun(
   });
 }
 
-export function resolveHumanReview(
-  dsl: Workflow,
-  threadId: string,
-  nodeId: string,
-  approved: boolean,
-  edits: Record<string, string> = {},
-  workflowContext?: { workflowId: string; threadId: string; path: string[] },
-) {
-  return invoke('workflow_resolve_human_review', {
-    dsl,
-    threadId,
-    nodeId,
-    approved,
-    edits,
-    workflowContext,
-  });
-}
-
-export function resolveAskUserQuestion(
-  dsl: Workflow,
-  threadId: string,
-  nodeId: string,
-  optionId: string,
-  workflowContext?: { workflowId: string; threadId: string; path: string[] },
-) {
-  return invoke('workflow_resolve_ask_user_question', {
-    dsl,
-    threadId,
-    nodeId,
-    optionId,
-    workflowContext,
-  });
+export function validateWorkflowAction(id: string) {
+  return invoke<void>('workflow_run_validate_action', { id });
 }

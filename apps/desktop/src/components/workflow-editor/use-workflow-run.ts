@@ -1,18 +1,17 @@
+import { useQuery } from '@tanstack/react-query';
 import type { Edge, Node } from '@xyflow/react';
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { prepareWorkflowProcessApps } from '@/services/process-node';
-import { resolvePendingAction } from '@/services/run-history';
-import { inspectRunRecord } from '@/services/run-history';
+import { inspectRunRecord, listActiveRuns } from '@/services/run-history';
 import {
   archiveChatSession as archiveChatSessionRequest,
   createChatSession,
   getChatSession,
   listChatSessionTurns,
-  resolveAskUserQuestion,
-  resolveHumanReview,
   resumeBackgroundWorkflowRun,
   startBackgroundWorkflowRun,
   subscribeWorkflowRun,
@@ -25,14 +24,8 @@ import {
   type WorkflowRunEvent,
   type WorkflowRunEventEnvelope,
 } from '@/services/workflow';
-import { useWorkflowRunStore } from '@/stores';
+import { useWorkflowRunStore, useWorkrunStore } from '@/stores';
 import { workflowRunView } from '@/stores/workflow-run.store';
-
-type SubworkflowContext = {
-  workflowId: string;
-  threadId: string;
-  path: string[];
-};
 
 function preparationDescription({
   appName,
@@ -59,17 +52,6 @@ function preparationDescription({
     completed: 'Ready',
   };
   return `${appName} · v${version} — ${labels[stage]}`;
-}
-
-function getSubworkflowContext(value: unknown): SubworkflowContext | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const { workflowId, threadId, path } = value as Record<string, unknown>;
-  return typeof workflowId === 'string' &&
-    typeof threadId === 'string' &&
-    Array.isArray(path) &&
-    path.every((part) => typeof part === 'string')
-    ? { workflowId, threadId, path }
-    : undefined;
 }
 
 function unconfiguredSubworkflow(nodes: Node[]) {
@@ -137,9 +119,16 @@ function useWorkflowRun(
   releaseVersion?: string,
   ensureWorkflowId?: () => Promise<string>,
 ) {
-  const [isResolvingHumanReview, setIsResolvingHumanReview] = useState(false);
-  const [isResolvingAskUserQuestion, setIsResolvingAskUserQuestion] =
-    useState(false);
+  const { t } = useTranslation();
+  const workspace = useWorkrunStore(
+    (state) => state.config?.workspace_mode ?? 'personal',
+  );
+  const activeRuns = useQuery({
+    queryKey: ['run-history', 'active', workspace],
+    queryFn: listActiveRuns,
+  });
+  const starting = useRef(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [isRestoringChatSession, setIsRestoringChatSession] = useState(false);
   // `undefined` follows a restored history run, while `null` records that the
   // restored run has finished or been closed during this editor session.
@@ -151,6 +140,7 @@ function useWorkflowRun(
     useShallow((state) => ({
       runningNodeId: state.runningNodeId,
       runStatus: state.projection.status,
+      awaitingInput: state.projection.awaitingInput,
       toolApproval: state.toolApproval,
       humanReview: state.humanReview,
       askUserQuestion: state.askUserQuestion,
@@ -169,6 +159,16 @@ function useWorkflowRun(
       activeChatSession: state.activeChatSession,
       setActiveChatSession: state.setActiveChatSession,
     })),
+  );
+  const hasActiveRun = Boolean(
+    activeRuns.data?.some(
+      (run) =>
+        run.targetType === 'workflow' &&
+        run.targetId === workflowId &&
+        ['queued', 'running', 'waiting_for_input'].includes(run.status),
+    ) ||
+    store.runStatus === 'running' ||
+    store.awaitingInput,
   );
   const runThreadId = useRef<string | undefined>(undefined);
   const chatSessionId = useRef<string | undefined>(undefined);
@@ -205,15 +205,11 @@ function useWorkflowRun(
   };
 
   const drain = () => {
-    const event = pendingEvents.current.shift();
-    if (event) store.applyRunEvents([event], context());
-    if (pendingEvents.current.length) {
-      // Preserve native ordering at visual boundaries. In particular, two
-      // quick node_start events must not first appear as one combined list.
-      pendingFrame.current = requestAnimationFrame(drain);
-      return;
-    }
+    const events = pendingEvents.current.splice(0);
     pendingFrame.current = undefined;
+    // Preserve event order inside one store update, without painting transient
+    // node_end / approval / interrupt states on separate animation frames.
+    if (events.length) store.applyRunEvents(events, context());
     const callbacks = afterDrain.current;
     afterDrain.current = [];
     callbacks.forEach((callback) => callback());
@@ -293,6 +289,40 @@ function useWorkflowRun(
   };
 
   const beginWorkflowRun = async (input: Record<string, unknown>) => {
+    if (starting.current || hasActiveRun) return;
+    starting.current = true;
+    setIsStarting(true);
+    try {
+      // Check durable runs again at submission, including runs started in
+      // another window since this editor's last active-run refresh.
+      const active = await listActiveRuns();
+      if (
+        active.some(
+          (run) =>
+            run.targetType === 'workflow' &&
+            run.targetId === workflowId &&
+            ['queued', 'running', 'waiting_for_input'].includes(run.status),
+        )
+      ) {
+        void activeRuns.refetch();
+        toast.error(t('workflowEditor.activeRunExists'), {
+          toasterId: 'global',
+        });
+        return;
+      }
+      await executeWorkflowRun(input);
+    } catch (error) {
+      toast.error(t('workflowEditor.checkActiveRunFailed'), {
+        toasterId: 'global',
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      starting.current = false;
+      setIsStarting(false);
+    }
+  };
+
+  const executeWorkflowRun = async (input: Record<string, unknown>) => {
     const subworkflow = unconfiguredSubworkflow(nodes);
     if (subworkflow) {
       const workflowName = subworkflow.data?.workflowName;
@@ -558,6 +588,7 @@ function useWorkflowRun(
   };
 
   const startRun = () => {
+    if (hasActiveRun || isStarting || activeRuns.isLoading) return;
     if (settings.mode === 'chat') {
       const activeSession = store.activeChatSession;
       if (activeSession?.workflowId === workflowId) {
@@ -576,141 +607,10 @@ function useWorkflowRun(
     }
   };
 
-  const resolvePendingToolApproval = async (approved: boolean) => {
-    const approval = store.toolApproval;
-    const { functionCallId, fingerprint } = approval ?? {};
-    if (typeof functionCallId !== 'string' || typeof fingerprint !== 'string')
-      return;
-    const nodeId = approval?.nodeId;
-    if (!approved && typeof nodeId === 'string') {
-      // The native graph only records the decision on resume. Add the UI event
-      // now so the rejected invocation remains visible in this execution.
-      store.applyRunEvents(
-        [
-          {
-            runId: runId.current ?? 'local',
-            // Insert between the last persisted event and the next native
-            // sequence, so the local denial cannot suppress resume events.
-            sequence:
-              useWorkflowRunStore.getState().projection.eventSequence + 0.5,
-            event: {
-              type: 'custom',
-              node: nodeId,
-              event_type: 'agent.tool_denied',
-              data: {
-                tool: approval?.tool,
-                name: approval?.name,
-                input: approval?.input,
-                status: 'denied',
-                message: 'Denied by user',
-              },
-            },
-          },
-        ],
-        context(),
-      );
-    }
-
-    const actionId = approval?.runActionId;
-    if (actionId) {
-      try {
-        if (typeof actionId !== 'string')
-          throw new Error('run action is invalid');
-        await resolvePendingAction(actionId, { approved });
-      } catch (error) {
-        toast.error('Could not resume the run', {
-          toasterId: 'global',
-          description: error instanceof Error ? error.message : String(error),
-        });
-        return;
-      }
-    }
-    store.clearToolApproval();
-    resumeWorkflowRun({ functionCallId, fingerprint, approved });
-  };
-
-  const resolvePendingHumanReview = async (
-    approved: boolean,
-    edits: Record<string, string> = {},
-  ) => {
-    if (isResolvingHumanReview) return false;
-    const review = store.humanReview;
-    const nodeId = review?.nodeId;
-    if (typeof nodeId !== 'string') return false;
-    const threadId = runThreadId.current;
-    if (!threadId) return false;
-
-    setIsResolvingHumanReview(true);
-    try {
-      const workflowContext = getSubworkflowContext(review?.workflowContext);
-      await resolveHumanReview(
-        toWorkflowDsl(workflowId, nodes, edges, settings),
-        threadId,
-        nodeId,
-        approved,
-        edits,
-        workflowContext,
-      );
-      const actionId = review?.runActionId;
-      if (actionId) {
-        if (typeof actionId !== 'string')
-          throw new Error('run action is invalid');
-        await resolvePendingAction(actionId, { approved, edits });
-      }
-      store.clearHumanReview();
-      resumeWorkflowRun();
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error('Could not record the review decision', {
-        toasterId: 'global',
-        description: message,
-      });
-      return false;
-    } finally {
-      setIsResolvingHumanReview(false);
-    }
-  };
-
-  const resolvePendingAskUserQuestion = async (optionId: string) => {
-    if (isResolvingAskUserQuestion) return;
-    const nodeId = store.askUserQuestion?.nodeId;
-    if (typeof nodeId !== 'string') return;
-    const threadId = runThreadId.current;
-    if (!threadId) return;
-
-    setIsResolvingAskUserQuestion(true);
-    try {
-      const workflowContext = getSubworkflowContext(
-        store.askUserQuestion?.workflowContext,
-      );
-      await resolveAskUserQuestion(
-        toWorkflowDsl(workflowId, nodes, edges, settings),
-        threadId,
-        nodeId,
-        optionId,
-        workflowContext,
-      );
-      const actionId = store.askUserQuestion?.runActionId;
-      if (actionId) {
-        if (typeof actionId !== 'string')
-          throw new Error('run action is invalid');
-        await resolvePendingAction(actionId, { optionId });
-      }
-      store.clearAskUserQuestion();
-      resumeWorkflowRun();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error('Could not record the selected option', {
-        toasterId: 'global',
-        description: message,
-      });
-    } finally {
-      setIsResolvingAskUserQuestion(false);
-    }
-  };
-
   return {
+    hasActiveRun,
+    runStartDisabled:
+      hasActiveRun || isStarting || activeRuns.isLoading || activeRuns.isError,
     isRunning: store.runStatus === 'running',
     runStatus: store.runStatus,
     startRun,
@@ -719,11 +619,6 @@ function useWorkflowRun(
     toolApproval: store.toolApproval,
     humanReview: store.humanReview,
     askUserQuestion: store.askUserQuestion,
-    isResolvingHumanReview,
-    isResolvingAskUserQuestion,
-    resolvePendingToolApproval,
-    resolvePendingHumanReview,
-    resolvePendingAskUserQuestion,
     resumeWorkflowRun,
     restoreChatSession,
     archiveChatSession,

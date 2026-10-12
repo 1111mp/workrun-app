@@ -492,8 +492,9 @@ type ProcessNodeDetails = Awaited<ReturnType<typeof getProcessNode>>;
 function ProcessNodeDetailPage() {
   const { t } = useTranslation();
   const { id } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
+  const liveRun = searchParams.get('live') === 'true';
   const isCatalogApp = searchParams.get('catalog') === 'true';
   const teamUserId = useWorkrunStore((state) => state.teamUser?.id);
   const node = useQuery({
@@ -506,6 +507,17 @@ function ProcessNodeDetailPage() {
     queryKey: ['run-history', historyRunId],
     queryFn: () => inspectRunRecord(historyRunId!),
     enabled: Boolean(historyRunId),
+    refetchOnMount: 'always',
+    // A run opened from Run Center keeps using this detail page's output
+    // panel while native execution continues after the originating page closes.
+    refetchInterval: (query) =>
+      liveRun &&
+      (!query.state.data ||
+        ['queued', 'running', 'waiting_for_input'].includes(
+          query.state.data.status,
+        ))
+        ? 500
+        : false,
   });
 
   if (node.isError) {
@@ -537,6 +549,17 @@ function ProcessNodeDetailPage() {
       key={node.data.definition.id}
       processNode={node.data}
       isCatalogApp={isCatalogApp}
+      onCloseRun={() =>
+        setSearchParams(
+          (current) => {
+            const next = new URLSearchParams(current);
+            next.delete('runId');
+            next.delete('live');
+            return next;
+          },
+          { replace: true },
+        )
+      }
       readOnly={isCatalogApp && node.data.definition.ownerId !== teamUserId}
       historicalRun={
         historicalRun.data?.targetType === 'app' &&
@@ -551,11 +574,13 @@ function ProcessNodeDetailPage() {
 function ProcessNodeDetailEditor({
   processNode,
   historicalRun,
+  onCloseRun,
   isCatalogApp = false,
   readOnly = false,
 }: {
   processNode: ProcessNodeDetails;
   historicalRun?: RunRecord;
+  onCloseRun: () => void;
   isCatalogApp?: boolean;
   readOnly?: boolean;
 }) {
@@ -1193,7 +1218,7 @@ function ProcessNodeDetailEditor({
           onClear={() => undefined}
           onRunAgain={() => undefined}
           onOpenChange={(open) => {
-            if (!open) void navigate(-1);
+            if (!open) onCloseRun();
           }}
         />
       ) : null}

@@ -1,12 +1,20 @@
 {
   "executionRecovery": {
+    "loadFailed": "无法加载恢复状态",
+    "awaitingRecovery": "已中断 · 待恢复",
+    "tryRecover": "尝试恢复",
+    "interruptedDescription": "本次执行已中断。恢复前会检查已保存的检查点及操作结果，符合条件后继续原运行。",
+    "confirmingRemote": "正在确认远程任务状态",
+    "remoteDescription": "正在核对原远程任务，确认后继续，不会重新提交任务。",
+    "dismiss": "不再跟进",
+    "dismissed": "已停止跟进，运行历史仍保留。",
+    "appRecoveryUnsupported": "此应用执行暂不支持恢复。请先核对原执行结果，再决定是否重新运行。",
+    "compensationBlocksRecovery": "此运行已进入补偿流程，不能继续正向执行。",
+    "requestBlocked": "暂时无法继续处理",
+    "checkingRequest": "检查中…",
     "workspaceTitle": "任务工作区",
-    "continueTitle": "恢复这个中断任务？",
-    "continueDescription": "从应用退出或崩溃造成的中断处恢复，复用已保存结果。失败或已停止的任务请使用“重新运行”；结果未知的操作需先对账。",
-    "keepTask": "保留任务",
     "runAgain": "重新运行",
     "updateFailed": "无法更新补偿",
-    "continueFailed": "无法继续任务",
     "newTaskFailed": "无法创建新任务",
     "closeTask": "关闭 {{name}}",
     "pin": "固定",
@@ -483,6 +491,11 @@
     }
   },
   "runCenter": {
+    "concurrentCount": "{{count}} 次活跃运行",
+    "all": "全部运行",
+    "pending": "待处理",
+    "noPending": "暂无待处理请求",
+    "noPendingDescription": "需要授权、回答或审核的请求会显示在这里。",
     "title": "运行中心",
     "open": "打开运行中心",
     "view": "查看",
@@ -501,7 +514,7 @@
     "emptyDescription": "从工作流或应用中启动运行，其进度和输入请求将显示在这里。",
     "attentionHeading": "需要处理 · {{count}}",
     "activeHeading": "进行中的运行 · {{count}}",
-    "approvalHeading": "审批队列 · 请选择一项处理",
+    "approvalHeading": "待处理请求 · 自由选择处理顺序",
     "cancel": "取消",
     "cancelled": "{{targetType}}已取消",
     "cancelFailed": "无法取消运行",
@@ -606,6 +619,31 @@
     }
   },
   "approval": {
+    "cards": {
+      "processed": "已处理",
+      "types": {
+        "tool": "工具执行授权",
+        "question": "需要你回答",
+        "review": "人工审核"
+      },
+      "hints": {
+        "tool": "确认调用参数后再允许执行。可以先查看已有输出，稍后回来处理。",
+        "question": "选择选项并提交回答后继续。也可以稍后回来处理。",
+        "review": "查看审核内容与上下文后再做决定。可以先查看已有输出，稍后回来处理。"
+      },
+      "pending": "等待你处理",
+      "later": "可以先查看输出，或稍后回来处理。",
+      "retry": "重试",
+      "cancelled": "运行已取消",
+      "expired": "请求已失效",
+      "answered": "已回答：{{answer}}",
+      "approved": "已通过",
+      "rejected": "已拒绝",
+      "resolved": "已处理",
+      "details": "查看详情",
+      "hideDetails": "收起详情",
+      "denyTool": "拒绝执行"
+    },
     "cancel": "取消",
     "continue": "继续",
     "saving": "正在保存…",
@@ -617,6 +655,12 @@
       "fallbackSource": "工具应用",
       "input": "调用参数",
       "risk": "风险",
+      "riskLevels": {
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "unknown": "未知"
+      },
       "unknown": "未知",
       "run": "运行工具"
     },
@@ -637,11 +681,13 @@
       "savingAnswer": "正在保存回答…"
     },
     "errors": {
-      "loadQueue": "无法加载授权队列",
+      "loadRequests": "无法加载交互请求",
       "continueWorkflow": "无法继续工作流"
     }
   },
   "workflowEditor": {
+    "activeRunExists": "此工作流有进行中的任务，请先完成或取消当前任务，再开始新的运行。",
+    "checkActiveRunFailed": "无法确认当前运行状态，请重试后再运行。",
     "remoteTasks": {
       "title": "远程任务",
       "description": "远程任务状态与已收集的结果。Workflow 失败或停止时，会对未结束的任务自动尝试取消一次。",
@@ -1024,6 +1070,35 @@
       "viewRunDetails": "查看详情",
       "turnCount": "{{count}} 轮",
       "stepCount": "{{count}} 步",
+      "messages": {
+        "tool": "工具",
+        "denied": "用户已拒绝",
+        "input": "输入",
+        "result": "结果",
+        "output": "输出",
+        "status": "状态",
+        "cancelledStep": "此步骤完成前已取消。",
+        "waitingReview": "等待审核…",
+        "approved": "已通过。",
+        "rejected": "已拒绝。",
+        "reviewCompleted": "审核已完成。",
+        "waitingAnswer": "等待回答…",
+        "answerReceived": "已收到回答。",
+        "runningSubworkflow": "正在运行子工作流…",
+        "subworkflowCompleted": "子工作流已完成。",
+        "terminated": "工作流已终止。",
+        "evaluatingConditions": "正在判断条件…",
+        "noCondition": "未匹配任何条件，此路径已结束。",
+        "evaluatingCases": "正在判断分支…",
+        "noCase": "未匹配任何条件，使用默认分支。",
+        "generating": "正在生成回复…",
+        "responseReady": "回复已就绪。",
+        "waitingResponse": "等待回复…",
+        "noResponse": "已完成，无文本回复。",
+        "running": "运行中…",
+        "completed": "已完成。",
+        "selected": "已选择：{{label}}。"
+      },
       "toolCount": "{{count}} 次工具调用",
       "processOutput": "应用输出",
       "thinking": "思考中…",

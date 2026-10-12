@@ -44,7 +44,12 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
     let mut sequence = RunHistoryStore::last_sequence(&run_id).await? + 1;
     let mut has_pending_action = false;
     while let Some(mut event) = receiver.recv().await {
-        if let Some((kind, payload)) = pending_action(&event) {
+        if let Some((kind, mut payload)) = pending_action(&event) {
+            if let Some(data) = payload.as_object_mut()
+                && let Some(node) = event.get("node").and_then(Value::as_str)
+            {
+                data.entry("nodeId").or_insert_with(|| Value::String(node.to_string()));
+            }
             let action_id = uuid::Uuid::new_v4().to_string();
             RunHistoryStore::create_pending_action(CreatePendingAction {
                 id: action_id.clone(),
@@ -54,8 +59,7 @@ pub(super) async fn persist_events(run_id: String, mut receiver: mpsc::Unbounded
                 created_at: chrono::Utc::now().to_rfc3339(),
             })
             .await?;
-            // Claiming belongs to the shell-level coordinator. Notify it only
-            // after the action is durable, so it can claim immediately.
+            // Notify observers only after the request is durable.
             emit_on_main_thread(
                 "pending-action-created",
                 PendingActionCreated {

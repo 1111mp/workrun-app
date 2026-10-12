@@ -1,0 +1,467 @@
+{
+  "nodes": [
+    {
+      "id": "start-node-default",
+      "type": "start",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "name": "Recorded start"
+      }
+    },
+    {
+      "id": "03334f3e-bb10-4ccd-945c-27e1fc2ca323",
+      "type": "agent",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "name": "Recorded agent"
+      }
+    },
+    {
+      "id": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+      "type": "agent",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "name": "Recorded agent"
+      }
+    },
+    {
+      "id": "926c3302-ceca-4748-9780-df9cdfa70abf",
+      "type": "if_else",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "name": "Recorded if_else"
+      }
+    },
+    {
+      "id": "29bc5c20-5c65-4cc5-81e2-f10d56af05a1",
+      "type": "agent",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "name": "Recorded agent"
+      }
+    },
+    {
+      "id": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+      "type": "agent",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "name": "Recorded agent"
+      }
+    },
+    {
+      "id": "dc877be2-6ad7-470b-a8b2-a297f2fe25a7",
+      "type": "end",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "name": "Recorded end"
+      }
+    }
+  ],
+  "events": [
+    {
+      "runId": "recorded-run",
+      "sequence": 0,
+      "event": {
+        "type": "custom",
+        "node": "",
+        "event_type": "workflow.attempt_started",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 1,
+      "event": {
+        "type": "resumed",
+        "step": 0,
+        "pending_nodes": ["03334f3e-bb10-4ccd-945c-27e1fc2ca323"]
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 2,
+      "event": {
+        "type": "node_start",
+        "node": "03334f3e-bb10-4ccd-945c-27e1fc2ca323",
+        "step": 0
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 3,
+      "event": {
+        "type": "custom",
+        "node": "03334f3e-bb10-4ccd-945c-27e1fc2ca323",
+        "event_type": "agent.model_call",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 4,
+      "event": {
+        "type": "message",
+        "node": "03334f3e-bb10-4ccd-945c-27e1fc2ca323",
+        "is_final": true,
+        "content": "Recorded response at event 4."
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 5,
+      "event": {
+        "type": "custom",
+        "node": "03334f3e-bb10-4ccd-945c-27e1fc2ca323",
+        "event_type": "workflow.node_result",
+        "data": {
+          "nodeId": "03334f3e-bb10-4ccd-945c-27e1fc2ca323",
+          "type": "agent",
+          "result": {}
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 6,
+      "event": {
+        "type": "node_end",
+        "node": "03334f3e-bb10-4ccd-945c-27e1fc2ca323",
+        "step": 0,
+        "duration_ms": 3118
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 7,
+      "event": {
+        "type": "node_start",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "step": 1
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 8,
+      "event": {
+        "type": "custom",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "event_type": "agent.model_call",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 9,
+      "event": {
+        "type": "custom",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "event_type": "agent.tool_call",
+        "data": {
+          "tool": "example_tool",
+          "input": {},
+          "result": {}
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 10,
+      "event": {
+        "type": "custom",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "event_type": "agent.tool_result",
+        "data": {
+          "tool": "example_tool",
+          "input": {},
+          "result": {}
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 11,
+      "event": {
+        "type": "custom",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "event_type": "agent.model_call",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 12,
+      "event": {
+        "type": "message",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "is_final": true,
+        "content": "Recorded response at event 12."
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 13,
+      "event": {
+        "type": "custom",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "event_type": "workflow.node_result",
+        "data": {
+          "nodeId": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+          "type": "agent",
+          "result": {}
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 14,
+      "event": {
+        "type": "node_end",
+        "node": "9dc62a23-3159-46cb-8814-1cb5137dd1b6",
+        "step": 1,
+        "duration_ms": 7518
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 15,
+      "event": {
+        "type": "node_start",
+        "node": "926c3302-ceca-4748-9780-df9cdfa70abf",
+        "step": 2
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 16,
+      "event": {
+        "type": "custom",
+        "node": "926c3302-ceca-4748-9780-df9cdfa70abf",
+        "event_type": "workflow.node_result",
+        "data": {
+          "nodeId": "926c3302-ceca-4748-9780-df9cdfa70abf",
+          "type": "if_else",
+          "result": {
+            "route": "false"
+          }
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 17,
+      "event": {
+        "type": "node_end",
+        "node": "926c3302-ceca-4748-9780-df9cdfa70abf",
+        "step": 2,
+        "duration_ms": 1
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 18,
+      "event": {
+        "type": "node_start",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "step": 3
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 19,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "agent.model_call",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 20,
+      "event": {
+        "type": "node_end",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "step": 3,
+        "duration_ms": 1928
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 21,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "agent.tool_approval_required",
+        "data": {
+          "nodeId": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+          "name": "example_tool",
+          "functionCallId": "approval-call",
+          "fingerprint": "approval-fingerprint",
+          "runActionId": "approval-action"
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 22,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "tool_confirmation",
+        "data": {
+          "required": true,
+          "functionCallId": "approval-call",
+          "fingerprint": "approval-fingerprint"
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 23,
+      "event": {
+        "type": "interrupted",
+        "node": "unknown",
+        "message": "Dynamic interrupt: Tool confirmation required"
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 24,
+      "event": {
+        "type": "custom",
+        "node": "",
+        "event_type": "workflow.attempt_started",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 25,
+      "event": {
+        "type": "resumed",
+        "step": 3,
+        "pending_nodes": ["5dcf8144-73f1-42e0-a640-ac451f9f2de2"]
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 26,
+      "event": {
+        "type": "node_start",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "step": 3
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 27,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "agent.model_call",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 28,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "agent.tool_call",
+        "data": {
+          "tool": "example_tool",
+          "input": {},
+          "result": {}
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 29,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "agent.tool_result",
+        "data": {
+          "tool": "example_tool",
+          "input": {},
+          "result": {}
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 30,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "agent.model_call",
+        "data": {}
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 31,
+      "event": {
+        "type": "message",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "is_final": true,
+        "content": "Recorded response at event 31."
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 32,
+      "event": {
+        "type": "custom",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "event_type": "workflow.node_result",
+        "data": {
+          "nodeId": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+          "type": "agent",
+          "result": {}
+        }
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 33,
+      "event": {
+        "type": "node_end",
+        "node": "5dcf8144-73f1-42e0-a640-ac451f9f2de2",
+        "step": 3,
+        "duration_ms": 5920
+      }
+    },
+    {
+      "runId": "recorded-run",
+      "sequence": 34,
+      "event": {
+        "type": "done",
+        "state": {}
+      }
+    }
+  ]
+}

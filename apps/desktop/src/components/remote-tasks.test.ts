@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, createElement, type ReactElement } from 'react';
+import {
+  act,
+  createElement,
+  useEffect,
+  useState,
+  type ReactElement,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import { toast } from 'sonner';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -158,4 +164,44 @@ it('reports clipboard failures without claiming the message ID was copied', asyn
     { toasterId: 'global' },
   );
   expect(toast.success).not.toHaveBeenCalled();
+});
+
+it('keeps remote task output mounted while a run resumes and its refresh fails', async () => {
+  vi.mocked(listRemoteTasks).mockResolvedValue([
+    {
+      ...task,
+      status: 'completed',
+      result: { response: 'saved output', artifacts: [] },
+    },
+  ]);
+  let resume!: () => void;
+  function Harness() {
+    const [active, setActive] = useState(false);
+    useEffect(() => {
+      resume = () => setActive(true);
+    }, []);
+    return createElement(RemoteTasksPanel, {
+      runId: 'run-1',
+      isActive: active,
+      nodeName: () => 'Agent',
+    });
+  }
+  const container = await render(createElement(Harness));
+  const trigger = container.querySelector('button');
+  expect(container.textContent).toContain('saved output');
+  let reject!: (error: Error) => void;
+  vi.mocked(listRemoteTasks).mockImplementation(
+    () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+  );
+  await act(async () => resume());
+  await settle();
+  expect(container.querySelector('button')).toBe(trigger);
+  expect(container.textContent).toContain('saved output');
+  await act(async () => reject(new Error('temporary read failure')));
+  await settle();
+  expect(container.querySelector('button')).toBe(trigger);
+  expect(container.textContent).toContain('saved output');
 });

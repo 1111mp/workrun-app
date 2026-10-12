@@ -81,3 +81,8 @@ pub async fn workflow_operation_review(request: crate::module::workflow::operati
         .stringify_err()?;
     run_manager::review_operation(request).await.stringify_err()
 }
+
+#[tauri::command]
+pub async fn workflow_run_validate_action(id: String) -> CmdResult {
+    run_manager::validate_workflow_action(&id).await.stringify_err()
+}

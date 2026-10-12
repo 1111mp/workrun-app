@@ -48,6 +48,7 @@ export type WorkflowRunProjection = {
   latestExecutionIdByNode: Record<string, string>;
   latestThoughtIdByNode: Record<string, string>;
   resumePendingNodeIds: Record<string, true>;
+  awaitingInput?: boolean;
   activeMessageIdByNode: Record<string, string>;
   processLogsByNode: Record<
     string,
@@ -143,6 +144,7 @@ export function replayWorkflowRunProjection(
     };
     if (context.turnId) {
       projection.turnsById[context.turnId] = {
+        runId,
         status: 'running',
       };
     }
@@ -174,7 +176,10 @@ type WorkflowRunStore = {
     mode: WorkflowMode,
     turnId?: string,
   ) => void;
-  restoreWorkflowRun: (projection: WorkflowRunProjection) => void;
+  restoreWorkflowRun: (
+    projection: WorkflowRunProjection,
+    openPanel?: boolean,
+  ) => void;
   resumeWorkflowRun: () => void;
   applyRunEvents: (
     events: WorkflowRunEventEnvelope[],
@@ -242,6 +247,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
         projection.latestExecutionIdByNode = {};
         projection.latestThoughtIdByNode = {};
         projection.resumePendingNodeIds = {};
+        projection.awaitingInput = false;
         projection.activeMessageIdByNode = {};
         if (mode === 'chat') {
           const id = `${runId}:input:${turnId ?? 0}`;
@@ -259,6 +265,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
           };
           if (turnId) {
             projection.turnsById[turnId] = {
+              runId,
               status: 'running',
               startedAt: projection.startedAt,
             };
@@ -270,12 +277,15 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
         state.runPanelOpen = true;
         state.showRunOutput = true;
       }),
-    restoreWorkflowRun: (projection) =>
+    restoreWorkflowRun: (projection, openPanel = true) =>
       set((state) => {
         state.projection = projection;
         state.runningNodeId = projection.activeNodeId ?? null;
-        state.showRunOutput = true;
-        state.runPanelOpen = true;
+        // Refreshing a snapshot must not undo an explicit panel close.
+        if (openPanel) {
+          state.showRunOutput = true;
+          state.runPanelOpen = true;
+        }
       }),
     resumeWorkflowRun: () =>
       set((state) => {
@@ -400,6 +410,12 @@ function reduceWorkflowRunEvent(
   if (event.type === 'message')
     return appendMessage(projection, envelope, event, context);
   if (event.type === 'resumed') {
+    projection.awaitingInput = false;
+    if (transient) {
+      transient.toolApproval = undefined;
+      transient.humanReview = undefined;
+      transient.askUserQuestion = undefined;
+    }
     projection.status = 'running';
     projection.error = undefined;
     if (context.turnId && projection.turnsById[context.turnId]) {
@@ -477,11 +493,13 @@ function reduceWorkflowRunEvent(
     );
   } else if (event.type === 'interrupted') {
     const awaitingInput = Boolean(
+      projection.awaitingInput ||
       transient?.toolApproval ||
       transient?.humanReview ||
       transient?.askUserQuestion,
     );
-    if (event.node) projection.resumePendingNodeIds[event.node] = true;
+    if (event.node && projection.nodesById[event.node])
+      projection.resumePendingNodeIds[event.node] = true;
     // A dynamic interrupt is the runtime's checkpoint signal for an approval
     // or review. It is not a failed workflow and must not surface its internal
     // reason as an error banner while the corresponding action is pending.
@@ -560,6 +578,7 @@ function applyCustom(
     // Keep previous outputs and execution rows; only the task's live status is
     // reset when another attempt starts within the same business task.
     projection.status = 'running';
+    projection.awaitingInput = false;
     projection.error = undefined;
     projection.endedAt = undefined;
     projection.durationMs = undefined;
@@ -580,17 +599,42 @@ function applyCustom(
       turnId,
     );
   if (typeof event.data !== 'object' || event.data === null) return;
+  if (
+    [
+      'agent.tool_approval_required',
+      'workflow.human_review_required',
+      'workflow.ask_user_question_required',
+    ].includes(event.event_type)
+  ) {
+    // Graph interrupts may report node="unknown" after node_end. The request
+    // event still identifies the invocation that must survive continuation.
+    if (projection.latestExecutionIdByNode[event.node])
+      projection.resumePendingNodeIds[event.node] = true;
+    const actionId = (event.data as Record<string, unknown>).runActionId;
+    const execution =
+      typeof event.node === 'string'
+        ? latestExecution(projection, event.node)
+        : undefined;
+    // Attach to this invocation, not merely the node: loops can request input
+    // several times and each decision must stay beside its original output.
+    if (execution && typeof actionId === 'string') {
+      execution.actionIds = [...(execution.actionIds ?? []), actionId];
+    }
+  }
   if (event.event_type === 'agent.tool_approval_required') {
+    projection.awaitingInput = true;
     if (transient)
       transient.toolApproval = event.data as Record<string, unknown>;
     return;
   }
   if (event.event_type === 'workflow.human_review_required') {
+    projection.awaitingInput = true;
     if (transient)
       transient.humanReview = event.data as Record<string, unknown>;
     return;
   }
   if (event.event_type === 'workflow.ask_user_question_required') {
+    projection.awaitingInput = true;
     if (transient)
       transient.askUserQuestion = event.data as Record<string, unknown>;
     return;
@@ -749,6 +793,7 @@ function projectTerminal(
   turnId?: string,
 ) {
   projection.status = status;
+  if (status !== 'interrupted') projection.awaitingInput = false;
   projection.activeNodeId = undefined;
   projection.finalState = finalState;
   projection.error = error;
@@ -756,6 +801,7 @@ function projectTerminal(
     const startedAt = projection.turnsById[turnId]?.startedAt;
     const endedAt = Date.now();
     projection.turnsById[turnId] = {
+      ...projection.turnsById[turnId],
       status,
       startedAt,
       endedAt,

@@ -65,8 +65,14 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { ArtifactFiles } from '@/components/artifact-files';
 import { RemoteTasksPanel } from '@/components/remote-tasks';
+import {
+  WorkflowActionCards,
+  WorkflowActionNotice,
+  useWorkflowActions,
+} from '@/components/workflow-actions';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowCodeBlock } from '@/components/workflow-code-block';
+import { WorkflowRecoveryNotice } from '@/components/workflow-recovery-notice';
 import { artifactReferences } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
 import type {
@@ -418,15 +424,18 @@ function toolCallOutput(value: unknown) {
 }
 
 const ToolCalls = memo(function ToolCalls({ calls }: { calls: unknown[] }) {
-  if (calls.length === 0) return null;
+  const { t } = useTranslation();
 
+  // Keep the summary mounted before the first result arrives so allowing a
+  // tool does not insert a new row above model usage and shift the timeline.
   return (
     <Collapsible className='mt-3 rounded-md border'>
       <CollapsibleTrigger
+        disabled={calls.length === 0}
         render={<Button variant='ghost' className='w-full justify-between' />}
       >
         <span className='text-sm'>
-          Tool call{calls.length === 1 ? '' : 's'} · {calls.length}
+          {t('workflowEditor.output.toolCount', { count: calls.length })}
         </span>
         <ChevronDownIcon className='group-data-panel-open/button:rotate-180' />
       </CollapsibleTrigger>
@@ -441,7 +450,7 @@ const ToolCalls = memo(function ToolCalls({ calls }: { calls: unknown[] }) {
               ? record.name
               : typeof record.tool === 'string'
                 ? record.tool
-                : 'Tool';
+                : t('workflowEditor.output.messages.tool');
           const denied = record.status === 'denied';
           const output = toolCallOutput(record.output);
           return (
@@ -450,26 +459,36 @@ const ToolCalls = memo(function ToolCalls({ calls }: { calls: unknown[] }) {
                 <p className='text-sm font-medium'>{name}</p>
                 {denied ? (
                   <span className='text-destructive text-xs font-medium'>
-                    Denied by user
+                    {t('workflowEditor.output.messages.denied')}
                   </span>
                 ) : null}
               </div>
-              <ToolCallValue label='Input' value={record.input} />
+              <ToolCallValue
+                label={t('workflowEditor.output.messages.input')}
+                value={record.input}
+              />
               {denied ? (
                 <div>
                   <p className='text-muted-foreground text-xs font-medium'>
-                    Status
+                    {t('workflowEditor.output.messages.status')}
                   </p>
                   <p className='mt-1 text-sm'>
-                    {typeof record.message === 'string'
+                    {typeof record.message === 'string' &&
+                    record.message !== 'Denied by user'
                       ? record.message
-                      : 'Denied by user'}
+                      : t('workflowEditor.output.messages.denied')}
                   </p>
                 </div>
               ) : (
-                <ToolCallValue label='Result' value={record.result} />
+                <ToolCallValue
+                  label={t('workflowEditor.output.messages.result')}
+                  value={record.result}
+                />
               )}
-              <ExecutionOutput label='Output' log={output} />
+              <ExecutionOutput
+                label={t('workflowEditor.output.messages.output')}
+                log={output}
+              />
             </div>
           );
         })}
@@ -726,6 +745,26 @@ function CleanupMessages({ entry }: { entry: WorkflowTraceEntry }) {
 }
 
 function TraceResult({
+  actions,
+  ...props
+}: Parameters<typeof TraceResultContent>[0]) {
+  const inlineActions =
+    ['agent', 'remote_agent'].includes(props.entry.type) &&
+    typeof props.entry.error !== 'string' &&
+    props.entry.status !== 'cancelled';
+  return (
+    <>
+      {!inlineActions && actions}
+      <TraceResultContent
+        {...props}
+        actions={inlineActions ? actions : undefined}
+      />
+    </>
+  );
+}
+
+function TraceResultContent({
+  actions,
   entry,
   showAgentResponse = true,
   spans = [],
@@ -733,6 +772,7 @@ function TraceResult({
   onResponsePresentationComplete,
 }: {
   entry: WorkflowTraceEntry;
+  actions?: ReactNode;
   showAgentResponse?: boolean;
   spans?: RunSpan[];
   /** Historical output is a snapshot and must never replay live typing. */
@@ -762,7 +802,7 @@ function TraceResult({
   if (entry.status === 'cancelled')
     return (
       <p className='text-muted-foreground mt-2 text-sm'>
-        Cancelled before this step completed.
+        {t('workflowEditor.output.messages.cancelledStep')}
       </p>
     );
 
@@ -771,12 +811,12 @@ function TraceResult({
     return (
       <p className='text-muted-foreground mt-2 text-sm'>
         {entry.status === 'running'
-          ? 'Waiting for review…'
+          ? t('workflowEditor.output.messages.waitingReview')
           : approved === true
-            ? 'Approved.'
+            ? t('workflowEditor.output.messages.approved')
             : approved === false
-              ? 'Rejected.'
-              : 'Review completed.'}
+              ? t('workflowEditor.output.messages.rejected')
+              : t('workflowEditor.output.messages.reviewCompleted')}
       </p>
     );
   }
@@ -786,10 +826,10 @@ function TraceResult({
     return (
       <p className='text-muted-foreground mt-2 text-sm'>
         {entry.status === 'running'
-          ? 'Waiting for an answer…'
+          ? t('workflowEditor.output.messages.waitingAnswer')
           : label
-            ? `Selected: ${label}.`
-            : 'Answer received.'}
+            ? t('workflowEditor.output.messages.selected', { label })
+            : t('workflowEditor.output.messages.answerReceived')}
       </p>
     );
   }
@@ -799,8 +839,8 @@ function TraceResult({
       <>
         <p className='text-muted-foreground mt-2 text-sm'>
           {entry.status === 'running'
-            ? 'Running subworkflow…'
-            : 'Subworkflow completed.'}
+            ? t('workflowEditor.output.messages.runningSubworkflow')
+            : t('workflowEditor.output.messages.subworkflowCompleted')}
         </p>
         <SubworkflowExecution entry={entry} />
       </>
@@ -809,7 +849,9 @@ function TraceResult({
 
   if (entry.type === 'terminate') {
     return (
-      <p className='text-muted-foreground mt-2 text-sm'>Workflow terminated.</p>
+      <p className='text-muted-foreground mt-2 text-sm'>
+        {t('workflowEditor.output.messages.terminated')}
+      </p>
     );
   }
 
@@ -820,12 +862,12 @@ function TraceResult({
       typeof result?.condition === 'string' ? result.condition : undefined;
     const text =
       entry.status === 'running'
-        ? 'Evaluating conditions…'
+        ? t('workflowEditor.output.messages.evaluatingConditions')
         : route === 'true'
           ? `Matched condition: ${label ?? 'True'}${condition ? ` (${condition})` : ''}.`
           : route === 'false'
             ? `Matched condition: ${label ?? 'False'}${condition ? ` (${condition})` : ''}.`
-            : 'No condition matched; this path ended.';
+            : t('workflowEditor.output.messages.noCondition');
 
     return <p className='text-muted-foreground mt-2 text-sm'>{text}</p>;
   }
@@ -837,12 +879,12 @@ function TraceResult({
       typeof result?.condition === 'string' ? result.condition : undefined;
     const text =
       entry.status === 'running'
-        ? 'Evaluating cases…'
+        ? t('workflowEditor.output.messages.evaluatingCases')
         : route === 'default'
           ? `No case condition matched; using default branch: ${label ?? 'Default'}.`
           : typeof route === 'string' && route.startsWith('case:')
             ? `Matched case: ${label ?? 'Untitled case'}${condition ? ` (${condition})` : ''}.`
-            : 'No case condition matched; using the default branch.';
+            : t('workflowEditor.output.messages.noCase');
 
     return <p className='text-muted-foreground mt-2 text-sm'>{text}</p>;
   }
@@ -854,10 +896,11 @@ function TraceResult({
         <>
           <p className='text-muted-foreground mt-2 text-sm'>
             {entry.status === 'running'
-              ? 'Generating response…'
-              : 'Response ready.'}
+              ? t('workflowEditor.output.messages.generating')
+              : t('workflowEditor.output.messages.responseReady')}
           </p>
           <ToolCalls calls={toolCalls} />
+          {actions}
           <ModelUsage nodeId={entry.nodeId} spans={spans} />
         </>
       );
@@ -877,6 +920,7 @@ function TraceResult({
     return (
       <>
         <ToolCalls calls={toolCalls} />
+        {actions}
         <ModelUsage nodeId={entry.nodeId} spans={spans} />
         {responses.length > 0 ? (
           <div className='border-primary/25 mt-2 space-y-2 border-l-2 pl-3'>
@@ -899,8 +943,8 @@ function TraceResult({
         ) : (
           <p className='text-muted-foreground mt-2 text-sm'>
             {entry.status === 'running'
-              ? 'Waiting for a response…'
-              : 'Completed without a text response.'}
+              ? t('workflowEditor.output.messages.waitingResponse')
+              : t('workflowEditor.output.messages.noResponse')}
           </p>
         )}
       </>
@@ -932,7 +976,9 @@ function TraceResult({
 
   return (
     <p className='text-muted-foreground mt-2 text-sm'>
-      {entry.status === 'running' ? 'Running…' : 'Completed.'}
+      {entry.status === 'running'
+        ? t('workflowEditor.output.messages.running')
+        : t('workflowEditor.output.messages.completed')}
     </p>
   );
 }
@@ -1252,55 +1298,59 @@ const LiveThinkingProcess = memo(function LiveThinkingProcess({
         </MarkerContent>
       </Marker>
       <div className='flex flex-col gap-1.5 px-3'>
-        {completedThoughts.map((item) => (
-          <Marker key={item.id}>
-            <MarkerIcon>
-              <CircleIcon />
-            </MarkerIcon>
-            <MarkerContent>
-              {t('workflowEditor.output.finishedIn', {
-                node: displayNodeName(item.nodeId),
-              })}
-              {item.durationMs !== undefined
-                ? ` · ${(item.durationMs / 1000).toFixed(1)}s`
-                : ''}
-            </MarkerContent>
-          </Marker>
-        ))}
-        {activeThoughts.map((thought) => (
-          <Marker key={thought.id}>
-            <MarkerIcon>
-              <Spinner />
-            </MarkerIcon>
-            <MarkerContent>
-              {t('workflowEditor.output.workingIn', {
-                node: displayNodeName(thought.nodeId),
-              })}
-            </MarkerContent>
-          </Marker>
-        ))}
+        {thoughtIds.map((id) => {
+          const thought = thoughtsById[id];
+          if (!thought || !['running', 'completed'].includes(thought.status))
+            return null;
+          const active = thought.status === 'running';
+          return (
+            <Marker key={thought.id}>
+              <MarkerIcon>{active ? <Spinner /> : <CircleIcon />}</MarkerIcon>
+              <MarkerContent>
+                {t(
+                  active
+                    ? 'workflowEditor.output.workingIn'
+                    : 'workflowEditor.output.finishedIn',
+                  {
+                    node: displayNodeName(thought.nodeId),
+                  },
+                )}
+                {!active && thought.durationMs !== undefined
+                  ? ` · ${(thought.durationMs / 1000).toFixed(1)}s`
+                  : ''}
+              </MarkerContent>
+            </Marker>
+          );
+        })}
       </div>
     </div>
   );
 });
 
 const LiveTaskExecution = memo(function LiveTaskExecution({
+  runId,
   id,
   index,
   workflowNodes,
   spans,
   onResponsePresentationComplete,
 }: {
+  runId?: string;
   id: string;
   index: number;
   workflowNodes: Node[];
   spans: RunSpan[];
-  onResponsePresentationComplete: (responseIndex: number) => void;
+  onResponsePresentationComplete: (id: string, responseIndex: number) => void;
 }) {
   const { t } = useTranslation();
 
   const entry = useWorkflowRunStore(
     (state) => state.projection.executionsById[id],
+  );
+  const markResponsePresented = useCallback(
+    (responseIndex: number) =>
+      onResponsePresentationComplete(id, responseIndex),
+    [id, onResponsePresentationComplete],
   );
   if (!entry) return null;
 
@@ -1346,15 +1396,45 @@ const LiveTaskExecution = memo(function LiveTaskExecution({
         log={log}
       />
       <TraceResult
+        actions={
+          <WorkflowActionCards
+            runId={runId}
+            actionIds={entry.actionIds ?? []}
+            nodeName={displayNodeName}
+          />
+        }
         entry={entry}
         spans={spans}
         animateResponses
-        onResponsePresentationComplete={onResponsePresentationComplete}
+        onResponsePresentationComplete={markResponsePresented}
       />
       <CleanupMessages entry={entry} />
     </MessageScrollerItem>
   );
 });
+
+function LiveUnassignedActions({
+  runId,
+  nodeName,
+}: {
+  runId?: string;
+  nodeName: (id: string) => string;
+}) {
+  const assigned = useWorkflowRunStore(
+    useShallow((state) =>
+      state.projection.executionIds.flatMap(
+        (id) => state.projection.executionsById[id]?.actionIds ?? [],
+      ),
+    ),
+  );
+  return (
+    <WorkflowActionCards
+      runId={runId}
+      excludedActionIds={assigned}
+      nodeName={nodeName}
+    />
+  );
+}
 
 function RunTelemetry({
   spans,
@@ -1865,7 +1945,8 @@ function LiveWorkflowTaskOutput({
     !terminal || responseIds.every((id) => presentedResponses.has(id));
   const presentationStatus = presentationComplete ? status : 'running';
   const onResponsePresentationComplete = useCallback(
-    (id: string) => {
+    (executionId: string, responseIndex: number) => {
+      const id = `${executionId}:${responseIndex}`;
       setPresentation((current) => {
         const responses =
           current.startedAt === startedAt
@@ -1930,6 +2011,8 @@ function LiveWorkflowTaskOutput({
         </DrawerDescription>
       </DrawerHeader>
 
+      <WorkflowRecoveryNotice key={runId} runId={runId} />
+      <WorkflowActionNotice runId={runId} />
       <div className='relative flex min-h-0 flex-1 flex-col'>
         {error &&
         !executionIds.some(
@@ -1954,7 +2037,7 @@ function LiveWorkflowTaskOutput({
         <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
           <MessageScroller>
             <MessageScrollerViewport>
-              <MessageScrollerContent className='gap-4 px-4 py-4'>
+              <MessageScrollerContent className='gap-4 px-4 py-4 [&_[data-slot=message-scroller-item]]:[content-visibility:visible]'>
                 <MessageScrollerItem messageId='remote-tasks'>
                   <RemoteTasksPanel
                     key={runId}
@@ -1989,15 +2072,22 @@ function LiveWorkflowTaskOutput({
                 {executionIds.map((id, index) => (
                   <LiveTaskExecution
                     key={id}
+                    runId={runId}
                     id={id}
                     index={index}
                     workflowNodes={workflowNodes}
                     spans={spans}
-                    onResponsePresentationComplete={(responseIndex) =>
-                      onResponsePresentationComplete(`${id}:${responseIndex}`)
+                    onResponsePresentationComplete={
+                      onResponsePresentationComplete
                     }
                   />
                 ))}
+                <MessageScrollerItem messageId='unassigned-actions'>
+                  <LiveUnassignedActions
+                    runId={runId}
+                    nodeName={displayNodeName}
+                  />
+                </MessageScrollerItem>
                 <MessageScrollerItem
                   key='live-thinking'
                   messageId='live-thinking'
@@ -2101,7 +2191,7 @@ function LiveWorkflowTaskOutput({
         </MessageScrollerProvider>
       </div>
       <DrawerFooter className='flex-row justify-end'>
-        {!readOnly ? (
+        {!readOnly && status !== 'interrupted' ? (
           <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
             <RotateCcwIcon data-icon='inline-start' />
             {rerunLabel(status, t)}
@@ -2233,7 +2323,15 @@ function WorkflowRunOutput({
         );
       })
     : false;
-  const chatIsBusy = isRunning || chatPresentationPending;
+  const { data: actions = [] } = useWorkflowActions(run.runId);
+  const waitingForAction = actions.some(
+    (action) => action.status === 'pending',
+  );
+  const chatIsBusy =
+    isRunning ||
+    chatPresentationPending ||
+    waitingForAction ||
+    (run.status === 'interrupted' && !run.error);
 
   const copyAll = async () => {
     if (!output) return;
@@ -2288,7 +2386,7 @@ function WorkflowRunOutput({
               </DrawerDescription>
             )}
           </div>
-          {isChat && chatIsBusy ? (
+          {isChat && (isRunning || chatPresentationPending) ? (
             <span className='text-primary flex shrink-0 items-center gap-1.5 pt-1 text-xs'>
               <Spinner className='size-3' />
               {t('workflowEditor.output.workflowWorking')}
@@ -2297,6 +2395,8 @@ function WorkflowRunOutput({
         </div>
       </DrawerHeader>
 
+      <WorkflowRecoveryNotice key={run.runId} runId={run.runId} />
+      <WorkflowActionNotice runId={run.runId} />
       <div className='flex min-h-0 flex-1 flex-col'>
         {!isChat && isRunning && (
           <div className='text-muted-foreground flex items-center gap-2 px-4 py-2 text-sm'>
@@ -2320,7 +2420,7 @@ function WorkflowRunOutput({
         <MessageScrollerProvider autoScroll scrollPreviousItemPeek={64}>
           <MessageScroller>
             <MessageScrollerViewport>
-              <MessageScrollerContent className='gap-4 p-4'>
+              <MessageScrollerContent className='gap-4 p-4 [&_[data-slot=message-scroller-item]]:[content-visibility:visible]'>
                 <MessageScrollerItem messageId='remote-tasks'>
                   <RemoteTasksPanel
                     key={run.runId}
@@ -2386,11 +2486,32 @@ function WorkflowRunOutput({
                           label={t('workflowEditor.output.processOutput')}
                           log={log}
                         />
-                        <TraceResult entry={entry} spans={spans} />
+                        <TraceResult
+                          entry={entry}
+                          spans={spans}
+                          actions={
+                            <WorkflowActionCards
+                              runId={run.runId}
+                              actionIds={entry.actionIds ?? []}
+                              nodeName={displayNodeName}
+                            />
+                          }
+                        />
                         <CleanupMessages entry={entry} />
                       </MessageScrollerItem>
                     );
                   })}
+                {!isChat && (
+                  <MessageScrollerItem messageId='unassigned-actions'>
+                    <WorkflowActionCards
+                      runId={run.runId}
+                      excludedActionIds={execution.flatMap(
+                        (entry) => entry.actionIds ?? [],
+                      )}
+                      nodeName={displayNodeName}
+                    />
+                  </MessageScrollerItem>
+                )}
                 {!isChat && isRunning && (
                   <MessageScrollerItem messageId='execution-thinking'>
                     <ThinkingProcess
@@ -2524,6 +2645,18 @@ function WorkflowRunOutput({
                                     }
                                   />
                                 ) : null}
+                                <WorkflowActionCards
+                                  runId={
+                                    turn?.runId ??
+                                    (message.turnId ===
+                                    run.messages
+                                      .filter((item) => item.role === 'user')
+                                      .at(-1)?.turnId
+                                      ? run.runId
+                                      : undefined)
+                                  }
+                                  nodeName={displayNodeName}
+                                />
                                 <ChatTurnReceipt
                                   turn={turn}
                                   execution={turnExecution}
@@ -2542,6 +2675,15 @@ function WorkflowRunOutput({
                       );
                     })
                 )}
+                {isChat &&
+                  !run.messages.some((message) => message.role === 'user') && (
+                    <MessageScrollerItem messageId='chat-actions'>
+                      <WorkflowActionCards
+                        runId={run.runId}
+                        nodeName={displayNodeName}
+                      />
+                    </MessageScrollerItem>
+                  )}
                 {!isChat && run.finalState && (
                   <MessageScrollerItem messageId='final-state'>
                     <Collapsible className='bg-card overflow-hidden rounded-xl border shadow-sm'>
@@ -2615,8 +2757,12 @@ function WorkflowRunOutput({
         </DrawerFooter>
       ) : (
         <DrawerFooter className='flex-row justify-end'>
-          {!readOnly && (
-            <Button variant='outline' disabled={isRunning} onClick={onRunAgain}>
+          {!readOnly && run.status !== 'interrupted' && (
+            <Button
+              variant='outline'
+              disabled={isRunning || waitingForAction}
+              onClick={onRunAgain}
+            >
               <RotateCcwIcon data-icon='inline-start' />
               {rerunLabel(run.status, t)}
             </Button>

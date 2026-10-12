@@ -124,9 +124,9 @@ Continue later nodes from the same checkpoint
 
 A review node can let a reviewer approve or reject and, when configured, edit content. A question node writes the selected option to its own state key. Resuming does not re-execute completed nodes. Failed or stopped tasks do not continue from a checkpoint; fix the issue and use Run again to create a new task. Application-exit interruptions can separately recover after checkpoint and operation-journal validation.
 
-Subworkflows execute with parent workflow context and protect against recursive use: Workrun blocks cycles and limits nesting depth. `Terminate` explicitly ends the entire execution, rather than ending only one canvas path.
+Questions, human reviews, and tool confirmations appear as interactive cards in the corresponding node output. They leave other output and pages accessible. Pending interaction requests survive restart and can be opened from the Run Center. Tasks interrupted during execution remain available for recovery checks. See [Human review and resume](/guides/human-in-the-loop/) and [Runs, debugging, and traces](/quality/runs-and-traces/).
 
-![Human Review dialog with review content, supplemental context, and reject or approve-and-continue actions.](/media/workflows-and-state/03-review-checkpoint.png)
+Subworkflows execute with parent workflow context and protect against recursive use: Workrun blocks cycles and limits nesting depth. `Terminate` explicitly ends the entire execution, rather than ending only one canvas path.
 
 ## Validate and debug in the right order
 

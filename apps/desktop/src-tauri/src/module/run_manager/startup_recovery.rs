@@ -22,11 +22,8 @@ impl StartupRecovery {
         .execute(pool)
         .await?;
 
-        // 1. Invalidate local execution ownership before rebuilding recovery jobs.
-        // Running, waiting-for-input and queued Runs become interrupted. Also
-        // close unfinished evaluation batches, expire stale pending actions and
-        // release chat-session locks. A queued Run is not automatically restarted
-        // just because it is marked interrupted; eligibility is checked below.
+        // Waiting interactions have no executing owner to recover. Keep them
+        // and unstarted durable recipes; only interrupted execution needs a job.
         Self::mark_incomplete_runs_interrupted(pool).await?;
 
         // 2. Invalidate the freshness of remote adapter observations, not the
@@ -61,13 +58,11 @@ impl StartupRecovery {
     }
 
     async fn mark_incomplete_runs_interrupted(pool: &sqlx::SqlitePool) -> Result<()> {
-        // A native restart destroys running execution sessions and their paused
-        // in-memory execution owners. Mark records first; the journal-aware
-        // recovery scheduler validates durable checkpoints before continuing
-        // the same task. Unjournaled executors remain a manual decision.
+        // Only work with a lost execution owner is interrupted. Waiting user
+        // requests and unstarted durable recipes survive without re-execution.
         let recovered_at = chrono::Utc::now().to_rfc3339();
         let active_runs = sqlx::query(
-            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status IN ('running', 'waiting_for_input')",
+            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status = 'running' OR (status = 'waiting_for_input' AND (json_extract(runtime_json, '$.evaluationProfile') IS NOT NULL OR NOT EXISTS (SELECT 1 FROM run_pending_actions a WHERE a.run_id = run_records.id AND a.status = 'pending')))",
         )
         .bind(&recovered_at)
         .bind("Execution ended when Workrun restarted.")
@@ -75,13 +70,16 @@ impl StartupRecovery {
         .execute(pool)
         .await?;
         let queued_runs = sqlx::query(
-            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status = 'queued'",
+            "UPDATE run_records SET status = 'interrupted', ended_at = ?, error = ?, updated_at = ? WHERE status = 'queued' AND (json_extract(runtime_json, '$.evaluationProfile') IS NOT NULL OR NOT ((target_type = 'workflow' AND json_extract(runtime_json, '$.kind') = 'workflow' AND json_type(runtime_json, '$.dsl') = 'object' AND length(json_extract(runtime_json, '$.threadId')) > 0 AND json_type(runtime_json, '$.initialState') = 'object') OR (target_type = 'app' AND json_extract(runtime_json, '$.kind') = 'app')) IS TRUE)",
         )
         .bind(&recovered_at)
-        .bind("Execution did not start before Workrun restarted.")
+        .bind("Saved execution metadata is incomplete; this queued run requires manual recovery.")
         .bind(&recovered_at)
         .execute(pool)
         .await?;
+        // Dispatch validates restored recipes before any node can execute.
+        sqlx::query("UPDATE run_records SET runtime_json = json_set(runtime_json, '$.restoredQueue', json('true')) WHERE status = 'queued'")
+            .execute(pool).await?;
         // Evaluation batches cannot survive a native restart: a queued batch
         // may have crashed before it created its first workflow Run. Close by
         // batch status, not only by Run linkage, so no history entry waits
@@ -109,25 +107,19 @@ impl StartupRecovery {
         .bind(&recovered_at)
         .execute(pool)
         .await?;
-        // A pending action only has meaning while its native session is alive.
-        // Expire it with the recovered run so the global attention queue cannot
-        // offer a decision that can no longer be applied.
-        sqlx::query(
-            "UPDATE run_pending_actions SET status = 'expired' WHERE status = 'pending' AND run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error = 'Execution ended when Workrun restarted.')",
-        )
-        .execute(pool)
-        .await?;
+        // Do not expire waiting requests on restart. Their checkpoint and
+        // dependencies are validated before the user can submit them.
         let interrupted = active_runs.rows_affected() + queued_runs.rows_affected();
         // Chat sessions must not retain a lock for a native execution that was
         // interrupted during restart; their transcript remains recoverable.
         sqlx::query(
-            "UPDATE chat_turns SET status = 'interrupted', completed_at = ? WHERE run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Execution did not start before Workrun restarted.'))",
+            "UPDATE chat_turns SET status = 'interrupted', completed_at = ? WHERE run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Saved execution metadata is incomplete; this queued run requires manual recovery.'))",
         )
         .bind(&recovered_at)
         .execute(pool)
         .await?;
         sqlx::query(
-            "UPDATE chat_sessions SET active_run_id = NULL, updated_at = ? WHERE active_run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Execution did not start before Workrun restarted.'))",
+            "UPDATE chat_sessions SET active_run_id = NULL, updated_at = ? WHERE active_run_id IN (SELECT id FROM run_records WHERE status = 'interrupted' AND error IN ('Execution ended when Workrun restarted.', 'Saved execution metadata is incomplete; this queued run requires manual recovery.'))",
         )
         .bind(&recovered_at)
         .execute(pool)
@@ -150,14 +142,14 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[tokio::test]
-    async fn restart_interrupts_active_and_queued_runs() {
+    async fn restart_preserves_waiting_interactions_and_durable_queue_but_interrupts_execution() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE run_records (id TEXT PRIMARY KEY, status TEXT NOT NULL, ended_at TEXT, error TEXT, updated_at TEXT)",
+            "CREATE TABLE run_records (id TEXT PRIMARY KEY, status TEXT NOT NULL, ended_at TEXT, error TEXT, updated_at TEXT, target_type TEXT DEFAULT 'workflow', runtime_json TEXT DEFAULT '{}')",
         )
         .execute(&pool)
         .await
@@ -190,7 +182,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-1', 'waiting_for_input')")
+        sqlx::query("INSERT INTO run_records (id, status) VALUES ('run-1', 'running')")
             .execute(&pool)
             .await
             .unwrap();
@@ -227,7 +219,116 @@ mod tests {
                 .unwrap();
         }
 
+        sqlx::query("INSERT INTO run_records (id, status, ended_at, error) VALUES ('done', 'completed', 'saved-end', NULL), ('stopped', 'cancelled', 'saved-end', 'user stopped')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO run_pending_actions (id, run_id, kind, status) VALUES ('saved-decision', 'done', 'human_review', 'resolved')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO chat_turns VALUES ('run-1', 'waiting_for_input', NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO chat_sessions (id, active_run_id) VALUES ('chat', 'run-1')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query(r#"INSERT INTO run_records (id, status, runtime_json) VALUES ('waiting', 'waiting_for_input', '{}'), ('durable-queue', 'queued', '{"kind":"workflow","dsl":{},"threadId":"thread","initialState":{}}'), ('approved-queue', 'queued', '{"kind":"workflow","dsl":{},"threadId":"approved","initialState":{},"resume":true,"toolConfirmation":{"approved":true}}')"#).execute(&pool).await.unwrap();
+        let decision_runtime = serde_json::json!({"kind":"workflow","dsl":{},"threadId":"review-thread","initialState":{},"resume":true,"pendingCheckpointUpdate":{"updates":[["approved",true]],"workflowContext":null}});
+        sqlx::query("INSERT INTO run_records (id, status, runtime_json) VALUES ('decision-queue', 'queued', ?)")
+            .bind(decision_runtime.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO run_pending_actions VALUES ('waiting-question', 'waiting', 'ask_user_question', 'pending')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO chat_turns VALUES ('waiting', 'waiting_for_input', NULL), ('durable-queue', 'queued', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO chat_sessions (id, active_run_id) VALUES ('waiting-chat', 'waiting'), ('queued-chat', 'durable-queue')").execute(&pool).await.unwrap();
         StartupRecovery::mark_incomplete_runs_interrupted(&pool).await.unwrap();
+
+        // Repeated startup reconciliation must preserve history and terminal
+        // outcomes, rather than deleting records or reopening decisions.
+        StartupRecovery::mark_incomplete_runs_interrupted(&pool).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM run_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 8);
+        let preserved: Vec<String> = sqlx::query_scalar(
+            "SELECT status FROM run_records WHERE id IN ('waiting', 'durable-queue', 'approved-queue', 'decision-queue') ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(preserved, vec!["queued", "queued", "queued", "waiting_for_input"]);
+        let pending: String =
+            sqlx::query_scalar("SELECT status FROM run_pending_actions WHERE id = 'waiting-question'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(pending, "pending");
+        let retained_locks: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM chat_sessions WHERE active_run_id IN ('waiting', 'durable-queue')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(retained_locks, 2);
+        let approved_runtime: String =
+            sqlx::query_scalar("SELECT runtime_json FROM run_records WHERE id='approved-queue'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let approved_runtime: serde_json::Value = serde_json::from_str(&approved_runtime).unwrap();
+        assert_eq!(approved_runtime["toolConfirmation"]["approved"], true);
+        assert_eq!(approved_runtime["restoredQueue"], true);
+        let saved_decision: String =
+            sqlx::query_scalar("SELECT runtime_json FROM run_records WHERE id='decision-queue'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let saved_decision: serde_json::Value = serde_json::from_str(&saved_decision).unwrap();
+        assert_eq!(
+            saved_decision["pendingCheckpointUpdate"],
+            decision_runtime["pendingCheckpointUpdate"]
+        );
+        assert_eq!(saved_decision["threadId"], "review-thread");
+        assert_eq!(saved_decision["restoredQueue"], true);
+        let terminal: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT id, status, ended_at FROM run_records WHERE id IN ('done', 'stopped') ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            terminal,
+            vec![
+                ("done".into(), "completed".into(), "saved-end".into()),
+                ("stopped".into(), "cancelled".into(), "saved-end".into())
+            ]
+        );
+        let decision: String = sqlx::query_scalar("SELECT status FROM run_pending_actions WHERE id = 'saved-decision'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(decision, "resolved");
+        let owner: Option<String> = sqlx::query_scalar("SELECT active_run_id FROM chat_sessions WHERE id = 'chat'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(owner.is_none());
+        let turn: (String, Option<String>) =
+            sqlx::query_as("SELECT status, completed_at FROM chat_turns WHERE run_id = 'run-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(turn.0, "interrupted");
+        assert!(turn.1.is_some());
 
         let status: String = sqlx::query_scalar("SELECT status FROM run_records WHERE id = 'run-1'")
             .fetch_one(&pool)
@@ -240,7 +341,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status, "interrupted");
-        assert_eq!(expired, 3);
+        assert_eq!(expired, 0);
         let queued_status: String = sqlx::query_scalar("SELECT status FROM run_records WHERE id = 'run-2'")
             .fetch_one(&pool)
             .await
@@ -250,7 +351,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(queued_error, "Execution did not start before Workrun restarted.");
+        assert_eq!(
+            queued_error,
+            "Saved execution metadata is incomplete; this queued run requires manual recovery."
+        );
         let evaluation_status: String =
             sqlx::query_scalar("SELECT status FROM evaluation_runs WHERE id = 'evaluation-1'")
                 .fetch_one(&pool)

@@ -67,16 +67,7 @@ impl RunHistoryStore {
 
     pub async fn list_active() -> Result<Vec<RunRecordSummary>> {
         let pool = DBManager::global().pool()?;
-        let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
-        let rows = sql
-            .push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(" FROM run_records WHERE status IN ('queued', 'running', 'waiting_for_input') AND json_extract(runtime_json, '$.evaluationProfile') IS NULL AND workspace_id = ")
-            .push_bind(crate::utils::dirs::active_workspace_id())
-            .push(" ORDER BY started_at DESC, id DESC")
-            .build()
-            .fetch_all(&pool)
-            .await?;
-        rows.iter().map(summary_from_row).collect()
+        list_active_for_workspace(&pool, &crate::utils::dirs::active_workspace_id()).await
     }
 
     pub async fn list_timeline(query: RunHistoryTimelineQuery) -> Result<RunHistoryTimelinePage> {
@@ -574,6 +565,19 @@ fn json_column(value: String) -> Result<Value> {
     serde_json::from_str(&value).context("stored run history contains invalid JSON")
 }
 
+async fn list_active_for_workspace(pool: &sqlx::SqlitePool, workspace_id: &str) -> Result<Vec<RunRecordSummary>> {
+    let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
+    let rows = sql
+            .push(RUN_RECORD_SUMMARY_COLUMNS)
+            .push(" FROM run_records WHERE (status IN ('queued', 'running', 'waiting_for_input') OR (status = 'interrupted' AND COALESCE(json_extract(runtime_json, '$.recoveryDismissed'), 0) = 0 AND NOT EXISTS (SELECT 1 FROM workflow_abandonments b WHERE b.run_id = run_records.id))) AND json_extract(runtime_json, '$.evaluationProfile') IS NULL AND workspace_id = ")
+            .push_bind(workspace_id)
+            .push(" ORDER BY started_at DESC, id DESC")
+            .build()
+            .fetch_all(pool)
+            .await?;
+    rows.iter().map(summary_from_row).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -870,5 +874,64 @@ mod tests {
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].id, "chat-a");
         assert_eq!(page.items[0].kind, "chat");
+    }
+}
+
+#[cfg(test)]
+mod follow_up_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn center_retains_interrupted_runs_but_excludes_dismissed_terminal_and_other_workspace_runs() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE run_records (id TEXT PRIMARY KEY, target_type TEXT DEFAULT 'workflow', target_id TEXT DEFAULT 'workflow', target_name TEXT DEFAULT 'Workflow', status TEXT, started_at TEXT DEFAULT '2026-10-11', ended_at TEXT, duration_ms INTEGER, error TEXT, runtime_json TEXT DEFAULT '{}', target_snapshot_json TEXT DEFAULT '{}', workspace_id TEXT DEFAULT 'personal')").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE run_spans (run_id TEXT, kind TEXT, total_tokens INTEGER, input_tokens INTEGER, output_tokens INTEGER, estimated_cost_microusd INTEGER)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE workflow_abandonments (run_id TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, status, runtime, workspace) in [
+            ("interrupted", "interrupted", "{}", "personal"),
+            ("waiting", "waiting_for_input", "{}", "personal"),
+            ("queue", "queued", "{}", "personal"),
+            ("dismissed", "interrupted", r#"{"recoveryDismissed":true}"#, "personal"),
+            ("done", "completed", "{}", "personal"),
+            ("failed", "failed", "{}", "personal"),
+            ("cancelled", "cancelled", "{}", "personal"),
+            ("team", "interrupted", "{}", "team:default"),
+            ("evaluation", "interrupted", r#"{"evaluationProfile":{}}"#, "personal"),
+            ("compensating", "interrupted", "{}", "personal"),
+        ] {
+            sqlx::query("INSERT INTO run_records (id,status,runtime_json,workspace_id) VALUES (?,?,?,?)")
+                .bind(id)
+                .bind(status)
+                .bind(runtime)
+                .bind(workspace)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO workflow_abandonments VALUES ('compensating')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let records = list_active_for_workspace(&pool, "personal").await.unwrap();
+        assert_eq!(
+            records.into_iter().map(|run| run.id).collect::<Vec<_>>(),
+            vec!["waiting", "queue", "interrupted"]
+        );
+        assert_eq!(
+            list_active_for_workspace(&pool, "team:default").await.unwrap()[0].id,
+            "team"
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM run_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 10);
     }
 }

@@ -194,9 +194,7 @@ pub fn run() {
             cmd::run_history::run_history_observability,
             cmd::run_history::run_history_create_pending_action,
             cmd::run_history::run_history_list_pending_actions,
-            cmd::run_history::run_history_claim_next_pending_action,
-            cmd::run_history::run_history_release_pending_action,
-            cmd::run_history::run_history_resolve_pending_action,
+            cmd::run_history::run_history_dismiss_recovery,
             // chat session
             cmd::chat_session::chat_session_create,
             cmd::chat_session::chat_session_get,
@@ -211,6 +209,7 @@ pub fn run() {
             cmd::run_manager::workflow_run_resume,
             cmd::run_manager::workflow_run_recover_interrupted,
             cmd::run_manager::workflow_run_resolve_action,
+            cmd::run_manager::workflow_run_validate_action,
             cmd::run_manager::workflow_run_cancel,
             cmd::run_manager::workflow_operation_review,
             cmd::run_manager::process_node_run_start,
@@ -226,8 +225,6 @@ pub fn run() {
             // workflow
             cmd::workflow::workflow_compile,
             cmd::workflow::workflow_run,
-            cmd::workflow::workflow_resolve_human_review,
-            cmd::workflow::workflow_resolve_ask_user_question,
             cmd::workflow_catalog::get_workflows,
             cmd::workflow_share::workflow_share_export_preview,
             cmd::workflow_share::workflow_share_mcp_tools,

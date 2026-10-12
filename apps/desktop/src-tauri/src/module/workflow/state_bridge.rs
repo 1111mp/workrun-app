@@ -441,7 +441,11 @@ impl WorkflowStateCheckpointer {
         updates: impl IntoIterator<Item = (String, Value)>,
     ) -> GraphResult<()> {
         let Some(mut checkpoint) = self.load(thread_id).await? else {
-            return Ok(());
+            // A durable decision must not be acknowledged if its target state
+            // disappeared between validation and dispatch.
+            return Err(GraphError::CheckpointError(
+                "interaction checkpoint is unavailable".to_string(),
+            ));
         };
         let updates = updates.into_iter().collect::<Vec<_>>();
         let mut persisted_updates = Vec::with_capacity(updates.len());

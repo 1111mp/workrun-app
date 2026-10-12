@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   AlertDescription,
@@ -15,6 +15,7 @@ import {
   ClipboardIcon,
   Globe2Icon,
 } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -31,11 +32,27 @@ export function RemoteTasksPanel({
   nodeName: (id: string) => string;
 }) {
   const { t } = useTranslation();
+  const client = useQueryClient();
+  const previous = useRef({ runId, isActive });
   const tasks = useQuery({
-    queryKey: ['remoteTasks', runId, isActive],
+    queryKey: ['remoteTasks', runId],
     queryFn: () => listRemoteTasks(runId!),
     enabled: Boolean(runId),
   });
+  useEffect(() => {
+    const changed =
+      previous.current.runId === runId &&
+      previous.current.isActive !== isActive;
+    previous.current = { runId, isActive };
+    // Finishing or resuming refreshes the existing task list without clearing
+    // it while a new status-specific cache entry loads.
+    if (runId && changed)
+      void client.invalidateQueries({
+        queryKey: ['remoteTasks', runId],
+        exact: true,
+      });
+  }, [client, runId, isActive]);
+
   async function copyMessageId(messageId: string) {
     try {
       await navigator.clipboard.writeText(messageId);

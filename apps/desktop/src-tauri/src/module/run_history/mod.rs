@@ -40,8 +40,6 @@ mod records;
 pub(crate) mod recovery;
 
 #[cfg(test)]
-use pending_actions::claim_next_pending_action_from_pool;
-#[cfg(test)]
 use queue::claim_next_queued_run_from_pool;
 #[cfg(test)]
 use records::finish_execution_in_pool;
@@ -51,9 +49,7 @@ pub(crate) use queue::cancel_queued_run_in_pool;
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        RunStatus, claim_next_pending_action_from_pool, claim_next_queued_run_from_pool, finish_execution_in_pool,
-    };
+    use super::{RunStatus, claim_next_queued_run_from_pool, finish_execution_in_pool};
     use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 
     async fn pending_action_pool() -> SqlitePool {
@@ -72,7 +68,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "CREATE TABLE run_pending_actions (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT, resolved_at TEXT)",
+            "CREATE TABLE run_pending_actions (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT, resolved_at TEXT, resolution_json TEXT)",
         )
         .execute(&pool)
         .await
@@ -187,25 +183,17 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            super::pending_actions::claim_next_pending_action_for_workspace(&actions, "drawer", "personal")
+            super::pending_actions::claim_pending_action_for_workspace(&actions, "action-1", "window", "personal")
                 .await
-                .unwrap()
-                .is_none()
+                .is_err()
         );
-        assert_eq!(
-            super::pending_actions::claim_next_pending_action_for_workspace(&actions, "drawer", "team:default")
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            "action-1"
-        );
-        // A previous reservation must also remain hidden after switching away.
+        super::pending_actions::claim_pending_action_for_workspace(&actions, "action-1", "window", "team:default")
+            .await
+            .unwrap();
         assert!(
-            super::pending_actions::claim_next_pending_action_for_workspace(&actions, "drawer", "personal")
+            super::pending_actions::claim_pending_action_for_workspace(&actions, "action-2", "window", "personal")
                 .await
-                .unwrap()
-                .is_none()
+                .is_err()
         );
     }
 
@@ -238,40 +226,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_coordinators_claim_distinct_oldest_actions() {
-        let pool = pending_action_pool().await;
-        let (first, second) = tokio::join!(
-            claim_next_pending_action_from_pool(&pool, "drawer-a"),
-            claim_next_pending_action_from_pool(&pool, "drawer-b"),
-        );
-        let mut claimed = [first.unwrap().unwrap().id, second.unwrap().unwrap().id];
-        claimed.sort();
-        assert_eq!(claimed, ["action-1", "action-2"]);
-    }
-
-    #[tokio::test]
-    async fn reclaims_the_action_already_owned_by_the_reloaded_coordinator() {
-        let pool = pending_action_pool().await;
-        assert_eq!(
-            claim_next_pending_action_from_pool(&pool, "drawer-a")
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            "action-1"
-        );
-
-        assert_eq!(
-            claim_next_pending_action_from_pool(&pool, "drawer-a")
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            "action-1"
-        );
-    }
-
-    #[tokio::test]
     async fn terminal_run_actions_are_expired_and_cannot_be_claimed() {
         let pool = pending_action_pool().await;
         sqlx::query("INSERT INTO run_spans (id, run_id, status, started_at) VALUES ('open-node', 'run-1', 'running', '2026-09-05T00:00:01Z'), ('closed-tool', 'run-1', 'completed', '2026-09-05T00:00:01Z')")
@@ -289,10 +243,9 @@ mod tests {
         .unwrap();
 
         assert!(
-            claim_next_pending_action_from_pool(&pool, "drawer-a")
+            super::pending_actions::claim_pending_action_for_workspace(&pool, "action-1", "window", "personal")
                 .await
-                .unwrap()
-                .is_none()
+                .is_err()
         );
         let expired: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM run_pending_actions WHERE run_id = 'run-1' AND status = 'expired'",

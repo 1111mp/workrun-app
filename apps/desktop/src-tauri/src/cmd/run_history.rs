@@ -65,31 +65,18 @@ pub async fn run_history_create_pending_action(action: CreatePendingAction) -> C
 }
 
 #[tauri::command]
-pub async fn run_history_list_pending_actions() -> CmdResult<Vec<PendingAction>> {
-    RunHistoryStore::list_pending_actions().await.stringify_err()
-}
-
-#[tauri::command]
-pub async fn run_history_claim_next_pending_action(claimant_id: String) -> CmdResult<Option<PendingAction>> {
-    RunHistoryStore::claim_next_pending_action(&claimant_id)
+pub async fn run_history_list_pending_actions(run_id: Option<String>) -> CmdResult<Vec<PendingAction>> {
+    RunHistoryStore::list_pending_actions(run_id.as_deref())
         .await
         .stringify_err()
 }
 
+/// Stop tracking an interrupted run without deleting its history or executing
+/// cancellation/compensation against an external operation with unknown state.
 #[tauri::command]
-pub async fn run_history_release_pending_action(id: String, claimant_id: String) -> CmdResult {
-    RunHistoryStore::release_pending_action(&id, &claimant_id)
-        .await
-        .stringify_err()
-}
-
-#[tauri::command]
-pub async fn run_history_resolve_pending_action(
-    id: String,
-    claimant_id: Option<String>,
-    resolution: serde_json::Value,
-) -> CmdResult<PendingAction> {
-    RunHistoryStore::resolve_pending_action(&id, claimant_id.as_deref(), resolution)
+pub async fn run_history_dismiss_recovery(id: String) -> CmdResult {
+    RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
+    crate::module::run_manager::dismiss_interrupted_run(&id)
         .await
         .stringify_err()
 }

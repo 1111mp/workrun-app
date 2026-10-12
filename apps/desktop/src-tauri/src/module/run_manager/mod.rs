@@ -282,7 +282,7 @@ async fn supervisor_deadline_in_pool(pool: &sqlx::SqlitePool, compensation_avail
     let deadline = sqlx::query_scalar(
         "SELECT MIN(next_check_at) FROM (
             SELECT j.next_check_at FROM run_recovery_jobs j JOIN run_records r ON r.id=j.run_id
-            WHERE r.workspace_id=? AND j.status='pending' AND j.attempts<5 AND r.status='interrupted'
+            WHERE r.workspace_id=? AND j.status='pending' AND j.attempts<5 AND r.status='interrupted' AND COALESCE(json_extract(r.runtime_json, '$.recoveryDismissed'), 0)=0
             AND NOT EXISTS(SELECT 1 FROM workflow_abandonments b WHERE b.run_id=r.id)
             UNION ALL SELECT next_check_at FROM workflow_abandonments WHERE status='pending' AND ?
             AND NOT (COALESCE(last_error,'')='Waiting for original execution to stop' AND EXISTS(SELECT 1 FROM run_records r WHERE r.id=workflow_abandonments.run_id AND r.status IN ('queued','running','waiting_for_input')))
@@ -465,8 +465,9 @@ use execution::execute_claimed_run;
 
 pub use app::{cancel_running_app, start_app};
 pub use workflow::{
-    MissingReplayDependency, cancel_waiting_workflow, recover_interrupted_workflow, replay_missing_dependencies,
-    replay_run, resolve_workflow_action, resume_workflow, review_operation, start_workflow,
+    MissingReplayDependency, cancel_waiting_workflow, dismiss_interrupted_run, recover_interrupted_workflow,
+    replay_missing_dependencies, replay_run, resolve_workflow_action, resume_workflow, review_operation,
+    start_workflow, validate_workflow_action,
 };
 
 #[cfg(test)]

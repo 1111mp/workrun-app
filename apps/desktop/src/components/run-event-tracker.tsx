@@ -20,6 +20,13 @@ function RunEventTracker() {
     let unlistenPendingActions: (() => void) | undefined;
 
     void listen<WorkflowRunEventEnvelope>('run-event', ({ payload }) => {
+      const event = payload.event as { type?: string };
+      // An interaction event can precede its checkpoint write. Recheck cards
+      // when the graph confirms the durable pause, even for an announced run.
+      if (event?.type === 'interrupted') {
+        void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+      }
+
       if (announcedRuns.current.has(payload.runId)) return;
       // A run needs one early refresh to enter Run Center. Its output chunks
       // are rendered by the page-local subscriber and must not repeatedly
