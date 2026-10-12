@@ -230,3 +230,102 @@ it('shows restored task output immediately without scheduling typing frames', as
     vi.unstubAllGlobals();
   }
 });
+
+it('renders Agent chunks in the Web panel while the node is still running', async () => {
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    frames.set(++frameId, callback);
+    return frameId;
+  });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  const nodes: Node[] = [
+    {
+      id: 'agent',
+      type: 'agent',
+      position: { x: 0, y: 0 },
+      data: { name: 'Agent' },
+    },
+  ];
+  const store = useWorkflowRunStore.getState();
+  store.resetRunView();
+  store.startWorkflowRun('stream-run', {}, 'task');
+  let sequence = 0;
+  const deliver = async (event: WorkflowRunEventEnvelope['event']) => {
+    await act(async () =>
+      store.applyRunEvents(
+        [{ runId: 'stream-run', sequence: sequence++, event }],
+        { mode: 'task', nodes },
+      ),
+    );
+    for (let i = 0; frames.size && i < 100; i++) {
+      await act(async () => {
+        const current = [...frames.values()];
+        frames.clear();
+        current.forEach((callback) => callback(i * 16));
+      });
+    }
+  };
+  try {
+    await act(async () =>
+      root.render(
+        createElement(LiveWorkflowTaskOutput, {
+          workflowNodes: nodes,
+          onRunAgain: vi.fn(),
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+    await deliver({ type: 'node_start', node: 'agent', step: 0 });
+    await deliver({
+      type: 'message',
+      node: 'agent',
+      content: 'First live chunk',
+      is_final: false,
+    });
+    expect(host.textContent).toContain('First live chunk');
+    expect(
+      useWorkflowRunStore.getState().projection.executionsById[
+        'stream-run:execution:0'
+      ]?.status,
+    ).toBe('running');
+    await deliver({
+      type: 'message',
+      node: 'agent',
+      content: ' and second chunk',
+      is_final: false,
+    });
+    expect(host.textContent).toContain('First live chunk and second chunk');
+    expect(
+      useWorkflowRunStore.getState().projection.executionsById[
+        'stream-run:execution:0'
+      ]?.status,
+    ).toBe('running');
+    await deliver({
+      type: 'message',
+      node: 'agent',
+      content: '',
+      is_final: true,
+    });
+    await deliver({
+      type: 'node_end',
+      node: 'agent',
+      step: 0,
+      duration_ms: 100,
+    });
+    const row = host.querySelector(
+      '[data-message-id="stream-run:execution:0"]',
+    );
+    expect(
+      row?.textContent?.match(/First live chunk and second chunk/g),
+    ).toHaveLength(1);
+  } finally {
+    await act(async () => root.unmount());
+    store.resetRunView();
+    vi.unstubAllGlobals();
+    host.remove();
+  }
+});

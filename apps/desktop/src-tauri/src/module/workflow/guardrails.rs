@@ -156,6 +156,20 @@ pub(crate) fn redact_state(state: &State) -> State {
         .collect()
 }
 
+/// Agent response text is public output; keep metadata and tool results protected.
+pub(super) fn redact_node_result(mut data: Value) -> Value {
+    let messages = if data.get("type").and_then(Value::as_str) == Some("agent") {
+        data.as_object_mut().and_then(|object| object.remove("messages"))
+    } else {
+        None
+    };
+    let mut data = redact_json(&data);
+    if let Some(messages) = messages {
+        data["messages"] = messages;
+    }
+    data
+}
+
 pub(crate) fn redact_stream_event(event: StreamEvent) -> StreamEvent {
     match event {
         StreamEvent::State { state, step } => StreamEvent::State {
@@ -172,13 +186,16 @@ pub(crate) fn redact_stream_event(event: StreamEvent) -> StreamEvent {
             is_final,
         } => StreamEvent::Message {
             node,
-            content: redact_text(&content),
+            content,
             is_final,
         },
-        StreamEvent::Custom { node, event_type, data } => StreamEvent::Custom {
-            node,
-            event_type,
-            data: redact_json(&data),
+        StreamEvent::Custom { node, event_type, data } => {
+            let data = if event_type == "workflow.node_result" {
+                redact_node_result(data)
+            } else {
+                redact_json(&data)
+            };
+            StreamEvent::Custom { node, event_type, data }
         },
         StreamEvent::Debug { event_type, data } => StreamEvent::Debug {
             event_type,

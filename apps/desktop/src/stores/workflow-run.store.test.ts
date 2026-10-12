@@ -251,6 +251,53 @@ describe('workflow run projection', () => {
     });
   });
 
+  it('shows Agent deltas before completion without duplicating the final result', () => {
+    const store = useWorkflowRunStore.getState();
+    store.resetRunView();
+    store.startWorkflowRun('run-1', {}, 'chat', 'turn-1');
+    const context = { mode: 'chat' as const, nodes: [node], turnId: 'turn-1' };
+    const envelopes = events(
+      { type: 'node_start', node: 'research', step: 1 },
+      {
+        type: 'message',
+        node: 'research',
+        content: 'Contact alice@',
+        is_final: false,
+      },
+      {
+        type: 'message',
+        node: 'research',
+        content: 'example.com',
+        is_final: false,
+      },
+      { type: 'message', node: 'research', content: '', is_final: true },
+      {
+        type: 'custom',
+        node: 'research',
+        event_type: 'workflow.node_result',
+        data: {
+          type: 'agent',
+          messages: [
+            { role: 'assistant', content: 'Contact alice@example.com' },
+          ],
+        },
+      },
+    );
+    store.applyRunEvents(envelopes.slice(0, 2), context);
+    expect(
+      useWorkflowRunStore.getState().projection.executionsById[
+        'run-1:execution:0'
+      ]?.messages,
+    ).toEqual([{ role: 'assistant', content: 'Contact alice@' }]);
+    store.applyRunEvents(envelopes.slice(2), context);
+    expect(
+      useWorkflowRunStore.getState().projection.executionsById[
+        'run-1:execution:0'
+      ]?.messages,
+    ).toEqual([{ role: 'assistant', content: 'Contact alice@example.com' }]);
+    store.resetRunView();
+  });
+
   it('keeps chat node responses on their execution instead of appending bubbles', () => {
     const store = useWorkflowRunStore.getState();
     store.startWorkflowRun(

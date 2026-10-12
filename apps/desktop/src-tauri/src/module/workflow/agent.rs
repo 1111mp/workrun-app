@@ -76,7 +76,6 @@ pub(super) async fn add_local_agent_node(
         .instruction(instruction)
         .model(model)
         .input_guardrails(input_guardrails())
-        .output_guardrails(output_guardrails())
         .tool_guardrails(tool_guardrails());
     if !attachment_paths.is_empty() {
         let store = crate::module::artifact::ArtifactStore::active()?;
@@ -652,10 +651,11 @@ impl Node for StreamingAgentNode {
                             yield Ok(event);
                             return;
                         }
-                        // ADK 2.1 emits raw SSE chunks before output guardrails run.
-                        // Hold message and agent payload events until the complete
-                        // response can be redacted across chunk boundaries.
-                        if !matches!(event, StreamEvent::Updates { .. } | StreamEvent::Message { .. })
+                        // Forward Agent text immediately; internal payloads remain private.
+                        // CodeAct retains its existing complete-response redaction.
+                        if matches!(&event, StreamEvent::Message { .. }) && node.kind == "agent" {
+                            yield Ok(event);
+                        } else if !matches!(event, StreamEvent::Updates { .. } | StreamEvent::Message { .. })
                             && !matches!(&event, StreamEvent::Custom { event_type, .. } if event_type == "agent_event")
                         {
                             yield Ok(redact_stream_event(event));
@@ -676,9 +676,14 @@ impl Node for StreamingAgentNode {
                 .iter()
                 .filter_map(|event| serde_json::from_value::<Event>(event.clone()).ok())
                 .collect::<Vec<_>>();
-            let response = redact_text(&agent_response_text(&parsed_events));
-            if !response.is_empty() {
-                yield Ok(StreamEvent::message(node.name(), &response, true));
+            if node.kind == "agent" {
+                // Earlier messages already contain the text; only close the stream.
+                yield Ok(StreamEvent::message(node.name(), "", true));
+            } else {
+                let response = redact_text(&agent_response_text(&parsed_events));
+                if !response.is_empty() {
+                    yield Ok(StreamEvent::message(node.name(), &response, true));
+                }
             }
 
             if let Err(error) = node.store_streamed_events(key, events) {
@@ -753,7 +758,11 @@ pub(super) fn agent_output_updates(
     } else {
         agent_response_text(events)
     };
-    let response = redact_text(&raw_response);
+    let response = if context.kind == "agent" {
+        raw_response.clone()
+    } else {
+        redact_text(&raw_response)
+    };
     let messages = (!response.is_empty())
         .then(|| json!({ "role": "assistant", "content": response }))
         .into_iter()
@@ -767,7 +776,7 @@ pub(super) fn agent_output_updates(
     if !context.tool_calls.is_empty() {
         event["toolCalls"] = redact_json(&Value::Array(context.tool_calls.to_vec()));
     }
-    let event = redact_json(&event);
+    let event = redact_node_result(event);
     if let Some(on_event) = context.on_event {
         send_guarded_event(
             on_event,
@@ -928,6 +937,93 @@ mod usage_snapshot_tests {
 
         assert_eq!(effective_max_tool_calls(8, &profile), 1);
         assert_eq!(effective_max_tool_calls(8, &WorkflowExecutionProfile::Production), 8);
+    }
+
+    struct PausedStreamingLlm {
+        resume: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for PausedStreamingLlm {
+        fn name(&self) -> &str {
+            "stream-fixture"
+        }
+
+        async fn generate_content(
+            &self,
+            _request: adk_rust::LlmRequest,
+            streaming: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            assert!(streaming);
+            let resume = Arc::clone(&self.resume);
+            Ok(Box::pin(async_stream::stream! {
+                yield Ok(adk_rust::LlmResponse {
+                    content: Some(Content::new("model").with_text("Contact alice@")),
+                    partial: true,
+                    ..Default::default()
+                });
+                resume.notified().await;
+                yield Ok(adk_rust::LlmResponse {
+                    content: Some(Content::new("model").with_text("example.com")),
+                    partial: false,
+                    turn_complete: true,
+                    ..Default::default()
+                });
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn forwards_agent_text_before_model_completion_without_repeating_it() {
+        let resume = Arc::new(tokio::sync::Notify::new());
+        let agent = LlmAgentBuilder::new("agent")
+            .model(Arc::new(PausedStreamingLlm {
+                resume: Arc::clone(&resume),
+            }))
+            .build()
+            .unwrap();
+        let node = StreamingAgentNode::new(
+            AdkAgentNode::new(Arc::new(agent)),
+            StreamingAgentNodeConfig {
+                id: "agent".into(),
+                kind: "agent".into(),
+                endpoint_or_model: "fixture".into(),
+                on_event: None,
+                tool_trace: None,
+                output_key: None,
+                output_schema: None,
+                state: Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({})).unwrap())),
+                global_keys: BTreeSet::new(),
+                sensitive_fields: BTreeSet::new(),
+            },
+        );
+        let context = NodeContext::new(HashMap::new(), adk_rust::graph::ExecutionConfig::new("stream-test"), 0);
+        let mut stream = node.execute_stream(&context);
+        // The model cannot finish until this first frontend-bound message arrives.
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("first chunk must arrive before completion")
+            .unwrap()
+            .unwrap();
+        let StreamEvent::Message { content, is_final, .. } = redact_event_for_transport(first) else {
+            panic!("expected streaming text");
+        };
+        assert_eq!(content, "Contact alice@");
+        assert!(!is_final);
+        resume.notify_one();
+        let remaining = tokio::time::timeout(std::time::Duration::from_secs(2), stream.collect::<Vec<_>>())
+            .await
+            .unwrap();
+        let mut text = content;
+        let mut completed = 0;
+        for event in remaining {
+            if let StreamEvent::Message { content, is_final, .. } = redact_event_for_transport(event.unwrap()) {
+                text.push_str(&content);
+                completed += usize::from(is_final);
+            }
+        }
+        assert_eq!(text, "Contact alice@example.com");
+        assert_eq!(completed, 1);
     }
 
     struct FinalToolCallResponseLlm;

@@ -1719,7 +1719,25 @@ mod tests {
     }
 
     #[test]
-    fn redacts_agent_output_across_stream_chunk_boundaries() {
+    fn agent_transport_preserves_response_but_redacts_tool_metadata() {
+        let event = StreamEvent::custom(
+            "agent",
+            "workflow.node_result",
+            json!({
+                "type": "agent",
+                "messages": [{"role":"assistant","content":"Contact alice@example.com"}],
+                "toolCalls": [{"result":{"email":"alice@example.com"}}],
+            }),
+        );
+        let StreamEvent::Custom { data, .. } = redact_event_for_transport(event) else {
+            panic!("expected result");
+        };
+        assert_eq!(data["messages"][0]["content"], "Contact alice@example.com");
+        assert_eq!(data["toolCalls"][0]["result"]["email"], "[EMAIL REDACTED]");
+    }
+
+    #[test]
+    fn preserves_agent_output_across_stream_chunk_boundaries() {
         let mut first = Event::new("first");
         first.llm_response.content = Some(Content::new("model").with_text("Contact alice@"));
         let mut second = Event::new("second");
@@ -1739,10 +1757,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(updates["answer"], "Contact [EMAIL REDACTED]");
+        assert_eq!(updates["answer"], "Contact alice@example.com");
         assert_eq!(
             updates["workflow.trace"]["messages"],
-            json!([{"role": "assistant", "content": "Contact [EMAIL REDACTED]"}])
+            json!([{"role": "assistant", "content": "Contact alice@example.com"}])
         );
     }
 
