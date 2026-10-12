@@ -22,6 +22,11 @@ bitflags! {
 
 /// Patch Workrun Configuration
 pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result<()> {
+    if let Some(credentials) = &patch.provider_credentials {
+        for credential in credentials {
+            credential.request_headers()?;
+        }
+    }
     BaseConfig::workrun().await.edit_draft(|s| s.patch_config(patch));
 
     let update_flags = determine_update_flags(patch);

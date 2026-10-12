@@ -49,15 +49,16 @@ function SettingsPage() {
             // The desktop config represents an absent Rust `Option<String>` as null.
             // Form values must remain strings for react-hook-form's resolver type.
             baseUrl: credential.baseUrl ?? '',
+            headers: credential.headers ?? [],
           }))
         : [
-            { provider: 'gemini', apiKey: '', baseUrl: '' },
-            { provider: 'open_ai', apiKey: '', baseUrl: '' },
-            // { provider: 'open_ai_strict', apiKey: '', baseUrl: '' },
-            { provider: 'anthropic', apiKey: '', baseUrl: '' },
-            { provider: 'deep_seek', apiKey: '', baseUrl: '' },
-            { provider: 'groq', apiKey: '', baseUrl: '' },
-            { provider: 'ollama', apiKey: '', baseUrl: '' },
+            { provider: 'gemini', apiKey: '', baseUrl: '', headers: [] },
+            { provider: 'open_ai', apiKey: '', baseUrl: '', headers: [] },
+            // { provider: 'open_ai_strict', apiKey: '', baseUrl: '', headers: [] },
+            { provider: 'anthropic', apiKey: '', baseUrl: '', headers: [] },
+            { provider: 'deep_seek', apiKey: '', baseUrl: '', headers: [] },
+            { provider: 'groq', apiKey: '', baseUrl: '', headers: [] },
+            { provider: 'ollama', apiKey: '', baseUrl: '', headers: [] },
           ],
       summary_model_profile_id: config?.summary_model_profile_id ?? '',
     },

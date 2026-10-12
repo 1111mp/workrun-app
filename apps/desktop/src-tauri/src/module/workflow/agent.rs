@@ -263,6 +263,10 @@ fn personal_skill_names(node: &WorkflowNode) -> Result<Vec<String>> {
 /// Callers own their prompt and must not turn an internal request into a graph node.
 pub(crate) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
     let credential = config.credential_for(&model.provider);
+    let headers = credential
+        .map(|credential| credential.request_headers())
+        .transpose()?
+        .unwrap_or_default();
     let api_key = credential.and_then(|credential| credential.api_key.as_deref());
     let base_url = credential
         .and_then(|credential| credential.base_url.as_deref())
@@ -279,14 +283,25 @@ pub(crate) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result
                 Some(url) => OpenAIConfig::compatible(api_key, url, &model.model),
                 None => OpenAIConfig::new(api_key, &model.model),
             };
-            Arc::new(OpenAIClient::new(config)?)
+            if headers.is_empty() {
+                Arc::new(OpenAIClient::new(config)?)
+            } else {
+                let mut compatible = adk_rust::model::openai::OpenAICompatibleConfig::new(api_key, &model.model)
+                    .with_provider_name("openai");
+                if let Some(url) = base_url {
+                    compatible = compatible.with_base_url(url);
+                }
+                Arc::new(HeaderOpenAi(
+                    adk_rust::model::openai::OpenAICompatible::new(compatible)?.with_default_headers(headers)?,
+                ))
+            }
         },
         ModelProvider::Anthropic => {
             let config = match base_url {
                 Some(url) => AnthropicConfig::new(api_key, &model.model).with_base_url(url),
                 None => AnthropicConfig::new(api_key, &model.model),
             };
-            Arc::new(AnthropicClient::new(config)?)
+            Arc::new(AnthropicClient::new(config)?.with_default_headers(headers))
         },
         ModelProvider::DeepSeek => {
             let config = match base_url {
@@ -308,6 +323,28 @@ pub(crate) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result
                 .unwrap_or_else(|| OllamaConfig::new(&model.model)),
         )?),
     })
+}
+
+// The ADK OpenAIClient wrapper does not expose default headers. Preserve its
+// schema adapter when constructing the shared compatible transport directly.
+struct HeaderOpenAi(adk_rust::model::openai::OpenAICompatible);
+
+#[async_trait::async_trait]
+impl Llm for HeaderOpenAi {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn schema_adapter(&self) -> &dyn adk_rust::SchemaAdapter {
+        static ADAPTER: adk_rust::model::openai::OpenAiSchemaAdapter = adk_rust::model::openai::OpenAiSchemaAdapter;
+        &ADAPTER
+    }
+    async fn generate_content(
+        &self,
+        request: adk_rust::LlmRequest,
+        stream: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        self.0.generate_content(request, stream).await
+    }
 }
 
 struct InstrumentedLlm {
@@ -929,6 +966,79 @@ mod usage_snapshot_tests {
     use super::*;
     use futures::{StreamExt, stream};
 
+    #[tokio::test]
+    async fn model_custom_headers_reach_openai_and_anthropic_requests() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for provider in [ModelProvider::OpenAi, ModelProvider::Anthropic] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let anthropic = provider == ModelProvider::Anthropic;
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert_ne!(count, 0);
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                let body = if anthropic {
+                    json!({"id":"msg-test","type":"message","role":"assistant","model":"test-model","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}})
+                } else {
+                    json!({"id":"chat-test","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}})
+                }.to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+                request
+            });
+            let credential = crate::config::ProviderCredential {
+                provider: provider.clone(),
+                base_url: Some(format!("http://{address}/v1")),
+                api_key: Some("test-key".into()),
+                headers: vec![crate::config::ProviderHeader {
+                    name: "X-Tenant-ID".into(),
+                    value: "team-test".into(),
+                }],
+            };
+            let config = IWorkrun {
+                provider_credentials: vec![credential],
+                ..Default::default()
+            };
+            let model = create_model(
+                &ModelDefinition {
+                    id: "test".into(),
+                    name: "test".into(),
+                    provider,
+                    model: "test-model".into(),
+                },
+                &config,
+            )
+            .unwrap();
+            let request = adk_rust::LlmRequest::new("test-model", vec![Content::new("user").with_text("hello")]);
+            let mut responses = model.generate_content(request, false).await.unwrap();
+            let response = responses.next().await.unwrap().unwrap();
+            assert_eq!(response.content.unwrap().parts[0].text(), Some("ok"));
+            let request = server.await.unwrap().to_lowercase();
+            assert!(request.contains("x-tenant-id: team-test\r\n"));
+            if anthropic {
+                assert!(request.contains("x-api-key: test-key\r\n"));
+            } else {
+                assert!(request.contains("authorization: bearer test-key\r\n"));
+            }
+        }
+    }
     #[test]
     fn evaluation_limits_fixture_tools_to_one_call() {
         let profile = WorkflowExecutionProfile::Evaluation(EvaluationExecutionProfile {

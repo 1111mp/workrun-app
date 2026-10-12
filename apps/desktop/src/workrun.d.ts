@@ -29,10 +29,13 @@ type ModelDefinition = {
   model: string;
 };
 
+type ProviderHeader = { name: string; value: string };
+
 type ProviderCredential = {
   provider: ModelProvider;
   baseUrl?: string;
   apiKey?: string;
+  headers?: ProviderHeader[];
 };
 
 interface IWorkrunConfig {

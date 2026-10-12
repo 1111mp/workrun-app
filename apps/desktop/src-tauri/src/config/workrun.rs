@@ -5,6 +5,7 @@ use crate::{
 use anyhow::Result;
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
+use tauri_plugin_http::reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -46,8 +47,14 @@ pub struct ModelDefinition {
     pub model: String,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ProviderHeader {
+    pub name: String,
+    pub value: String,
+}
+
 /// Per-provider user credential persisted in `workrun.yaml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCredential {
     pub provider: ModelProvider,
@@ -60,6 +67,67 @@ pub struct ProviderCredential {
         deserialize_with = "crate::config::deserialize_encrypted"
     )]
     pub api_key: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "crate::config::serialize_encrypted",
+        deserialize_with = "crate::config::deserialize_encrypted"
+    )]
+    pub headers: Vec<ProviderHeader>,
+}
+
+impl std::fmt::Debug for ProviderCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderCredential")
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("headers", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl ProviderCredential {
+    pub(crate) fn request_headers(&self) -> Result<HeaderMap> {
+        let mut headers = HeaderMap::new();
+        if !self.headers.is_empty()
+            && !matches!(
+                self.provider,
+                ModelProvider::OpenAi | ModelProvider::OpenAiStrict | ModelProvider::Anthropic
+            )
+        {
+            anyhow::bail!("Custom headers are supported for OpenAI and Anthropic only");
+        }
+        for header in &self.headers {
+            let name = HeaderName::from_bytes(header.name.as_bytes())
+                .map_err(|_| anyhow::anyhow!("Invalid custom header name"))?;
+            // Authentication and transport headers remain owned by the model client.
+            if matches!(
+                name.as_str(),
+                "authorization"
+                    | "proxy-authorization"
+                    | "x-api-key"
+                    | "host"
+                    | "content-length"
+                    | "content-type"
+                    | "accept"
+                    | "connection"
+                    | "transfer-encoding"
+                    | "upgrade"
+                    | "te"
+                    | "trailer"
+            ) {
+                anyhow::bail!("Custom header conflicts with a client-managed header");
+            }
+            let mut value =
+                HeaderValue::from_str(&header.value).map_err(|_| anyhow::anyhow!("Invalid custom header value"))?;
+            value.set_sensitive(true);
+            if headers.insert(name, value).is_some() {
+                anyhow::bail!("Duplicate custom header name");
+            }
+        }
+        Ok(headers)
+    }
 }
 
 pub fn credential_provider(provider: &ModelProvider) -> ModelProvider {
@@ -350,5 +418,42 @@ impl IWorkrun {
             "en" => "en".to_string(),
             _ => i18n::DEFAULT_LANGUAGE.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+
+    #[test]
+    fn validates_header_names_values_duplicates_and_provider_support_without_leaking_values() {
+        let mut credential: ProviderCredential = serde_json::from_value(serde_json::json!({
+            "provider":"open_ai", "apiKey":"api-secret", "headers":[{"name":"X-Tenant", "value":"header-secret"}]
+        }))
+        .unwrap();
+        let headers = credential.request_headers().unwrap();
+        assert_eq!(headers["x-tenant"], "header-secret");
+        assert!(headers["x-tenant"].is_sensitive());
+        assert!(!format!("{credential:?}").contains("header-secret"));
+        assert!(!format!("{credential:?}").contains("api-secret"));
+        for name in ["bad name", "AUTHORIZATION", "X-API-Key", "Content-Length"] {
+            credential.headers[0].name = name.into();
+            assert!(credential.request_headers().is_err());
+        }
+        credential.headers[0].name = "X-Tenant".into();
+        credential.headers[0].value = "secret\r\nInjected: secret".into();
+        let error = credential.request_headers().unwrap_err().to_string();
+        assert!(!error.contains("secret"));
+        credential.headers[0].value = "header-secret".into();
+        credential.headers.push(ProviderHeader {
+            name: "x-tenant".into(),
+            value: "other".into(),
+        });
+        assert!(credential.request_headers().is_err());
+        credential.headers.pop();
+        credential.provider = ModelProvider::Gemini;
+        assert!(credential.request_headers().is_err());
+        credential.headers.clear();
+        assert!(credential.request_headers().unwrap().is_empty());
     }
 }

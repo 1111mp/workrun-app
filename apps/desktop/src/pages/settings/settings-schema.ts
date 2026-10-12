@@ -1,18 +1,80 @@
 import { z } from '@/lib/zod';
 
-const providerCredentialSchema = z.object({
-  provider: z.enum([
-    'gemini',
-    'open_ai',
-    'open_ai_strict',
-    'anthropic',
-    'deep_seek',
-    'groq',
-    'ollama',
-  ]),
-  baseUrl: z.string().trim().optional(),
-  apiKey: z.string().optional(),
-});
+const reservedHeaders = new Set([
+  'authorization',
+  'proxy-authorization',
+  'x-api-key',
+  'host',
+  'content-length',
+  'content-type',
+  'accept',
+  'connection',
+  'transfer-encoding',
+  'upgrade',
+  'te',
+  'trailer',
+]);
+
+export const providerCredentialSchema = z
+  .object({
+    provider: z.enum([
+      'gemini',
+      'open_ai',
+      'open_ai_strict',
+      'anthropic',
+      'deep_seek',
+      'groq',
+      'ollama',
+    ]),
+    baseUrl: z.string().trim().optional(),
+    apiKey: z.string().optional(),
+    headers: z.array(
+      z.object({
+        name: z
+          .string()
+          .regex(
+            /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/,
+            'settings.models.headerNameInvalid',
+          )
+          .refine(
+            (name) => !reservedHeaders.has(name.toLowerCase()),
+            'settings.models.headerReserved',
+          ),
+        value: z.string().refine(
+          (value) =>
+            Array.from(value).every((character) => {
+              const code = character.charCodeAt(0);
+              return code === 9 || (code >= 32 && code !== 127);
+            }),
+          'settings.models.headerValueInvalid',
+        ),
+      }),
+    ),
+  })
+  .superRefine((credential, ctx) => {
+    if (
+      credential.headers.length &&
+      !['open_ai', 'open_ai_strict', 'anthropic'].includes(credential.provider)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['headers'],
+        message: 'settings.models.headersUnsupported',
+      });
+    }
+    const names = new Set<string>();
+    credential.headers.forEach((header, index) => {
+      const name = header.name.toLowerCase();
+      if (names.has(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['headers', index, 'name'],
+          message: 'settings.models.headerDuplicate',
+        });
+      }
+      names.add(name);
+    });
+  });
 
 export const formSchema = z.object({
   theme: z.enum(['system', 'dark', 'light']),
