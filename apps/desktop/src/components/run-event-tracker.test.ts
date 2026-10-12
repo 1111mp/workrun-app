@@ -156,3 +156,119 @@ it('refreshes an active MCP list from pushed lifecycle events without polling', 
   }
   expect(stop).toHaveBeenCalledOnce();
 });
+
+it('reconciles runs and pending actions changed before native listeners were ready', async () => {
+  subscriptions.clear();
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  const activeKey = ['run-history', 'active', 'personal'];
+  const actionsKey = ['run-history', 'pending-actions', 'personal'];
+  client.setQueryData(activeKey, [{ id: 'app-run', status: 'running' }]);
+  client.setQueryData(actionsKey, []);
+  const active = new QueryObserver(client, {
+    queryKey: activeKey,
+    queryFn: async () => [],
+  });
+  const actions = new QueryObserver(client, {
+    queryKey: actionsKey,
+    queryFn: async () => [{ id: 'question', runId: 'workflow-run' }],
+  });
+  const unsubscribeActive = active.subscribe(() => {});
+  const unsubscribeActions = actions.subscribe(() => {});
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(RunEventTracker),
+        ),
+      ),
+    );
+    // Completion and a new question occurred before either listener was ready;
+    // no pushed event will replay them. Subscription must reconcile the snapshot.
+    await act(async () => {
+      subscriptions.get('run-status-changed')!.resolve(() => {});
+      subscriptions.get('pending-action-created')!.resolve(() => {});
+    });
+    await vi.waitFor(() => {
+      expect(active.getCurrentResult().data).toEqual([]);
+      expect(actions.getCurrentResult().data).toEqual([
+        { id: 'question', runId: 'workflow-run' },
+      ]);
+    });
+  } finally {
+    await act(async () => root.unmount());
+    for (const subscription of subscriptions.values())
+      subscription.resolve(() => {});
+    unsubscribeActive();
+    unsubscribeActions();
+    client.clear();
+    host.remove();
+  }
+});
+
+it('removes a completed App after a status event while retaining its older interrupted invocation', async () => {
+  subscriptions.clear();
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const oldRun = { id: 'old-app-run', targetId: 'app', status: 'interrupted' };
+  let runs = [
+    oldRun,
+    { id: 'new-app-run', targetId: 'app', status: 'running' },
+  ];
+  const observer = new QueryObserver(client, {
+    queryKey: ['run-history', 'active', 'personal'],
+    queryFn: async () => runs,
+  });
+  const unsubscribe = observer.subscribe(() => {});
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(RunEventTracker),
+        ),
+      ),
+    );
+    await act(async () =>
+      subscriptions.get('run-status-changed')!.resolve(() => {}),
+    );
+    await vi.waitFor(() =>
+      expect(observer.getCurrentResult().data).toHaveLength(2),
+    );
+    // app_done is emitted before the terminal transaction: an early output
+    // refresh can still see running. The later status event must reconcile it.
+    await act(async () =>
+      subscriptions.get('run-event')!.callback({
+        payload: { runId: 'new-app-run', event: { type: 'app_done' } },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(observer.getCurrentResult().isFetching).toBe(false),
+    );
+    runs = [oldRun];
+    await act(async () =>
+      subscriptions.get('run-status-changed')!.callback({
+        payload: { runId: 'new-app-run' },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(observer.getCurrentResult().data).toEqual([oldRun]),
+    );
+  } finally {
+    await act(async () => root.unmount());
+    for (const subscription of subscriptions.values())
+      subscription.resolve(() => {});
+    unsubscribe();
+    client.clear();
+    host.remove();
+  }
+});

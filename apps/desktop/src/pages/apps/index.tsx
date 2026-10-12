@@ -528,7 +528,7 @@ function AppHistoryDrawer({
       showSwipeHandle
       onOpenChange={onOpenChange}
     >
-      <DrawerContent className='h-[min(34rem,calc(100dvh-4rem))]'>
+      <DrawerContent className='h-[min(34rem,calc(100dvh-4rem))] shadow-[0_-8px_24px_-8px_rgb(0_0_0/0.14)] dark:shadow-[0_-8px_24px_-8px_rgb(0_0_0/0.35)]'>
         <DrawerHeader>
           <DrawerTitle>
             {selectedRun

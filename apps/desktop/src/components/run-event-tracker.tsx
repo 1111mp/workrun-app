@@ -43,13 +43,21 @@ function RunEventTracker() {
       void queryClient.invalidateQueries({ queryKey: ['run-history'] });
     }).then((stop) => {
       if (disposed) stop();
-      else unlistenStatusChanges = stop;
+      else {
+        unlistenStatusChanges = stop;
+        // Native events are not replayed. Reconcile changes that happened
+        // between the initial query and completion of listener registration.
+        void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+      }
     });
     void listen('pending-action-created', () => {
       void queryClient.invalidateQueries({ queryKey: ['run-history'] });
     }).then((stop) => {
       if (disposed) stop();
-      else unlistenPendingActions = stop;
+      else {
+        unlistenPendingActions = stop;
+        void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+      }
     });
 
     // Subscribe before refreshing once, so changes during webview startup are

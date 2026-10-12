@@ -110,7 +110,7 @@ function PythonUiRequestDialog() {
 
   return (
     <AlertDialog open={true}>
-      <AlertDialogContent className='max-w-lg!'>
+      <AlertDialogContent data-python-ui-request='' className='max-w-lg!'>
         <AlertDialogHeader>
           <AlertDialogTitle>
             {request.title ?? 'Input required'}

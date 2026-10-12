@@ -9,9 +9,9 @@ import {
   DrawerTitle,
   ScrollArea,
   Tabs,
+  TabsContent,
   TabsList,
   TabsTrigger,
-  TabsContent,
 } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
 import {
@@ -184,10 +184,7 @@ function RunCenter() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
 
-  const isRunSurface =
-    pathname.startsWith('/workflows') ||
-    pathname.startsWith('/apps') ||
-    pathname.startsWith('/runs');
+  const isRunSurface = pathname === '/workflows' || pathname === '/apps';
 
   const workspaceMode = useWorkrunStore(
     (state) => state.config?.workspace_mode ?? 'personal',

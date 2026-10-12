@@ -397,12 +397,26 @@ function WorkflowRunPanel({
         defaultHorizontalSnapPoint='48rem'
         horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
         swipeDirection='right'
-        onOpenChange={(open) => {
+        onOpenChange={(open, details) => {
+          // Process App forms live in a separate portal. Their focus and
+          // pointer events must not dismiss the output underneath them.
+          const target = details.event.target;
+          if (
+            !open &&
+            (details.reason === 'focus-out' ||
+              details.reason === 'outside-press') &&
+            (document.querySelector('[data-python-ui-request][data-open]') ||
+              (target instanceof Element &&
+                target.closest('[data-python-ui-request]')))
+          ) {
+            details.cancel();
+            return;
+          }
           if (!open && readOnly) onHistoricalClose?.();
           else onOpenChange(open);
         }}
       >
-        <DrawerContent>
+        <DrawerContent className='shadow-[-8px_0_24px_-8px_rgb(0_0_0/0.14)] dark:shadow-[-8px_0_24px_-8px_rgb(0_0_0/0.35)]'>
           {settings.mode === 'chat' ? (
             <>
               <div className='bg-muted/20 flex items-center justify-between border-b px-4 py-2'>

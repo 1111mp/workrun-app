@@ -218,12 +218,11 @@ function AppRunOutputPanel({
       modal={false}
       open={open}
       showSwipeHandle
-      defaultHorizontalSnapPoint='48rem'
-      horizontalSnapPoints={['31rem', '48rem', '64rem', '86rem']}
-      swipeDirection='right'
+      snapPoints={['31rem', 1]}
+      swipeDirection='down'
       onOpenChange={onOpenChange}
     >
-      <DrawerContent>
+      <DrawerContent className='shadow-[0_-8px_24px_-8px_rgb(0_0_0/0.14)] dark:shadow-[0_-8px_24px_-8px_rgb(0_0_0/0.35)]'>
         {run ? (
           <>
             <DrawerHeader>

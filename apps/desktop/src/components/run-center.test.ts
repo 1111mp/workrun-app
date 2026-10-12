@@ -2,7 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { expect, it, vi } from 'vitest';
 
 import { RunCenter } from './run-center';
@@ -107,6 +107,93 @@ function Location() {
   return createElement('output', null, location.pathname + location.search);
 }
 
+function RouteButtons() {
+  const navigate = useNavigate();
+  return createElement(
+    'nav',
+    null,
+    ...[
+      '/apps',
+      '/apps/report',
+      '/apps/new',
+      '/workflows',
+      '/workflows/weather',
+      '/workflows/new',
+      '/runs',
+      '/settings',
+      '/profile',
+      '/skills',
+      '/mcp-servers',
+    ].map((path) =>
+      createElement(
+        'button',
+        { key: path, onClick: () => void navigate(path) },
+        path,
+      ),
+    ),
+  );
+}
+
+it('shows Run Center only on App and Workflow lists and hides its drawer on other pages', async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(
+            MemoryRouter,
+            { initialEntries: ['/apps'] },
+            createElement(RunCenter),
+            createElement(Location),
+            createElement(RouteButtons),
+          ),
+        ),
+      ),
+    );
+    for (const path of [
+      '/apps',
+      '/apps/report',
+      '/apps/new',
+      '/workflows',
+      '/workflows/weather',
+      '/workflows/new',
+      '/runs',
+      '/settings',
+      '/profile',
+      '/skills',
+      '/mcp-servers',
+    ]) {
+      await act(async () =>
+        Array.from(host.querySelectorAll('nav button'))
+          .find((button) => button.textContent === path)!
+          .dispatchEvent(new MouseEvent('click', { bubbles: true })),
+      );
+      expect(host.querySelector('output')?.textContent).toBe(path);
+      const bar = host.querySelector<HTMLButtonElement>(
+        '[aria-label="runCenter.open"]',
+      );
+      if (['/apps', '/workflows'].includes(path)) {
+        expect(bar).not.toBeNull();
+        await act(async () => bar!.click());
+        expect(host.querySelector('[data-test="run-center"]')).not.toBeNull();
+      } else {
+        expect(bar).toBeNull();
+        expect(host.querySelector('[data-test="run-center"]')).toBeNull();
+      }
+    }
+  } finally {
+    await act(async () => root.unmount());
+    client.clear();
+    host.remove();
+  }
+});
+
 it('shows each task once and opens its existing run in the corresponding detail page', async () => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -124,6 +211,7 @@ it('shows each task once and opens its existing run in the corresponding detail 
             { initialEntries: ['/workflows'] },
             createElement(RunCenter),
             createElement(Location),
+            createElement(RouteButtons),
           ),
         ),
       ),
@@ -153,6 +241,12 @@ it('shows each task once and opens its existing run in the corresponding detail 
     expect(state.openRun).not.toHaveBeenCalled();
     expect(state.setOpen).toHaveBeenCalledWith(false);
     expect(host.querySelector('[data-test="run-center"]')).toBeNull();
+    expect(host.querySelector('[aria-label="runCenter.open"]')).toBeNull();
+    await act(async () =>
+      Array.from(host.querySelectorAll<HTMLButtonElement>('nav button'))
+        .find((button) => button.textContent === '/apps')!
+        .click(),
+    );
     await act(async () => open());
     await act(async () => taskButton('Report App').click());
     expect(host.querySelector('output')?.textContent).toBe(
