@@ -3,6 +3,7 @@
 //! The implementation is organized by responsibility under `mcp_server/`.
 
 mod registry;
+mod shutdown;
 mod stdio;
 mod types;
 mod validation;

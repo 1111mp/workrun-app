@@ -108,6 +108,14 @@ Hangzhou trip request → Choose to begin → Edit destination to Shanghai → A
   </video>
 </div>
 
+**Try this example:** <a href="/examples/workflows/weather-trip-planning.zip" download>Download the example Workflow (ZIP)</a>, including the workflow and weather App source code. The example's prompts and App name are in Chinese.
+
+1. Select **Import Workflow** in Workrun's Workflow list and open the downloaded ZIP file. No extraction is needed.
+2. Bind a model configuration on your device when prompted, confirm the import, and install the weather App's dependencies. You can also complete model setup later through **Configure imported dependencies**.
+3. Open the imported workflow, enter “根据杭州天气给出行程规划” (plan a trip based on the weather in Hangzhou), and run it. Follow the question, human review, and tool authorization cards to try the flow shown in the video.
+
+See [the workflow guide](/guides/build-a-workflow/) for import and export details.
+
 **Review can change the actual content.** The original request is “Plan a trip based on the weather in Hangzhou.” This review node uses `input` as its content key with **Allow editing** enabled; the reviewer changes “Hangzhou” to “Shanghai,” then approves and continues. Approval writes the edit back to that same state key, so the tool queries Shanghai weather and the planner follows the revised request. Check `city: "上海"` (Shanghai) on the tool authorization card to see that the edit reached downstream execution.
 
 | Step | Who handles it | What it produces |

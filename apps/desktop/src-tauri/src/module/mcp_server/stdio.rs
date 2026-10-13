@@ -209,7 +209,7 @@ impl StdioRuntime {
         let _guard = self.lifecycle.lock().await;
         let toolset = self.state.write().await.1.take();
         if let Some(toolset) = toolset {
-            toolset.cancellation_token().await.cancel();
+            super::shutdown::shutdown_toolset(&toolset).await;
         }
         self.state.write().await.0 = ServerStatus::Stopped;
         notify_changed();

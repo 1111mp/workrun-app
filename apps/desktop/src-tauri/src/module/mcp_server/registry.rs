@@ -449,7 +449,7 @@ impl McpServerRegistry {
     async fn shutdown_runtime(runtime: Arc<McpRuntime>) -> Result<()> {
         match runtime.as_ref() {
             McpRuntime::Stdio(manager) => manager.shutdown().await,
-            McpRuntime::Http(toolset) => toolset.cancellation_token().await.cancel(),
+            McpRuntime::Http(toolset) => super::shutdown::shutdown_toolset(toolset).await,
         }
         Ok(())
     }

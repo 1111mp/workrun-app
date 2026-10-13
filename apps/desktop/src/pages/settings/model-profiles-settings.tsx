@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+  Button,
   Field,
+  FieldError,
   FieldDescription,
   FieldGroup,
   FieldLabel,
@@ -18,7 +20,7 @@ import {
   SelectLabel,
   SelectTrigger,
 } from '@workspace/ui/components';
-import { ChevronRightIcon } from 'lucide-react';
+import { PlusIcon, Trash2Icon } from 'lucide-react';
 import { Controller, type UseFormReturn, FieldArray } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
@@ -66,14 +68,17 @@ function ModelProfilesSettings({
       </FieldLegend>
       <FieldDescription>{t('settings.models.description')}</FieldDescription>
       <div className='overflow-hidden rounded-xl'>
-        <FieldGroup className='gap-0'>
+        <FieldGroup className='gap-2'>
           <FieldArray
             control={form.control}
             name='provider_credentials'
             render={({ fields }) => (
               <>
                 {fields.map((field, index) => (
-                  <Field key={field.id}>
+                  <Field
+                    key={field.id}
+                    className='gap-0 overflow-hidden rounded-xl border'
+                  >
                     <FieldLabel
                       htmlFor={
                         field.provider === 'ollama'
@@ -129,10 +134,18 @@ function ModelProfilesSettings({
                               />
                             )}
                           </div>
-                          <ChevronRightIcon className='size-4' />
                         </ItemActions>
                       </Item>
                     </FieldLabel>
+                    {['open_ai', 'open_ai_strict', 'anthropic'].includes(
+                      field.provider,
+                    ) && (
+                      <ProviderHeadersSettings
+                        form={form}
+                        index={index}
+                        provider={field.provider}
+                      />
+                    )}
                   </Field>
                 ))}
               </>
@@ -192,6 +205,132 @@ function ModelProfilesSettings({
         )}
       />
     </FieldSet>
+  );
+}
+
+function ProviderHeadersSettings({
+  form,
+  index,
+  provider,
+}: {
+  form: UseFormReturn<SettingsForm>;
+  index: number;
+  provider: ModelProvider;
+}) {
+  const { t } = useTranslation();
+  return (
+    <details className='bg-muted/50 border-t px-3 py-3'>
+      <summary className='cursor-pointer text-sm'>
+        {t('settings.models.gatewaySettings', {
+          provider: MODEL_PROVIDER_LABEL[provider],
+        })}
+      </summary>
+      <FieldGroup className='pt-3'>
+        <Field>
+          <FieldLabel htmlFor={`provider-endpoint-${index}`}>
+            {t('settings.models.baseUrlPlaceholder')}
+          </FieldLabel>
+          <Input
+            id={`provider-endpoint-${index}`}
+            type='url'
+            autoComplete='off'
+            placeholder='https://api.example.com/v1'
+            {...form.register(`provider_credentials.${index}.baseUrl`)}
+          />
+        </Field>
+        <FieldSet>
+          <FieldLegend>{t('settings.models.headers')}</FieldLegend>
+          <FieldDescription>
+            {t('settings.models.headersDescription', {
+              provider: MODEL_PROVIDER_LABEL[provider],
+            })}
+          </FieldDescription>
+          <FieldArray
+            control={form.control}
+            name={`provider_credentials.${index}.headers`}
+            render={({ fields, append, remove }) => (
+              <FieldGroup>
+                {fields.map((header, headerIndex) => (
+                  <div key={header.id} className='flex items-start gap-2'>
+                    <Controller
+                      control={form.control}
+                      name={`provider_credentials.${index}.headers.${headerIndex}.name`}
+                      render={({ field, fieldState }) => (
+                        <Field data-invalid={fieldState.invalid}>
+                          <FieldLabel
+                            htmlFor={`header-name-${index}-${headerIndex}`}
+                          >
+                            {t('settings.models.headerName')}
+                          </FieldLabel>
+                          <Input
+                            {...field}
+                            id={`header-name-${index}-${headerIndex}`}
+                            aria-invalid={fieldState.invalid}
+                            autoComplete='off'
+                            spellCheck={false}
+                            placeholder='X-Project-ID'
+                          />
+                          {fieldState.error && (
+                            <FieldError>
+                              {t(fieldState.error.message ?? '')}
+                            </FieldError>
+                          )}
+                        </Field>
+                      )}
+                    />
+                    <Controller
+                      control={form.control}
+                      name={`provider_credentials.${index}.headers.${headerIndex}.value`}
+                      render={({ field, fieldState }) => (
+                        <Field data-invalid={fieldState.invalid}>
+                          <FieldLabel
+                            htmlFor={`header-value-${index}-${headerIndex}`}
+                          >
+                            {t('settings.models.headerValue')}
+                          </FieldLabel>
+                          <Input
+                            {...field}
+                            id={`header-value-${index}-${headerIndex}`}
+                            type='password'
+                            aria-invalid={fieldState.invalid}
+                            autoComplete='off'
+                            spellCheck={false}
+                          />
+                          {fieldState.error && (
+                            <FieldError>
+                              {t(fieldState.error.message ?? '')}
+                            </FieldError>
+                          )}
+                        </Field>
+                      )}
+                    />
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon'
+                      className='mt-6'
+                      aria-label={t('settings.models.removeHeader')}
+                      onClick={() => remove(headerIndex)}
+                    >
+                      <Trash2Icon />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={() => append({ name: '', value: '' })}
+                >
+                  <PlusIcon data-icon='inline-start' />
+                  {t('settings.models.addHeader')}
+                </Button>
+              </FieldGroup>
+            )}
+          />
+        </FieldSet>
+      </FieldGroup>
+    </details>
   );
 }
 
