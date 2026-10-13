@@ -145,6 +145,12 @@ If a run differs, inspect in this order: the App’s stdout/stderr and `normaliz
 
 In personal mode, save your changes, then open the **More (⋯)** menu in the Workflow detail page and choose **Export**. Select ZIP or TAR and review the package. It bundles the main definition, referenced Process Apps, Agent and CodeAct Tool Apps, and recursively referenced child Workflows. Repeated dependencies are included once. Missing dependencies and child-Workflow cycles prevent export.
 
+![Workflow export dialog: choose an archive format and review bundled Workflows, App source files, and dependencies the recipient must configure.](/media/build-a-workflow/04-workflow-export-dialog.png)
+
+To share just one App, choose **Export App** on its detail page to package its saved settings and source separately. The export dialog lists source files so you can deselect files you do not need to share. Files marked **Required** remain included.
+
+![App export dialog: choose an archive format and source files to share, with required files kept selected.](/media/build-a-workflow/05-app-export-dialog.png)
+
 Choose **Import** from the Workflow list to open a package. Review the dependencies, choose a name, and bind the external configuration available on your device. Import creates fresh IDs for the Workflow, child Workflows, and Apps, and updates their references; it does not overwrite existing objects.
 
 Models, MCP tools, Skills, remote credentials, mounted host paths, environment values, and private URLs may require local configuration. Skill source and MCP server configuration are not bundled. Credentials, host paths, and environment values are removed from the exported definition. Review prompts and App source yourself for embedded private data.

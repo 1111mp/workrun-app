@@ -145,6 +145,12 @@ category, priority, recommendation
 
 在个人模式下，先保存修改，再打开 Workflow 详情页的 **更多（⋯）** 菜单，选择 **导出**。选择 ZIP 或 TAR 并检查包内容。包内会包含主 Workflow 定义、Process App、Agent 和 CodeAct 使用的 Tool App，以及递归引用的子 Workflow。重复依赖只打包一次；缺失依赖或子 Workflow 循环引用会阻止导出。
 
+![Workflow 导出弹窗：选择压缩格式，检查包内 Workflow、App 源码和接收方需要配置的依赖。](/media/build-a-workflow/04-workflow-export-dialog.png)
+
+如果只需要分享一个 App，也可以在 App 详情页选择 **导出 App**，单独打包已保存的 App 设置和源码。导出弹窗会列出源码文件，可以取消勾选不需要分享的文件；标记为 **必需** 的文件会保留。
+
+![App 导出弹窗：选择压缩格式和要分享的源码文件，必需文件保持选中。](/media/build-a-workflow/05-app-export-dialog.png)
+
 在 Workflow 列表选择 **导入**，打开压缩包，检查依赖、确认名称，并绑定当前设备上的外部配置。导入会为主 Workflow、子 Workflow 和 App 创建新 ID，同时更新引用，不会覆盖已有对象。
 
 模型、MCP 工具、Skill、远程凭证、挂载路径、环境变量值和私有 URL 可能需要在本地重新配置。包内不包含 Skill 源码和 MCP 服务配置；导出的定义会移除凭证、本机路径和环境变量值。提示词和 App 源码中手动写入的私有数据仍需自行检查。
