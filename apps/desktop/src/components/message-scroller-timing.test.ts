@@ -14,7 +14,7 @@ import { expect, it, vi } from 'vitest';
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-it('compensates content growth before the resize paint and preserves manual scroll position', async () => {
+it('follows content growth after resize and preserves manual scroll position', async () => {
   let contentHeight = 500;
   let viewportHeight = 200;
   const observers = new Map<Element, ResizeObserverCallback>();
@@ -114,29 +114,37 @@ it('compensates content growth before the resize paint and preserves manual scro
     expect(resize).toBeDefined();
     expect(viewport!.scrollTop).toBe(300);
 
-    // ResizeObserver runs before paint. Deferring its scroll correction to
-    // another animation frame exposes the displaced timeline for one frame.
+    // The upstream primitive schedules resize corrections on the next frame.
+    const flushResize = async (callback: ResizeObserverCallback) => {
+      await act(async () => callback([], {} as ResizeObserver));
+      await act(async () => {
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach((callback) => callback(0));
+      });
+    };
     contentHeight += 80;
-    await act(async () => resize([], {} as ResizeObserver));
+    await flushResize(resize);
     expect(viewport!.scrollTop).toBe(380);
     viewportHeight = 180;
-    await act(async () => observers.get(viewport!)!([], {} as ResizeObserver));
+    await flushResize(observers.get(viewport!)!);
     expect(viewport!.scrollTop).toBe(400);
     contentHeight -= 40;
-    await act(async () => resize([], {} as ResizeObserver));
+    await flushResize(resize);
     expect(viewport!.scrollTop).toBe(360);
 
-    // Tool output is inserted inside an existing row, not as a new timeline
-    // item. It must follow before RAF/ResizeObserver rather than one frame later.
+    // Nested tool results and streamed text are detected through content resize.
     const toolResult = document.createElement('span');
     toolResult.textContent = 'Tool result';
     contentHeight += 60;
     await act(async () => content.firstElementChild!.append(toolResult));
+    await flushResize(resize);
     expect(viewport!.scrollTop).toBe(420);
     contentHeight += 20;
     await act(async () => {
       toolResult.firstChild!.nodeValue += ' streamed text';
     });
+    await flushResize(resize);
     expect(viewport!.scrollTop).toBe(440);
 
     await act(async () => {
@@ -147,12 +155,13 @@ it('compensates content growth before the resize paint and preserves manual scro
       viewport!.dispatchEvent(new Event('scroll'));
     });
     contentHeight += 80;
-    await act(async () => resize([], {} as ResizeObserver));
+    await flushResize(resize);
     expect(viewport!.scrollTop).toBe(100);
     contentHeight += 60;
     await act(async () =>
       content.firstElementChild!.append(document.createElement('span')),
     );
+    await flushResize(resize);
     expect(viewport!.scrollTop).toBe(100);
   } finally {
     await act(async () => root.unmount());
