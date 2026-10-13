@@ -90,7 +90,7 @@ pub async fn build_new_window() -> Result<WebviewWindow, String> {
             #[cfg(target_os = "macos")]
             take_webview_needs_reload();
 
-            #[cfg(debug_assertions)]
+            #[cfg(all(debug_assertions, not(feature = "e2e")))]
             window.open_devtools();
 
             Ok(window)

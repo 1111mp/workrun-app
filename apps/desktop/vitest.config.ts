@@ -8,7 +8,25 @@ export default defineConfig({
     alias: { '@': resolve(import.meta.dirname, './src') },
   },
   test: {
-    environment: 'node',
-    include: ['src/**/*.test.ts'],
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          environment: 'node',
+          include: ['src/**/*.test.ts'],
+          exclude: ['src/**/*.tauri.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'tauri',
+          environment: 'jsdom',
+          include: ['src/**/*.tauri.test.ts'],
+          setupFiles: ['./src/test/tauri-setup.ts'],
+        },
+      },
+    ],
   },
 });
