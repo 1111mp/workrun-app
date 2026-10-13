@@ -1,6 +1,6 @@
-// @vitest-environment jsdom
-import { act, createElement, useState } from 'react';
-import { createRoot } from 'react-dom/client';
+import { act, render as renderComponent, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import {
@@ -33,62 +33,56 @@ const field: WorkflowInput = {
   type: 'files',
   required: true,
 };
-const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
+
 async function render(inputs = [field], disabled = false) {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   const onSend = vi.fn();
   function Harness() {
     const [values, setValues] = useState<Record<string, unknown>>({
       documents: [files[0]],
     });
-    return createElement(WorkflowChatComposer, {
-      fileInputs: inputs,
-      filesForInput: (key) => values[key],
-      message: 'Analyze',
-      onMessageChange: vi.fn(),
-      disabled,
-      onFileChange: (key, value) =>
-        setValues((current) => ({ ...current, [key]: value })),
-      onSubmit: (event) => {
-        event.preventDefault();
-        onSend(values);
-      },
-    });
+    return (
+      <WorkflowChatComposer
+        fileInputs={inputs}
+        filesForInput={(key) => values[key]}
+        message='Analyze'
+        onMessageChange={vi.fn()}
+        disabled={disabled}
+        onFileChange={(key, value) =>
+          setValues((current) => ({ ...current, [key]: value }))
+        }
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend(values);
+        }}
+      />
+    );
   }
-  const container = document.createElement('div');
-  document.body.append(container);
-  const root = createRoot(container);
-  await act(async () => root.render(createElement(Harness)));
-  cleanups.push(async () => {
-    await act(async () => root.unmount());
-    container.remove();
-  });
+  const { container } = renderComponent(<Harness />);
   return { container, onSend };
 }
+
 async function pick(label: string) {
-  await act(async () =>
-    document
-      .querySelector<HTMLButtonElement>(
-        '[aria-label="workflowEditor.artifacts.add"]',
-      )!
-      .click(),
+  const user = userEvent.setup();
+  await user.click(
+    document.querySelector<HTMLButtonElement>(
+      '[aria-label="workflowEditor.artifacts.add"]',
+    )!,
   );
-  const item = [
-    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-  ].find((item) => item.textContent === label);
-  expect(item).toBeDefined();
-  await act(async () => item!.click());
+  const item = await screen.findByRole('menuitem', { name: label });
+  await user.click(item!);
 }
+
 async function send(container: HTMLElement) {
-  await act(async () =>
-    container.querySelector<HTMLButtonElement>('[type="submit"]')!.click(),
+  const user = userEvent.setup();
+  await user.click(
+    container.querySelector<HTMLButtonElement>('[type="submit"]')!,
   );
 }
+
 it('adds files through the menu, deduplicates selections, and preserves field routing', async () => {
   vi.mocked(pickArtifacts).mockResolvedValue(files);
   const { container, onSend } = await render();
@@ -103,22 +97,23 @@ it('adds files through the menu, deduplicates selections, and preserves field ro
   await send(container);
   expect(artifactReferences(onSend.mock.calls[0]![0].documents)).toEqual(files);
 });
+
 it('canceling the picker leaves selected files intact and removing them updates the submitted state', async () => {
+  const user = userEvent.setup();
   vi.mocked(pickArtifacts).mockResolvedValue([]);
   const { container, onSend } = await render();
   await pick('workflowEditor.artifacts.add');
   expect(container.textContent).toContain('old.pdf');
-  await act(async () =>
-    container
-      .querySelector<HTMLButtonElement>(
-        '[aria-label="workflowEditor.artifacts.remove"]',
-      )!
-      .click(),
+  await user.click(
+    container.querySelector<HTMLButtonElement>(
+      '[aria-label="workflowEditor.artifacts.remove"]',
+    )!,
   );
   expect(container.querySelector('[data-slot="attachment"]')).toBeNull();
   await send(container);
   expect(onSend.mock.calls[0]![0].documents).toEqual([]);
 });
+
 it('routes a single-file selection to the chosen field without replacing other attachments', async () => {
   vi.mocked(pickArtifacts).mockResolvedValue([files[1]!]);
   const { container, onSend } = await render([
@@ -133,6 +128,7 @@ it('routes a single-file selection to the chosen field without replacing other a
     cover: files[1],
   });
 });
+
 it('blocks sending during file import and disables read-only attachment controls', async () => {
   let resolve!: (files: ArtifactRef[]) => void;
   vi.mocked(pickArtifacts).mockReturnValue(
@@ -159,6 +155,7 @@ it('blocks sending during file import and disables read-only attachment controls
     )!.disabled,
   ).toBe(true);
 });
+
 it('omits the file menu for workflows without file inputs and keeps IME Enter from submitting', async () => {
   const { container, onSend } = await render([]);
   expect(

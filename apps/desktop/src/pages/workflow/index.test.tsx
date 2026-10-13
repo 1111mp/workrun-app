@@ -1,7 +1,9 @@
-// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, createElement } from 'react';
-import { createRoot } from 'react-dom/client';
+import {
+  act,
+  render as renderComponent,
+  type RenderResult,
+} from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { expect, it, vi } from 'vitest';
 
@@ -17,10 +19,11 @@ vi.mock('@/components', () => ({
     historicalRun,
     liveRun,
   }: {
-    historicalRun?: { id: string };
+    historicalRun?: {
+      id: string;
+    };
     liveRun?: boolean;
-  }) =>
-    createElement('output', null, `${historicalRun?.id ?? 'none'}:${liveRun}`),
+  }) => <output>{`${historicalRun?.id ?? 'none'}:${liveRun}`}</output>,
 }));
 vi.mock('@/stores', () => ({
   useWorkrunStore: (select: (state: unknown) => unknown) =>
@@ -37,9 +40,6 @@ vi.mock('@/services/run-history', () => ({
   listActiveRuns: vi.fn(),
   inspectRunRecord: vi.fn(),
 }));
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 it.each([
   ['/workflows/weather', 'waiting:true', true],
@@ -85,28 +85,18 @@ it.each([
     });
     const host = document.createElement('div');
     document.body.append(host);
-    const root = createRoot(host);
+    let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
     try {
-      await act(async () => {
-        root.render(
-          createElement(
-            QueryClientProvider,
-            { client },
-            createElement(
-              MemoryRouter,
-              { initialEntries: [path] },
-              createElement(
-                Routes,
-                null,
-                createElement(Route, {
-                  path: '/workflows/:id',
-                  element: createElement(Component),
-                }),
-              ),
-            ),
-          ),
-        );
-      });
+      rendered = renderComponent(
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={[path]}>
+            <Routes>
+              <Route path='/workflows/:id' element={<Component />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+        { container: host },
+      );
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
       });
@@ -138,7 +128,7 @@ it.each([
       expect(host.querySelector('output')).toBe(output);
       expect(output?.textContent).toBe(expected);
     } finally {
-      await act(async () => root.unmount());
+      rendered.unmount();
       client.clear();
       host.remove();
     }

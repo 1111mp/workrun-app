@@ -35,3 +35,4 @@ minimumReleaseAgeExclude:
   - cronstrue@3.32.0
   - lucide-react@1.56.0
   - vitest@5.0.4
+  - '@testing-library/user-event@14.6.8'

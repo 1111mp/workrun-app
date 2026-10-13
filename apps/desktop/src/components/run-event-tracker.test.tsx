@@ -1,11 +1,13 @@
-// @vitest-environment jsdom
 import {
   QueryClient,
   QueryClientProvider,
   QueryObserver,
 } from '@tanstack/react-query';
-import { act, createElement } from 'react';
-import { createRoot } from 'react-dom/client';
+import {
+  act,
+  render as renderComponent,
+  type RenderResult,
+} from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 
 import { RunEventTracker } from './run-event-tracker';
@@ -16,7 +18,12 @@ const subscriptions = vi.hoisted(
       string,
       {
         callback: (event: {
-          payload: { runId: string; event?: { type: string } };
+          payload: {
+            runId: string;
+            event?: {
+              type: string;
+            };
+          };
         }) => void;
         resolve: (stop: () => void) => void;
       }
@@ -27,7 +34,12 @@ vi.mock('@tauri-apps/api/event', () => ({
     (
       name: string,
       callback: (event: {
-        payload: { runId: string; event?: { type: string } };
+        payload: {
+          runId: string;
+          event?: {
+            type: string;
+          };
+        };
       }) => void,
     ) =>
       new Promise<() => void>((resolve) =>
@@ -37,24 +49,18 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 it('refreshes after subscribing, handles pushed updates, and releases late listeners', async () => {
-  (
-    globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
   subscriptions.clear();
   const client = new QueryClient();
   const invalidate = vi.spyOn(client, 'invalidateQueries');
   const host = document.createElement('div');
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   const stops = Array.from({ length: 5 }, () => vi.fn());
   try {
-    await act(async () =>
-      root.render(
-        createElement(
-          QueryClientProvider,
-          { client },
-          createElement(RunEventTracker),
-        ),
-      ),
+    rendered = renderComponent(
+      <QueryClientProvider client={client}>
+        <RunEventTracker />
+      </QueryClientProvider>,
+      { container: host },
     );
     expect(subscriptions.size).toBe(5);
     expect(invalidate).not.toHaveBeenCalled();
@@ -83,7 +89,7 @@ it('refreshes after subscribing, handles pushed updates, and releases late liste
       .get('run-status-changed')!
       .callback({ payload: { runId: 'run' } });
     expect(invalidate).toHaveBeenCalledTimes(6);
-    await act(async () => root.unmount());
+    rendered.unmount();
     invalidate.mockClear();
     await act(async () => {
       subscriptions.get('run-event')!.resolve(stops[2]!);
@@ -99,9 +105,6 @@ it('refreshes after subscribing, handles pushed updates, and releases late liste
 });
 
 it('refreshes an active MCP list from pushed lifecycle events without polling', async () => {
-  (
-    globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
   subscriptions.clear();
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -114,17 +117,14 @@ it('refreshes an active MCP list from pushed lifecycle events without polling', 
   });
   const unsubscribe = observer.subscribe(() => {});
   const host = document.createElement('div');
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   const stop = vi.fn();
   try {
-    await act(async () =>
-      root.render(
-        createElement(
-          QueryClientProvider,
-          { client },
-          createElement(RunEventTracker),
-        ),
-      ),
+    rendered = renderComponent(
+      <QueryClientProvider client={client}>
+        <RunEventTracker />
+      </QueryClientProvider>,
+      { container: host },
     );
     await act(async () =>
       subscriptions.get('mcp-servers-changed')!.resolve(stop),
@@ -147,7 +147,7 @@ it('refreshes an active MCP list from pushed lifecycle events without polling', 
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(fetchServers).toHaveBeenCalledTimes(requests);
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     for (const subscription of subscriptions.values())
       subscription.resolve(() => {});
     unsubscribe();
@@ -177,16 +177,13 @@ it('reconciles runs and pending actions changed before native listeners were rea
   const unsubscribeActive = active.subscribe(() => {});
   const unsubscribeActions = actions.subscribe(() => {});
   const host = document.createElement('div');
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   try {
-    await act(async () =>
-      root.render(
-        createElement(
-          QueryClientProvider,
-          { client },
-          createElement(RunEventTracker),
-        ),
-      ),
+    rendered = renderComponent(
+      <QueryClientProvider client={client}>
+        <RunEventTracker />
+      </QueryClientProvider>,
+      { container: host },
     );
     // Completion and a new question occurred before either listener was ready;
     // no pushed event will replay them. Subscription must reconcile the snapshot.
@@ -201,7 +198,7 @@ it('reconciles runs and pending actions changed before native listeners were rea
       ]);
     });
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     for (const subscription of subscriptions.values())
       subscription.resolve(() => {});
     unsubscribeActive();
@@ -227,16 +224,13 @@ it('removes a completed App after a status event while retaining its older inter
   });
   const unsubscribe = observer.subscribe(() => {});
   const host = document.createElement('div');
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   try {
-    await act(async () =>
-      root.render(
-        createElement(
-          QueryClientProvider,
-          { client },
-          createElement(RunEventTracker),
-        ),
-      ),
+    rendered = renderComponent(
+      <QueryClientProvider client={client}>
+        <RunEventTracker />
+      </QueryClientProvider>,
+      { container: host },
     );
     await act(async () =>
       subscriptions.get('run-status-changed')!.resolve(() => {}),
@@ -264,7 +258,7 @@ it('removes a completed App after a status event while retaining its older inter
       expect(observer.getCurrentResult().data).toEqual([oldRun]),
     );
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     for (const subscription of subscriptions.values())
       subscription.resolve(() => {});
     unsubscribe();

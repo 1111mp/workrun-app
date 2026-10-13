@@ -1,7 +1,10 @@
-// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, createElement } from 'react';
-import { createRoot } from 'react-dom/client';
+import {
+  act,
+  render as renderComponent,
+  type RenderResult,
+} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import type { PendingAction } from '@/services/run-history';
@@ -14,8 +17,12 @@ import { WorkflowActionCard } from './workflow-actions';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, values?: { answer?: string }) =>
-      values?.answer ? `${key}: ${values.answer}` : key,
+    t: (
+      key: string,
+      values?: {
+        answer?: string;
+      },
+    ) => (values?.answer ? `${key}: ${values.answer}` : key),
     i18n: { language: 'en' },
   }),
 }));
@@ -31,10 +38,6 @@ vi.mock('@/services/workflow', () => ({
   validateWorkflowAction: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/components/artifact-files', () => ({ ArtifactFiles: () => null }));
-
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => vi.clearAllMocks());
 
 async function mount(action: PendingAction, prefetch = true) {
@@ -52,28 +55,29 @@ async function mount(action: PendingAction, prefetch = true) {
   }
   const host = document.createElement('div');
   document.body.append(host);
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   const render = async (value: PendingAction) =>
-    act(async () =>
-      root.render(
-        createElement(
-          QueryClientProvider,
-          { client },
-          createElement(WorkflowActionCard, { action: value }),
-        ),
-      ),
+    act(
+      async () =>
+        (rendered = renderComponent(
+          <QueryClientProvider client={client}>
+            <WorkflowActionCard action={value} />
+          </QueryClientProvider>,
+          { container: host },
+        )),
     );
   await render(action);
   return {
     host,
     render,
     close: async () => {
-      await act(async () => root.unmount());
+      rendered.unmount();
       client.clear();
       host.remove();
     },
   };
 }
+
 function button(host: HTMLElement, text: string) {
   const element = Array.from(host.querySelectorAll('button')).find((button) =>
     button.textContent?.includes(text),
@@ -81,6 +85,7 @@ function button(host: HTMLElement, text: string) {
   expect(element).toBeTruthy();
   return element!;
 }
+
 function request(
   id: string,
   kind: PendingAction['kind'],
@@ -97,6 +102,7 @@ function request(
 }
 
 it('submits the selected tool request once, keeps errors retryable, and retains its result', async () => {
+  const user = userEvent.setup();
   const resolve = vi.mocked(resolveBackgroundWorkflowAction);
   resolve
     .mockRejectedValueOnce(new Error('Temporary failure'))
@@ -109,7 +115,7 @@ it('submits the selected tool request once, keeps errors retryable, and retains 
   );
   try {
     expect(view.host.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => button(view.host, 'approval.tool.run').click());
+    await user.click(button(view.host, 'approval.tool.run'));
     expect(view.host.textContent).toContain('Temporary failure');
     expect(resolve).toHaveBeenLastCalledWith('tool-2', expect.any(String), {
       approved: true,
@@ -128,6 +134,7 @@ it('submits the selected tool request once, keeps errors retryable, and retains 
 });
 
 it('preserves an unanswered selection when its panel unmounts and requires explicit submission', async () => {
+  const user = userEvent.setup();
   const action = request('question-draft', 'ask_user_question', {
     title: 'Choose a destination',
     options: [
@@ -136,10 +143,8 @@ it('preserves an unanswered selection when its panel unmounts and requires expli
     ],
   });
   const first = await mount(action);
-  await act(async () =>
-    (
-      first.host.querySelectorAll('input[type="radio"]')[1] as HTMLElement
-    ).click(),
+  await user.click(
+    first.host.querySelectorAll('input[type="radio"]')[1] as HTMLElement,
   );
   expect(resolveBackgroundWorkflowAction).not.toHaveBeenCalled();
   await first.close();
@@ -152,7 +157,7 @@ it('preserves an unanswered selection when its panel unmounts and requires expli
         )[1] as HTMLInputElement
       ).checked,
     ).toBe(true);
-    await act(async () => button(second.host, 'approval.continue').click());
+    await user.click(button(second.host, 'approval.continue'));
     expect(resolveBackgroundWorkflowAction).toHaveBeenCalledWith(
       'question-draft',
       expect.any(String),
@@ -164,6 +169,7 @@ it('preserves an unanswered selection when its panel unmounts and requires expli
 });
 
 it('invalidates a stale card after cancellation and displays saved review edits in history', async () => {
+  const user = userEvent.setup();
   const action = request('review-1', 'human_review', {
     contentKey: 'report',
     editable: true,
@@ -182,7 +188,7 @@ it('invalidates a stale card after cancellation and displays saved review edits 
       status: 'resolved',
       resolution: { approved: true, edits: { report: 'Reviewed report' } },
     });
-    await act(async () => button(view.host, 'approval.cards.details').click());
+    await user.click(button(view.host, 'approval.cards.details'));
     expect(view.host.textContent).toContain('Reviewed report');
     expect(resolveBackgroundWorkflowAction).not.toHaveBeenCalled();
   } finally {
@@ -191,6 +197,7 @@ it('invalidates a stale card after cancellation and displays saved review edits 
 });
 
 it('renders a resolved questionnaire with its saved answer disabled', async () => {
+  const user = userEvent.setup();
   const view = await mount({
     ...request('question-resolved', 'ask_user_question', {
       options: [
@@ -202,14 +209,14 @@ it('renders a resolved questionnaire with its saved answer disabled', async () =
     resolution: { optionId: 'b' },
   });
   try {
-    await act(async () => button(view.host, 'approval.cards.details').click());
+    await user.click(button(view.host, 'approval.cards.details'));
     expect(view.host.querySelector('[data-slot="questionnaire"]')).toBeTruthy();
     const inputs = view.host.querySelectorAll<HTMLInputElement>(
       'input[type="radio"]',
     );
     expect(inputs[1].checked).toBe(true);
     expect(inputs[0].matches(':disabled')).toBe(true);
-    await act(async () => inputs[0].click());
+    await user.click(inputs[0]);
     expect(inputs[1].checked).toBe(true);
     expect(resolveBackgroundWorkflowAction).not.toHaveBeenCalled();
   } finally {
@@ -220,6 +227,7 @@ it('renders a resolved questionnaire with its saved answer disabled', async () =
 it.each([null, undefined])(
   'allows supplying missing review text (%s) and submits it with approval',
   async (content) => {
+    const user = userEvent.setup();
     const view = await mount(
       request(`review-empty-${String(content)}`, 'human_review', {
         contentKey: 'input',
@@ -240,9 +248,7 @@ it.each([null, undefined])(
         descriptor.set!.call(textarea, 'Weather in Shanghai');
         textarea!.dispatchEvent(new Event('input', { bubbles: true }));
       });
-      await act(async () =>
-        button(view.host, 'approval.review.approveContinue').click(),
-      );
+      await user.click(button(view.host, 'approval.review.approveContinue'));
       expect(resolveBackgroundWorkflowAction).toHaveBeenCalledWith(
         `review-empty-${String(content)}`,
         expect.any(String),
@@ -251,9 +257,7 @@ it.each([null, undefined])(
           edits: { input: 'Weather in Shanghai' },
         },
       );
-      await act(async () =>
-        button(view.host, 'approval.cards.details').click(),
-      );
+      await user.click(button(view.host, 'approval.cards.details'));
       expect(view.host.textContent).toContain('Weather in Shanghai');
     } finally {
       await view.close();
@@ -262,6 +266,7 @@ it.each([null, undefined])(
 );
 
 it('keeps another request actionable while submission is in flight', async () => {
+  const user = userEvent.setup();
   let complete!: () => void;
   vi.mocked(resolveBackgroundWorkflowAction)
     .mockImplementationOnce(
@@ -278,12 +283,10 @@ it('keeps another request actionable while submission is in flight', async () =>
     request('independent', 'tool_approval', { name: 'Second' }),
   );
   try {
-    await act(async () => button(first.host, 'approval.tool.run').click());
+    await user.click(button(first.host, 'approval.tool.run'));
     expect(button(first.host, 'approval.saving').disabled).toBe(true);
     expect(button(second.host, 'approval.tool.run').disabled).toBe(false);
-    await act(async () =>
-      button(second.host, 'approval.cards.denyTool').click(),
-    );
+    await user.click(button(second.host, 'approval.cards.denyTool'));
     expect(resolveBackgroundWorkflowAction).toHaveBeenLastCalledWith(
       'independent',
       expect.any(String),
@@ -301,6 +304,7 @@ it('keeps another request actionable while submission is in flight', async () =>
 it.each(['tool_approval', 'human_review', 'ask_user_question'] as const)(
   'makes an expired %s request read-only without submitting it',
   async (kind) => {
+    const user = userEvent.setup();
     const action = request(`expired-${kind}`, kind, {
       content: 'Draft',
       contentKey: 'report',
@@ -317,9 +321,7 @@ it.each(['tool_approval', 'human_review', 'ask_user_question'] as const)(
       );
       expect(view.host.textContent).not.toContain('approval.tool.run');
       expect(view.host.textContent).not.toContain('approval.continue');
-      await act(async () =>
-        button(view.host, 'approval.cards.details').click(),
-      );
+      await user.click(button(view.host, 'approval.cards.details'));
       expect(view.host.querySelector('textarea')).toBeNull();
       for (const input of view.host.querySelectorAll<HTMLInputElement>(
         'input',
@@ -334,6 +336,7 @@ it.each(['tool_approval', 'human_review', 'ask_user_question'] as const)(
 );
 
 it('retains an unrestorable request and disables submission with its validation reason', async () => {
+  const user = userEvent.setup();
   vi.mocked(validateWorkflowAction).mockRejectedValue(
     new Error('Saved checkpoint is missing'),
   );
@@ -354,9 +357,7 @@ it('retains an unrestorable request and disables submission with its validation 
     expect(button(view.host, 'approval.review.approveContinue').disabled).toBe(
       true,
     );
-    await act(async () =>
-      button(view.host, 'approval.review.approveContinue').click(),
-    );
+    await user.click(button(view.host, 'approval.review.approveContinue'));
     expect(resolveBackgroundWorkflowAction).not.toHaveBeenCalled();
   } finally {
     await view.close();

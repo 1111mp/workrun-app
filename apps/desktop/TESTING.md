@@ -6,13 +6,34 @@ Run these commands from the repository root.
 
 ```sh
 pnpm --filter workrun test
+pnpm --filter workrun test:component
 pnpm --filter workrun test:tauri
+pnpm --filter workrun test:browser
 pnpm --filter workrun typecheck
 ```
 
-`test` runs both Vitest projects. Existing `*.test.ts` files retain their Node
-environment. New `*.tauri.test.ts` files run in jsdom with an isolated Tauri mock
-environment, a `main` window, event mocking, and cleanup after each test.
+`test` runs all four Vitest projects (including the browser suite):
+
+- `unit`: ordinary `*.test.ts` files run in Node for logic, services, and stores.
+- `component`: `*.test.tsx` files (excluding `*.browser.test.tsx`) run in jsdom with React Testing Library,
+  explicit automatic cleanup, and `jest-dom` assertions.
+- `browser`: `*.browser.test.ts` / `*.browser.test.tsx` files run in headless
+  WebKit on macOS/Linux or Chromium on Windows through Playwright with `vitest-browser-react` and the application CSS.
+- `tauri`: `*.tauri.test.ts` files run in jsdom with an isolated Tauri mock
+  environment, a `main` window, event mocking, and cleanup after each test.
+
+For component tests, use JSX with `render()` or `renderHook()` from
+`@testing-library/react`. Prefer role/name queries and `userEvent.setup()` for
+ordinary clicks and input, and `findBy*` / `waitFor()` for asynchronous results.
+Keep `act` around direct store updates, native event callbacks, or controlled
+animation frames when these updates happen outside Testing Library interactions.
+Explicit `unmount()` remains useful when testing listener cleanup or remounting.
+Some timing and DOM identity tests intentionally retain low-level DOM access.
+
+Each test must still own its QueryClient and reset any shared application stores
+or service mocks it changes. DOM cleanup does not reset application state.
+When testing clipboard behavior, initialize `userEvent` before installing a
+custom clipboard fixture because `userEvent.setup()` installs its own stub.
 
 Use `mockTauriCommands` from `@/test/tauri` to supply command results or throw
 backend errors. It returns a Vitest spy for checking command names and arguments.
@@ -24,6 +45,36 @@ Tauri's event mock provides partial event support, not full native window routin
 These tests exercise frontend code and the JavaScript Tauri APIs. They do not run
 Rust, Python, native dialogs, or filesystem operations. Existing `vi.mock()` tests
 can be migrated when touching them; they do not need a wholesale rewrite.
+
+## Real browser component checks
+
+Install the browser for your platform after installing dependencies (repeat after Playwright updates):
+
+```sh
+# macOS / Linux (Linux CI may also need --with-deps)
+pnpm --filter workrun exec playwright install webkit
+# Windows
+pnpm --filter workrun exec playwright install chromium
+pnpm --filter workrun test:browser
+# Run one file, or open the browser for debugging.
+pnpm --filter workrun test:browser message-scroller-timing
+pnpm --filter workrun test:browser --browser.headless=false
+```
+
+Use `*.browser.test.tsx` for components that need real layout, scrolling, or browser
+observers. Import `render` from `vitest-browser-react` and await rendering and
+rerendering. Use `vitest/browser` locators and user events, `expect.element()` for
+DOM assertions, and `expect.poll()` for asynchronous geometry changes. The render
+library automatically cleans up components between tests. Do not import the jsdom
+setup or replace real layout APIs with mocks in these cases.
+
+The message scroller suite checks content growth/shrinkage, viewport resizing,
+and preservation of the user's position after keyboard scrolling using real
+ResizeObserver and animation frames. The engine selection follows Tauri: WebKit
+for WKWebView on macOS and WebKitGTK on Linux, Chromium for WebView2 on Windows.
+Playwright uses its own browser builds, so these checks do not run the system
+WebView or establish native WebView compatibility; use desktop E2E for that. Fast suites can run without
+launching a browser with `test --project unit --project component --project tauri`.
 
 ## Real desktop UI checks
 
