@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
-import { copyFile, cp, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { globSync } from 'node:fs';
+import { access, copyFile, cp, mkdir } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { createWorkspace } from './e2e-fixtures.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const binaryName = process.platform === 'win32' ? 'workrun.exe' : 'workrun';
@@ -67,32 +69,53 @@ if (process.argv[2] === 'build') {
     }
   }
 } else {
-  const dataDir = await mkdtemp(join(tmpdir(), 'workrun-e2e-'));
-  // Seed an empty personal workspace so native IPC can start before onboarding completes.
-  for (const [relativePath, catalog] of [
-    ['personal/workflow.json', { workflows: [] }],
-    ['personal/process-nodes/catalog.json', { nodes: [] }],
-    ['personal/mcp-servers/catalog.json', { servers: [] }],
-  ]) {
-    const path = join(dataDir, relativePath);
-    await mkdir(join(path, '..'), { recursive: true });
-    await writeFile(path, JSON.stringify(catalog));
+  const args = process.argv.slice(2);
+  const patterns = [];
+  const forwarded = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === '--spec') {
+      if (!args[index + 1]) throw new Error('--spec requires a file or glob');
+      patterns.push(args[++index]);
+    } else if (arg.startsWith('--spec=')) {
+      patterns.push(arg.slice('--spec='.length));
+    } else {
+      forwarded.push(arg);
+    }
   }
-  await writeFile(
-    join(dataDir, 'workrun.yaml'),
-    JSON.stringify({
-      locale: 'en',
-      theme: 'light',
-      onboarding_completed: false,
-      workspace_mode: 'personal',
-      enable_auto_launch: false,
-      auto_check_update: false,
-    }),
-  );
-  console.log(`E2E data and backend logs: ${dataDir}`);
-  // Keep failed runs inspectable; this directory never contains personal data.
-  await run(['exec', 'wdio', 'run', 'wdio.conf.ts', ...process.argv.slice(2)], {
-    WORKRUN_E2E_DATA_DIR: dataDir,
-    WORKRUN_E2E_BINARY: binary,
-  });
+  const specs = [
+    ...new Set(
+      globSync(patterns.length ? patterns : ['test/e2e/**/*.spec.ts'], {
+        cwd: root,
+      }),
+    ),
+  ].sort();
+  if (!specs.length) throw new Error('No E2E specs matched');
+  for (const spec of specs) {
+    const workflow = basename(spec) === 'workflow.spec.ts';
+    const dataDir = await createWorkspace(root, workflow);
+    console.log(`E2E data and backend logs (${spec}): ${dataDir}`);
+    const env = {
+      WORKRUN_E2E_DATA_DIR: dataDir,
+      WORKRUN_E2E_BINARY: binary,
+      WORKRUN_E2E_RESTORE: '',
+    };
+    const command = [
+      'exec',
+      'wdio',
+      'run',
+      'wdio.conf.ts',
+      ...forwarded,
+      '--spec',
+      spec,
+    ];
+    // Each spec gets its own native process and data; failed workspaces remain inspectable.
+    await run(command, env);
+    if (workflow) {
+      await access(join(dataDir, 'workflow-run.json'));
+      // A new WDIO invocation tears down and relaunches the native application.
+      // Preserve its workspace to verify SQLite/catalog persistence across process lifetimes.
+      await run(command, { ...env, WORKRUN_E2E_RESTORE: '1' });
+    }
+  }
 }

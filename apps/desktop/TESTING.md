@@ -12,6 +12,17 @@ pnpm --filter workrun test:browser
 pnpm --filter workrun typecheck
 ```
 
+The Frontend Check pull-request workflow runs only the unit, component, and
+Tauri mock projects, and uploads the Vitest console log on failure. It does not
+download or launch a browser. Browser component tests and native desktop E2E
+remain local manual checks.
+
+To run the same fast suites as CI:
+
+```sh
+pnpm --filter workrun test --project unit --project component --project tauri
+```
+
 `test` runs all four Vitest projects (including the browser suite):
 
 - `unit`: ordinary `*.test.ts` files run in Node for logic, services, and stores.
@@ -109,20 +120,41 @@ Cargo's existing build cache is reused; the runner launches a dedicated copy at
 and copies `Workrun E2E.app` into that directory so native bundle resource lookup
 works correctly.
 
-Every invocation creates a fresh temporary data directory, seeds an empty personal
-workspace with English/light onboarding settings, and disables automatic updates
+Each selected spec gets a fresh temporary data directory and a separate native
+application process. The runner accepts `--spec path` / `--spec=path` and glob
+patterns relative to `apps/desktop`; other options are forwarded to WDIO.
+The default fixtures seed an empty personal
+workspace with English/light onboarding settings, and disable automatic updates
 and autostart. Onboarding remains incomplete so the UI still shows the mode picker.
 An E2E build requires `WORKRUN_E2E_DATA_DIR` and never falls back to personal
 application data.
 Keep tests independent; specs needing different starting state should arrange
 their own fixtures rather than depend on a previous spec.
 
-The initial smoke test checks database readiness and covers personal onboarding,
+The onboarding smoke test checks database readiness and covers personal onboarding,
 validation of an empty name, real IPC persistence, and restoration after reload.
 Failed tests save screenshots
 and WDIO logs to `apps/desktop/test-results/desktop/`. The runner prints the
 temporary workspace path; it is retained for inspecting configuration, database,
-and Rust logs after the run.
+and Rust logs after the run. Failure diagnostics also include the page HTML and
+a JSON file identifying the workspace and restart phase.
+
+The workflow smoke test seeds a local Python App using the bundled SDK wheel,
+creates its workflow through real IPC, and starts execution through the UI.
+It checks fixed input/output, completed history, and opening the saved output.
+After the first successful run, the runner starts a second WDIO invocation with
+the same workspace to check workflow, input, events, and output restoration after
+a native application restart. The restart phase reads `workflow-run.json` from
+that workspace; it does not create another run or substitute a page refresh.
+
+```sh
+pnpm --filter workrun test:e2e --spec test/e2e/workflow.spec.ts
+```
+
+The workflow fixture has no model service or package-index dependency. Its first
+execution still requires network access to download Workrun's managed Python
+3.12 runtime into the isolated workspace. The desktop test timeout allows four
+minutes, while workflow completion is bounded at three minutes.
 
 ## AI verification workflow
 

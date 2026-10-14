@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,7 +28,11 @@ export const config: WebdriverIO.Config = {
         driverProvider: 'embedded',
         captureBackendLogs: true,
         captureFrontendLogs: true,
-        env: { WORKRUN_E2E_DATA_DIR: process.env.WORKRUN_E2E_DATA_DIR },
+        env: {
+          WORKRUN_E2E_DATA_DIR: process.env.WORKRUN_E2E_DATA_DIR,
+          // Exercise the packaged SDK even though the E2E binary is a debug build.
+          WORKRUN_SDK_MODE: 'bundled',
+        },
       } satisfies TauriServiceOptions,
     ],
   ],
@@ -38,12 +42,34 @@ export const config: WebdriverIO.Config = {
   outputDir: artifacts,
   waitforTimeout: 15000,
   connectionRetryCount: 0,
-  mochaOpts: { timeout: 60000 },
+  // Cold workflow workspaces download a managed Python runtime on their first run.
+  mochaOpts: { timeout: 240000 },
   async afterTest(test, _context, { passed }) {
     if (passed) return;
     await mkdir(artifacts, { recursive: true });
     const name = `${Date.now()}-${test.title.replace(/[^a-z0-9]+/gi, '-')}`;
     const { browser } = await import('@wdio/globals');
-    await browser.saveScreenshot(join(artifacts, `${name}.png`));
+    // Collect independently so a broken WebView cannot hide the original failure.
+    const diagnostics = await Promise.allSettled([
+      browser.saveScreenshot(join(artifacts, `${name}.png`)),
+      browser
+        .getPageSource()
+        .then((source) => writeFile(join(artifacts, `${name}.html`), source)),
+      writeFile(
+        join(artifacts, `${name}.json`),
+        JSON.stringify(
+          {
+            test: test.title,
+            workspace: process.env.WORKRUN_E2E_DATA_DIR,
+            restore: process.env.WORKRUN_E2E_RESTORE === '1',
+          },
+          null,
+          2,
+        ),
+      ),
+    ]);
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.status === 'rejected') console.error(diagnostic.reason);
+    }
   },
 };

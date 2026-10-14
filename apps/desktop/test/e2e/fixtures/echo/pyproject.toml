@@ -1,0 +1,9 @@
+[project]
+name = "workrun-e2e-echo"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["workrun-sdk==0.1.0"]
+
+# Resolve the SDK from Workrun's bundled wheels without querying a package index.
+[tool.uv]
+no-index = true
