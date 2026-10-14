@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Workrun E2E",
+  "identifier": "io.github.1111mp.workrun.e2e",
+  "bundle": { "createUpdaterArtifacts": false },
+  "build": {
+    "beforeBuildCommand": "pnpm prebuild && pnpm exec vite build --config vite.config.ts --mode e2e"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "e2e",
+          "windows": ["main"],
+          "permissions": ["wdio:default", "wdio-webdriver:default"]
+        }
+      ]
+    }
+  },
+  "plugins": {
+    "deep-link": { "desktop": { "schemes": ["workrun-e2e"] } }
+  }
+}

@@ -19,6 +19,13 @@ jobs:
         with:
           filters: |
             frontend:
+              - '.github/workflows/frontend-check.yml'
+              - 'apps/desktop/package.json'
+              - 'apps/desktop/vitest.config.ts'
+              - 'apps/desktop/tsconfig.e2e.json'
+              - 'apps/desktop/wdio.conf.ts'
+              - 'apps/desktop/test/e2e/**'
+              - 'apps/desktop/scripts/**'
               - 'apps/desktop/src/**'
               - 'apps/docs/src/**'
               - 'packages/ui/src/**'
@@ -49,8 +56,8 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.check_frontend.outputs.frontend == 'true'
         with:
-          node-version: '24.21.0'
-          cache: 'pnpm'
+          node-version: "24.21.0"
+          cache: "pnpm"
 
       - name: Restore pnpm cache
         if: steps.check_frontend.outputs.frontend == 'true'
@@ -76,3 +83,18 @@ jobs:
       - name: Run TypeScript typecheck
         if: steps.check_frontend.outputs.frontend == 'true'
         run: pnpm typecheck --filter=workrun --filter=workrun-docs --filter=@workspace/ui --filter=@workspace/json-schema-form
+
+      - name: Run desktop frontend tests
+        if: steps.check_frontend.outputs.frontend == 'true'
+        run: |
+          mkdir -p apps/desktop/test-results/frontend
+          set -o pipefail
+          pnpm --filter workrun test --project unit --project component --project tauri 2>&1 | tee apps/desktop/test-results/frontend/vitest.log
+
+      - name: Upload frontend test diagnostics
+        if: failure() && steps.check_frontend.outputs.frontend == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-frontend-test-results
+          path: apps/desktop/test-results/frontend/
+          if-no-files-found: ignore

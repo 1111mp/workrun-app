@@ -1,12 +1,9 @@
-// @vitest-environment jsdom
-
-import { act, createElement } from 'react';
-import { createRoot } from 'react-dom/client';
+import { act, render as renderComponent, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 let requestHandler: ((request: any) => void) | undefined;
 let sessionClosedHandler: ((sessionId: string) => void) | undefined;
-
 vi.mock('@/services/python-ipc', () => ({
   onPythonUiRequest: vi.fn(async (handler) => {
     requestHandler = handler;
@@ -26,21 +23,11 @@ vi.mock('@/services/python-ipc', () => ({
     });
   }),
 }));
-
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }));
-
 import { respondToPythonUiRequest } from '@/services/python-ipc';
 
 import { PythonUiRequestDialog } from './python-ui-request-dialog';
-
-let container: HTMLDivElement | undefined;
-let root: ReturnType<typeof createRoot> | undefined;
-
 afterEach(() => {
-  act(() => root?.unmount());
-  container?.remove();
-  container = undefined;
-  root = undefined;
   requestHandler = undefined;
   sessionClosedHandler = undefined;
   vi.clearAllMocks();
@@ -48,10 +35,8 @@ afterEach(() => {
 
 describe('PythonUiRequestDialog', () => {
   it('queues concurrent forms from separate runs and removes cancelled sessions', async () => {
-    container = document.createElement('div');
-    document.body.append(container);
-    root = createRoot(container);
-    await act(async () => root?.render(createElement(PythonUiRequestDialog)));
+    const user = userEvent.setup();
+    renderComponent(<PythonUiRequestDialog />);
     await act(async () => {
       requestHandler?.({
         runId: 'a',
@@ -74,11 +59,7 @@ describe('PythonUiRequestDialog', () => {
     });
     expect(document.body.textContent).toContain('First form');
     expect(document.body.textContent).not.toContain('Second form');
-    await act(async () => {
-      document
-        .querySelector<HTMLButtonElement>('button[type="submit"]')
-        ?.click();
-    });
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
     expect(respondToPythonUiRequest).toHaveBeenCalledWith(
       expect.objectContaining({ runId: 'a', requestId: 'one' }),
       {},
@@ -88,15 +69,12 @@ describe('PythonUiRequestDialog', () => {
     expect(document.body.textContent).toContain('Third form');
     expect(document.body.textContent).not.toContain('Second form');
   });
-
   it('retains a form after a failed response so it can be retried', async () => {
+    const user = userEvent.setup();
     vi.mocked(respondToPythonUiRequest).mockRejectedValueOnce(
       new Error('write failed'),
     );
-    container = document.createElement('div');
-    document.body.append(container);
-    root = createRoot(container);
-    await act(async () => root?.render(createElement(PythonUiRequestDialog)));
+    renderComponent(<PythonUiRequestDialog />);
     await act(async () =>
       requestHandler?.({
         runId: 'a',
@@ -105,26 +83,13 @@ describe('PythonUiRequestDialog', () => {
         schema: { type: 'object' },
       }),
     );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('button[type="submit"]')
-        ?.click(),
-    );
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
     expect(document.body.textContent).toContain('Retry form');
-    expect(
-      document.querySelector<HTMLButtonElement>('button[type="submit"]')
-        ?.disabled,
-    ).toBe(false);
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled();
   });
   it('keeps a follow-up confirmation request visible after submitting a form', async () => {
-    container = document.createElement('div');
-    document.body.append(container);
-    root = createRoot(container);
-
-    await act(async () => {
-      root?.render(createElement(PythonUiRequestDialog));
-    });
-
+    const user = userEvent.setup();
+    renderComponent(<PythonUiRequestDialog />);
     await act(async () => {
       requestHandler?.({
         runId: 'run-1',
@@ -134,16 +99,7 @@ describe('PythonUiRequestDialog', () => {
         schema: { type: 'object' },
       });
     });
-
-    const submit = [
-      ...document.querySelectorAll<HTMLButtonElement>('button'),
-    ].find((button) => button.type === 'submit');
-    expect(submit).toBeDefined();
-
-    await act(async () => {
-      submit?.click();
-    });
-
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
     expect(document.body.textContent).toContain('Confirm resolution');
   });
 });

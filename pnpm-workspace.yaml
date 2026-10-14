@@ -1,29 +1,38 @@
 packages:
-  - "apps/**/*"
-  - "packages/**/*"
+  - 'apps/**/*'
+  - 'packages/**/*'
 
 allowBuilds:
-  "@scarf/scarf": true
-  "@swc/core": true
+  '@scarf/scarf': true
+  '@swc/core': true
   esbuild: true
+  # Embedded Tauri WebDriver does not use these browser-driver installers.
+  edgedriver: false
+  geckodriver: false
   msw: false
   unrs-resolver: true
 
 minimumReleaseAgeExclude:
-  - "@swc/core-darwin-arm64@1.16.18"
-  - "@swc/core-darwin-x64@1.16.18"
-  - "@swc/core-linux-arm-gnueabihf@1.16.18"
-  - "@swc/core-linux-arm64-gnu@1.16.18"
-  - "@swc/core-linux-arm64-musl@1.16.18"
-  - "@swc/core-linux-ppc64-gnu@1.16.18"
-  - "@swc/core-linux-s390x-gnu@1.16.18"
-  - "@swc/core-linux-x64-gnu@1.16.18"
-  - "@swc/core-linux-x64-musl@1.16.18"
-  - "@swc/core-win32-arm64-msvc@1.16.18"
-  - "@swc/core-win32-ia32-msvc@1.16.18"
-  - "@swc/core-win32-x64-msvc@1.16.18"
-  - "@swc/core@1.16.18"
-  - "@tanstack/query-core@5.104.2"
-  - "@tanstack/react-query@5.104.2"
+  - '@swc/core-darwin-arm64@1.16.18'
+  - '@swc/core-darwin-x64@1.16.18'
+  - '@swc/core-linux-arm-gnueabihf@1.16.18'
+  - '@swc/core-linux-arm64-gnu@1.16.18'
+  - '@swc/core-linux-arm64-musl@1.16.18'
+  - '@swc/core-linux-ppc64-gnu@1.16.18'
+  - '@swc/core-linux-s390x-gnu@1.16.18'
+  - '@swc/core-linux-x64-gnu@1.16.18'
+  - '@swc/core-linux-x64-musl@1.16.18'
+  - '@swc/core-win32-arm64-msvc@1.16.18'
+  - '@swc/core-win32-ia32-msvc@1.16.18'
+  - '@swc/core-win32-x64-msvc@1.16.18'
+  - '@swc/core@1.16.18'
+  - '@tanstack/query-core@5.104.2'
+  - '@tanstack/react-query@5.104.2'
   - react-hook-form@7.90.0
-  - zod@4.6.6
+  - zod@4.6.6 || 4.6.7
+  - '@vitest/mocker@5.0.4'
+  - '@vitest/spy@5.0.4'
+  - cronstrue@3.32.0
+  - lucide-react@1.56.0
+  - vitest@5.0.4
+  - '@testing-library/user-event@14.6.8'

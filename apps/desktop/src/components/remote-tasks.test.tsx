@@ -1,13 +1,11 @@
-// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   act,
-  createElement,
-  useEffect,
-  useState,
-  type ReactElement,
-} from 'react';
-import { createRoot } from 'react-dom/client';
+  render as renderComponent,
+  type RenderResult,
+} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useEffect, useState, type ReactElement } from 'react';
 import { toast } from 'sonner';
 import { afterEach, expect, it, vi } from 'vitest';
 
@@ -28,10 +26,10 @@ vi.mock('@/services/remote-agent', () => ({
   manageRemoteTask: vi.fn(),
 }));
 vi.mock('@/components/artifact-files', () => ({
-  ArtifactFiles: ({ value }: { value: unknown }) =>
-    createElement('pre', null, JSON.stringify(value)),
+  ArtifactFiles: ({ value }: { value: unknown }) => (
+    <pre>{JSON.stringify(value)}</pre>
+  ),
 }));
-
 const task: RemoteTask = {
   id: 'record-1',
   runId: 'run-1',
@@ -56,26 +54,28 @@ async function settle() {
     await new Promise((resolve) => setTimeout(resolve, 30));
   });
 }
+
 async function render(element: ReactElement) {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   });
   const container = document.createElement('div');
   document.body.append(container);
-  const root = createRoot(container);
-  await act(async () => {
-    root.render(createElement(QueryClientProvider, { client }, element));
-  });
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
+  rendered = renderComponent(
+    <QueryClientProvider client={client}>{element}</QueryClientProvider>,
+    { container },
+  );
   await settle();
   cleanups.push(async () => {
-    await act(async () => root.unmount());
+    rendered.unmount();
     client.clear();
     container.remove();
   });
   return container;
 }
-async function click(key: string) {
+
+async function click(key: string, user = userEvent.setup()) {
   const button = [
     ...document.querySelectorAll<HTMLButtonElement>('button'),
   ].find(
@@ -84,7 +84,7 @@ async function click(key: string) {
   );
   expect(button).toBeDefined();
   expect(button!.disabled).toBe(false);
-  await act(async () => button!.click());
+  await user.click(button!);
   await settle();
 }
 
@@ -97,11 +97,11 @@ it('shows saved status and results without remote management actions', async () 
     },
   ]);
   const container = await render(
-    createElement(RemoteTasksPanel, {
-      runId: 'run-1',
-      isActive: false,
-      nodeName: () => 'PDF agent',
-    }),
+    <RemoteTasksPanel
+      runId='run-1'
+      isActive={false}
+      nodeName={() => 'PDF agent'}
+    />,
   );
   expect(container.textContent).toContain('finished remotely');
   expect(container.textContent).toContain('PDF agent');
@@ -117,21 +117,19 @@ it('shows saved status and results without remote management actions', async () 
 });
 
 it('shows and copies the exact message ID for an unknown submission without enabling remote actions', async () => {
+  // userEvent installs a clipboard stub; initialize it before our failure/success fixture.
+  const user = userEvent.setup();
   vi.mocked(listRemoteTasks).mockResolvedValue([{ ...task, taskId: null }]);
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal('navigator', { clipboard: { writeText } });
   const container = await render(
-    createElement(RemoteTasksPanel, {
-      runId: 'run-1',
-      isActive: false,
-      nodeName: (id) => id,
-    }),
+    <RemoteTasksPanel runId='run-1' isActive={false} nodeName={(id) => id} />,
   );
   expect(container.textContent).toContain(
     'workflowEditor.remoteTasks.messageId',
   );
   expect(container.textContent).toContain('message-1');
-  await click('workflowEditor.remoteTasks.copyMessageId');
+  await click('workflowEditor.remoteTasks.copyMessageId', user);
   expect(writeText).toHaveBeenCalledExactlyOnceWith('message-1');
   expect(toast.success).toHaveBeenCalledWith(
     'workflowEditor.remoteTasks.messageIdCopied',
@@ -147,18 +145,16 @@ it('shows and copies the exact message ID for an unknown submission without enab
 });
 
 it('reports clipboard failures without claiming the message ID was copied', async () => {
+  // userEvent installs a clipboard stub; initialize it before our failure/success fixture.
+  const user = userEvent.setup();
   vi.mocked(listRemoteTasks).mockResolvedValue([{ ...task, taskId: null }]);
   vi.stubGlobal('navigator', {
     clipboard: { writeText: vi.fn().mockRejectedValue(new Error('Denied')) },
   });
   await render(
-    createElement(RemoteTasksPanel, {
-      runId: 'run-1',
-      isActive: false,
-      nodeName: (id) => id,
-    }),
+    <RemoteTasksPanel runId='run-1' isActive={false} nodeName={(id) => id} />,
   );
-  await click('workflowEditor.remoteTasks.copyMessageId');
+  await click('workflowEditor.remoteTasks.copyMessageId', user);
   expect(toast.error).toHaveBeenCalledWith(
     'workflowEditor.remoteTasks.messageIdCopyFailed',
     { toasterId: 'global' },
@@ -180,13 +176,15 @@ it('keeps remote task output mounted while a run resumes and its refresh fails',
     useEffect(() => {
       resume = () => setActive(true);
     }, []);
-    return createElement(RemoteTasksPanel, {
-      runId: 'run-1',
-      isActive: active,
-      nodeName: () => 'Agent',
-    });
+    return (
+      <RemoteTasksPanel
+        runId='run-1'
+        isActive={active}
+        nodeName={() => 'Agent'}
+      />
+    );
   }
-  const container = await render(createElement(Harness));
+  const container = await render(<Harness />);
   const trigger = container.querySelector('button');
   expect(container.textContent).toContain('saved output');
   let reject!: (error: Error) => void;

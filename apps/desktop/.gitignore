@@ -29,3 +29,5 @@ dist-ssr
 # agent skill
 .agents
 skills-lock.json
+
+.vitest

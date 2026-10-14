@@ -9,6 +9,7 @@ use std::{
 };
 use tauri::Manager as _;
 
+#[cfg(not(feature = "e2e"))]
 pub static APP_ID: &str = "io.github.1111mp.workrun";
 
 pub static PORTABLE_FLAG: OnceCell<bool> = OnceCell::new();
@@ -137,26 +138,38 @@ pub fn init_portable_flag() -> Result<()> {
 
 /// Root directory containing all isolated Workrun workspaces.
 pub fn app_data_dir() -> Result<PathBuf> {
-    use tauri::utils::platform::current_exe;
-
-    let flag = PORTABLE_FLAG.get().unwrap_or(&false);
-    if *flag {
-        let app_exe = current_exe()?;
-        let app_exe = dunce::canonicalize(app_exe)?;
-        let app_dir = app_exe
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("failed to get the portable app dir"))?;
-        return Ok(PathBuf::from(app_dir).join(".config").join(APP_ID));
+    #[cfg(feature = "e2e")]
+    {
+        let path = std::env::var_os("WORKRUN_E2E_DATA_DIR")
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("WORKRUN_E2E_DATA_DIR is required for E2E builds"))?;
+        anyhow::ensure!(path.is_absolute(), "WORKRUN_E2E_DATA_DIR must be absolute");
+        Ok(path)
     }
 
-    let app_handle = handle::Handle::app_handle();
+    #[cfg(not(feature = "e2e"))]
+    {
+        use tauri::utils::platform::current_exe;
 
-    match app_handle.path().data_dir() {
-        Ok(dir) => Ok(dir.join(APP_ID)),
-        Err(e) => {
-            logging!(error, Type::File, "Failed to get the app home directory: {e}");
-            Err(anyhow::anyhow!("Failed to get the app homedirectory"))
-        },
+        let flag = PORTABLE_FLAG.get().unwrap_or(&false);
+        if *flag {
+            let app_exe = current_exe()?;
+            let app_exe = dunce::canonicalize(app_exe)?;
+            let app_dir = app_exe
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("failed to get the portable app dir"))?;
+            return Ok(PathBuf::from(app_dir).join(".config").join(APP_ID));
+        }
+
+        let app_handle = handle::Handle::app_handle();
+
+        match app_handle.path().data_dir() {
+            Ok(dir) => Ok(dir.join(APP_ID)),
+            Err(e) => {
+                logging!(error, Type::File, "Failed to get the app home directory: {e}");
+                Err(anyhow::anyhow!("Failed to get the app homedirectory"))
+            },
+        }
     }
 }
 

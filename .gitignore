@@ -30,3 +30,4 @@ dist-ssr
 .skills-lock.json
 
 .pnpm-store
+test-results/

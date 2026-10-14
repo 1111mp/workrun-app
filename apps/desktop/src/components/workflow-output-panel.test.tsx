@@ -1,7 +1,10 @@
-// @vitest-environment jsdom
+import {
+  act,
+  render as renderComponent,
+  type RenderResult,
+} from '@testing-library/react';
 import type { Node } from '@xyflow/react';
-import { act, createElement, type ReactNode } from 'react';
-import { createRoot } from 'react-dom/client';
+import { type ReactNode } from 'react';
 import { expect, it, vi } from 'vitest';
 
 import type { RunSpan } from '@/services/run-history';
@@ -33,7 +36,6 @@ vi.mock('@/components/workflow-actions', () => ({
 }));
 vi.mock('@melloware/react-logviewer', () => ({ LazyLog: () => null }));
 vi.mock('@workspace/ui/components', async () => {
-  const { createElement } = await import('react');
   // DOM identity is tested independently of drawer positioning and scrolling
   // observers, which require a real layout engine rather than jsdom.
   const names = [
@@ -81,18 +83,18 @@ vi.mock('@workspace/ui/components', async () => {
         children?: ReactNode;
         messageId?: string;
         className?: string;
-      }) =>
-        createElement(
-          'div',
-          { 'data-component': name, 'data-message-id': messageId, className },
-          children,
-        ),
+      }) => (
+        <div
+          data-component={name}
+          data-message-id={messageId}
+          className={className}
+        >
+          {children}
+        </div>
+      ),
     ]),
   );
 });
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 it('keeps completed messages and the viewport mounted through the recorded tool approval and resume sequence', async () => {
   const frames = new Map<number, FrameRequestCallback>();
@@ -114,19 +116,21 @@ it('keeps completed messages and the viewport mounted through the recorded tool 
   };
   const host = document.createElement('div');
   document.body.append(host);
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   const nodes = recording.nodes as Node[];
   useWorkflowRunStore.getState().startWorkflowRun('recorded-run', {}, 'task');
   const render = async (spans: RunSpan[] = []) =>
-    act(async () =>
-      root.render(
-        createElement(LiveWorkflowTaskOutput, {
-          workflowNodes: nodes,
-          onRunAgain: vi.fn(),
-          onClose: vi.fn(),
-          spans,
-        }),
-      ),
+    act(
+      async () =>
+        (rendered = renderComponent(
+          <LiveWorkflowTaskOutput
+            workflowNodes={nodes}
+            onRunAgain={vi.fn()}
+            onClose={vi.fn()}
+            spans={spans}
+          />,
+          { container: host },
+        )),
     );
   try {
     await render();
@@ -194,7 +198,7 @@ it('keeps completed messages and the viewport mounted through the recorded tool 
       host.querySelectorAll('[data-message-id="recorded-run:execution:18"]'),
     ).toHaveLength(1);
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     vi.unstubAllGlobals();
     host.remove();
   }
@@ -211,22 +215,21 @@ it('shows restored task output immediately without scheduling typing frames', as
     nodes,
   });
   const host = document.createElement('div');
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   try {
-    await act(async () => {
-      root.render(
-        createElement(LiveWorkflowTaskOutput, {
-          workflowNodes: nodes,
-          onRunAgain: vi.fn(),
-          onClose: vi.fn(),
-        }),
-      );
-    });
+    rendered = renderComponent(
+      <LiveWorkflowTaskOutput
+        workflowNodes={nodes}
+        onRunAgain={vi.fn()}
+        onClose={vi.fn()}
+      />,
+      { container: host },
+    );
     expect(host.textContent).toContain('Recorded response at event 31.');
     expect(host.textContent).not.toContain('workflowEditor.output.running');
     expect(requestFrame).not.toHaveBeenCalled();
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     vi.unstubAllGlobals();
   }
 });
@@ -241,7 +244,7 @@ it('renders Agent chunks in the Web panel while the node is still running', asyn
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
   const host = document.createElement('div');
   document.body.append(host);
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   const nodes: Node[] = [
     {
       id: 'agent',
@@ -270,14 +273,13 @@ it('renders Agent chunks in the Web panel while the node is still running', asyn
     }
   };
   try {
-    await act(async () =>
-      root.render(
-        createElement(LiveWorkflowTaskOutput, {
-          workflowNodes: nodes,
-          onRunAgain: vi.fn(),
-          onClose: vi.fn(),
-        }),
-      ),
+    rendered = renderComponent(
+      <LiveWorkflowTaskOutput
+        workflowNodes={nodes}
+        onRunAgain={vi.fn()}
+        onClose={vi.fn()}
+      />,
+      { container: host },
     );
     await deliver({ type: 'node_start', node: 'agent', step: 0 });
     await deliver({
@@ -323,7 +325,7 @@ it('renders Agent chunks in the Web panel while the node is still running', asyn
       row?.textContent?.match(/First live chunk and second chunk/g),
     ).toHaveLength(1);
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     store.resetRunView();
     vi.unstubAllGlobals();
     host.remove();

@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "lodash-es": "^4.18.1",
-    "lucide-react": "^1.55.0"
+    "lucide-react": "^1.56.0"
   },
   "devDependencies": {
     "@actions/github": "^9.1.1",

@@ -1,7 +1,10 @@
-// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, createElement } from 'react';
-import { createRoot } from 'react-dom/client';
+import {
+  render as renderComponent,
+  within,
+  waitFor,
+} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import {
@@ -27,9 +30,6 @@ vi.mock('@/services/run-history', () => ({
 vi.mock('@/services/workflow', () => ({
   recoverInterruptedWorkflowRun: vi.fn(),
 }));
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => vi.resetAllMocks());
 
 async function mount(extra: Partial<RunRecord> = {}) {
@@ -56,33 +56,26 @@ async function mount(extra: Partial<RunRecord> = {}) {
     ['run-history', 'recovery-state', 'personal', 'original'],
     record,
   );
-  const host = document.createElement('div');
-  document.body.append(host);
-  const root = createRoot(host);
-  await act(async () =>
-    root.render(
-      createElement(
-        QueryClientProvider,
-        { client },
-        createElement(WorkflowRecoveryNotice, { runId: 'original' }),
-      ),
-    ),
+  const user = userEvent.setup();
+  const rendered = renderComponent(
+    <QueryClientProvider client={client}>
+      <WorkflowRecoveryNotice runId='original' />
+    </QueryClientProvider>,
   );
   return {
-    host,
+    host: rendered.container,
+    user,
     close: async () => {
-      await act(async () => root.unmount());
+      rendered.unmount();
       client.clear();
-      host.remove();
     },
   };
 }
+
 function button(host: HTMLElement, label: string) {
-  const value = [...host.querySelectorAll('button')].find((item) =>
-    item.textContent?.includes(label),
-  );
-  expect(value).toBeTruthy();
-  return value!;
+  return within(host).getByRole('button', {
+    name: (name) => name.includes(label),
+  });
 }
 
 it('retains recovery errors and retries the original run without replaying it', async () => {
@@ -92,18 +85,14 @@ it('retains recovery errors and retries the original run without replaying it', 
     .mockResolvedValueOnce({} as never);
   const view = await mount();
   try {
-    await act(async () =>
-      button(view.host, 'executionRecovery.tryRecover').click(),
+    await view.user.click(button(view.host, 'executionRecovery.tryRecover'));
+    await waitFor(() =>
+      expect(view.host).toHaveTextContent('Original result is unknown'),
     );
-    expect(view.host.textContent).toContain('Original result is unknown');
     expect(recover).toHaveBeenLastCalledWith('original');
-    expect(button(view.host, 'executionRecovery.tryRecover').disabled).toBe(
-      false,
-    );
-    await act(async () =>
-      button(view.host, 'executionRecovery.tryRecover').click(),
-    );
-    expect(recover).toHaveBeenCalledTimes(2);
+    expect(button(view.host, 'executionRecovery.tryRecover')).toBeEnabled();
+    await view.user.click(button(view.host, 'executionRecovery.tryRecover'));
+    await waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
     expect(view.host.textContent).not.toContain('Original result is unknown');
   } finally {
     await view.close();
@@ -122,12 +111,8 @@ it('shows remote reconciliation progress and prevents concurrent manual recovery
     expect(view.host.textContent).toContain(
       'executionRecovery.confirmingRemote',
     );
-    expect(button(view.host, 'executionRecovery.tryRecover').disabled).toBe(
-      true,
-    );
-    await act(async () =>
-      button(view.host, 'executionRecovery.tryRecover').click(),
-    );
+    expect(button(view.host, 'executionRecovery.tryRecover')).toBeDisabled();
+    await view.user.click(button(view.host, 'executionRecovery.tryRecover'));
     expect(recoverInterruptedWorkflowRun).not.toHaveBeenCalled();
   } finally {
     await view.close();
@@ -138,9 +123,7 @@ it('stops tracking only the selected run and never invokes recovery', async () =
   vi.mocked(dismissRunRecovery).mockResolvedValue(undefined);
   const view = await mount();
   try {
-    await act(async () =>
-      button(view.host, 'executionRecovery.dismiss').click(),
-    );
+    await view.user.click(button(view.host, 'executionRecovery.dismiss'));
     expect(dismissRunRecovery).toHaveBeenCalledExactlyOnceWith('original');
     expect(recoverInterruptedWorkflowRun).not.toHaveBeenCalled();
   } finally {

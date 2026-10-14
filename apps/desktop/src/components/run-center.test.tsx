@@ -1,7 +1,11 @@
-// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, createElement, type ReactNode } from 'react';
-import { createRoot } from 'react-dom/client';
+import {
+  act,
+  render as renderComponent,
+  type RenderResult,
+} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { type ReactNode } from 'react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { expect, it, vi } from 'vitest';
 
@@ -62,8 +66,9 @@ vi.mock('react-i18next', () => ({
 // Keep this a navigation test: overlay animations and tab primitives have
 // separate ownership, while the actual Run Center event handlers stay intact.
 vi.mock('@workspace/ui/components', () => {
-  const box = ({ children, ...props }: { children?: ReactNode }) =>
-    createElement('div', props, children);
+  const box = ({ children, ...props }: { children?: ReactNode }) => (
+    <div {...props}>{children}</div>
+  );
   const button = ({
     children,
     variant: _variant,
@@ -73,7 +78,7 @@ vi.mock('@workspace/ui/components', () => {
     children?: ReactNode;
     variant?: string;
     size?: string;
-  }) => createElement('button', props, children);
+  }) => <button {...props}>{children}</button>;
   return {
     Badge: box,
     Button: button,
@@ -83,11 +88,8 @@ vi.mock('@workspace/ui/components', () => {
     DrawerTitle: box,
     ScrollArea: box,
     Drawer: ({ open, children }: { open: boolean; children: ReactNode }) =>
-      open
-        ? createElement('div', { 'data-test': 'run-center' }, children)
-        : null,
-    Tabs: ({ children }: { children: ReactNode }) =>
-      createElement('div', null, children),
+      open ? <div data-test='run-center'>{children}</div> : null,
+    Tabs: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     TabsList: box,
     TabsTrigger: button,
     TabsContent: ({
@@ -96,65 +98,57 @@ vi.mock('@workspace/ui/components', () => {
     }: {
       value: string;
       children: ReactNode;
-    }) => (value === 'all' ? createElement('div', null, children) : null),
+    }) => (value === 'all' ? <div>{children}</div> : null),
   };
 });
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
+
 function Location() {
   const location = useLocation();
-  return createElement('output', null, location.pathname + location.search);
+  return <output>{location.pathname + location.search}</output>;
 }
 
 function RouteButtons() {
   const navigate = useNavigate();
-  return createElement(
-    'nav',
-    null,
-    ...[
-      '/apps',
-      '/apps/report',
-      '/apps/new',
-      '/workflows',
-      '/workflows/weather',
-      '/workflows/new',
-      '/runs',
-      '/settings',
-      '/profile',
-      '/skills',
-      '/mcp-servers',
-    ].map((path) =>
-      createElement(
-        'button',
-        { key: path, onClick: () => void navigate(path) },
-        path,
-      ),
-    ),
+  return (
+    <nav>
+      {[
+        '/apps',
+        '/apps/report',
+        '/apps/new',
+        '/workflows',
+        '/workflows/weather',
+        '/workflows/new',
+        '/runs',
+        '/settings',
+        '/profile',
+        '/skills',
+        '/mcp-servers',
+      ].map((path) => (
+        <button key={path} onClick={() => void navigate(path)}>
+          {path}
+        </button>
+      ))}
+    </nav>
   );
 }
 
 it('shows Run Center only on App and Workflow lists and hides its drawer on other pages', async () => {
+  const user = userEvent.setup();
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const host = document.createElement('div');
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   try {
-    await act(async () =>
-      root.render(
-        createElement(
-          QueryClientProvider,
-          { client },
-          createElement(
-            MemoryRouter,
-            { initialEntries: ['/apps'] },
-            createElement(RunCenter),
-            createElement(Location),
-            createElement(RouteButtons),
-          ),
-        ),
-      ),
+    rendered = renderComponent(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/apps']}>
+          <RunCenter />
+          <Location />
+          <RouteButtons />
+        </MemoryRouter>
+      </QueryClientProvider>,
+      { container: host },
     );
     for (const path of [
       '/apps',
@@ -180,7 +174,7 @@ it('shows Run Center only on App and Workflow lists and hides its drawer on othe
       );
       if (['/apps', '/workflows'].includes(path)) {
         expect(bar).not.toBeNull();
-        await act(async () => bar!.click());
+        await user.click(bar!);
         expect(host.querySelector('[data-test="run-center"]')).not.toBeNull();
       } else {
         expect(bar).toBeNull();
@@ -188,33 +182,29 @@ it('shows Run Center only on App and Workflow lists and hides its drawer on othe
       }
     }
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     client.clear();
     host.remove();
   }
 });
 
 it('shows each task once and opens its existing run in the corresponding detail page', async () => {
+  const user = userEvent.setup();
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const host = document.createElement('div');
-  const root = createRoot(host);
+  let rendered!: Pick<RenderResult, 'rerender' | 'unmount'>;
   try {
-    await act(async () =>
-      root.render(
-        createElement(
-          QueryClientProvider,
-          { client },
-          createElement(
-            MemoryRouter,
-            { initialEntries: ['/workflows'] },
-            createElement(RunCenter),
-            createElement(Location),
-            createElement(RouteButtons),
-          ),
-        ),
-      ),
+    rendered = renderComponent(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/workflows']}>
+          <RunCenter />
+          <Location />
+          <RouteButtons />
+        </MemoryRouter>
+      </QueryClientProvider>,
+      { container: host },
     );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -233,7 +223,7 @@ it('shows each task once and opens its existing run in the corresponding detail 
         button.textContent?.includes('Weather workflow'),
       ),
     ).toHaveLength(1);
-    await act(async () => taskButton('Weather workflow').click());
+    await user.click(taskButton('Weather workflow'));
     expect(host.querySelector('output')?.textContent).toBe(
       '/workflows/weather?runId=weather-run&live=true',
     );
@@ -242,19 +232,19 @@ it('shows each task once and opens its existing run in the corresponding detail 
     expect(state.setOpen).toHaveBeenCalledWith(false);
     expect(host.querySelector('[data-test="run-center"]')).toBeNull();
     expect(host.querySelector('[aria-label="runCenter.open"]')).toBeNull();
-    await act(async () =>
-      Array.from(host.querySelectorAll<HTMLButtonElement>('nav button'))
-        .find((button) => button.textContent === '/apps')!
-        .click(),
+    await user.click(
+      Array.from(host.querySelectorAll<HTMLButtonElement>('nav button')).find(
+        (button) => button.textContent === '/apps',
+      )!,
     );
     await act(async () => open());
-    await act(async () => taskButton('Report App').click());
+    await user.click(taskButton('Report App'));
     expect(host.querySelector('output')?.textContent).toBe(
       '/apps?runId=app-run',
     );
     expect(state.openRun).not.toHaveBeenCalled();
   } finally {
-    await act(async () => root.unmount());
+    rendered.unmount();
     client.clear();
     host.remove();
   }

@@ -1,7 +1,10 @@
-// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, createElement } from 'react';
-import { createRoot } from 'react-dom/client';
+import {
+  render as renderComponent,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import {
@@ -27,7 +30,6 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
-
 const credential = {
   id: 'existing',
   name: 'Service key',
@@ -42,7 +44,6 @@ async function setup(
   },
   url = 'https://agent.example/a2a',
 ) {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.mocked(listRemoteCredentials).mockResolvedValue([
     {
       ...credential,
@@ -53,51 +54,33 @@ async function setup(
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   });
   const onChange = vi.fn();
-  const container = document.createElement('div');
-  document.body.append(container);
-  const root = createRoot(container);
-  await act(async () => {
-    root.render(
-      createElement(
-        QueryClientProvider,
-        { client },
-        createElement(RemoteAgentAuthenticationFields, {
-          url,
-          authentication,
-          onChange,
-        }),
-      ),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  const user = userEvent.setup();
+  const { container, unmount } = renderComponent(
+    <QueryClientProvider client={client}>
+      <RemoteAgentAuthenticationFields
+        url={url}
+        authentication={authentication}
+        onChange={onChange}
+      />
+    </QueryClientProvider>,
+  );
+  await waitFor(() =>
+    expect(client.getQueryData(['remote-agent-credentials'])).toBeDefined(),
+  );
   const click = async (key: string) => {
-    const button = [
-      ...container.querySelectorAll<HTMLButtonElement>('button'),
-    ].find(
-      (button) => button.textContent === `workflowEditor.remoteAuth.${key}`,
+    await user.click(
+      await within(container).findByRole('button', {
+        name: `workflowEditor.remoteAuth.${key}`,
+      }),
     );
-    expect(button).toBeDefined();
-    await act(async () => {
-      button!.click();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
   };
   const input = async (id: string, value: string) => {
     const element = container.querySelector<HTMLInputElement>(`#${id}`)!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        'value',
-      )!.set!.call(element, value);
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await user.clear(element);
+    await user.type(element, value);
   };
   const close = async () => {
-    await act(async () => root.unmount());
-    container.remove();
+    unmount();
     client.clear();
   };
   return { container, client, onChange, click, input, close };
@@ -224,6 +207,7 @@ it.each([
 ] as const)(
   'keeps saved credentials visible and explains availability for %s',
   async (url, enabled, explanation) => {
+    const user = userEvent.setup();
     const ui = await setup({ type: 'bearer', credentialId: '' }, url);
     try {
       if (explanation)
@@ -233,27 +217,21 @@ it.each([
       const trigger = ui.container.querySelector<HTMLButtonElement>(
         '[aria-label="workflowEditor.remoteAuth.credential"]',
       )!;
-      await act(async () => {
-        trigger.click();
-      });
+      await user.click(trigger);
       const option = [
         ...document.querySelectorAll<HTMLElement>('[role="option"]'),
       ].find((item) => item.textContent?.includes('Service key'));
       expect(option).toBeDefined();
       expect(option?.getAttribute('aria-disabled') === 'true').toBe(!enabled);
       if (enabled) {
-        await act(async () => {
-          option!.click();
-        });
+        await user.click(option!);
         expect(ui.onChange).toHaveBeenCalledWith({
           type: 'bearer',
           credentialId: 'existing',
         });
       } else {
         expect(option?.textContent).toContain('https://agent.example');
-        await act(async () => {
-          option!.click();
-        });
+        await user.click(option!);
         expect(ui.onChange).not.toHaveBeenCalled();
       }
     } finally {
@@ -263,6 +241,7 @@ it.each([
 );
 
 it('reloads the saved credential when configuring a node again', async () => {
+  const user = userEvent.setup();
   const first = await setup();
   await first.close();
   const next = await setup({ type: 'bearer', credentialId: '' });
@@ -271,16 +250,12 @@ it('reloads the saved credential when configuring a node again', async () => {
     const trigger = next.container.querySelector<HTMLButtonElement>(
       '[aria-label="workflowEditor.remoteAuth.credential"]',
     )!;
-    await act(async () => {
-      trigger.click();
-    });
+    await user.click(trigger);
     const option = [
       ...document.querySelectorAll<HTMLElement>('[role="option"]'),
     ].find((item) => item.textContent === 'Service key');
     expect(option).toBeDefined();
-    await act(async () => {
-      option!.click();
-    });
+    await user.click(option!);
     expect(next.onChange).toHaveBeenCalledWith({
       type: 'bearer',
       credentialId: 'existing',

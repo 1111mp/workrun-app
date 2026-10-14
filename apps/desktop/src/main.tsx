@@ -10,6 +10,11 @@ import { getAppInitialData } from '@/services/init';
 import { checkForStartupUpdate } from '@/services/updater';
 
 void (async () => {
+  // The desktop test bridge is excluded from normal production builds.
+  if (import.meta.env.MODE === 'e2e') {
+    await import('@wdio/tauri-plugin');
+  }
+
   const [config, sysTheme] = await getAppInitialData();
   // Set the theme in advance to prevent flickering.
   applyTheme(config.theme !== 'system' ? config.theme : sysTheme, false);

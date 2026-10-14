@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, createElement, useEffect } from 'react';
-import { createRoot } from 'react-dom/client';
+import { act, renderHook } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 
 import { listActiveRuns, type RunRecordSummary } from '@/services/run-history';
@@ -35,9 +33,6 @@ vi.mock('@/services/workflow', () => ({
 vi.mock('@/services/process-node', () => ({
   prepareWorkflowProcessApps: vi.fn(async (dsl: unknown) => dsl),
 }));
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
 
 function active(status: RunRecordSummary['status']): RunRecordSummary {
   return {
@@ -49,6 +44,7 @@ function active(status: RunRecordSummary['status']): RunRecordSummary {
     startedAt: '2026-10-11T00:00:00Z',
   };
 }
+
 async function mount(runs: RunRecordSummary[]) {
   vi.clearAllMocks();
   useWorkflowRunStore.getState().resetRunView();
@@ -57,30 +53,24 @@ async function mount(runs: RunRecordSummary[]) {
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
   client.setQueryData(['run-history', 'active', 'personal'], runs);
-  let hook: ReturnType<typeof useWorkflowRun>;
-  function Harness() {
-    const current = useWorkflowRun('weather', [], [], {
-      mode: 'task',
-      inputSchema: { fields: [] },
-    } as unknown as WorkflowSettings);
-    useEffect(() => {
-      hook = current;
-    });
-    return null;
-  }
-  const host = document.createElement('div');
-  const root = createRoot(host);
-  await act(async () =>
-    root.render(
-      createElement(QueryClientProvider, { client }, createElement(Harness)),
-    ),
+  const rendered = renderHook(
+    () =>
+      useWorkflowRun('weather', [], [], {
+        mode: 'task',
+        inputSchema: { fields: [] },
+      } as unknown as WorkflowSettings),
+    {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    },
   );
   return {
     get hook() {
-      return hook!;
+      return rendered.result.current;
     },
     close: async () => {
-      await act(async () => root.unmount());
+      rendered.unmount();
       client.clear();
     },
   };

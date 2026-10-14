@@ -21,6 +21,11 @@ pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(feature = "e2e")]
+    assert!(
+        std::env::var_os("WORKRUN_E2E_DATA_DIR").is_some(),
+        "E2E builds must be launched through the isolated test runner"
+    );
     let _ = utils::dirs::init_portable_flag();
 
     #[cfg(target_os = "linux")]
@@ -35,7 +40,11 @@ pub fn run() {
             tauri_plugin_single_instance::Builder::new()
                 // Set a custom D-Bus ID, used on Linux
                 // Defaults to the app's bundle identifier set in tauri.conf.json.
-                .dbus_id("io.github.mp1111.workrun")
+                .dbus_id(if cfg!(feature = "e2e") {
+                    "io.github.mp1111.workrun.e2e"
+                } else {
+                    "io.github.mp1111.workrun"
+                })
                 .callback(|app_handle, _argc, _cwd| {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.show();
@@ -62,6 +71,10 @@ pub fn run() {
 
             resolve::init_work_dir_and_logger()?;
 
+            // Register after flexi_logger so the test bridge cannot claim the global logger.
+            #[cfg(feature = "e2e")]
+            app.handle().plugin(tauri_plugin_wdio::init())?;
+
             // Logger initialization needs Tauri's AppHandle for its file path.
             // Register the OTLP layer immediately afterwards so flexi_logger
             // remains the sole owner of the global `log` facade.
@@ -71,7 +84,9 @@ pub fn run() {
 
             logging!(info, Type::Setup, "Starting application initialization...");
 
-            if let Err(e) = setup_autostart(app) {
+            if !cfg!(feature = "e2e")
+                && let Err(e) = setup_autostart(app)
+            {
                 logging!(error, Type::Setup, "Failed to setup autostart: {}", e);
             }
 
@@ -260,6 +275,9 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_devtools::init());
     }
+
+    #[cfg(feature = "e2e")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
     let app = builder
         .build(tauri::generate_context!())
