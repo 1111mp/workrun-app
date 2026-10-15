@@ -111,77 +111,86 @@ function UpdateDialog() {
 
   return (
     <AlertDialog open={open}>
-      <AlertDialogContent className='max-w-xl!'>
-        <AlertDialogHeader>
-          <AlertDialogMedia>
-            <Info />
-          </AlertDialogMedia>
-          <AlertDialogTitle>{t('updater.updateInfo')}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {t('updater.updateDescription')}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <div>
+      <AlertDialogContent className='max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-2xl! gap-0 overflow-y-auto p-0'>
+        <div className='via-background relative overflow-hidden border-b bg-linear-to-br from-violet-500/12 to-sky-500/10 px-5 pt-5 pb-4 sm:px-6 sm:pt-6'>
+          <div className='absolute -top-12 -right-10 size-36 rounded-full bg-violet-500/10 blur-2xl' />
+          <AlertDialogHeader className='relative grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-3 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
+            <AlertDialogMedia className='mb-0 size-10 rounded-xl border border-violet-500/20 bg-violet-500/10 text-violet-700 shadow-sm dark:text-violet-300'>
+              <Info className='size-5' />
+            </AlertDialogMedia>
+            <div className='flex min-w-0 flex-col gap-1.5'>
+              <AlertDialogTitle className='text-lg font-semibold tracking-tight'>
+                {t('updater.updateInfo')}
+              </AlertDialogTitle>
+              <AlertDialogDescription className='text-sm leading-5'>
+                {t('updater.updateDescription')}
+              </AlertDialogDescription>
+            </div>
+          </AlertDialogHeader>
+        </div>
+        <div className='flex flex-col gap-5 px-5 py-5 sm:px-6'>
           {hasUpdate && (
             <>
-              <ItemGroup className='grid grid-cols-2 gap-4'>
-                <Item>
+              <ItemGroup className='grid grid-cols-2 gap-3'>
+                <Item variant='outline' className='min-w-0'>
                   <ItemContent>
                     <ItemTitle>{t('updater.currentVersion')}</ItemTitle>
                     <ItemDescription>{update.currentVersion}</ItemDescription>
                   </ItemContent>
                 </Item>
-                <Item>
+                <Item variant='outline' className='min-w-0'>
                   <ItemContent>
                     <ItemTitle>{t('updater.newVersion')}</ItemTitle>
                     <ItemDescription>{update.version}</ItemDescription>
                   </ItemContent>
                 </Item>
               </ItemGroup>
-              <Item>
-                <ItemContent>
-                  <ItemTitle>{t('updater.releaseNotes')}</ItemTitle>
-                  <div className='bg-muted text-muted-foreground mt-2 max-h-50 overflow-auto rounded-sm p-3'>
-                    <Markdown
-                      components={{
-                        a: ({ children, ...props }) => {
-                          return (
-                            <a
-                              className='text-primary underline'
-                              {...props}
-                              target='_blank'
-                            >
+              <ItemGroup>
+                <Item className='p-0'>
+                  <ItemContent>
+                    <ItemTitle>{t('updater.releaseNotes')}</ItemTitle>
+                    <div className='bg-muted/40 text-muted-foreground mt-2 max-h-64 overflow-auto rounded-lg border p-4 text-sm leading-6 wrap-break-word'>
+                      <Markdown
+                        components={{
+                          a: ({ children, ...props }) => {
+                            return (
+                              <a
+                                className='text-primary underline'
+                                {...props}
+                                target='_blank'
+                              >
+                                {children}
+                              </a>
+                            );
+                          },
+                          h3: ({ children }) => (
+                            <h3 className='text-base font-bold'>{children}</h3>
+                          ),
+                          ul: ({ children }) => (
+                            <ul className='px-6 py-2'>{children}</ul>
+                          ),
+                          li: ({ children }) => (
+                            <li className='list-disc text-sm leading-6'>
                               {children}
-                            </a>
-                          );
-                        },
-                        h3: ({ children }) => (
-                          <h3 className='text-base font-bold'>{children}</h3>
-                        ),
-                        ul: ({ children }) => (
-                          <ul className='px-6 py-2'>{children}</ul>
-                        ),
-                        li: ({ children }) => (
-                          <li className='list-disc text-sm leading-6'>
-                            {children}
-                          </li>
-                        ),
-                        code: ({ children }) => (
-                          <Kbd className='text-card-foreground bg-card'>
-                            {children}
-                          </Kbd>
-                        ),
-                      }}
-                    >
-                      {update.body}
-                    </Markdown>
-                  </div>
-                </ItemContent>
-              </Item>
+                            </li>
+                          ),
+                          code: ({ children }) => (
+                            <Kbd className='text-card-foreground bg-card'>
+                              {children}
+                            </Kbd>
+                          ),
+                        }}
+                      >
+                        {update.body}
+                      </Markdown>
+                    </div>
+                  </ItemContent>
+                </Item>
+              </ItemGroup>
             </>
           )}
           {percentage !== undefined && (
-            <Field className='w-full px-3 py-2'>
+            <Field className='w-full'>
               <FieldLabel htmlFor='progress-upload'>
                 <span>{t('updater.downloadProgress')}</span>
                 <span className='ml-auto'>{percentage}%</span>
@@ -190,7 +199,7 @@ function UpdateDialog() {
             </Field>
           )}
         </div>
-        <AlertDialogFooter>
+        <AlertDialogFooter className='mx-0 mb-0 px-5 py-4 sm:px-6'>
           <AlertDialogCancel
             onClick={async () => {
               setDownloading(false);

@@ -101,18 +101,15 @@ function SettingsPage() {
     ) {
       // The endpoint is persisted before offering a restart so accepting it
       // cannot restart the process before the new collector is available.
-      const shouldRestart = await confirm({
+      await confirm({
         icon: <Power />,
         title: t('settings.otlp.restartTitle'),
         description: t('settings.otlp.restartDescription'),
         actionVariant: 'destructive',
         cancelText: t('common.cancel'),
         confirmText: t('settings.restart'),
+        onConfirm: restartApp,
       });
-
-      if (shouldRestart) {
-        await restartApp();
-      }
     }
   });
 

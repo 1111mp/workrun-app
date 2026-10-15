@@ -61,6 +61,7 @@ import { WorkflowRunPanel } from '@/components/workflow-run-panel';
 import { WorkflowSchedules } from '@/components/workflow-schedules';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { WorkflowConfigureButton } from '@/components/workflow-share-dialog';
+import { useUnsavedChangesGuard } from '@/hooks';
 import { isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
 import {
@@ -215,9 +216,6 @@ function WorkflowEditorContent({
     WorkflowRelease | undefined
   >();
   const activeWorkflow = workflow ?? createdWorkflow;
-  const [savedDocument, setSavedDocument] = useState<string>(() =>
-    workflow ? JSON.stringify(workflow.document) : '',
-  );
   const autoStartHandled = useRef(false);
   const creatingWorkflow = useRef<Promise<StoredWorkflow> | undefined>(null);
 
@@ -247,6 +245,9 @@ function WorkflowEditorContent({
 
   const workflowDocument = toWorkflowDocument(nodes, edges, workflowSettings);
   const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
+  const [savedDocument, setSavedDocument] = useState<string>(() =>
+    workflow ? JSON.stringify(workflow.document) : workflowDocumentSnapshot,
+  );
   const isDirty = workflowDocumentSnapshot !== savedDocument;
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const localReleaseMatchesDraft = Boolean(
@@ -349,6 +350,13 @@ function WorkflowEditorContent({
   });
 
   const { t } = useTranslation();
+  useUnsavedChangesGuard({
+    hasUnsavedChanges: !readOnly && isDirty,
+    title: t('workflowEditor.unsavedChanges.title'),
+    description: t('workflowEditor.unsavedChanges.description'),
+    confirmText: t('workflowEditor.unsavedChanges.leave'),
+    cancelText: t('workflowEditor.unsavedChanges.stay'),
+  });
 
   const candidateEvaluations = candidateEvaluationRuns.data ?? [];
   const latestCandidateEvaluation = candidateEvaluations[0];

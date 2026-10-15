@@ -686,6 +686,12 @@
     }
   },
   "workflowEditor": {
+    "unsavedChanges": {
+      "title": "离开编辑页面？",
+      "description": "工作流有尚未保存的改动。离开后，这些改动将丢失。你可以继续编辑并保存后再离开。",
+      "stay": "继续编辑",
+      "leave": "放弃改动并离开"
+    },
     "activeRunExists": "此工作流有进行中的任务，请先完成或取消当前任务，再开始新的运行。",
     "checkActiveRunFailed": "无法确认当前运行状态，请重试后再运行。",
     "remoteTasks": {
@@ -1979,7 +1985,14 @@
     "installFailed": "更新安装失败，请重试。"
   },
 
+  "unsavedChanges": {
+    "title": "离开当前页面？",
+    "description": "你有尚未保存的改动。离开后，这些改动将丢失。你可以继续编辑并保存后再离开。",
+    "stay": "继续编辑",
+    "leave": "放弃改动并离开"
+  },
   "confirm": {
+    "actionFailed": "操作失败，请重试。",
     "title": "确定吗？",
     "cancel": "取消",
     "confirm": "确定"

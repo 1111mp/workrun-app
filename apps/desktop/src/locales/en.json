@@ -698,6 +698,12 @@
     }
   },
   "workflowEditor": {
+    "unsavedChanges": {
+      "title": "Leave the editor?",
+      "description": "This workflow has unsaved changes. Leaving will discard them. You can continue editing and save before leaving.",
+      "stay": "Continue editing",
+      "leave": "Discard changes and leave"
+    },
     "activeRunExists": "This workflow has an active run. Complete or cancel it before starting another.",
     "checkActiveRunFailed": "Could not check active runs. Try again before starting.",
     "remoteTasks": {
@@ -2006,7 +2012,14 @@
     "installFailed": "Update installation failed. Please try again."
   },
 
+  "unsavedChanges": {
+    "title": "Leave this page?",
+    "description": "You have unsaved changes. Leaving will discard them. You can continue editing and save before leaving.",
+    "stay": "Continue editing",
+    "leave": "Discard changes and leave"
+  },
   "confirm": {
+    "actionFailed": "The action failed. Try again.",
     "title": "Are you sure?",
     "cancel": "Cancel",
     "confirm": "Confirm"
