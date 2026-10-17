@@ -113,6 +113,11 @@ pub fn run() {
             // app
             cmd::app::restart_app,
             cmd::artifact::artifact_pick,
+            // assistant
+            cmd::assistant::assistant_reply,
+            cmd::assistant::assistant_session_save,
+            cmd::assistant::assistant_session_list,
+            cmd::assistant::assistant_session_get,
             cmd::artifact::artifact_export,
             cmd::artifact::artifact_preview,
             cmd::artifact::artifact_open_pdf,

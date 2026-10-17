@@ -23,9 +23,6 @@ vi.mock('@/components/remote-tasks', () => ({ RemoteTasksPanel: () => null }));
 vi.mock('@/components/workflow-chat-composer', () => ({
   WorkflowChatComposer: () => null,
 }));
-vi.mock('@/components/workflow-code-block', () => ({
-  WorkflowCodeBlock: () => null,
-}));
 vi.mock('@/components/workflow-recovery-notice', () => ({
   WorkflowRecoveryNotice: () => null,
 }));

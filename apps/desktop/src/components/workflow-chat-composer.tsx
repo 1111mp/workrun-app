@@ -117,7 +117,8 @@ export function WorkflowChatComposer({
           </InputGroupAddon>
         )}
         <InputGroupTextarea
-          className='max-h-52 min-h-20 px-4 pt-3'
+          rows={1}
+          className='max-h-52 min-h-0 overflow-y-auto px-4 py-3 leading-6'
           aria-label={t('workflowEditor.output.message')}
           disabled={disabled || picking}
           placeholder={t('workflowEditor.output.messagePlaceholder')}
@@ -137,7 +138,7 @@ export function WorkflowChatComposer({
         />
         <InputGroupAddon
           align='block-end'
-          className='justify-between px-3 pb-3'
+          className='justify-between px-3 pb-2'
         >
           <div className='flex min-w-0 items-center gap-3'>
             {fileInputs.length > 0 && (

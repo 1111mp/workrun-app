@@ -108,6 +108,7 @@ import { useWorkflowRun } from './workflow-editor/use-workflow-run';
 import { useWorkflowRunRecord } from './workflow-editor/use-workflow-run-record';
 import { useWorkflowRunSnapshot } from './workflow-editor/use-workflow-run-snapshot';
 import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
+import { WorkflowEditorToolbar } from './workflow-editor/workflow-editor-toolbar';
 
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
@@ -899,8 +900,11 @@ function WorkflowEditorContent({
           ) : undefined
         }
         header={
-          <header className='flex h-10 shrink-0 items-center gap-2 pt-1 pr-4'>
-            <div className='flex flex-1 items-center gap-2 px-4'>
+          <WorkflowEditorToolbar readOnly={readOnly}>
+            <div
+              data-tauri-drag-region={OS_PLATFORM !== 'win32'}
+              className='flex flex-1 items-center gap-2 px-4'
+            >
               <Button
                 variant='ghost'
                 size='icon-sm'
@@ -1060,7 +1064,7 @@ function WorkflowEditorContent({
                 </Button>
               ) : null}
             </div>
-          </header>
+          </WorkflowEditorToolbar>
         }
       >
         {!readOnly ? (

@@ -11,15 +11,11 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
   Spinner,
-  buttonVariants,
-  type VariantProps,
 } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
 import { CircleAlertIcon, InfoIcon } from 'lucide-react';
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
@@ -27,22 +23,9 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
-type ConfirmOptions = {
-  icon?: ReactNode;
-  title?: string;
-  description?: string;
-  content?: ReactNode;
-  confirmText?: string;
-  cancelText?: string;
-  actionVariant?: VariantProps<typeof buttonVariants>['variant'];
-  onConfirm?: () => void | Promise<void>;
-};
+import { ConfirmContext, type ConfirmOptions } from '@/lib/confirm-context';
 
-type ConfirmContextType = {
-  confirm: (options: ConfirmOptions) => Promise<boolean>;
-};
-
-const ConfirmContext = createContext<ConfirmContextType | null>(null);
+export { useConfirm } from '@/lib/confirm-context';
 
 type ConfirmRequest = {
   options: ConfirmOptions;
@@ -185,14 +168,4 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       </AlertDialog>
     </ConfirmContext.Provider>
   );
-}
-
-export function useConfirm() {
-  const context = useContext(ConfirmContext);
-
-  if (!context) {
-    throw new Error('useConfirm must be used inside ConfirmProvider');
-  }
-
-  return context.confirm;
 }

@@ -13,44 +13,29 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@workspace/ui/components';
-import { cn } from '@workspace/ui/lib/utils';
 import {
-  AppWindowIcon,
   BookOpenIcon,
-  HistoryIcon,
   LogOutIcon,
   RefreshCwIcon,
   ServerCogIcon,
   SettingsIcon,
   User,
-  WorkflowIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { NavLink, Outlet, useNavigate } from 'react-router';
+import { Outlet, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { DeeplinkHandler } from '@/components/deeplink-handler';
-import { RunCenter } from '@/components/run-center';
-import { RunEventTracker } from '@/components/run-event-tracker';
 import { TeamSessionGate } from '@/components/team-session-gate';
+import { WorkspaceFrame } from '@/components/workspace-frame';
 import { createTeamAuthClient } from '@/lib/auth-client';
 import {
   selectWorkspaceUserInfo,
   useUpdaterStore,
   useWorkrunStore,
 } from '@/stores';
-
-const navigation = [
-  { to: '/workflows', labelKey: 'navigation.workflow', icon: WorkflowIcon },
-  {
-    to: '/apps',
-    labelKey: 'navigation.apps',
-    icon: AppWindowIcon,
-  },
-  { to: '/runs', labelKey: 'navigation.runHistory', icon: HistoryIcon },
-];
 
 function HomePage() {
   return (
@@ -121,50 +106,15 @@ function HomeLayout() {
   };
 
   return (
-    <div className='flex h-dvh min-h-0 flex-col overflow-hidden'>
-      <header
-        data-tauri-drag-region={OS_PLATFORM !== 'win32'}
-        className={cn(
-          'flex h-12 shrink-0 items-center gap-1 border-b px-2',
-          OS_PLATFORM === 'darwin' && 'pl-20',
-        )}
-      >
-        {OS_PLATFORM === 'darwin' && (
-          <span data-tauri-drag-region className='mr-3 text-sm font-semibold'>
-            Workrun
-          </span>
-        )}
-        <nav
-          aria-label={t('navigation.label')}
-          className='flex items-center gap-1'
-        >
-          {navigation.map(({ to, labelKey, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              viewTransition
-              className={({ isActive }) =>
-                [
-                  'flex h-7 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                ].join(' ')
-              }
-            >
-              <Icon className='size-3.5' />
-              {t(labelKey)}
-            </NavLink>
-          ))}
-        </nav>
-        <div data-tauri-drag-region className='flex-1' />
+    <WorkspaceFrame
+      accountMenu={
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
               <Button
                 variant='ghost'
                 size='sm'
-                className='relative'
+                className='relative w-full justify-start group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0'
                 aria-label={t('navigation.accountMenu')}
               >
                 <Avatar size='sm'>
@@ -175,6 +125,9 @@ function HomeLayout() {
                     <User />
                   </AvatarFallback>
                 </Avatar>
+                <span className='truncate group-data-[collapsible=icon]:hidden'>
+                  {displayName || t('navigation.accountMenu')}
+                </span>
                 {availableUpdate ? (
                   <span
                     className='ring-background absolute top-1 right-1 size-1.5 rounded-full bg-red-500 ring-2'
@@ -230,6 +183,9 @@ function HomeLayout() {
                   : availableUpdate
                     ? t('updater.available')
                     : t('navigation.checkForUpdates')}
+                <span className='truncate group-data-[collapsible=icon]:hidden'>
+                  {displayName || t('navigation.accountMenu')}
+                </span>
                 {availableUpdate ? (
                   <span className='ml-auto rounded-sm bg-red-500! px-1 py-0.5 text-[10px] leading-none font-semibold text-white!'>
                     NEW
@@ -251,13 +207,10 @@ function HomeLayout() {
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-      </header>
-      <main className='min-h-0 flex-1 [view-transition-name:page-content]'>
-        <Outlet />
-      </main>
-      <RunEventTracker />
-      <RunCenter />
-    </div>
+      }
+    >
+      <Outlet />
+    </WorkspaceFrame>
   );
 }
 

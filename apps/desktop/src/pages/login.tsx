@@ -44,7 +44,7 @@ function LoginPage() {
       if (result.error || !(await getTeamUser(serverUrl))) {
         throw new Error('Login failed');
       }
-      void navigate('/workflows', { replace: true });
+      void navigate('/start', { replace: true });
     } catch {
       setError(t('onboarding.login.failed'));
     } finally {

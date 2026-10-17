@@ -8,7 +8,9 @@ import {
 import { useEffect } from 'react';
 import { expect, it, vi } from 'vitest';
 
-import { ConfirmProvider, useConfirm } from './confirm-dialog';
+import { useConfirm } from '@/lib/confirm-context';
+
+import { ConfirmProvider } from './confirm-dialog';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),

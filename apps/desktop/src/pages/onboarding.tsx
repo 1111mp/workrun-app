@@ -84,7 +84,7 @@ function OnboardingPage() {
           onboarding_completed: true,
         });
         useWorkrunStore.getState().setTeamUser(undefined);
-        await router.navigate('/workflows');
+        await router.navigate('/start');
       }}
     />
   ) : (
@@ -98,7 +98,7 @@ function OnboardingPage() {
           team: { server_url: serverUrl },
           onboarding_completed: true,
         });
-        await router.navigate(teamUser ? '/workflows' : '/login');
+        await router.navigate(teamUser ? '/start' : '/login');
       }}
     />
   );

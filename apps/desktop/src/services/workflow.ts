@@ -452,6 +452,19 @@ export async function getWorkflows() {
   return invoke<StoredWorkflow[]>('get_workflows');
 }
 
+/** The entry searches the full team catalog rather than only its first page. */
+export async function getWorkflowCapabilities() {
+  if (!isTeamMode()) return getWorkflows();
+  const items: StoredWorkflow[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await getWorkflowOverview({ pageSize: 100, cursor });
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return items;
+}
+
 export function getWorkflowOverview(query: WorkflowOverviewQuery = {}) {
   const params = new URLSearchParams();
   Object.entries(query).forEach(([key, value]) => {

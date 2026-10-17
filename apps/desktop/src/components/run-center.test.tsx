@@ -112,6 +112,7 @@ function RouteButtons() {
   return (
     <nav>
       {[
+        '/start',
         '/apps',
         '/apps/report',
         '/apps/new',
@@ -151,6 +152,7 @@ it('shows Run Center only on App and Workflow lists and hides its drawer on othe
       { container: host },
     );
     for (const path of [
+      '/start',
       '/apps',
       '/apps/report',
       '/apps/new',
