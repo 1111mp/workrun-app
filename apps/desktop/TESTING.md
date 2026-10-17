@@ -59,6 +59,18 @@ can be migrated when touching them; they do not need a wholesale rewrite.
 
 ## Real browser component checks
 
+On macOS, run browser tests outside an agent's restricted execution sandbox
+(request elevated execution when required). In this environment, sandboxed
+WebKit launches have aborted in macOS `_RegisterApplication` before loading
+tests and triggered a “Playwright quit unexpectedly” system dialog. Headless
+mode still initializes a native application. Unit/component/Tauri mock tests
+can remain sandboxed; do not suppress macOS crash reporting to hide this failure.
+
+Vitest keeps failure screenshots in `apps/desktop/.vitest/attachments/`.
+Each test run (including watch reruns) clears the previous run's attachments.
+Successful tests should not save manual screenshots into source directories;
+use screenshot assertions when a visual regression check is required.
+
 Install the browser for your platform after installing dependencies (repeat after Playwright updates):
 
 ```sh

@@ -2076,6 +2076,12 @@
     "emptyDescription": "Create or import an app or workflow. It will appear here when ready."
   },
   "assistant": {
+    "progressThinking": "Thinking",
+    "progressSummary": "Approach summary",
+    "runLoadFailed": "Unable to load execution progress",
+    "runSteps": "{{completed}} / {{count}} steps",
+    "runTimeline": "Workflow execution progress",
+    "noRunSteps": "No execution steps were recorded.",
     "model": "Assistant model",
     "selectModel": "Select a model",
     "configureModel": "Configure provider credentials in Settings",

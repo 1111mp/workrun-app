@@ -18,7 +18,7 @@ import {
   HistoryIcon,
   HomeIcon,
   MessageSquareIcon,
-  PlusIcon,
+  SquarePen,
   WorkflowIcon,
 } from 'lucide-react';
 import { useEffect, type ReactNode } from 'react';
@@ -78,7 +78,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
       <SidebarHeader>
         <div
           data-tauri-drag-region={OS_PLATFORM !== 'win32'}
-          className={OS_PLATFORM === 'darwin' ? 'h-7 shrink-0' : 'h-2 shrink-0'}
+          className='h-2 shrink-0'
         />
         <SidebarMenu className='group-data-[collapsible=icon]:items-center'>
           <SidebarMenuItem>
@@ -109,7 +109,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
               className='group-data-[collapsible=icon]:justify-center'
               render={<Link to='/start' state={{ reset: key }} />}
             >
-              <PlusIcon />
+              <SquarePen />
               <span className='group-data-[collapsible=icon]:hidden'>
                 {t('start.newTask')}
               </span>
@@ -132,7 +132,45 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                   }
                   render={<Link to={to} />}
                 >
-                  <Icon />
+                  <Icon className='group-data-active/menu-button:hidden' />
+                  <svg
+                    viewBox='0 0 24 24'
+                    fill='currentColor'
+                    aria-hidden='true'
+                    className='hidden group-data-active/menu-button:block'
+                  >
+                    {to === '/start' && (
+                      <path
+                        fillRule='evenodd'
+                        d='M11.1 2.7a1.5 1.5 0 0 1 1.8 0l8 6A2.5 2.5 0 0 1 22 10.7V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-9.3a2.5 2.5 0 0 1 1.1-2l8-6ZM10 14v8h4v-8h-4Z'
+                        clipRule='evenodd'
+                      />
+                    )}
+                    {to === '/workflows' && (
+                      <>
+                        <rect x='2' y='2' width='8' height='8' rx='2' />
+                        <rect x='14' y='14' width='8' height='8' rx='2' />
+                        <path d='M5 10v5a4 4 0 0 0 4 4h5v-2H9a2 2 0 0 1-2-2v-5H5Z' />
+                      </>
+                    )}
+                    {to === '/apps' && (
+                      <path
+                        fillRule='evenodd'
+                        d='M4 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H4Zm0 5v11h16V8H4Zm1-3v1h2V5H5Zm4 0v1h2V5H9Z'
+                        clipRule='evenodd'
+                      />
+                    )}
+                    {to === '/runs' && (
+                      <>
+                        <path
+                          fillRule='evenodd'
+                          d='M12 3a9 9 0 1 1-8.5 12h2.2A7 7 0 1 0 6 8.4L4.5 7A9 9 0 0 1 12 3Zm-1 4h2v4.5l3.5 2-1 1.7L11 12.7V7Z'
+                          clipRule='evenodd'
+                        />
+                        <path d='M2 3v7h7L2 3Z' />
+                      </>
+                    )}
+                  </svg>
                   <span className='group-data-[collapsible=icon]:hidden'>
                     {label}
                   </span>

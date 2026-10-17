@@ -2049,6 +2049,12 @@
     "emptyDescription": "创建或导入应用、工作流，准备好后就能在这里使用。"
   },
   "assistant": {
+    "progressThinking": "正在思考",
+    "progressSummary": "处理摘要",
+    "runLoadFailed": "暂时无法加载执行进展",
+    "runSteps": "{{completed}} / {{count}} 个步骤",
+    "runTimeline": "工作流执行进展",
+    "noRunSteps": "暂时没有节点执行记录。",
     "model": "主控模型",
     "selectModel": "选择对话模型",
     "configureModel": "在设置中配置模型服务凭据",

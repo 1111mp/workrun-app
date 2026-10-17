@@ -2,7 +2,7 @@ import { mongodbAdapter } from '@better-auth/mongo-adapter';
 import { tauri } from '@daveyplate/better-auth-tauri/plugin';
 import { ConfigService } from '@nestjs/config';
 import { betterAuth } from 'better-auth';
-import { openAPI } from 'better-auth/plugins';
+import { bearer, openAPI } from 'better-auth/plugins';
 import type { Connection } from 'mongoose';
 
 export function createAuth(
@@ -42,6 +42,8 @@ export function createAuth(
       'http://localhost:1420',
     ],
     plugins: [
+      // Native assistant requests reuse the signed-in session over HTTP.
+      bearer(),
       tauri({
         callbackURL: '/workflows',
         debugLogs: process.env.NODE_ENV === 'development',

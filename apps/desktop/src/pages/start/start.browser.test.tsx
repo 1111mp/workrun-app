@@ -103,10 +103,6 @@ it('renders the inset shell and collapses the navigation without losing the entr
     .element(screen.getByText('发票汇总', { exact: true }))
     .toBeVisible();
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(1280);
-  await page.screenshot({ path: '.vitest/workrun-entry-desktop.png' });
-  document.documentElement.classList.add('dark');
-  await page.screenshot({ path: '.vitest/workrun-entry-dark.png' });
-  document.documentElement.classList.remove('dark');
   await screen
     .getByRole('main')
     .getByRole('button', { name: 'Toggle Sidebar', exact: true })
@@ -141,7 +137,6 @@ it('renders the inset shell and collapses the navigation without losing the entr
       );
     })
     .toBeLessThanOrEqual(1);
-  await page.screenshot({ path: '.vitest/workrun-entry-collapsed.png' });
   await screen
     .getByRole('main')
     .getByRole('button', { name: 'Toggle Sidebar', exact: true })
@@ -158,7 +153,6 @@ it('keeps the composer and capability actions usable on a narrow window', async 
     .element(screen.getByText('发票汇总', { exact: true }))
     .toBeVisible();
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: '.vitest/workrun-entry-mobile.png' });
 });
 
 it('gives the workflow editor the full viewport without an empty title strip', async () => {

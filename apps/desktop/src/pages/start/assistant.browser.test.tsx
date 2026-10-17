@@ -12,11 +12,15 @@ const host = vi.hoisted(() => ({
   inspect: vi.fn(),
   saved: new Map(),
   compactCatalog: false,
+  listeners: new Set<(event: unknown) => void>(),
   scope: JSON.stringify(['personal', '', '']),
 }));
 const state = vi.hoisted(() => ({
   config: { workspace_mode: 'personal', summary_model_profile_id: 'model' },
   teamUser: undefined,
+}));
+vi.mock('@/lib/auth-client', () => ({
+  createTeamAuthClient: () => ({ getSession: async () => ({ data: null }) }),
 }));
 vi.mock('@/components/app-sidebar', () => ({
   useEntryWorkspace: () => host.scope,
@@ -55,6 +59,19 @@ vi.mock('@/services/cmd', () => ({
 vi.mock('@/services/process-node', () => ({
   prepareWorkflowProcessApps: async (dsl: unknown) => dsl,
 }));
+vi.mock('@/components/workflow-output-panel', () => ({
+  WorkflowExecutionDetails: ({
+    entry,
+  }: {
+    entry: { messages?: { content?: string }[] };
+  }) => (
+    <>
+      {entry.messages?.map((message, index) => (
+        <p key={index}>{message.content}</p>
+      ))}
+    </>
+  ),
+}));
 vi.mock('@/services/run-history', () => ({
   inspectRunRecord: (...args: unknown[]) => host.inspect(...args),
 }));
@@ -66,19 +83,127 @@ vi.mock('@/components/workflow-run-panel', () => ({
   WorkflowRunForm: () => <div>参数表单</div>,
 }));
 vi.mock('@tauri-apps/api/core', () => ({
+  isTauri: () => false,
   Channel: class {
     onmessage?: (event: unknown) => void;
   },
   invoke: async (command: string, args: Record<string, unknown>) => {
-    if (command === 'assistant_reply')
-      return host.reply(args.request, args.onEvent);
+    if (command === 'assistant_turn_start') {
+      // Native-host contract substitute: the page submits a turn and observes
+      // snapshots/events. Workflow ownership stays behind this IPC boundary.
+      const request = args.request as {
+        sessionId: string;
+        action: { kind: string; text: string };
+      };
+      const session = structuredClone(host.saved.get(request.sessionId));
+      if (request.action.kind === 'send') {
+        session.messages.push({
+          id: crypto.randomUUID(),
+          role: 'user',
+          text: request.action.text,
+          content: { role: 'user', parts: [{ text: request.action.text }] },
+        });
+      }
+      session.status = 'thinking';
+      session.error = undefined;
+      host.saved.set(session.id, structuredClone(session));
+      const acknowledged = structuredClone(session);
+      setTimeout(async () => {
+        try {
+          let messageId = crypto.randomUUID();
+          const channel = {
+            onmessage: (event: unknown) =>
+              host.listeners.forEach((receive) =>
+                receive({
+                  payload: { sessionId: session.id, messageId, event },
+                }),
+              ),
+          };
+          let reply = await host.reply(
+            {
+              contents: session.messages.map(
+                (message: { content: unknown }) => message.content,
+              ),
+            },
+            channel,
+          );
+          session.messages.push({
+            id: messageId,
+            role: 'assistant',
+            text: reply.text,
+            content: reply.content,
+          });
+          if (reply.call) {
+            session.status = 'running';
+            session.activeCall = {
+              ...reply.call,
+              runId: 'run',
+              workflow: { document: { settings: { name: '报告生成' } } },
+            };
+            host.saved.set(session.id, structuredClone(session));
+            await host.start();
+            const record = await host.inspect('run');
+            const response = {
+              status: record.status,
+              result: record.events.at(-1)?.event.state,
+            };
+            session.messages.push({
+              id: crypto.randomUUID(),
+              role: 'tool',
+              text: record.status,
+              runId: 'run',
+              workflowName: '报告生成',
+              content: {
+                role: 'function',
+                parts: [
+                  {
+                    functionResponse: { name: reply.call.toolName, response },
+                    id: reply.call.callId,
+                  },
+                ],
+              },
+            });
+            session.activeCall = null;
+            messageId = crypto.randomUUID();
+            reply = await host.reply(
+              {
+                contents: session.messages.map(
+                  (message: { content: unknown }) => message.content,
+                ),
+              },
+              channel,
+            );
+            session.messages.push({
+              id: messageId,
+              role: 'assistant',
+              text: reply.text,
+              content: reply.content,
+            });
+          }
+          session.status = 'idle';
+          host.saved.set(session.id, structuredClone(session));
+        } catch (error) {
+          session.status = 'error';
+          session.error = String(error);
+          host.saved.set(session.id, structuredClone(session));
+        }
+      }, 0);
+      return acknowledged;
+    }
     if (command === 'assistant_session_save') {
       const session = args.session as { id: string };
       host.saved.set(session.id, structuredClone(session));
       return;
     }
-    if (command === 'assistant_session_get') return host.saved.get(args.id);
+    if (command === 'assistant_session_get')
+      return structuredClone(host.saved.get(args.id));
     throw new Error(`Unexpected command ${command}`);
+  },
+}));
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: async (_name: string, receive: (event: unknown) => void) => {
+    host.listeners.add(receive);
+    return () => host.listeners.delete(receive);
   },
 }));
 vi.mock('react-i18next', () => ({
@@ -114,6 +239,7 @@ vi.mock('@/services/workflow', () => {
     toWorkflowDsl: (id: string) => ({ id }),
     startBackgroundWorkflowRun: (...args: unknown[]) => host.start(...args),
     cancelBackgroundWorkflowRun: vi.fn(),
+    subscribeWorkflowRun: async () => () => {},
   };
 });
 
@@ -124,6 +250,7 @@ import { Component as StartPage } from './index';
 beforeEach(() => {
   vi.resetAllMocks();
   host.saved.clear();
+  host.listeners.clear();
   host.compactCatalog = false;
   useAssistantStore.setState({ sessions: {}, scopes: {}, streams: {} });
   host.start.mockResolvedValue(undefined);
@@ -149,12 +276,12 @@ it('keeps typing focus, lets the model dispatch a workflow, and returns its resu
       text: '我会调用报告生成工作流。',
       content: {
         role: 'model',
-        parts: [{ name: 'workflow_report', args: {}, id: 'call' }],
+        parts: [{ name: 'execute_workflow', args: {}, id: 'call' }],
       },
       call: {
         workflowId: 'report',
         input: {},
-        toolName: 'workflow_report',
+        toolName: 'execute_workflow',
         callId: 'call',
       },
     })
@@ -186,6 +313,9 @@ it('keeps typing focus, lets the model dispatch a workflow, and returns its resu
   await expect
     .element(screen.getByText('报告已完成，销售额增长 10%。', { exact: true }))
     .toBeVisible();
+  expect(
+    screen.getByRole('button', { name: '有帮助', exact: true }).elements(),
+  ).toHaveLength(1);
   expect(host.start).toHaveBeenCalledTimes(1);
   expect(host.reply).toHaveBeenCalledTimes(2);
   expect(JSON.stringify(host.reply.mock.calls[1]![0])).toContain(
@@ -194,7 +324,6 @@ it('keeps typing focus, lets the model dispatch a workflow, and returns its resu
   await screen.getByRole('textbox').fill('谢谢');
   await expect.element(screen.getByRole('textbox')).toHaveValue('谢谢');
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(1280);
-  await page.screenshot({ path: '.vitest/workrun-assistant-conversation.png' });
 });
 
 it.each([1280, 390])(
@@ -237,7 +366,6 @@ it.each([1280, 390])(
       )
       .element();
     expect(longName.scrollWidth).toBeLessThanOrEqual(longName.clientWidth + 1);
-    await page.screenshot({ path: `.vitest/workrun-model-menu-${width}.png` });
     await screen
       .getByRole('option', { name: /Gemini 3.5 Flash Lite Preview/ })
       .click();
@@ -441,7 +569,6 @@ it('places copy and feedback below the answer and saves feedback without another
       .toHaveAttribute('aria-pressed', 'true');
     expect(host.reply).toHaveBeenCalledTimes(1);
     expect(host.start).not.toHaveBeenCalled();
-    await page.screenshot({ path: '.vitest/workrun-message-actions.png' });
   } finally {
     if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard);
     else delete (navigator as { clipboard?: Clipboard }).clipboard;
@@ -539,4 +666,180 @@ it('keeps only the latest message actions visible until an older message is hove
   await expect.poll(() => getComputedStyle(old).opacity).toBe('0');
   old.querySelector<HTMLButtonElement>('button')!.focus();
   await expect.poll(() => getComputedStyle(old).opacity).toBe('1');
+});
+
+it('keeps an expanded execution in place when the final assistant answer arrives', async () => {
+  let finish!: (record: unknown) => void;
+  const waiting = new Promise((resolve) => {
+    finish = resolve;
+  });
+  host.inspect.mockImplementation(() => waiting);
+  host.reply
+    .mockResolvedValueOnce({
+      text: '开始处理。',
+      content: {
+        role: 'model',
+        parts: [{ name: 'execute_workflow', args: {}, id: 'call' }],
+      },
+      call: {
+        workflowId: 'report',
+        input: {},
+        toolName: 'execute_workflow',
+        callId: 'call',
+      },
+    })
+    .mockResolvedValueOnce({
+      text: '已根据执行结果完成处理。',
+      content: { role: 'model', parts: [{ text: '已根据执行结果完成处理。' }] },
+    });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/start']}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect.element(screen.getByRole('textbox')).toBeEnabled();
+  await screen.getByRole('textbox').fill('生成报告');
+  await screen.getByRole('button', { name: '发送', exact: true }).click();
+  await screen
+    .getByTestId('assistant-workflow-run')
+    .getByRole('button', { expanded: false })
+    .click();
+  const timeline = screen.getByTestId('workflow-run-timeline').element();
+  finish({
+    id: 'run',
+    targetName: '报告生成',
+    status: 'completed',
+    spans: [],
+    events: [
+      {
+        sequence: 0,
+        event: {
+          type: 'done',
+          state: { global: {}, nodes: {}, workflow: {} },
+          total_steps: 0,
+        },
+      },
+    ],
+  });
+  await expect
+    .element(screen.getByText('已根据执行结果完成处理。', { exact: true }))
+    .toBeVisible();
+  expect(screen.getByTestId('workflow-run-timeline').element()).toBe(timeline);
+  expect(host.start).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('[data-slot="drawer-content"]')).toBeNull();
+});
+
+it('right-aligns user bubbles and removes thinking when the turn leaves the thinking phase', async () => {
+  const session = {
+    id: 'activity-lifecycle',
+    title: '取消订单',
+    modelId: 'model',
+    status: 'idle' as const,
+    steps: 0,
+    messages: [
+      {
+        id: 'user',
+        role: 'user' as const,
+        text: '取消订单 43',
+        content: { role: 'user', parts: [] },
+      },
+      {
+        id: 'preamble',
+        role: 'assistant' as const,
+        text: '正在查找工作流',
+        content: {
+          role: 'model',
+          parts: [{ name: 'execute_workflow', args: {} }],
+        },
+      },
+    ],
+    activities: [
+      { id: 'progress', turnId: 'user', summary: '正在校验订单参数' },
+    ],
+  };
+  host.saved.set(session.id, session);
+  useAssistantStore.setState({
+    sessions: { [session.id]: session },
+    scopes: { [session.id]: host.scope },
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  await render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[`/start?session=${session.id}`]}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .element(page.getByText('取消订单 43', { exact: true }))
+    .toBeVisible();
+  const bubble = document.querySelector(
+    '[data-align="end"] [data-slot="bubble"]',
+  )!;
+  const message = bubble.closest('[data-slot="message"]')!;
+  expect(
+    Math.abs(
+      bubble.getBoundingClientRect().right -
+        message.getBoundingClientRect().right,
+    ),
+  ).toBeLessThanOrEqual(1);
+  useAssistantStore.setState({
+    sessions: { [session.id]: { ...session, status: 'thinking' } },
+  });
+  await expect
+    .element(page.getByText('正在校验订单参数', { exact: true }))
+    .toBeVisible();
+  await expect
+    .element(page.getByText('正在查找工作流', { exact: true }))
+    .not.toBeInTheDocument();
+  // A second model phase follows execution; old discovery hints must vanish,
+  // and newly reported delivery progress must become visible instead.
+  useAssistantStore.setState({
+    sessions: {
+      [session.id]: {
+        ...session,
+        status: 'thinking',
+        responsePhaseId: 'delivery',
+        activities: [
+          {
+            id: 'old',
+            turnId: 'user',
+            phaseId: 'discovery',
+            summary: '正在查找工作流',
+          },
+          {
+            id: 'new',
+            turnId: 'user',
+            phaseId: 'delivery',
+            summary: '正在整理执行结果',
+          },
+        ],
+      },
+    },
+  });
+  await expect
+    .element(page.getByText('正在查找工作流', { exact: true }))
+    .not.toBeInTheDocument();
+  await expect
+    .element(page.getByText('正在整理执行结果', { exact: true }))
+    .toBeVisible();
+  for (const status of ['running', 'needs_input', 'idle', 'error'] as const) {
+    useAssistantStore.setState({
+      sessions: { [session.id]: { ...session, status } },
+    });
+    await expect
+      .element(page.getByText('正在校验订单参数', { exact: true }))
+      .not.toBeInTheDocument();
+  }
 });

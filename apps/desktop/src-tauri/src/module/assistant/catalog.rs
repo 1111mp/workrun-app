@@ -1,0 +1,293 @@
+//! Native workflow discovery, version resolution and dependency preparation.
+use super::tools::Capability;
+use crate::{
+    config::{BaseConfig, IProcessNode},
+    feat,
+    module::{process_node::ProcessNodeInstallStatus, workflow::WorkflowDsl},
+    utils::dirs,
+};
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
+use tauri_plugin_http::reqwest::{Client, Response};
+
+pub struct Catalog {
+    workflows: Vec<Value>,
+    team: Option<TeamApi>,
+}
+struct TeamApi {
+    base: String,
+    token: String,
+    client: Client,
+}
+impl TeamApi {
+    async fn response(&self, path: &str) -> Result<Response> {
+        // Never follow a redirect with workspace authentication or accept a
+        // model-supplied URL. All paths are generated from the native catalog.
+        let response = self
+            .client
+            .get(format!("{}/api/v1{path}", self.base.trim_end_matches('/')))
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            bail!("Team API request failed ({})", response.status());
+        }
+        Ok(response)
+    }
+    async fn get(&self, path: &str) -> Result<Value> {
+        let envelope: Value = self.response(path).await?.json().await?;
+        if envelope["errorCode"].as_i64() != Some(0) {
+            bail!("Team API rejected the request");
+        }
+        Ok(envelope["payload"].clone())
+    }
+}
+impl Catalog {
+    pub async fn load(team_token: Option<&str>) -> Result<Self> {
+        let config = BaseConfig::workrun().await.data_arc();
+        let team = if dirs::is_team_workspace() {
+            Some(TeamApi {
+                base: config
+                    .team
+                    .as_ref()
+                    .context("Team server is not configured")?
+                    .server_url
+                    .clone(),
+                token: team_token
+                    .filter(|token| !token.is_empty())
+                    .context("Sign in to access Team workflows")?
+                    .into(),
+                client: Client::builder()
+                    .redirect(tauri_plugin_http::reqwest::redirect::Policy::none())
+                    .timeout(std::time::Duration::from_secs(60))
+                    .build()?,
+            })
+        } else {
+            None
+        };
+        // The catalog is fetched only when list_workflow/execute_workflow needs
+        // it. Ordinary conversation must not depend on the Team server being up.
+        let mut workflows = if team.is_none() {
+            feat::get_workflows()
+                .await?
+                .into_iter()
+                .map(serde_json::to_value)
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            vec![]
+        };
+        workflows.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        Ok(Self { workflows, team })
+    }
+    pub fn capabilities(&self) -> Vec<Capability> {
+        self.workflows.iter().filter_map(capability).collect()
+    }
+
+    pub async fn resolve(&self, id: &str) -> Result<Value> {
+        if let Some(api) = &self.team {
+            let encoded = encoded(id);
+            // Both endpoints enforce server-side ownership/publication ACLs.
+            match api.get(&format!("/workflow/{encoded}")).await {
+                Ok(workflow) => Ok(workflow),
+                Err(_) => api.get(&format!("/workflow/team/{encoded}")).await,
+            }
+        } else {
+            Ok(serde_json::to_value(feat::get_workflow(id).await?)?)
+        }
+    }
+    pub async fn prepare(&self, workflow: &Value) -> Result<Value> {
+        let mut dsl = document_dsl(workflow)?;
+        if let Some(api) = &self.team {
+            let scope = format!(
+                "release-{}",
+                workflow["releaseId"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("draft-{}", workflow["id"].as_str().unwrap_or_default()))
+            );
+            for node in dsl["nodes"].as_array_mut().context("Workflow nodes are missing")? {
+                let reference = node["data"]["appRef"].clone();
+                if node["type"] != "process" || reference["source"] != "team" {
+                    continue;
+                }
+                let app = reference["remoteAppId"].as_str().context("Missing Team app ID")?;
+                let release = reference["releaseId"].as_str().context("Missing Team app release")?;
+                let sha = reference["archiveSha256"]
+                    .as_str()
+                    .context("Missing Team app checksum")?;
+                let installed = feat::process_node_find_team_release(app, release, &scope).await?;
+                let local = if let Some(node) = installed.filter(|node| {
+                    matches!(node.install_status, ProcessNodeInstallStatus::Installed)
+                        && node.definition.remote_archive_sha256.as_deref() == Some(sha)
+                }) {
+                    node
+                } else {
+                    let path = format!("/app/catalog/{}/releases/{}", encoded(app), encoded(release));
+                    let mut definition = api.get(&path).await?;
+                    definition["remoteAppId"] = json!(app);
+                    definition["remoteReleaseId"] = json!(release);
+                    definition["remoteArchiveSha256"] = json!(sha);
+                    let response = api.response(&format!("{path}/source-archive")).await?;
+                    if response.headers().get("x-workrun-sha256").and_then(|v| v.to_str().ok()) != Some(sha) {
+                        bail!("Team app archive checksum changed");
+                    }
+                    let temporary = tempfile::NamedTempFile::new()?;
+                    let mut file = tokio::fs::File::create(temporary.path()).await?;
+                    let mut response = response;
+                    use tokio::io::AsyncWriteExt;
+                    while let Some(bytes) = response.chunk().await? {
+                        file.write_all(&bytes).await?;
+                    }
+                    file.flush().await?;
+                    drop(file);
+                    feat::install_process_node_archive(
+                        feat::InstallProcessNodeArchiveRequest {
+                            definition: serde_json::from_value::<IProcessNode>(definition)?,
+                            archive_path: temporary.path().into(),
+                            sha256: sha.into(),
+                            release_id: release.into(),
+                            installation_scope: Some(scope.clone()),
+                        },
+                        tauri::ipc::Channel::new(|_| Ok(())),
+                    )
+                    .await?
+                };
+                node["data"]["processNodeId"] = json!(local.definition.id);
+            }
+        }
+        let config = BaseConfig::workrun().await.data_arc();
+        crate::module::workflow::compile(serde_json::from_value::<WorkflowDsl>(dsl.clone())?, &config, None).await?;
+        Ok(dsl)
+    }
+}
+
+pub fn parameters(settings: &Value) -> Value {
+    let mut fields = settings["inputSchema"]["fields"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if settings["mode"] == "chat" && !fields.iter().any(|field| field["key"] == "input") {
+        fields.push(json!({"key":"input","label":"Message","type":"textarea","required":true}));
+    }
+    let mut properties = serde_json::Map::new();
+    let mut required = vec![];
+    for field in fields {
+        let Some(key) = field["key"].as_str() else {
+            continue;
+        };
+        let kind = match field["type"].as_str().unwrap_or("string") {
+            "number" => "number",
+            "boolean" => "boolean",
+            "file" => "object",
+            "files" => "array",
+            _ => "string",
+        };
+        let mut schema = json!({"type":kind,"description":format!("{} {}",field["label"].as_str().unwrap_or(key),field["description"].as_str().unwrap_or(""))});
+        if kind == "array" {
+            schema["items"] = json!({"type":"object"});
+        }
+        properties.insert(key.into(), schema);
+        if field["required"] == true {
+            required.push(json!(key));
+        }
+    }
+    json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
+}
+pub fn validate_input(settings: &Value, input: &Value) -> Result<bool> {
+    let schema = parameters(settings);
+    let values = input.as_object().context("Workflow input must be an object")?;
+    // Validate types/unknown keys first; collect missing required values through
+    // the existing conversation form without dispatching a partial operation.
+    let mut supplied_schema = schema.clone();
+    supplied_schema["required"] = json!([]);
+    let mut supplied = input.clone();
+    supplied.as_object_mut().unwrap().retain(|_, value| !value.is_null());
+    if !jsonschema::validator_for(&supplied_schema)?.is_valid(&supplied) {
+        bail!("Workflow input does not match its inputSchema");
+    }
+    let missing = schema["required"].as_array().unwrap().iter().any(|key| {
+        values.get(key.as_str().unwrap()).is_none_or(|v| {
+            v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()) || v.as_array().is_some_and(Vec::is_empty)
+        })
+    });
+    if !missing {
+        crate::module::artifact::validate_input(&settings["inputSchema"], input)?;
+    }
+    Ok(!missing)
+}
+pub fn document_dsl(workflow: &Value) -> Result<Value> {
+    let document = &workflow["document"];
+    let settings = &document["settings"];
+    let dsl = json!({"id":workflow["id"],"name":settings["name"],"description":settings["description"],"mode":settings["mode"],
+        "inputSchema":settings["inputSchema"],"outputSchema":settings.get("outputSchema").cloned().unwrap_or(json!({"fields":[]})),
+        "sessionStateFields":settings.get("sessionStateFields").cloned().unwrap_or(json!([])),"nodes":document["nodes"],"edges":document["edges"]});
+    serde_json::from_value::<WorkflowDsl>(dsl.clone()).context("Invalid workflow document")?;
+    Ok(dsl)
+}
+
+fn encoded(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+#[async_trait::async_trait]
+impl super::tools::WorkflowDiscovery for Catalog {
+    async fn list(&self, args: &Value) -> Result<Value> {
+        if let Some(id) = args.get("workflow_id").and_then(Value::as_str) {
+            let cap = self.describe(id).await?;
+            return Ok(
+                json!({"items":[{"id":cap.id,"name":cap.name,"description":cap.description,"inputSchema":cap.parameters}],"nextCursor":null}),
+            );
+        }
+        if let Some(api) = &self.team {
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 50);
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("");
+            let cursor = args.get("cursor").and_then(Value::as_str).unwrap_or("");
+            let page = api
+                .get(&format!(
+                    "/workflow/overview?pageSize={limit}&query={}&cursor={}",
+                    encoded(query),
+                    encoded(cursor)
+                ))
+                .await?;
+            let items=page["items"].as_array().context("Invalid workflow catalog")?.iter().filter_map(capability).map(|cap|json!({"id":cap.id,"name":cap.name,"description":cap.description,"inputSchema":cap.parameters})).collect::<Vec<_>>();
+            Ok(json!({"items":items,"nextCursor":page["nextCursor"]}))
+        } else {
+            super::tools::list_page(&self.capabilities(), args)
+        }
+    }
+    async fn describe(&self, id: &str) -> Result<Capability> {
+        capability(&self.resolve(id).await?).context("Invalid workflow contract")
+    }
+}
+fn capability(entry: &Value) -> Option<Capability> {
+    let settings = entry.get("document")?.get("settings")?;
+    Some(Capability {
+        id: entry.get("id")?.as_str()?.into(),
+        name: settings.get("name")?.as_str()?.into(),
+        description: settings.get("description").and_then(Value::as_str).unwrap_or("").into(),
+        parameters: parameters(settings),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_input_contract_preserves_types_required_fields_and_chat_input() {
+        let settings = json!({"mode":"task","inputSchema":{"fields":[{"key":"count","type":"number","required":true},{"key":"enabled","type":"boolean","required":true}]}});
+        assert!(!validate_input(&settings, &json!({})).unwrap());
+        assert!(validate_input(&settings, &json!({"count":0,"enabled":false})).unwrap());
+        assert!(validate_input(&settings, &json!({"count":"0","enabled":false})).is_err());
+        assert!(validate_input(&settings, &json!({"count":0,"enabled":false,"unknown":true})).is_err());
+        let chat = json!({"mode":"chat","inputSchema":{"fields":[]}});
+        assert!(!validate_input(&chat, &json!({})).unwrap());
+        assert!(validate_input(&chat, &json!({"input":"Hello"})).unwrap());
+    }
+    #[test]
+    fn native_dsl_keeps_session_state_and_durable_document_identity() {
+        let workflow = json!({"id":"workflow-1","document":{"settings":{"name":"Report","mode":"task","inputSchema":{"fields":[]},"sessionStateFields":["customer"]},"nodes":[],"edges":[]}});
+        let dsl = document_dsl(&workflow).unwrap();
+        assert_eq!(dsl["id"], "workflow-1");
+        assert_eq!(dsl["sessionStateFields"], json!(["customer"]));
+    }
+}

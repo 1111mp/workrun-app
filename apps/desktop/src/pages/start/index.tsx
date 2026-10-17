@@ -33,15 +33,12 @@ import { toast } from 'sonner';
 
 import { useEntryWorkspace } from '@/components/app-sidebar';
 import { ArtifactFiles } from '@/components/artifact-files';
-import { WorkflowActionCards } from '@/components/workflow-actions';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowRunForm } from '@/components/workflow-run-panel';
 import { artifactReferences, type ArtifactRef } from '@/services/artifact';
 import type { AssistantMessage } from '@/services/assistant';
 import { getModelCatalog } from '@/services/cmd';
-import { inspectRunRecord } from '@/services/run-history';
-import { cancelBackgroundWorkflowRun } from '@/services/workflow';
-import { useRunWorkspaceStore, useWorkrunStore } from '@/stores';
+import { useWorkrunStore } from '@/stores';
 import {
   createAssistantSession,
   declineAssistantWorkflow,
@@ -55,6 +52,9 @@ import {
 
 import { AssistantMessageActions } from './assistant-message-actions';
 import { AssistantMessageText } from './assistant-message-text';
+import { groupAssistantMessages } from './assistant-turn';
+import { AssistantTurnActivity } from './assistant-turn-activity';
+import { AssistantWorkflowRun } from './assistant-workflow-run';
 
 function StartPage() {
   const scope = useEntryWorkspace();
@@ -95,7 +95,9 @@ function AssistantChat({ scope }: { scope: string }) {
     retry: false,
   });
   const session = cached ?? restored.data;
-  const messages: AssistantMessage[] = [...(session?.messages ?? [])];
+  const messages: AssistantMessage[] = (session?.messages ?? []).map(
+    (message) => ({ ...message }),
+  );
   if (stream && !messages.some((message) => message.id === stream.messageId)) {
     messages.push({
       id: stream.messageId,
@@ -105,10 +107,44 @@ function AssistantChat({ scope }: { scope: string }) {
     });
   }
 
+  // A run keeps its presentation identity when the pending call becomes a
+  // durable tool receipt, preserving expansion and the inner scroll position.
+  if (session?.activeCall?.runId) {
+    messages.push({
+      id: `workflow-run-${session.activeCall.runId}`,
+      role: 'tool',
+      text: 'running',
+      runId: session.activeCall.runId,
+      workflowName: session.activeCall.workflow.document.settings.name,
+      content: { role: 'function', parts: [] },
+    });
+  }
+  for (const message of messages) {
+    if (message.role === 'tool' && message.runId)
+      message.id = `workflow-run-${message.runId}`;
+  }
+
+  const groups = groupAssistantMessages(messages);
   const latestMessageId = messages.at(-1)?.id;
   const latestUserId = [...messages]
     .reverse()
     .find((message) => message.role === 'user')?.id;
+  if (
+    latestUserId &&
+    (session?.status === 'thinking' ||
+      session?.activities?.some((item) => item.turnId === latestUserId)) &&
+    !groups.some(
+      (group) => group.role === 'assistant' && group.turnId === latestUserId,
+    )
+  ) {
+    groups.push({
+      id: `reply-${latestUserId}`,
+      turnId: latestUserId,
+      role: 'assistant',
+      messages: [],
+      progress: [],
+    });
+  }
   const models = useQuery({
     queryKey: ['model-catalog'],
     queryFn: getModelCatalog,
@@ -129,12 +165,6 @@ function AssistantChat({ scope }: { scope: string }) {
   const busy =
     creating || session?.status === 'thinking' || session?.status === 'running';
   const active = session?.activeCall;
-  const run = useQuery({
-    queryKey: ['run-history', 'assistant', active?.runId],
-    queryFn: () => inspectRunRecord(active!.runId!),
-    enabled: Boolean(active?.runId),
-    refetchInterval: active?.runId ? 1000 : false,
-  });
 
   useEffect(() => {
     void client.invalidateQueries({ queryKey: ['assistant-sessions'] });
@@ -265,143 +295,172 @@ function AssistantChat({ scope }: { scope: string }) {
               <MessageScroller>
                 <MessageScrollerViewport>
                   <MessageScrollerContent className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] px-6 py-5'>
-                    {messages.map((message) => (
+                    {groups.map((group) => (
                       <MessageScrollerItem
-                        key={message.id}
-                        messageId={message.id}
-                        scrollAnchor={message.role === 'user'}
-                        className={
-                          !message.text && !message.artifacts?.length
-                            ? 'hidden'
-                            : undefined
-                        }
+                        key={group.id}
+                        messageId={group.id}
+                        scrollAnchor={group.role === 'user'}
                       >
                         <Message
-                          align={message.role === 'user' ? 'end' : 'start'}
+                          align={group.role === 'user' ? 'end' : 'start'}
                         >
                           <MessageContent>
-                            {message.role === 'tool' ? (
-                              <div className='flex flex-wrap items-center gap-2'>
-                                <Badge variant='outline'>
-                                  {message.workflowName}
-                                </Badge>
-                                <span className='text-muted-foreground text-xs'>
-                                  {t(`runs.runStatus.${message.text}`, {
-                                    defaultValue: message.text,
-                                  })}
-                                </span>
-                                {message.runId && (
-                                  <Button
-                                    variant='ghost'
-                                    size='sm'
-                                    onClick={async () => {
-                                      try {
-                                        const record = await inspectRunRecord(
-                                          message.runId!,
-                                        );
-                                        useRunWorkspaceStore
-                                          .getState()
-                                          .openRun(record);
-                                      } catch (error) {
-                                        toast.error(String(error), {
-                                          toasterId: 'global',
-                                        });
-                                      }
-                                    }}
-                                  >
-                                    {t('assistant.details')}
-                                  </Button>
-                                )}
-                              </div>
-                            ) : (
-                              <Bubble
-                                variant={
-                                  message.role === 'user'
-                                    ? 'secondary'
-                                    : 'ghost'
+                            {group.role === 'assistant' && (
+                              <AssistantTurnActivity
+                                key={session.responsePhaseId ?? group.id}
+                                summaries={
+                                  session.responsePhaseId
+                                    ? (session.activities ?? [])
+                                        .filter(
+                                          (item) =>
+                                            item.turnId === group.turnId &&
+                                            item.phaseId ===
+                                              session.responsePhaseId,
+                                        )
+                                        .map((item) => item.summary)
+                                    : // Legacy sessions have no phase IDs. Never carry
+                                      // their discovery hints across a workflow receipt.
+                                      group.messages.some(
+                                          (item) => item.role === 'tool',
+                                        )
+                                      ? []
+                                      : (session.activities ?? [])
+                                          .filter(
+                                            (item) =>
+                                              item.turnId === group.turnId,
+                                          )
+                                          .map((item) => item.summary)
                                 }
-                              >
-                                <BubbleContent>
-                                  <AssistantMessageText
-                                    text={message.text}
-                                    animate={message.id === stream?.messageId}
-                                  />
-                                </BubbleContent>
-                              </Bubble>
-                            )}
-                            {Boolean(message.artifacts?.length) && (
-                              <ArtifactFiles
-                                compact
-                                hidePicker
-                                value={message.artifacts}
-                                multiple
+                                busy={Boolean(
+                                  session.status === 'thinking' &&
+                                  !session.activeCall &&
+                                  !stream?.text &&
+                                  group.turnId === latestUserId,
+                                )}
                               />
                             )}
-                            {message.role !== 'tool' &&
-                              message.text &&
-                              message.id !== stream?.messageId && (
-                                <MessageFooter
-                                  className={cn(
-                                    'gap-2 pt-1 transition-opacity motion-reduce:transition-none',
-                                    message.id !== latestMessageId &&
-                                      '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 [@media(hover:hover)]:group-focus-within/message:opacity-100',
-                                  )}
-                                >
-                                  <AssistantMessageActions
-                                    text={message.text}
-                                    feedback={message.feedback}
-                                    disabled={Boolean(
-                                      busy || session.activeCall,
-                                    )}
-                                    onFeedback={
-                                      message.role === 'assistant'
-                                        ? (value) =>
-                                            void setAssistantFeedback(
-                                              session.id,
-                                              message.id,
-                                              value,
-                                              scope,
-                                            ).catch(() =>
-                                              toast.error(
-                                                t('assistant.feedbackFailed'),
-                                                { toasterId: 'global' },
-                                              ),
-                                            )
-                                        : undefined
+                            {group.messages.map((message) => (
+                              <div
+                                key={message.id}
+                                className={cn(
+                                  'min-w-0',
+                                  group.role === 'user' &&
+                                    'flex flex-col items-end',
+                                )}
+                              >
+                                {message.role === 'tool' ? (
+                                  message.runId ? (
+                                    <AssistantWorkflowRun
+                                      runId={message.runId}
+                                      name={message.workflowName}
+                                      status={message.text}
+                                      scope={scope}
+                                    />
+                                  ) : (
+                                    <span className='text-muted-foreground text-sm'>
+                                      {message.workflowName} ·{' '}
+                                      {t(`runs.runStatus.${message.text}`, {
+                                        defaultValue: message.text,
+                                      })}
+                                    </span>
+                                  )
+                                ) : (
+                                  <Bubble
+                                    variant={
+                                      message.role === 'user'
+                                        ? 'secondary'
+                                        : 'ghost'
                                     }
+                                  >
+                                    <BubbleContent>
+                                      <AssistantMessageText
+                                        text={message.text}
+                                        animate={
+                                          message.id === stream?.messageId
+                                        }
+                                      />
+                                    </BubbleContent>
+                                  </Bubble>
+                                )}
+                                {Boolean(message.artifacts?.length) && (
+                                  <ArtifactFiles
+                                    compact
+                                    hidePicker
+                                    value={message.artifacts}
+                                    multiple
                                   />
-                                  {session.error &&
-                                    message.id === latestUserId && (
-                                      <>
-                                        <span className='text-destructive'>
-                                          {t('assistant.responseFailed')}
-                                        </span>
-                                        <Button
-                                          variant='ghost'
-                                          size='icon-xs'
-                                          aria-label={t(
-                                            'assistant.retryResponse',
-                                          )}
-                                          title={t('assistant.retryResponse')}
-                                          disabled={Boolean(busy)}
-                                          onClick={() =>
-                                            void resumeAssistant(
-                                              session.id,
-                                              scope,
-                                            )
-                                          }
-                                        >
-                                          <RotateCcwIcon />
-                                        </Button>
-                                      </>
-                                    )}
-                                </MessageFooter>
-                              )}
+                                )}
+                                {message.role !== 'tool' &&
+                                  message.text &&
+                                  message.id !== stream?.messageId && (
+                                    <MessageFooter
+                                      className={cn(
+                                        'gap-2 pt-1 transition-opacity motion-reduce:transition-none',
+                                        message.id !== latestMessageId &&
+                                          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 [@media(hover:hover)]:group-focus-within/message:opacity-100',
+                                      )}
+                                    >
+                                      <AssistantMessageActions
+                                        text={message.text}
+                                        feedback={message.feedback}
+                                        disabled={Boolean(
+                                          busy || session.activeCall,
+                                        )}
+                                        onFeedback={
+                                          message.role === 'assistant'
+                                            ? (value) =>
+                                                void setAssistantFeedback(
+                                                  session.id,
+                                                  message.id,
+                                                  value,
+                                                  scope,
+                                                ).catch(() =>
+                                                  toast.error(
+                                                    t(
+                                                      'assistant.feedbackFailed',
+                                                    ),
+                                                    { toasterId: 'global' },
+                                                  ),
+                                                )
+                                            : undefined
+                                        }
+                                      />
+                                      {session.error &&
+                                        message.id === latestUserId && (
+                                          <>
+                                            <span className='text-destructive'>
+                                              {t('assistant.responseFailed')}
+                                            </span>
+                                            <Button
+                                              variant='ghost'
+                                              size='icon-xs'
+                                              aria-label={t(
+                                                'assistant.retryResponse',
+                                              )}
+                                              title={t(
+                                                'assistant.retryResponse',
+                                              )}
+                                              disabled={Boolean(busy)}
+                                              onClick={() =>
+                                                void resumeAssistant(
+                                                  session.id,
+                                                  scope,
+                                                )
+                                              }
+                                            >
+                                              <RotateCcwIcon />
+                                            </Button>
+                                          </>
+                                        )}
+                                    </MessageFooter>
+                                  )}
+                              </div>
+                            ))}
                           </MessageContent>
                         </Message>
                       </MessageScrollerItem>
                     ))}
-                    {active && (
+                    {active && !active.runId && (
                       <MessageScrollerItem
                         messageId={`call-${active.toolName}`}
                       >
@@ -412,42 +471,12 @@ function AssistantChat({ scope }: { scope: string }) {
                                 {active.workflow.document.settings.name}
                               </Badge>
                               <span className='text-muted-foreground text-xs'>
-                                {session.status === 'needs_input'
-                                  ? t('assistant.inputsNeeded')
-                                  : run.data
-                                    ? t(`runs.runStatus.${run.data.status}`)
-                                    : t('assistant.preparing')}
+                                {t(
+                                  session.status === 'needs_input'
+                                    ? 'assistant.inputsNeeded'
+                                    : 'assistant.preparing',
+                                )}
                               </span>
-                              {run.data && (
-                                <Button
-                                  variant='ghost'
-                                  size='sm'
-                                  onClick={() =>
-                                    useRunWorkspaceStore
-                                      .getState()
-                                      .openRun(run.data!)
-                                  }
-                                >
-                                  {t('assistant.details')}
-                                </Button>
-                              )}
-                              {active.runId && (
-                                <Button
-                                  variant='ghost'
-                                  size='sm'
-                                  onClick={() =>
-                                    void cancelBackgroundWorkflowRun(
-                                      active.runId!,
-                                    ).catch((error) =>
-                                      toast.error(String(error), {
-                                        toasterId: 'global',
-                                      }),
-                                    )
-                                  }
-                                >
-                                  {t('assistant.cancel')}
-                                </Button>
-                              )}
                             </div>
                             {session.status === 'needs_input' && (
                               <WorkflowRunForm
@@ -471,22 +500,8 @@ function AssistantChat({ scope }: { scope: string }) {
                                 layout='dialog'
                               />
                             )}
-                            {active.runId && (
-                              <WorkflowActionCards runId={active.runId} />
-                            )}
                           </MessageContent>
                         </Message>
-                      </MessageScrollerItem>
-                    )}
-                    {session.status === 'thinking' && !stream?.text && (
-                      <MessageScrollerItem messageId='thinking'>
-                        <div
-                          role='status'
-                          className='text-muted-foreground flex items-center gap-2 text-sm'
-                        >
-                          <Spinner />
-                          {t('assistant.thinking')}
-                        </div>
                       </MessageScrollerItem>
                     )}
                     {session.error && (
@@ -505,7 +520,7 @@ function AssistantChat({ scope }: { scope: string }) {
               </MessageScroller>
             </MessageScrollerProvider>
           </div>
-          <div className='mx-auto w-full max-w-[clamp(48rem,72cqw,76rem)] shrink-0 px-6 pt-3 pb-5'>
+          <div className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] shrink-0 px-6 pt-3 pb-5'>
             {renderComposer()}
           </div>
         </>

@@ -981,6 +981,27 @@ function TraceResultContent({
   );
 }
 
+/** Reuse the same node receipts in the assistant's inline execution timeline. */
+export function WorkflowExecutionDetails({
+  entry,
+  spans = [],
+}: {
+  entry: WorkflowRunExecution;
+  spans?: RunSpan[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <ExecutionOutput
+        label={t('workflowEditor.output.processOutput')}
+        log={processLog(entry)}
+      />
+      <TraceResult entry={entry} spans={spans} />
+      <CleanupMessages entry={entry} />
+    </>
+  );
+}
+
 function executionStatusIcon(status: WorkflowRunExecution['status']) {
   if (status === 'running') return <Spinner />;
   if (status === 'failed') return <CircleAlertIcon />;

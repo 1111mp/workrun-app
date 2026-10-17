@@ -114,7 +114,7 @@ pub fn run() {
             cmd::app::restart_app,
             cmd::artifact::artifact_pick,
             // assistant
-            cmd::assistant::assistant_reply,
+            cmd::assistant::assistant_turn_start,
             cmd::assistant::assistant_session_save,
             cmd::assistant::assistant_session_list,
             cmd::assistant::assistant_session_get,

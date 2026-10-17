@@ -1,436 +1,294 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  reply: vi.fn(),
-  save: vi.fn(),
+const host = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  turn: vi.fn(),
   get: vi.fn(),
-  start: vi.fn(),
-  inspect: vi.fn(),
-  workflows: vi.fn(),
-  resolve: vi.fn(),
-  prepare: vi.fn(),
-  compile: vi.fn(),
-  scope: { config: { workspace_mode: 'personal' }, teamUser: undefined },
+  listen: vi.fn(),
+  unlisten: vi.fn(),
+  saved: new Map<string, unknown>(),
+  token: vi.fn(),
+  scope: {
+    config: {
+      workspace_mode: 'personal',
+      team: { server_url: 'https://team.example' },
+    },
+    teamUser: { id: 'user' },
+  },
 }));
 vi.mock('@tauri-apps/api/core', () => ({
-  Channel: class {
-    onmessage?: (event: unknown) => void;
-  },
-  invoke: (command: string, args: Record<string, unknown>) => {
-    if (command === 'assistant_reply')
-      return mocks.reply(args.request, args.onEvent);
-    if (command === 'assistant_session_save') return mocks.save(args.session);
-    if (command === 'assistant_session_get') return mocks.get(args.id);
-    throw new Error(`Unexpected command ${command}`);
-  },
+  invoke: (...args: unknown[]) => host.invoke(...args),
+}));
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: (...args: unknown[]) => host.listen(...args),
+}));
+vi.mock('@/lib/auth-client', () => ({
+  createTeamAuthClient: () => ({ getSession: () => host.token() }),
 }));
 vi.mock('@/stores/workrun.store', () => ({
-  useWorkrunStore: { getState: () => mocks.scope },
-}));
-vi.mock('@/services/process-node', () => ({
-  prepareWorkflowProcessApps: (...args: unknown[]) => mocks.prepare(...args),
-}));
-vi.mock('@/services/run-history', () => ({
-  inspectRunRecord: (...args: unknown[]) => mocks.inspect(...args),
-}));
-vi.mock('@/services/deeplink', () => ({ validateDeeplinkInput: () => {} }));
-vi.mock('@/services/workflow', () => ({
-  getWorkflowCapabilities: () => mocks.workflows(),
-  getWorkflow: () => mocks.resolve(),
-  getPublishedWorkflow: () => mocks.resolve(),
-  compileWorkflow: (...args: unknown[]) => mocks.compile(...args),
-  toWorkflowDsl: (id: string) => ({ id }),
-  startBackgroundWorkflowRun: (...args: unknown[]) => mocks.start(...args),
+  useWorkrunStore: { getState: () => host.scope },
 }));
 
-import {
-  capabilityParameters,
-  toolResultContent,
-  assistantWorkflowResult,
-} from '@/services/assistant';
+import type { AssistantSession } from '@/services/assistant';
 
 import {
   createAssistantSession,
+  loadAssistantSession,
   sendAssistantMessage,
   provideAssistantInputs,
-  loadAssistantSession,
+  declineAssistantWorkflow,
   resumeAssistant,
   setAssistantFeedback,
   useAssistantStore,
 } from './assistant.store';
-
 const scope = JSON.stringify(['personal', '', '']);
-const workflow = {
-  id: 'report',
-  document: {
-    nodes: [],
-    edges: [],
-    settings: {
-      name: 'Report',
-      description: 'Generate a report',
-      mode: 'task',
-      inputSchema: {
-        fields: [
-          {
-            id: 'topic',
-            key: 'topic',
-            label: 'Topic',
-            type: 'string',
-            required: true,
-          },
-        ],
-      },
-    },
-  },
+const assistantMessage = {
+  id: 'answer',
+  role: 'assistant' as const,
+  text: 'Ready',
+  content: { role: 'model', parts: [{ text: 'Ready' }] },
 };
-const answer = (text: string) => ({
-  text,
-  content: { role: 'model', parts: [{ text }] },
-});
-const toolCall = (input: Record<string, unknown> = { topic: 'sales' }) => ({
-  text: 'Preparing your report.',
-  content: {
-    role: 'model',
-    parts: [
-      {
-        name: 'workflow_report',
-        args: input,
-        id: 'call-1',
-        thought_signature: 'signature',
-      },
-    ],
-  },
-  call: {
-    workflowId: 'report',
-    input,
-    toolName: 'workflow_report',
-    callId: 'call-1',
-  },
-});
-const finished = {
-  id: 'run-1',
-  targetName: 'Report',
-  status: 'completed',
-  events: [
-    {
-      event: { type: 'done', state: { global: { report: 'Sales increased' } } },
-    },
-  ],
-  runtime: { secret: 'not-for-the-model' },
-  targetSnapshot: { secret: 'not-for-the-model' },
-};
-
+function current(id: string) {
+  return useAssistantStore.getState().sessions[id]!;
+}
+function store(session: AssistantSession) {
+  host.saved.set(session.id, structuredClone(session));
+  return session;
+}
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.scope.config.workspace_mode = 'personal';
+  host.saved.clear();
+  host.scope.config.workspace_mode = 'personal';
   useAssistantStore.setState({ sessions: {}, scopes: {}, streams: {} });
-  mocks.save.mockResolvedValue(undefined);
-  mocks.workflows.mockResolvedValue([workflow]);
-  mocks.resolve.mockResolvedValue(workflow);
-  mocks.compile.mockResolvedValue({});
-  mocks.prepare.mockImplementation(async (dsl: unknown) => dsl);
-  mocks.start.mockResolvedValue(undefined);
-  mocks.inspect.mockResolvedValue(finished);
-});
-
-it('answers a normal question without starting a workflow', async () => {
-  mocks.reply.mockResolvedValue(answer('Hello'));
-  const session = await createAssistantSession('model', 'Hello', scope);
-  await sendAssistantMessage(session.id, 'Hello', scope);
-  expect(mocks.start).not.toHaveBeenCalled();
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'idle',
+  host.listen.mockResolvedValue(host.unlisten);
+  host.get.mockImplementation(async (id: string) =>
+    structuredClone(host.saved.get(id)),
   );
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1)?.text,
-  ).toBe('Hello');
-});
-
-it('runs the selected workflow, preserves call identity, and gives its real result to the model', async () => {
-  mocks.reply
-    .mockResolvedValueOnce(toolCall())
-    .mockResolvedValueOnce(answer('Sales increased.'));
-  const session = await createAssistantSession('model', 'Sales report', scope);
-  await sendAssistantMessage(session.id, 'Make a sales report', scope);
-  expect(mocks.start).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      targetId: 'report',
-      input: { topic: 'sales' },
-      initialState: { topic: 'sales' },
-    }),
-  );
-  const request = mocks.reply.mock.calls[1]![0];
-  expect(request.contents[1].parts[0].thought_signature).toBe('signature');
-  expect(request.contents[2].parts[0]).toMatchObject({
-    id: 'call-1',
-    functionResponse: {
-      name: 'workflow_report',
-      response: { status: 'completed' },
+  host.turn.mockImplementation(async (request: { sessionId: string }) => {
+    const session = structuredClone(
+      host.saved.get(request.sessionId),
+    ) as AssistantSession;
+    return store({ ...session, messages: [assistantMessage], status: 'idle' });
+  });
+  host.token.mockResolvedValue({
+    data: { session: { token: 'private-team-token' } },
+  });
+  host.invoke.mockImplementation(
+    async (command: string, args: Record<string, unknown>) => {
+      if (command === 'assistant_session_save') {
+        store(args.session as AssistantSession);
+        return;
+      }
+      if (command === 'assistant_session_get') return host.get(args.id);
+      if (command === 'assistant_turn_start') return host.turn(args.request);
+      throw new Error(`Renderer must not invoke ${command}`);
     },
-  });
-  expect(JSON.stringify(request)).not.toContain('not-for-the-model');
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1)?.text,
-  ).toBe('Sales increased.');
-});
-
-it('collects missing inputs before any execution and then continues the same tool call', async () => {
-  mocks.reply
-    .mockResolvedValueOnce(toolCall({}))
-    .mockResolvedValueOnce(answer('Done'));
-  const session = await createAssistantSession('model', 'Report', scope);
-  await sendAssistantMessage(session.id, 'Create a report', scope);
-  expect(mocks.start).not.toHaveBeenCalled();
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'needs_input',
-  );
-  await provideAssistantInputs(session.id, { topic: 'sales' }, scope);
-  expect(mocks.start).toHaveBeenCalledTimes(1);
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'idle',
   );
 });
 
-it('never repeats dispatch after an uncertain start response and reattaches by run ID', async () => {
-  mocks.reply
-    .mockResolvedValueOnce(toolCall())
-    .mockResolvedValueOnce(answer('Done'));
-  mocks.start.mockRejectedValueOnce(new Error('response lost'));
-  const session = await createAssistantSession('model', 'Report', scope);
-  await sendAssistantMessage(session.id, 'Create a sales report', scope);
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'error',
-  );
-  await resumeAssistant(session.id, scope);
-  expect(mocks.start).toHaveBeenCalledTimes(1);
-  expect(mocks.inspect).toHaveBeenCalledWith(expect.any(String));
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'idle',
-  );
-});
-
-it('rejects duplicate sends while the model is responding', async () => {
-  let complete!: (result: ReturnType<typeof answer>) => void;
-  mocks.reply.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        complete = resolve;
-      }),
-  );
-  const session = await createAssistantSession('model', 'Hello', scope);
-  const first = sendAssistantMessage(session.id, 'Hello', scope);
-  await vi.waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
-  await sendAssistantMessage(session.id, 'Hello again', scope);
-  complete(answer('Hello'));
-  await first;
-  expect(mocks.reply).toHaveBeenCalledTimes(1);
-});
-
-it('restores interrupted inference without automatically issuing a model call or workflow', async () => {
-  mocks.get.mockResolvedValue({
-    id: 'saved',
-    title: 'Saved',
-    modelId: 'model',
-    status: 'thinking',
-    messages: [],
-    steps: 0,
-  });
-  const session = await loadAssistantSession('saved', scope);
-  expect(session.status).toBe('error');
-  expect(mocks.reply).not.toHaveBeenCalled();
-  expect(mocks.start).not.toHaveBeenCalled();
-});
-
-it('generates typed input declarations and preserves false as a supplied required value', () => {
-  const settings = {
-    ...workflow.document.settings,
-    inputSchema: {
-      fields: [
-        {
-          id: 'ok',
-          key: 'ok',
-          label: 'Approved',
-          type: 'boolean',
-          required: true,
-        },
-      ],
+it('submits a user turn to native without passing catalogs, tools or workflow execution recipes', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  await sendAssistantMessage(session.id, 'Create a report', scope, [
+    { $type: 'artifact' },
+  ]);
+  expect(host.turn).toHaveBeenCalledExactlyOnceWith({
+    sessionId: session.id,
+    action: {
+      kind: 'send',
+      text: 'Create a report',
+      attachments: [{ $type: 'artifact' }],
     },
-  } as WorkflowSettings;
-  expect(capabilityParameters(settings)).toMatchObject({
-    properties: { ok: { type: 'boolean' } },
-    required: ['ok'],
-    additionalProperties: false,
+    teamToken: undefined,
   });
+  expect(current(session.id).messages).toEqual([assistantMessage]);
   expect(
-    toolResultContent(
-      { workflowId: 'x', input: {}, toolName: 'x', callId: 'id' },
-      { status: 'cancelled' },
+    host.invoke.mock.calls.every(([command]) =>
+      [
+        'assistant_session_save',
+        'assistant_session_get',
+        'assistant_turn_start',
+      ].includes(command),
     ),
-  ).toMatchObject({ parts: [{ id: 'id' }] });
-  expect(
-    JSON.stringify(assistantWorkflowResult(finished as never)),
-  ).not.toContain('not-for-the-model');
+  ).toBe(true);
 });
 
-it('waits for the actual terminal result before asking the model to continue', async () => {
-  let finish!: (record: typeof finished) => void;
-  mocks.reply
-    .mockResolvedValueOnce(toolCall())
-    .mockResolvedValueOnce(answer('Done'));
-  mocks.inspect.mockImplementationOnce(
+it('observes a native execution until its persisted result arrives', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  let finish!: (session: AssistantSession) => void;
+  host.turn.mockImplementationOnce(async () =>
+    store({ ...session, status: 'running' }),
+  );
+  host.get.mockImplementationOnce(
     () =>
       new Promise((resolve) => {
         finish = resolve;
       }),
   );
-  const session = await createAssistantSession('model', 'Report', scope);
   const sending = sendAssistantMessage(session.id, 'Create a report', scope);
-  await vi.waitFor(() => expect(mocks.inspect).toHaveBeenCalled());
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'running',
-  );
-  expect(mocks.reply).toHaveBeenCalledTimes(1);
-  finish(finished);
+  await vi.waitFor(() => expect(current(session.id).status).toBe('running'));
+  expect(host.turn).toHaveBeenCalledTimes(1);
+  finish(store({ ...session, status: 'idle', messages: [assistantMessage] }));
   await sending;
-  expect(mocks.reply).toHaveBeenCalledTimes(2);
+  expect(current(session.id).status).toBe('idle');
+  expect(host.unlisten).toHaveBeenCalledOnce();
 });
 
-it('stops dispatch when the workspace changes and allows explicit recovery after returning', async () => {
-  mocks.reply.mockImplementationOnce(async () => {
-    mocks.scope.config.workspace_mode = 'team';
-    return toolCall();
-  });
-  const session = await createAssistantSession('model', 'Report', scope);
+it('reattaches to a running native session after reload without dispatch or inference', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  store({ ...session, status: 'running' });
+  host.get
+    .mockResolvedValueOnce({ ...session, status: 'running' })
+    .mockResolvedValueOnce({
+      ...session,
+      status: 'idle',
+      messages: [assistantMessage],
+    });
+  await loadAssistantSession(session.id, scope);
+  await vi.waitFor(() => expect(current(session.id).status).toBe('idle'));
+  expect(host.turn).not.toHaveBeenCalled();
+});
+
+it('does not mark a native inference interrupted merely because the renderer reloaded', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  let finish!: (session: AssistantSession) => void;
+  host.get
+    .mockResolvedValueOnce({ ...session, status: 'thinking' })
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+  expect((await loadAssistantSession(session.id, scope)).status).toBe(
+    'thinking',
+  );
+  await vi.waitFor(() => expect(host.listen).toHaveBeenCalled());
+  finish({ ...session, status: 'idle' });
+  await vi.waitFor(() => expect(current(session.id).status).toBe('idle'));
+  expect(host.turn).not.toHaveBeenCalled();
+});
+
+it('never retries dispatch when the start IPC response is lost', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  host.turn.mockRejectedValueOnce(new Error('response lost'));
+  host.get
+    .mockResolvedValueOnce({ ...session, status: 'running' })
+    .mockResolvedValueOnce({
+      ...session,
+      status: 'idle',
+      messages: [assistantMessage],
+    });
   await sendAssistantMessage(session.id, 'Create a report', scope);
-  expect(mocks.start).not.toHaveBeenCalled();
-  mocks.scope.config.workspace_mode = 'personal';
-  const restored = await loadAssistantSession(session.id, scope);
-  expect(restored.status).toBe('error');
+  await vi.waitFor(() => expect(current(session.id).status).toBe('idle'));
+  expect(host.turn).toHaveBeenCalledTimes(1);
 });
 
-it('publishes streaming text before completion and saves exactly one final assistant message', async () => {
-  let finish!: (result: ReturnType<typeof answer>) => void;
-  let channel!: { onmessage: (event: { type: string; text: string }) => void };
-  mocks.reply.mockImplementationOnce((_request, onEvent) => {
-    channel = onEvent;
-    return new Promise((resolve) => {
-      finish = resolve;
-    });
+it('forwards missing input decisions and cancellation to the native owner', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  useAssistantStore.setState({
+    sessions: { [session.id]: { ...session, status: 'needs_input' } },
   });
-  const session = await createAssistantSession('model', 'Hello', scope);
-  const sending = sendAssistantMessage(session.id, 'Hello', scope);
-  await vi.waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
-  channel.onmessage({ type: 'text_delta', text: 'Hello ' });
-  channel.onmessage({ type: 'text_delta', text: 'world' });
-  expect(useAssistantStore.getState().streams[session.id]?.text).toBe(
-    'Hello world',
-  );
-  expect(
-    useAssistantStore
-      .getState()
-      .sessions[session.id]?.messages.filter(
-        (message) => message.role === 'assistant',
-      ),
-  ).toHaveLength(0);
-  expect(mocks.start).not.toHaveBeenCalled();
-  const previewId = useAssistantStore.getState().streams[session.id]!.messageId;
-  finish(answer('Hello world'));
-  await sending;
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1),
-  ).toMatchObject({ id: previewId, text: 'Hello world' });
-  expect(useAssistantStore.getState().streams[session.id]).toBeUndefined();
-  channel.onmessage({ type: 'text_delta', text: 'late duplicate' });
-  expect(useAssistantStore.getState().streams[session.id]).toBeUndefined();
-});
-
-it('replaces authoritative text snapshots without duplicating deltas and retains failed output only as a preview', async () => {
-  let fail!: (error: Error) => void;
-  let channel!: { onmessage: (event: { type: string; text: string }) => void };
-  mocks.reply.mockImplementationOnce((_request, onEvent) => {
-    channel = onEvent;
-    return new Promise((_resolve, reject) => {
-      fail = reject;
-    });
+  await provideAssistantInputs(session.id, { period: 'week' }, scope);
+  expect(host.turn.mock.calls[0]![0].action).toEqual({
+    kind: 'inputs',
+    input: { period: 'week' },
   });
-  const session = await createAssistantSession('model', 'Hello', scope);
-  const sending = sendAssistantMessage(session.id, 'Hello', scope);
-  await vi.waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
-  channel.onmessage({ type: 'text_delta', text: 'Hello' });
-  channel.onmessage({ type: 'text_replace', text: 'Hello world' });
-  expect(useAssistantStore.getState().streams[session.id]?.text).toBe(
-    'Hello world',
-  );
-  fail(new Error('connection lost'));
-  await sending;
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'error',
-  );
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages,
-  ).toHaveLength(1);
-  expect(mocks.save.mock.calls.at(-1)?.[0].messages).toHaveLength(1);
-  channel.onmessage({ type: 'text_delta', text: 'late' });
-  expect(useAssistantStore.getState().streams[session.id]?.text).toBe(
-    'Hello world',
-  );
-  mocks.reply.mockResolvedValueOnce(answer('Recovered'));
+  useAssistantStore.setState({
+    sessions: { [session.id]: { ...session, status: 'needs_input' } },
+  });
+  await declineAssistantWorkflow(session.id, scope);
+  expect(host.turn.mock.calls[1]![0].action).toEqual({ kind: 'decline' });
   await resumeAssistant(session.id, scope);
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1)?.text,
-  ).toBe('Recovered');
+  expect(host.turn.mock.calls[2]![0].action).toEqual({ kind: 'continue' });
+});
+
+it('publishes native stream events and removes the transient message once persisted', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  let receive!: (event: unknown) => void;
+  let finish!: (session: AssistantSession) => void;
+  host.listen.mockImplementationOnce(async (_name, callback) => {
+    receive = callback;
+    return host.unlisten;
+  });
+  host.turn.mockImplementationOnce(async () =>
+    store({ ...session, status: 'thinking' }),
+  );
+  host.get.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const sending = sendAssistantMessage(session.id, 'Hello', scope);
+  await vi.waitFor(() => expect(host.get).toHaveBeenCalled());
+  receive({
+    payload: {
+      sessionId: session.id,
+      messageId: 'answer',
+      event: { type: 'text_delta', text: 'Rea' },
+    },
+  });
+  receive({
+    payload: {
+      sessionId: session.id,
+      messageId: 'answer',
+      event: { type: 'text_delta', text: 'dy' },
+    },
+  });
+  expect(useAssistantStore.getState().streams[session.id]?.text).toBe('Ready');
+  const activity = {
+    id: 'progress1',
+    turnId: 'user1',
+    summary: 'Check available capabilities',
+  };
+  receive({
+    payload: {
+      sessionId: session.id,
+      messageId: 'answer',
+      event: { type: 'activity', summary: activity.summary },
+      activity,
+    },
+  });
+  expect(current(session.id).activities).toEqual([activity]);
+  finish(store({ ...session, status: 'idle', messages: [assistantMessage] }));
+  await sending;
   expect(useAssistantStore.getState().streams[session.id]).toBeUndefined();
+  expect(current(session.id).activities).toEqual([activity]);
 });
 
-it('persists mutually exclusive message feedback without regenerating or dispatching work', async () => {
-  mocks.reply.mockResolvedValue(answer('Hello'));
-  const session = await createAssistantSession('model', 'Hello', scope);
-  await sendAssistantMessage(session.id, 'Hello', scope);
-  const messageId = useAssistantStore
-    .getState()
-    .sessions[session.id]!.messages.at(-1)!.id;
-  await setAssistantFeedback(session.id, messageId, 'helpful', scope);
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1)
-      ?.feedback,
-  ).toBe('helpful');
-  expect(mocks.save.mock.calls.at(-1)?.[0].messages.at(-1).feedback).toBe(
-    'helpful',
+it('keeps team authentication in the native request, outside conversation data', async () => {
+  host.scope.config.workspace_mode = 'team';
+  const teamScope = JSON.stringify(['team', 'https://team.example', 'user']);
+  const session = await createAssistantSession('model', 'Work', teamScope);
+  await sendAssistantMessage(session.id, 'Hello', teamScope);
+  expect(host.turn.mock.calls[0]![0].teamToken).toBe('private-team-token');
+  expect(JSON.stringify(current(session.id))).not.toContain(
+    'private-team-token',
   );
-  await setAssistantFeedback(session.id, messageId, 'unhelpful', scope);
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1)
-      ?.feedback,
-  ).toBe('unhelpful');
-  await setAssistantFeedback(session.id, messageId, 'unhelpful', scope);
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1)
-      ?.feedback,
-  ).toBeUndefined();
-  expect(mocks.reply).toHaveBeenCalledTimes(1);
-  expect(mocks.start).not.toHaveBeenCalled();
 });
 
-it('does not mark a completed response as failed when saving feedback fails', async () => {
-  mocks.reply.mockResolvedValue(answer('Hello'));
-  const session = await createAssistantSession('model', 'Hello', scope);
-  await sendAssistantMessage(session.id, 'Hello', scope);
-  const messageId = useAssistantStore
-    .getState()
-    .sessions[session.id]!.messages.at(-1)!.id;
-  mocks.save.mockRejectedValueOnce(new Error('storage unavailable'));
-  await expect(
-    setAssistantFeedback(session.id, messageId, 'helpful', scope),
-  ).rejects.toThrow('storage unavailable');
-  expect(useAssistantStore.getState().sessions[session.id]?.status).toBe(
-    'idle',
+it('prevents simultaneous submissions from the same renderer', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  let finish!: (session: AssistantSession) => void;
+  host.turn.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
   );
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.error,
-  ).toBeUndefined();
-  expect(
-    useAssistantStore.getState().sessions[session.id]?.messages.at(-1)
-      ?.feedback,
-  ).toBeUndefined();
-  expect(mocks.reply).toHaveBeenCalledTimes(1);
+  const first = sendAssistantMessage(session.id, 'Hello', scope);
+  await vi.waitFor(() => expect(host.turn).toHaveBeenCalledOnce());
+  await sendAssistantMessage(session.id, 'Hello again', scope);
+  finish(session);
+  await first;
+  expect(host.turn).toHaveBeenCalledOnce();
+});
+
+it('persists feedback without replaying the native turn', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  store({ ...session, messages: [assistantMessage] });
+  await loadAssistantSession(session.id, scope);
+  await setAssistantFeedback(session.id, 'answer', 'helpful', scope);
+  expect(current(session.id).messages[0]?.feedback).toBe('helpful');
+  expect(host.turn).not.toHaveBeenCalled();
 });

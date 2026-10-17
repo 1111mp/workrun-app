@@ -1,4 +1,5 @@
 pub mod artifact;
+pub mod assistant;
 pub mod chat_session;
 pub mod deeplink;
 pub mod evaluation;

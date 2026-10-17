@@ -1,24 +1,15 @@
+import { listen } from '@tauri-apps/api/event';
 import { create } from 'zustand';
 
-import { artifactReferences } from '@/services/artifact';
+import { createTeamAuthClient } from '@/lib/auth-client';
 import {
-  assistantReply,
-  assistantWorkflowResult,
   getAssistantSession,
-  missingWorkflowInputs,
-  resolveAssistantWorkflow,
   saveAssistantSession,
-  toolResultContent,
-  type AssistantMessage,
+  startAssistantTurn,
   type AssistantSession,
+  type AssistantActivity,
+  type AssistantTurnAction,
 } from '@/services/assistant';
-import { prepareWorkflowProcessApps } from '@/services/process-node';
-import { inspectRunRecord } from '@/services/run-history';
-import {
-  getWorkflowCapabilities,
-  startBackgroundWorkflowRun,
-  toWorkflowDsl,
-} from '@/services/workflow';
 import { useWorkrunStore } from '@/stores/workrun.store';
 
 export const useAssistantStore = create<{
@@ -26,6 +17,7 @@ export const useAssistantStore = create<{
   scopes: Record<string, string>;
   streams: Record<string, { messageId: string; text: string }>;
 }>(() => ({ sessions: {}, scopes: {}, streams: {} }));
+const observers = new Map<string, Promise<void>>();
 const locks = new Set<string>();
 const workspace = () => {
   const state = useWorkrunStore.getState();
@@ -45,11 +37,21 @@ function ensureWorkspace(scope: string) {
 }
 function publish(session: AssistantSession, scope: string) {
   useAssistantStore.setState((state) => {
+    // Polling snapshots may predate a live progress event. Preserve it until
+    // the native phase commits the same ID to durable history.
+    const activities = new Map(
+      (session.activities ?? []).map((item) => [item.id, item]),
+    );
+    if (state.scopes[session.id] === scope)
+      for (const item of state.sessions[session.id]?.activities ?? [])
+        activities.set(item.id, item);
+    session = { ...session, activities: [...activities.values()] };
     const streams = { ...state.streams };
     const stream = streams[session.id];
     if (
       stream &&
-      session.messages.some((message) => message.id === stream.messageId)
+      (session.messages.some((message) => message.id === stream.messageId) ||
+        !['thinking', 'running'].includes(session.status))
     )
       delete streams[session.id];
     return {
@@ -59,41 +61,106 @@ function publish(session: AssistantSession, scope: string) {
     };
   });
 }
-
-async function commit(session: AssistantSession, scope: string) {
-  ensureWorkspace(scope);
-  await saveAssistantSession(session);
-  ensureWorkspace(scope);
-  publish(session, scope);
-}
 function latest(id: string) {
-  const value = useAssistantStore.getState().sessions[id];
-  if (!value) throw new Error('Conversation is not loaded.');
-  return value;
+  const session = useAssistantStore.getState().sessions[id];
+  if (!session) throw new Error('Conversation is not loaded.');
+  return session;
 }
-async function guarded(id: string, scope: string, action: () => Promise<void>) {
-  if (locks.has(id)) return;
-  locks.add(id);
-  try {
-    ensureWorkspace(scope);
-    await action();
-  } catch (error) {
-    if (workspace() === scope && useAssistantStore.getState().sessions[id]) {
-      const session = {
-        ...latest(id),
-        status: 'error' as const,
-        error: String(error),
-      };
-      publish(session, scope);
-      try {
-        await saveAssistantSession(session);
-      } catch {
-        /* Keep the failure visible even if storage itself failed. */
+async function teamToken() {
+  const config = useWorkrunStore.getState().config;
+  if (config?.workspace_mode !== 'team') return;
+  const server = config.team?.server_url;
+  if (!server) throw new Error('Team server URL is not configured.');
+  const session = await createTeamAuthClient(server).getSession();
+  if (!session.data?.session.token)
+    throw new Error('Sign in to access Team workflows.');
+  return session.data.session.token;
+}
+
+// Observation never calls a model or dispatches a workflow. Native ownership
+// continues when this loop, the renderer, or the stream listener disappears.
+function observe(id: string, scope: string): Promise<void> {
+  const key = `${scope}/${id}`;
+  const existing = observers.get(key);
+  if (existing) return existing;
+  const task = (async () => {
+    const unlisten = await listen<{
+      sessionId: string;
+      messageId: string;
+      activity?: AssistantActivity;
+      event:
+        | { type: 'text_delta' | 'text_replace'; text: string }
+        | { type: 'activity'; summary: string };
+    }>('assistant-stream', ({ payload }) => {
+      const state = useAssistantStore.getState();
+      if (
+        workspace() !== scope ||
+        payload.sessionId !== id ||
+        state.scopes[id] !== scope
+      )
+        return;
+      if (payload.event.type === 'activity') {
+        const activity = payload.activity;
+        const session = state.sessions[id];
+        if (
+          activity &&
+          session &&
+          !session.activities?.some((item) => item.id === activity.id)
+        )
+          useAssistantStore.setState({
+            sessions: {
+              ...state.sessions,
+              [id]: {
+                ...session,
+                activities: [...(session.activities ?? []), activity],
+              },
+            },
+          });
+        return;
       }
+      const event = payload.event;
+      if (
+        state.sessions[id]?.messages.some(
+          (message) => message.id === payload.messageId,
+        )
+      )
+        return;
+      useAssistantStore.setState((state) => {
+        const stream = state.streams[id];
+        return {
+          streams: {
+            ...state.streams,
+            [id]: {
+              messageId: payload.messageId,
+              text:
+                event.type === 'text_replace'
+                  ? event.text
+                  : (stream?.messageId === payload.messageId
+                      ? stream.text
+                      : '') + event.text,
+            },
+          },
+        };
+      });
+    }).catch(() => () => {});
+    try {
+      while (
+        workspace() === scope &&
+        useAssistantStore.getState().scopes[id] === scope
+      ) {
+        const session = await getAssistantSession(id);
+        ensureWorkspace(scope);
+        if (useAssistantStore.getState().scopes[id] !== scope) return;
+        publish(session, scope);
+        if (!['thinking', 'running'].includes(session.status)) return;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    } finally {
+      unlisten();
     }
-  } finally {
-    locks.delete(id);
-  }
+  })().finally(() => observers.delete(key));
+  observers.set(key, task);
+  return task;
 }
 
 export async function createAssistantSession(
@@ -101,6 +168,7 @@ export async function createAssistantSession(
   title: string,
   scope: string,
 ) {
+  ensureWorkspace(scope);
   const session: AssistantSession = {
     id: crypto.randomUUID(),
     title: title.slice(0, 72),
@@ -109,332 +177,105 @@ export async function createAssistantSession(
     status: 'idle',
     steps: 0,
   };
-  await commit(session, scope);
+  await saveAssistantSession(session);
+  ensureWorkspace(scope);
+  publish(session, scope);
   return session;
 }
-
 export async function loadAssistantSession(id: string, scope: string) {
   ensureWorkspace(scope);
-  const state = useAssistantStore.getState();
-  const cached = state.scopes[id] === scope ? state.sessions[id] : undefined;
-  if (cached && locks.has(id)) return cached;
-  const session = cached
-    ? structuredClone(cached)
-    : await getAssistantSession(id);
+  const session = await getAssistantSession(id);
   ensureWorkspace(scope);
-  // A renderer restart must never repeat a call whose side effects are unknown.
-  // Native runs can be reattached by ID; unfinished inference requires explicit retry.
-  if (
-    session.status === 'thinking' ||
-    (session.status === 'running' && !session.activeCall?.runId)
-  ) {
-    session.status = 'error';
-    session.error =
-      'Assistant response was interrupted. Continue to retry the response.';
-  }
   publish(session, scope);
-  if (session.activeCall?.runId && session.status === 'running')
-    void resumeAssistant(id, scope);
+  if (['thinking', 'running'].includes(session.status))
+    void observe(id, scope).catch(() => {});
   return session;
 }
-
-function appendToolResult(
-  session: AssistantSession,
-  response: unknown,
-  text: string,
-): AssistantSession {
-  const call = session.activeCall!;
-  const message: AssistantMessage = {
-    id: crypto.randomUUID(),
-    role: 'tool',
-    text,
-    content: toolResultContent(call, response),
-    runId: call.runId,
-    workflowName: call.workflow.document.settings.name,
-    artifacts: artifactReferences(response),
-  };
-  return {
-    ...session,
-    activeCall: undefined,
-    messages: [...session.messages, message],
-    status: 'thinking',
-    error: undefined,
-  };
-}
-
-async function waitForWorkflow(id: string, scope: string) {
-  const call = latest(id).activeCall!;
-  if (!call.runId) throw new Error('Workflow run has not started.');
-  for (;;) {
+async function act(id: string, scope: string, action: AssistantTurnAction) {
+  if (locks.has(id)) return;
+  locks.add(id);
+  let ownsLock = true;
+  try {
     ensureWorkspace(scope);
-    const record = await inspectRunRecord(call.runId);
-    if (
-      ['completed', 'failed', 'cancelled', 'interrupted'].includes(
-        record.status,
-      )
-    ) {
-      await commit(
-        appendToolResult(
-          latest(id),
-          assistantWorkflowResult(record),
-          record.status,
-        ),
-        scope,
-      );
-      return;
+    const token = await teamToken();
+    ensureWorkspace(scope);
+    const session = await startAssistantTurn(id, action, token);
+    ensureWorkspace(scope);
+    publish(session, scope);
+    // Native ownership now guards the turn. Release the submission guard before
+    // observation publishes a terminal state and enables the next user action.
+    locks.delete(id);
+    ownsLock = false;
+    await observe(id, scope);
+  } catch (error) {
+    if (workspace() === scope && useAssistantStore.getState().sessions[id]) {
+      // An uncertain IPC response never authorizes a retry. Prefer the native
+      // state; a running task remains running despite a transport failure.
+      const session = await getAssistantSession(id).catch(() => undefined);
+      if (session && ['thinking', 'running'].includes(session.status)) {
+        publish(session, scope);
+        void observe(id, scope).catch(() => {});
+      } else
+        publish(
+          { ...(session ?? latest(id)), status: 'error', error: String(error) },
+          scope,
+        );
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+  } finally {
+    if (ownsLock) locks.delete(id);
   }
 }
-
-async function launchWorkflow(
-  id: string,
-  scope: string,
-  input: Record<string, unknown>,
-) {
-  const session = latest(id);
-  const call = session.activeCall!;
-  const workflow = call.workflow;
-  const settings = workflow.document.settings;
-  if (missingWorkflowInputs(settings, input).length) {
-    await commit(
-      { ...session, status: 'needs_input', activeCall: { ...call, input } },
-      scope,
-    );
-    return false;
-  }
-  const dsl = await prepareWorkflowProcessApps(
-    toWorkflowDsl(
-      workflow.id,
-      workflow.document.nodes,
-      workflow.document.edges,
-      settings,
-    ),
-    `release-${workflow.releaseId ?? `draft-${workflow.id}`}`,
-    () => undefined,
-  );
-  ensureWorkspace(scope);
-  const runId = crypto.randomUUID();
-  // Persist identity before starting. Recovery only observes this run; it never
-  // dispatches a second execution when a create response was lost.
-  await commit(
-    { ...latest(id), status: 'running', activeCall: { ...call, input, runId } },
-    scope,
-  );
-  await startBackgroundWorkflowRun({
-    runId,
-    targetId: workflow.id,
-    targetName: settings.name,
-    input,
-    initialState: input,
-    targetSnapshot: workflow.document,
-    dsl,
-    threadId: crypto.randomUUID(),
-    releaseId: workflow.releaseId,
-    releaseVersion: workflow.version,
-  });
-  await waitForWorkflow(id, scope);
-  return true;
-}
-
-async function driveAssistant(id: string, scope: string) {
-  for (;;) {
-    ensureWorkspace(scope);
-    let session = latest(id);
-    if (session.steps >= 8)
-      throw new Error(
-        'Automatic workflow limit reached. Start a new turn to continue.',
-      );
-    const capabilities = await getWorkflowCapabilities();
-    ensureWorkspace(scope);
-    const messageId = crypto.randomUUID();
-    useAssistantStore.setState((state) => ({
-      streams: { ...state.streams, [id]: { messageId, text: '' } },
-    }));
-    let accepting = true;
-    let reply;
-    try {
-      reply = await assistantReply(session, capabilities, (event) => {
-        if (!accepting || workspace() !== scope) return;
-        useAssistantStore.setState((state) => {
-          const stream = state.streams[id];
-          if (stream?.messageId !== messageId) return state;
-          return {
-            streams: {
-              ...state.streams,
-              [id]: {
-                messageId,
-                text:
-                  event.type === 'text_replace'
-                    ? event.text
-                    : stream.text + event.text,
-              },
-            },
-          };
-        });
-      });
-    } finally {
-      accepting = false;
-    }
-
-    ensureWorkspace(scope);
-    session = {
-      ...session,
-      messages: [
-        ...session.messages,
-        {
-          id: messageId,
-          role: 'assistant',
-          text: reply.text,
-          content: reply.content,
-        },
-      ],
-      status: reply.call ? 'thinking' : 'idle',
-      error: undefined,
-    };
-    if (!reply.call) {
-      await commit(session, scope);
-      return;
-    }
-    // Bind the call to the exact document that will be executed and stored in
-    // native history, rather than executing an unvalidated model-authored graph.
-    const workflow = await resolveAssistantWorkflow(
-      reply.call.workflowId,
-      capabilities,
-    );
-    session = {
-      ...session,
-      activeCall: { ...reply.call, workflow },
-      steps: session.steps + 1,
-    };
-    await commit(session, scope);
-    try {
-      if (!(await launchWorkflow(id, scope, reply.call.input))) return;
-    } catch (error) {
-      // A run ID means dispatch may have happened: never turn an uncertain
-      // create response into an automatic retry or a second tool execution.
-      if (latest(id).activeCall?.runId) throw error;
-      await commit(
-        appendToolResult(
-          latest(id),
-          { status: 'failed', error: String(error) },
-          'failed',
-        ),
-        scope,
-      );
-    }
-  }
-}
-
 export async function sendAssistantMessage(
   id: string,
   text: string,
   scope: string,
   attachments: unknown[] = [],
 ) {
-  await guarded(id, scope, async () => {
-    const session = latest(id);
-    if (session.activeCall || !['idle', 'error'].includes(session.status))
-      return;
-    if (!text.trim() && !attachments.length) return;
-    const message: AssistantMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      text,
-      artifacts: artifactReferences(attachments),
-      content: {
-        role: 'user',
-        parts: [
-          {
-            text: attachments.length
-              ? `${text}\n\nAttached file references (use these exact objects for file inputs):\n${JSON.stringify(attachments)}`
-              : text,
-          },
-        ],
-      },
-    };
-    await commit(
-      {
-        ...session,
-        messages: [...session.messages, message],
-        status: 'thinking',
-        error: undefined,
-        steps: 0,
-      },
-      scope,
-    );
-    await driveAssistant(id, scope);
-  });
+  const session = latest(id);
+  if (
+    session.activeCall ||
+    !['idle', 'error'].includes(session.status) ||
+    (!text.trim() && !attachments.length)
+  )
+    return;
+  await act(id, scope, { kind: 'send', text, attachments });
 }
-
 export async function provideAssistantInputs(
   id: string,
   input: Record<string, unknown>,
   scope: string,
 ) {
-  await guarded(id, scope, async () => {
-    if (latest(id).status !== 'needs_input') return;
-    if (await launchWorkflow(id, scope, input)) await driveAssistant(id, scope);
-  });
+  if (latest(id).status === 'needs_input')
+    await act(id, scope, { kind: 'inputs', input });
 }
-
 export async function resumeAssistant(id: string, scope: string) {
-  await guarded(id, scope, async () => {
-    const session = latest(id);
-    if (session.activeCall?.runId) {
-      await commit({ ...session, status: 'running', error: undefined }, scope);
-      await waitForWorkflow(id, scope);
-    } else if (session.activeCall) {
-      await commit(
-        { ...session, status: 'needs_input', error: undefined },
-        scope,
-      );
-      return;
-    } else
-      await commit({ ...session, status: 'thinking', error: undefined }, scope);
-    await driveAssistant(id, scope);
-  });
+  await act(id, scope, { kind: 'continue' });
 }
-
 export async function declineAssistantWorkflow(id: string, scope: string) {
-  await guarded(id, scope, async () => {
-    if (latest(id).status !== 'needs_input') return;
-    await commit(
-      appendToolResult(
-        latest(id),
-        { status: 'cancelled', reason: 'User cancelled parameter collection.' },
-        'cancelled',
-      ),
-      scope,
-    );
-    await driveAssistant(id, scope);
-  });
+  if (latest(id).status === 'needs_input')
+    await act(id, scope, { kind: 'decline' });
 }
-
 export async function setAssistantFeedback(
   id: string,
   messageId: string,
   value: 'helpful' | 'unhelpful',
   scope: string,
 ) {
-  if (locks.has(id)) return;
-  locks.add(id);
-  try {
-    ensureWorkspace(scope);
-    const session = latest(id);
-    // Feedback is local metadata. Storage failures must not turn a completed
-    // response into a failed turn whose retry could dispatch work again.
-    if (!['idle', 'error'].includes(session.status)) return;
-    const messages = session.messages.map((message) =>
+  ensureWorkspace(scope);
+  const session = latest(id);
+  if (!['idle', 'error'].includes(session.status)) return;
+  const updated = {
+    ...session,
+    messages: session.messages.map((message) =>
       message.id === messageId && message.role === 'assistant'
         ? {
             ...message,
             feedback: message.feedback === value ? undefined : value,
           }
         : message,
-    );
-    await commit({ ...session, messages }, scope);
-  } finally {
-    locks.delete(id);
-  }
+    ),
+  };
+  await saveAssistantSession(updated);
+  ensureWorkspace(scope);
+  publish(updated, scope);
 }
