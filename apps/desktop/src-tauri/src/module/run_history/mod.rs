@@ -33,6 +33,7 @@ async fn ensure_workspace_in_pool(pool: &sqlx::SqlitePool, id: &str, workspace_i
 
 pub(crate) use records::create_in_transaction;
 
+mod deletion;
 mod pending_actions;
 mod queries;
 mod queue;

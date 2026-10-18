@@ -68,3 +68,6 @@ export const startAssistantTurn = (
   invoke<AssistantSession>('assistant_turn_start', {
     request: { sessionId, action, teamToken },
   });
+
+export const deleteAssistantSession = (id: string) =>
+  invoke<void>('assistant_session_delete', { id });

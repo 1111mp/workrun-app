@@ -4,7 +4,6 @@ import {
   Avatar,
   AvatarFallback,
   AvatarImage,
-  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -12,9 +11,11 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  SidebarMenuButton,
 } from '@workspace/ui/components';
 import {
   BookOpenIcon,
+  ChevronsUpDown,
   LogOutIcon,
   RefreshCwIcon,
   ServerCogIcon,
@@ -56,7 +57,6 @@ function HomeLayout() {
   const queryClient = useQueryClient();
 
   const navigate = useNavigate();
-
   const { t } = useTranslation();
 
   const displayName = userInfo?.name;
@@ -111,33 +111,39 @@ function HomeLayout() {
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button
-                variant='ghost'
-                size='sm'
-                className='relative w-full justify-start group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0'
-                aria-label={t('navigation.accountMenu')}
+              <SidebarMenuButton
+                size='lg'
+                aria-label={displayName || t('navigation.accountMenu')}
+                className='data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground relative h-12! p-0! group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-8!'
               >
-                <Avatar size='sm'>
-                  {avatarUrl ? (
-                    <AvatarImage alt={displayName ?? ''} src={avatarUrl} />
-                  ) : null}
-                  <AvatarFallback>
+                <Avatar className='size-8 shrink-0 rounded-lg'>
+                  <AvatarImage src={avatarUrl ?? ''} alt={displayName ?? ''} />
+                  <AvatarFallback className='rounded-lg'>
                     <User />
                   </AvatarFallback>
                 </Avatar>
-                <span className='truncate group-data-[collapsible=icon]:hidden'>
-                  {displayName || t('navigation.accountMenu')}
-                </span>
-                {availableUpdate ? (
-                  <span
-                    className='ring-background absolute top-1 right-1 size-1.5 rounded-full bg-red-500 ring-2'
-                    aria-label={t('updater.available')}
-                  />
-                ) : null}
-              </Button>
+
+                <div className='grid min-w-0 flex-1 text-left text-sm leading-tight'>
+                  <span className='truncate font-medium'>
+                    {displayName || t('navigation.accountMenu')}
+                  </span>
+                  {availableUpdate ? (
+                    <span
+                      className='ring-background absolute top-2 left-2 size-1.5 rounded-full bg-red-500 ring-2'
+                      aria-label={t('updater.available')}
+                    />
+                  ) : null}
+                </div>
+                <ChevronsUpDown className='ml-auto size-4' />
+              </SidebarMenuButton>
             }
           />
-          <DropdownMenuContent align='end' className='w-48'>
+          <DropdownMenuContent
+            className='w-(--anchor-width) min-w-56 rounded-lg'
+            side='right'
+            align='end'
+            sideOffset={4}
+          >
             <DropdownMenuGroup>
               {displayName ? (
                 <DropdownMenuLabel className='text-muted-foreground truncate px-2 py-1.5 text-sm font-medium'>
@@ -183,11 +189,8 @@ function HomeLayout() {
                   : availableUpdate
                     ? t('updater.available')
                     : t('navigation.checkForUpdates')}
-                <span className='truncate group-data-[collapsible=icon]:hidden'>
-                  {displayName || t('navigation.accountMenu')}
-                </span>
                 {availableUpdate ? (
-                  <span className='ml-auto rounded-sm bg-red-500! px-1 py-0.5 text-[10px] leading-none font-semibold text-white!'>
+                  <span className='text-foreground ml-auto rounded-sm bg-red-500! px-1 py-0.5 text-[10px] leading-none font-semibold'>
                     NEW
                   </span>
                 ) : null}

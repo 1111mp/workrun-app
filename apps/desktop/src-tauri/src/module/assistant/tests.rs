@@ -4,12 +4,12 @@ use serde_json::Value;
 use std::{collections::VecDeque, sync::Mutex};
 use tools::{Capability, tool_name};
 
-struct ScriptedModel {
+pub(super) struct ScriptedModel {
     responses: Mutex<VecDeque<Content>>,
     requests: Mutex<Vec<LlmRequest>>,
 }
 impl ScriptedModel {
-    fn new(responses: Vec<Content>) -> Self {
+    pub(super) fn new(responses: Vec<Content>) -> Self {
         Self {
             responses: Mutex::new(responses.into()),
             requests: Mutex::new(vec![]),
@@ -36,7 +36,7 @@ impl Llm for ScriptedModel {
         })])))
     }
 }
-fn runtime() -> AssistantRuntime {
+pub(super) fn runtime() -> AssistantRuntime {
     AssistantRuntime {
         profile: AgentProfile::default(),
         skills: SkillCatalog::builtin(),
@@ -372,7 +372,17 @@ async fn gemini_wire_keeps_instructions_and_status_turn_has_no_execution_tool() 
             .contains("independent conversational agent")
     );
     assert!(bodies[1]["contents"].to_string().contains("conversation"));
-    assert!(!bodies[1]["tools"].to_string().contains(&tool_name("cancel-order")));
+    // Discovery descriptions can mention execute_workflow. Permission is
+    // determined by declared function names, not arbitrary descriptive text.
+    let names = bodies[1]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|tool| tool["functionDeclarations"].as_array().unwrap())
+        .map(|declaration| declaration["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"list_workflow"));
+    assert!(!names.contains(&super::tools::EXECUTE_WORKFLOW));
 }
 
 /// Opt-in semantic regression against a configured Gemini provider. It only asks
@@ -380,23 +390,7 @@ async fn gemini_wire_keeps_instructions_and_status_turn_has_no_execution_tool() 
 #[tokio::test]
 #[ignore = "uses configured Gemini API credentials and network"]
 async fn live_gemini_followups_do_not_propose_another_execution() {
-    let directory = std::env::var_os("WORKRUN_ASSISTANT_LIVE_CONFIG_DIR")
-        .expect("set WORKRUN_ASSISTANT_LIVE_CONFIG_DIR explicitly");
-    let directory = std::path::PathBuf::from(directory);
-    let source = std::fs::read_to_string(directory.join("workrun.yaml")).unwrap();
-    let config: Value = serde_yaml_ng::from_str(&source).unwrap();
-    let credential = config["provider_credentials"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["provider"] == "gemini")
-        .expect("Gemini is not configured");
-    let key = std::fs::read(directory.join(".encryption_key")).unwrap();
-    let decrypted = crate::config::decrypt_data_with_key(credential["apiKey"].as_str().unwrap(), &key)
-        .expect("cannot decrypt configured credential");
-    let api_key: Option<String> = serde_json::from_str(&decrypted).unwrap();
-    let model_name = std::env::var("WORKRUN_ASSISTANT_LIVE_MODEL").unwrap_or_else(|_| "gemini-3.5-flash-lite".into());
-    let model = adk_rust::model::GeminiModel::new(api_key.unwrap(), model_name).unwrap();
+    let model = live_gemini_model_from_env();
     let filter = std::env::var("WORKRUN_ASSISTANT_LIVE_FILTER").ok();
     for input in ["任务成功了吗", "为什么执行失败", "你能做什么", "重新取消订单43"] {
         if filter.as_ref().is_some_and(|filter| !input.contains(filter)) {
@@ -440,6 +434,16 @@ async fn live_gemini_followups_do_not_propose_another_execution() {
                 name: "Sales report".into(),
                 description: "Read workspace sales data and generate a sales report for the requested period.".into(),
                 parameters: json!({"type":"object","properties":{"period":{"type":"string","description":"Requested reporting period"}},"required":["period"]}),
+            }, Capability {
+                id: "invoice-summary".into(),
+                name: "Invoice summary".into(),
+                description: "Extract invoice totals from supplied invoice files. Does not query sales data or generate sales reports.".into(),
+                parameters: json!({"type":"object","properties":{"files":{"type":"array","items":{"type":"object"}}},"required":["files"]}),
+            }, Capability {
+                id: "document-translation".into(),
+                name: "Document translation".into(),
+                description: "Translate a supplied document into a requested language. Does not query sales data or generate sales reports.".into(),
+                parameters: json!({"type":"object","properties":{"language":{"type":"string"}},"required":["language"]}),
             }],
         };
         let reply = runtime()
@@ -453,6 +457,17 @@ async fn live_gemini_followups_do_not_propose_another_execution() {
         );
         println!("{input}: execution={}", reply.call.is_some());
         if let Some(call) = reply.call {
+            assert_eq!(
+                call.workflow_id, "sales-report",
+                "selected the wrong capability for {input}"
+            );
+            assert!(
+                call.input["period"]
+                    .as_str()
+                    .is_some_and(|period| !period.trim().is_empty()),
+                "missing report period"
+            );
+            println!("Selected sales-report with a nonempty period from three candidates");
             // Use the real provider's signed call, then substitute only the
             // workflow receipt. This verifies native result continuation without
             // attaching an executor or producing any business side effects.
@@ -609,4 +624,24 @@ async fn public_progress_is_a_separate_event_and_not_final_answer_text() {
     assert!(events.lock().unwrap().iter().any(|event| matches!(event,
         super::AssistantStreamEvent::Activity { summary } if summary == "I will compare the available approaches."
     )));
+}
+
+pub(super) fn live_gemini_model_from_env() -> adk_rust::model::GeminiModel {
+    let directory = std::env::var_os("WORKRUN_ASSISTANT_LIVE_CONFIG_DIR")
+        .expect("set WORKRUN_ASSISTANT_LIVE_CONFIG_DIR explicitly");
+    let directory = std::path::PathBuf::from(directory);
+    let source = std::fs::read_to_string(directory.join("workrun.yaml")).unwrap();
+    let config: Value = serde_yaml_ng::from_str(&source).unwrap();
+    let credential = config["provider_credentials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["provider"] == "gemini")
+        .expect("Gemini is not configured");
+    let key = std::fs::read(directory.join(".encryption_key")).unwrap();
+    let decrypted = crate::config::decrypt_data_with_key(credential["apiKey"].as_str().unwrap(), &key)
+        .expect("cannot decrypt configured credential");
+    let api_key: Option<String> = serde_json::from_str(&decrypted).unwrap();
+    let model_name = std::env::var("WORKRUN_ASSISTANT_LIVE_MODEL").unwrap_or_else(|_| "gemini-3.5-flash-lite".into());
+    adk_rust::model::GeminiModel::new(api_key.unwrap(), model_name).unwrap()
 }

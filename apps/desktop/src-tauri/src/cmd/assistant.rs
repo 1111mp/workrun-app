@@ -47,6 +47,42 @@ pub async fn assistant_session_get(id: String) -> CmdResult<Value> {
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn session_deletion_is_scoped_and_rejects_pending_calls() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../resources/migrations/20261016100000_assistant_sessions.up.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut session = json!({"id": id, "title":"Test", "status":"idle", "messages":[]});
+        save_session_in_pool(&pool, "personal", &session).await.unwrap();
+        assert!(
+            crate::module::assistant::session::delete(&pool, "team:other", &id)
+                .await
+                .is_err()
+        );
+        session["activeCall"] = json!({"runId":"active"});
+        save_session_in_pool(&pool, "personal", &session).await.unwrap();
+        assert!(
+            crate::module::assistant::session::delete(&pool, "personal", &id)
+                .await
+                .is_err()
+        );
+        session["activeCall"] = Value::Null;
+        save_session_in_pool(&pool, "personal", &session).await.unwrap();
+        crate::module::assistant::session::delete(&pool, "personal", &id)
+            .await
+            .unwrap();
+        assert!(
+            crate::module::assistant::session::get(&pool, "personal", &id)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn sessions_are_durable_and_cannot_be_overwritten_from_another_workspace() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -80,4 +116,12 @@ mod tests {
                 .unwrap();
         assert!(hidden.is_none());
     }
+}
+
+#[tauri::command]
+pub async fn assistant_session_delete(id: String) -> CmdResult {
+    let pool = DBManager::global().pool().stringify_err()?;
+    crate::module::assistant::session::delete(&pool, &active_workspace_id(), &id)
+        .await
+        .stringify_err()
 }

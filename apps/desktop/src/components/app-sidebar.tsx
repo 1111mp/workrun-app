@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Sidebar,
   SidebarContent,
@@ -9,6 +9,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuAction,
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
   SidebarRail,
   Skeleton,
   useSidebar,
@@ -18,17 +24,25 @@ import {
   HistoryIcon,
   HomeIcon,
   MessageSquareIcon,
+  MoreHorizontalIcon,
+  Trash2Icon,
+  ArrowUpRightIcon,
   SquarePen,
   WorkflowIcon,
 } from 'lucide-react';
 import { useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useLocation } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 
-import { listAssistantSessions } from '@/services/assistant';
+import { useConfirm } from '@/lib/confirm-context';
+import {
+  deleteAssistantSession,
+  listAssistantSessions,
+} from '@/services/assistant';
 import { runDetailsPath } from '@/services/run-center';
-import { listRunHistoryPage } from '@/services/run-history';
+import { deleteRunRecord, listRunHistoryPage } from '@/services/run-history';
 import { useWorkrunStore } from '@/stores';
+import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 
 export function useEntryWorkspace() {
   return useWorkrunStore((state) =>
@@ -69,28 +83,25 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
   ];
 
   return (
-    <Sidebar
-      variant='inset'
-      collapsible='icon'
-      // Include the inset's left margin so controls center in the visible rail.
-      className='group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(6)))]'
-    >
+    <Sidebar variant='inset' collapsible='icon'>
       <SidebarHeader>
         <div
           data-tauri-drag-region={OS_PLATFORM !== 'win32'}
           className='h-2 shrink-0'
         />
-        <SidebarMenu className='group-data-[collapsible=icon]:items-center'>
+        <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
               size='lg'
+              className='h-12! p-0! group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-8!'
               tooltip='Workrun'
               aria-label='Workrun'
-              className='group-data-[collapsible=icon]:justify-center'
               render={<Link to='/settings' />}
             >
-              <WorkflowIcon />
-              <span className='flex min-w-0 flex-col truncate group-data-[collapsible=icon]:hidden'>
+              <div className='bg-sidebar-primary text-sidebar-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-lg'>
+                <WorkflowIcon />
+              </div>
+              <span className='flex min-w-0 flex-col truncate'>
                 <span className='font-semibold'>Workrun</span>
                 <span className='text-muted-foreground text-xs'>
                   {t(
@@ -106,90 +117,49 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
             <SidebarMenuButton
               tooltip={t('start.newTask')}
               aria-label={t('start.newTask')}
-              className='group-data-[collapsible=icon]:justify-center'
               render={<Link to='/start' state={{ reset: key }} />}
             >
               <SquarePen />
-              <span className='group-data-[collapsible=icon]:hidden'>
-                {t('start.newTask')}
-              </span>
+              <span>{t('start.newTask')}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
+      <SidebarGroup>
+        <SidebarMenu>
+          {navigation.map(({ to, label, icon: Icon }) => (
+            <SidebarMenuItem key={to}>
+              <SidebarMenuButton
+                tooltip={label}
+                aria-label={label}
+                isActive={
+                  pathname === to ||
+                  (to === '/start' && pathname === '/') ||
+                  (to !== '/start' && pathname.startsWith(`${to}/`))
+                }
+                render={<Link to={to} />}
+              >
+                <Icon />
+                <span>{label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroup>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarMenu className='group-data-[collapsible=icon]:items-center'>
-            {navigation.map(({ to, label, icon: Icon }) => (
-              <SidebarMenuItem key={to}>
-                <SidebarMenuButton
-                  tooltip={label}
-                  aria-label={label}
-                  className='group-data-[collapsible=icon]:justify-center'
-                  isActive={
-                    pathname === to ||
-                    (to !== '/start' && pathname.startsWith(`${to}/`))
-                  }
-                  render={<Link to={to} />}
-                >
-                  <Icon className='group-data-active/menu-button:hidden' />
-                  <svg
-                    viewBox='0 0 24 24'
-                    fill='currentColor'
-                    aria-hidden='true'
-                    className='hidden group-data-active/menu-button:block'
-                  >
-                    {to === '/start' && (
-                      <path
-                        fillRule='evenodd'
-                        d='M11.1 2.7a1.5 1.5 0 0 1 1.8 0l8 6A2.5 2.5 0 0 1 22 10.7V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-9.3a2.5 2.5 0 0 1 1.1-2l8-6ZM10 14v8h4v-8h-4Z'
-                        clipRule='evenodd'
-                      />
-                    )}
-                    {to === '/workflows' && (
-                      <>
-                        <rect x='2' y='2' width='8' height='8' rx='2' />
-                        <rect x='14' y='14' width='8' height='8' rx='2' />
-                        <path d='M5 10v5a4 4 0 0 0 4 4h5v-2H9a2 2 0 0 1-2-2v-5H5Z' />
-                      </>
-                    )}
-                    {to === '/apps' && (
-                      <path
-                        fillRule='evenodd'
-                        d='M4 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H4Zm0 5v11h16V8H4Zm1-3v1h2V5H5Zm4 0v1h2V5H9Z'
-                        clipRule='evenodd'
-                      />
-                    )}
-                    {to === '/runs' && (
-                      <>
-                        <path
-                          fillRule='evenodd'
-                          d='M12 3a9 9 0 1 1-8.5 12h2.2A7 7 0 1 0 6 8.4L4.5 7A9 9 0 0 1 12 3Zm-1 4h2v4.5l3.5 2-1 1.7L11 12.7V7Z'
-                          clipRule='evenodd'
-                        />
-                        <path d='M2 3v7h7L2 3Z' />
-                      </>
-                    )}
-                  </svg>
-                  <span className='group-data-[collapsible=icon]:hidden'>
-                    {label}
-                  </span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarGroup>
         <SidebarGroup className='group-data-[collapsible=icon]:hidden'>
           <SidebarGroupLabel>
             {t('assistant.recentConversations')}
           </SidebarGroupLabel>
-          <SidebarMenu className='group-data-[collapsible=icon]:items-center'>
+          <SidebarMenu>
             {conversations.data?.map((conversation) => (
               <SidebarMenuItem key={conversation.id}>
                 <SidebarMenuButton
+                  title={conversation.title}
                   isActive={
+                    pathname === '/start' &&
                     new URLSearchParams(search).get('session') ===
-                    conversation.id
+                      conversation.id
                   }
                   render={
                     <Link
@@ -200,8 +170,24 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                   <MessageSquareIcon />
                   <span>{conversation.title}</span>
                 </SidebarMenuButton>
+                <RecentActions
+                  kind='conversation'
+                  id={conversation.id}
+                  name={conversation.title}
+                  to={`/start?${new URLSearchParams({ session: conversation.id })}`}
+                />
               </SidebarMenuItem>
             ))}
+            {conversations.isPending && (
+              <SidebarMenuItem>
+                <Skeleton className='h-8 w-full' />
+              </SidebarMenuItem>
+            )}
+            {conversations.data?.length === 0 && (
+              <li className='text-muted-foreground px-2 py-1 text-xs'>
+                {t('sidebar.noConversations')}
+              </li>
+            )}
             {conversations.isError && (
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={() => void conversations.refetch()}>
@@ -213,7 +199,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
         </SidebarGroup>
         <SidebarGroup className='group-data-[collapsible=icon]:hidden'>
           <SidebarGroupLabel>{t('start.recentRuns')}</SidebarGroupLabel>
-          <SidebarMenu className='group-data-[collapsible=icon]:items-center'>
+          <SidebarMenu>
             {recent.isPending && <Skeleton className='h-8 w-full' />}
             {recent.isError && (
               <SidebarMenuItem>
@@ -229,9 +215,18 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                   isActive={new URLSearchParams(search).get('runId') === run.id}
                   render={<Link to={runDetailsPath(run)} />}
                 >
-                  <MessageSquareIcon />
+                  <HistoryIcon />
                   <span>{run.targetName}</span>
                 </SidebarMenuButton>
+                <RecentActions
+                  kind='run'
+                  id={run.id}
+                  name={run.targetName}
+                  to={runDetailsPath(run)}
+                  canDelete={['completed', 'failed', 'cancelled'].includes(
+                    run.status,
+                  )}
+                />
               </SidebarMenuItem>
             ))}
             {recent.data?.items.length === 0 && (
@@ -242,10 +237,123 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className='group-data-[collapsible=icon]:items-center'>
-        {accountMenu}
-      </SidebarFooter>
+      <SidebarFooter>{accountMenu}</SidebarFooter>
       <SidebarRail />
     </Sidebar>
+  );
+}
+
+function RecentActions({
+  kind,
+  id,
+  name,
+  to,
+  canDelete = true,
+}: {
+  kind: 'conversation' | 'run';
+  id: string;
+  name: string;
+  to: string;
+  canDelete?: boolean;
+}) {
+  const { t } = useTranslation();
+  const { isMobile } = useSidebar();
+  const client = useQueryClient();
+  const confirm = useConfirm();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const workspace = useEntryWorkspace();
+  const remove = () =>
+    confirm({
+      title: t('sidebar.deleteTitle', { name }),
+      description: t(
+        kind === 'conversation'
+          ? 'sidebar.deleteConversationDescription'
+          : 'sidebar.deleteRunDescription',
+      ),
+      confirmText: t('sidebar.delete'),
+      actionVariant: 'destructive',
+      onConfirm: async () => {
+        await (kind === 'conversation'
+          ? deleteAssistantSession(id)
+          : deleteRunRecord(id));
+        if (kind === 'conversation') {
+          const { useAssistantStore } =
+            await import('@/stores/assistant.store');
+          useAssistantStore.setState((state) => {
+            if (state.scopes[id] !== workspace) return state;
+            const sessions = { ...state.sessions };
+            const scopes = { ...state.scopes };
+            const streams = { ...state.streams };
+            delete sessions[id];
+            delete scopes[id];
+            delete streams[id];
+            return { sessions, scopes, streams };
+          });
+        }
+        if (kind === 'run') useRunWorkspaceStore.getState().closeRun(id);
+        const params = new URLSearchParams(location.search);
+        if (
+          (kind === 'conversation' &&
+            location.pathname === '/start' &&
+            params.get('session') === id) ||
+          (kind === 'run' && params.get('runId') === id)
+        ) {
+          await navigate(kind === 'conversation' ? '/start' : '/runs', {
+            replace: true,
+          });
+        }
+        // Refresh all history projections, including the full history page.
+        await client.invalidateQueries({
+          queryKey: [
+            kind === 'conversation' ? 'assistant-sessions' : 'run-history',
+          ],
+        });
+        if (kind === 'run')
+          await client.invalidateQueries({
+            queryKey: ['run-history-timeline'],
+          });
+        client.removeQueries({
+          queryKey:
+            kind === 'conversation'
+              ? ['assistant-session', workspace, id]
+              : ['run-history', id],
+        });
+      },
+    });
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <SidebarMenuAction
+            showOnHover
+            aria-label={t('sidebar.more', { name })}
+          />
+        }
+      >
+        <MoreHorizontalIcon />
+        <span className='sr-only'>{t('sidebar.more', { name })}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        className='w-48'
+        side={isMobile ? 'bottom' : 'right'}
+        align={isMobile ? 'end' : 'start'}
+      >
+        <DropdownMenuGroup>
+          <DropdownMenuItem render={<Link to={to} />}>
+            <ArrowUpRightIcon />
+            {t('sidebar.open')}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            variant='destructive'
+            disabled={!canDelete}
+            onClick={() => void remove()}
+          >
+            <Trash2Icon />
+            {t('sidebar.delete')}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

@@ -80,3 +80,8 @@ pub async fn run_history_dismiss_recovery(id: String) -> CmdResult {
         .await
         .stringify_err()
 }
+
+#[tauri::command]
+pub async fn run_history_delete(id: String) -> CmdResult {
+    RunHistoryStore::delete(&id).await.stringify_err()
+}

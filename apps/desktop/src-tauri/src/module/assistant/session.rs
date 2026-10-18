@@ -87,6 +87,21 @@ async fn commit(pool: &SqlitePool, workspace: &str, session: &Value) -> Result<(
     }
     Ok(())
 }
+/// Hold the same lease as turn dispatch so deletion cannot race a native writer.
+pub async fn delete(pool: &SqlitePool, workspace: &str, id: &str) -> Result<()> {
+    let _lease = acquire(workspace, id)?;
+    let session = get(pool, workspace, id).await?;
+    if session["activeCall"].is_object() || !matches!(session["status"].as_str(), Some("idle" | "error")) {
+        bail!("Only an idle conversation can be deleted");
+    }
+    sqlx::query("DELETE FROM assistant_sessions WHERE id = ? AND workspace_id = ?")
+        .bind(id)
+        .bind(workspace)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn renderer_save(session: Value) -> Result<()> {
     let pool = DBManager::global().pool()?;
     let workspace = dirs::active_workspace_id();
@@ -396,14 +411,14 @@ async fn launch(
     Ok(true)
 }
 
-struct RunObservation {
-    status: String,
-    name: String,
-    error: Option<String>,
-    state: Value,
+pub(super) struct RunObservation {
+    pub(super) status: String,
+    pub(super) name: String,
+    pub(super) error: Option<String>,
+    pub(super) state: Value,
 }
 #[async_trait::async_trait]
-trait WorkflowRuns: Send + Sync {
+pub(super) trait WorkflowRuns: Send + Sync {
     async fn start(&self, request: StartWorkflowRun) -> Result<()>;
     async fn inspect(&self, id: &str) -> Result<RunObservation>;
 }
@@ -430,7 +445,7 @@ impl WorkflowRuns for NativeRuns {
         })
     }
 }
-async fn dispatch(
+pub(super) async fn dispatch(
     pool: &SqlitePool,
     workspace: &str,
     session: &mut Value,

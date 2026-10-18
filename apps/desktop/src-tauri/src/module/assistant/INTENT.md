@@ -23,6 +23,20 @@ results from requesting new work or fresh information. If material ambiguity rem
 select clarification. Do not select execution merely because tools exist or an earlier
 goal remains unresolved.
 
+Apply these boundaries before selecting execution:
+- Writing, rewriting, translating, summarizing or analyzing text directly in the
+  conversation is conversation when no external resource or workflow is requested.
+  An imperative such as "write me an email" does not by itself require execution.
+  Sending the email or explicitly using a workflow is different.
+- A refusal, pause, or request to explain instead replaces the earlier execution
+  request. Classify the requested explanation/discussion, without an action quote.
+- A contextual confirmation is execution only when its target and scope are clear.
+  An unresolved choice between multiple tasks or references such as "that one again"
+  without a unique referent is clarification. Do not pick a target or fill in missing
+  scope to make the message executable.
+- A clear execution request can still lack required parameters. Its intent may be
+  execution, but that classification does not supply or authorize guessed inputs.
+
 For execution, actionQuote is an exact, nonempty excerpt from the latest user message
 expressing or confirming the requested work. Context can resolve that excerpt's scope,
 but cannot replace it with a quote from an earlier turn. For other intents actionQuote

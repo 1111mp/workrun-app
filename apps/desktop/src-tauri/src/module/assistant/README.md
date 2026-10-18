@@ -149,3 +149,106 @@ human review or long executions do not time out the assistant's model request.
 `report_progress({summary})` publishes a concise public approach/progress summary (1–600 characters). It is a read-only communication tool, not permission to execute a workflow and not a provider's private thinking transcript. Native `activity` events carry a stable activity ID and the originating user-message `turnId`; summaries are persisted in `session.activities` when the model phase ends, including a failed phase. While a phase is in flight, live summaries are transient; reloading can recover them after that phase commits. Provider thinking parts remain excluded from visible text.
 
 The renderer groups assistant/tool records by the preceding user message. The collapsible public summary is visible only during the active model phase before answer text starts streaming; workflow execution and user-action waits use the inline run card instead. Native responsePhaseId and activity phaseId prevent discovery summaries from leaking into result delivery. Completed/failed turns hide the thinking indicator, and the final answer owns the feedback controls. Stored model/function exchanges remain intact for continuation; historical sessions use the same grouping without a database migration.
+
+## Data-driven evaluation baseline
+
+`fixtures/baseline.json` is the versioned main-agent evaluation set. Its 26 cases
+cover direct answers, planning, status/explanation, explicit retries, contextual
+confirmation/rejection, missing inputs, ambiguity, unavailable capabilities, bilingual
+routing, typed parameters, and result delivery. Four synthetic capabilities provide
+competing destinations; the dataset is independent of a user's workflow catalog.
+
+`evaluation.rs` runs the same main-agent runtime, with the default profile and core
+skills, against a configured Gemini model. It separately scores:
+
+- **Intent:** the structured current-turn assessment, observed from actual model output.
+- **Routing:** no proposal, the correct workflow, or clarification/input collection.
+- **Arguments:** exact fixture-defined values, including canonical reporting periods.
+- **Delivery:** no second execution and fixture-specific factual anchors in the answer.
+
+Delivery checks are targeted assertions, not a general semantic judge. Prior-turn
+fixtures use synthetic conversation summaries. They complement the signed function
+history and native session recovery tests; they do not replace those tests. Scripted
+models validate the evaluation harness, not model classification accuracy.
+
+Run all cases explicitly (this calls the configured provider and may consume quota):
+
+```sh
+WORKRUN_ASSISTANT_LIVE_CONFIG_DIR='/path/to/workrun/config' \
+WORKRUN_ASSISTANT_EVAL_REPORT='/tmp/workrun-assistant-evaluation.json' \
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib \
+  live_assistant_evaluation_baseline -- --ignored --nocapture
+```
+
+Use `WORKRUN_ASSISTANT_EVAL_CASES='greeting,sales-this-week,no-match-images'` to select
+exact case IDs. `WORKRUN_ASSISTANT_LIVE_MODEL` overrides the model. Requests are paced
+at six-second intervals, including tool discovery requests. A provider failure stops
+the run and still writes a report; it does not silently count remaining cases as
+passed. Reports include selected IDs, suite size, per-case results, per-dimension
+counts, and an explicit completeness flag. Runtime rejections are failures, while
+provider failures such as rate limits are recorded as incomplete coverage. Neither
+credentials nor provider request URLs are written into reports. Reports contain only
+synthetic fixture inputs/outputs; normal CI does not call a provider.
+
+### Initial measured baseline and next steps
+
+On 2026-10-18, `gemini-3.5-flash-lite` completed all 26 cases with no provider
+errors: 22 cases passed, intent 24/26, routing 23/26, arguments 10/10, delivery 3/3.
+These are one-run regression observations, not a production accuracy estimate.
+The argument score covers explicitly specified inputs; invented defaults are
+separately caught by missing-input routing cases.
+
+The initial run identified four cases requiring fixes:
+
+- `write-email`: answered directly but classified ordinary drafting as execution.
+- `reject-plan`: classified explanation correctly, then the runtime rejected the
+  turn. No execution was returned; investigate the rejected model/tool exchange.
+- `missing-period`: proposed `sales-report` with `this_month` despite no supplied
+  period, rather than collecting the missing input.
+- `ambiguous-followup`: classified an unclear follow-up as execution and proposed
+  `sales-report` with an invented `this_month` period.
+
+The revised intent and coordination instructions distinguish in-conversation writing
+from external actions, require an unambiguous contextual confirmation, honor a pause
+or refusal over earlier execution intent, and require input values from the user,
+established context, or a declared schema default. Enum choices/examples are not
+defaults. Missing scope must be collected before execution. The instructions also
+explicitly prohibit parallel tool calls, matching the runtime's existing constraint.
+Evaluation errors now retain allowlisted runtime rejection categories without exposing
+model text, credentials or request URLs.
+
+On the same date/model, all four original failures passed a focused rerun, followed
+by the unchanged complete baseline passing 26/26: intent 26/26, routing 26/26,
+arguments 10/10, delivery 3/3, with no provider errors. These are model-behavior fixes
+through runtime instructions, not a native proof of semantic input provenance. Native
+execution grants, schema validation and rejection of unauthorized calls remain in force.
+Before automatic composition, add explicit input provenance/collection and unify
+Workflow/App capability contracts and output bindings, then introduce constrained
+composition plus native graph validation.
+The initial real-model acceptance passed with amount 1500, the actual graph's
+manual-review branch and exactly one dispatch; production queue coverage remains
+outside that acceptance test.
+
+## Real read-only workflow acceptance
+
+`fixtures/expense-review.workflow.json` is a local rule graph:
+`Start → amount >= 1000 → End`. It uses no model nodes, Apps, network connections,
+payments, or user files. A temporary SQLite checkpointer backs the actual compiler
+and graph executor. The assistant dispatches through its normal durable identity and
+result handoff, with a test execution transport replacing the production RunManager
+queue. This verifies real graph execution and conversation handoff, not a launched
+Tauri process, Team transport, production queue workers, or App runtimes.
+
+The ordinary `assistant_acceptance_executes_real_expense_rules_and_returns_receipts`
+test checks amounts 800, 1000 and 1500 with a scripted assistant. To exercise a real
+model's selection, parameters and final answer with the real graph:
+
+```sh
+WORKRUN_ASSISTANT_LIVE_CONFIG_DIR='/path/to/workrun/config' \
+WORKRUN_ASSISTANT_ACCEPTANCE_REPORT='/tmp/workrun-assistant-acceptance.json' \
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib \
+  live_assistant_real_workflow_acceptance -- --ignored --nocapture
+```
+
+The acceptance report includes the computed graph state, final answer and dispatch
+count. Nothing is installed in the user's workspace, and no business workflow is run.

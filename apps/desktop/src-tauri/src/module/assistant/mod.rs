@@ -310,3 +310,9 @@ async fn generate(
 mod protocol_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod evaluation;
+
+#[cfg(test)]
+mod acceptance;

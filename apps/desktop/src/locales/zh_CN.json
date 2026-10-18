@@ -1,4 +1,13 @@
 {
+  "sidebar": {
+    "more": "{{name}}的更多操作",
+    "open": "打开",
+    "delete": "删除",
+    "deleteTitle": "删除“{{name}}”？",
+    "deleteConversationDescription": "此对话将被永久删除，关联的执行记录会保留。进行中的对话无法删除。",
+    "deleteRunDescription": "此执行记录及其日志将被永久删除。进行中的执行及关联工作流对话的记录无法删除。",
+    "noConversations": "暂无最近对话"
+  },
   "codeBlock": {
     "wrap": "切换自动换行",
     "download": "下载代码",

@@ -1052,7 +1052,7 @@ pub(super) async fn compile_with_path(
 }
 
 #[cfg(test)]
-tokio::task_local! { static TEST_CHECKPOINT_DB: String; }
+tokio::task_local! { pub(crate) static TEST_CHECKPOINT_DB: String; }
 
 async fn workflow_checkpointer_db_url() -> Result<String> {
     #[cfg(test)]

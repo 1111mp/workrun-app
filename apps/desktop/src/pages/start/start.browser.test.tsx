@@ -10,6 +10,7 @@ import zh from '@/locales/zh_CN.json';
 
 vi.mock('@/services/assistant', () => ({
   listAssistantSessions: async () => [],
+  deleteAssistantSession: vi.fn(),
 }));
 vi.mock('@/stores', () => ({
   useWorkrunStore: (select: (state: unknown) => unknown) =>
@@ -44,6 +45,7 @@ vi.mock('@/services/process-node', () => ({
   ensurePublishedProcessNode: vi.fn(),
 }));
 vi.mock('@/services/run-history', () => ({
+  deleteRunRecord: vi.fn(),
   listRunHistoryPage: async () => ({
     items: [
       {
@@ -73,6 +75,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+import { ConfirmProvider } from '@/components/confirm-dialog';
 import { WorkspaceFrame } from '@/components/workspace-frame';
 
 import { Component as StartPage } from './library';
@@ -88,9 +91,11 @@ async function renderEntry() {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/start']}>
-        <WorkspaceFrame accountMenu={<span>个人账户 · 设置</span>}>
-          <StartPage />
-        </WorkspaceFrame>
+        <ConfirmProvider>
+          <WorkspaceFrame accountMenu={<span>个人账户 · 设置</span>}>
+            <StartPage />
+          </WorkspaceFrame>
+        </ConfirmProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -159,11 +164,13 @@ it('gives the workflow editor the full viewport without an empty title strip', a
   await page.viewport(1280, 900);
   const screen = await render(
     <MemoryRouter initialEntries={['/workflows/report']}>
-      <WorkspaceFrame accountMenu={null}>
-        <div data-testid='editor-surface' className='size-full'>
-          Workflow editor
-        </div>
-      </WorkspaceFrame>
+      <ConfirmProvider>
+        <WorkspaceFrame accountMenu={null}>
+          <div data-testid='editor-surface' className='size-full'>
+            Workflow editor
+          </div>
+        </WorkspaceFrame>
+      </ConfirmProvider>
     </MemoryRouter>,
   );
   const rect = screen

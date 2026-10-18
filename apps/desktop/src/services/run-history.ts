@@ -369,3 +369,6 @@ export function reviewWorkflowOperation(request: {
 export function dismissRunRecovery(id: string) {
   return invoke<void>('run_history_dismiss_recovery', { id });
 }
+
+export const deleteRunRecord = (id: string) =>
+  invoke<void>('run_history_delete', { id });
