@@ -134,6 +134,21 @@ fn build_runtime(node: &WorkflowNode) -> Result<Arc<MontyRuntime>> {
     build_runtime_with_workspace(node, None)
 }
 
+// Describe the exact file ABI and completion bridge; vague "maps references"
+// wording caused models to guess dictionary keys and read artifact directories.
+pub(crate) const WORKRUN_CODEACT_RESOURCES: &str = r#"Workrun file and result contract:
+/artifacts/manifest.json is a JSON ARRAY, not a dictionary keyed by workflow input names.
+Each entry is {"reference":{"id":"artifact-id","name":"input.dat",...},"path":"/artifacts/artifact-id/input.dat"}.
+Read it as:
+    import json
+    from pathlib import Path
+    files = json.loads(Path("/artifacts/manifest.json").read_text())
+    text = Path(files[0]["path"]).read_text()
+For multiple files, match entry["reference"]["id"] to the input ArtifactRef ID. Never guess paths or read an artifact directory as a file.
+Monty supports only the modules listed in its language briefing. Passing bound dictionary methods as callbacks is unsupported (e.g. max(mapping, key=mapping.get)); use an explicit function or loop.
+The last Python expression must be {"type":"final_result","value":{...named output fields...}}. Return computed values, not a claim that global state was written. Workrun maps this object to node-private state; the configured state.globalKeys publishes selected fields. Do not call imaginary state tools or repeat computation just to publish.
+Write deliverable files under /outputs with pathlib.Path; successful regular files are exported as artifacts. Do not invent ArtifactRef objects, host paths or dependencies. Use configured tools for unsupported document/media processing."#;
+
 fn build_runtime_with_workspace(
     node: &WorkflowNode,
     workspace: Option<&CodeActWorkspace>,
@@ -159,7 +174,7 @@ fn build_runtime_with_workspace(
         runtime = runtime
             .allow_path("/artifacts", workspace.inputs(), PathAccess::ReadOnly)
             .allow_path("/outputs", workspace.outputs(), PathAccess::ReadWrite)
-            .additional_prompt("Workrun resources: /artifacts/manifest.json maps each authorized artifact reference to its read-only virtual path. Read it with pathlib.Path.read_text() and json.loads(). Write deliverable files under /outputs using pathlib.Path; regular files there are collected as durable node State artifacts on successful completion. Do not invent ArtifactRef objects or use host paths. Monty cannot install third-party packages; use configured tools for PDF, image or video processing.");
+            .additional_prompt(WORKRUN_CODEACT_RESOURCES);
     }
 
     for mount in mounts {
@@ -225,13 +240,13 @@ fn build_runtime_with_workspace(
 }
 
 // Each compiled run owns its copies. Scripts never mount the immutable store itself.
-pub(super) struct CodeActWorkspace {
+pub(crate) struct CodeActWorkspace {
     directory: tempfile::TempDir,
     store: ArtifactStore,
 }
 
 impl CodeActWorkspace {
-    fn new(store: ArtifactStore) -> Result<Self> {
+    pub(crate) fn new(store: ArtifactStore) -> Result<Self> {
         let workspace = Self {
             directory: tempfile::tempdir()?,
             store,
@@ -241,14 +256,14 @@ impl CodeActWorkspace {
         Ok(workspace)
     }
 
-    fn inputs(&self) -> PathBuf {
+    pub(crate) fn inputs(&self) -> PathBuf {
         self.directory.path().join("inputs")
     }
-    fn outputs(&self) -> PathBuf {
+    pub(crate) fn outputs(&self) -> PathBuf {
         self.directory.path().join("outputs")
     }
 
-    pub(super) fn prepare(&self, input: &Value, snapshot: Option<&Value>) -> Result<()> {
+    pub(crate) fn prepare(&self, input: &Value, snapshot: Option<&Value>) -> Result<()> {
         let store = &self.store;
         for directory in [self.inputs(), self.outputs()] {
             std::fs::remove_dir_all(&directory)?;
@@ -323,7 +338,7 @@ impl CodeActWorkspace {
         }))).collect::<Result<Vec<_>>>().map(Value::Array)
     }
 
-    pub(super) fn collect(&self) -> Result<Value> {
+    pub(crate) fn collect(&self) -> Result<Value> {
         let store = &self.store;
         let refs = self
             .output_paths()?
@@ -734,5 +749,119 @@ Path("/outputs/report.txt").write_text(text + " processed")
         let output = std::fs::File::create(workspace.outputs().join("large.bin")).unwrap();
         output.set_len(MAX_FILE_BYTES + 1).unwrap();
         assert!(workspace.collect().unwrap_err().to_string().contains("512 MiB"));
+    }
+    struct LiveSalesModel {
+        inner: adk_rust::model::GeminiModel,
+        requests: Arc<Mutex<Vec<Vec<Content>>>>,
+    }
+    #[async_trait::async_trait]
+    impl Llm for LiveSalesModel {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn schema_adapter(&self) -> &dyn adk_rust::SchemaAdapter {
+            self.inner.schema_adapter()
+        }
+        async fn generate_content(
+            &self,
+            request: adk_rust::LlmRequest,
+            stream: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            self.requests.lock().unwrap().push(request.contents.clone());
+            self.inner.generate_content(request, stream).await
+        }
+    }
+    #[tokio::test]
+    #[ignore = "uses configured Gemini; synthetic CSV in temporary artifact storage only"]
+    async fn live_codeact_sales_csv() {
+        let (_root, store, workspace) = test_workspace();
+        let input = store.save_bytes("sales.csv", "date,product,quantity,unit_price\n2026-10-01,产品A,10,100\n2026-10-02,产品B,5,200\n2026-10-03,产品A,3,100\n2026-10-04,产品C,2,500\n".as_bytes()).unwrap();
+        let state = Arc::new(Mutex::new(
+            WorkflowStateBridge::from_initial_state(json!({"sales_file":input})).unwrap(),
+        ));
+        let requests = Arc::new(Mutex::new(vec![]));
+        let agent = CodeActAgent::builder().name("codeact_calc")
+            .instruction("Read sales data from /artifacts/manifest.json. Calculate total sales, sales per product, and the product with the highest sales using Python. Publish these values to global state keys: total_sales, product_sales, top_product.")
+            .input_guardrails(input_guardrails())
+            .output_guardrails(output_guardrails())
+            .model(instrumented_model(Arc::new(LiveSalesModel { inner:crate::module::assistant::codeact_live_test_model(), requests:requests.clone() }), "codeact_calc", "gemini-test", None))
+            .runtime(runtime(&workspace)).max_iterations(8).build().unwrap();
+        let node = StreamingAgentNode::new(
+            AdkAgentNode::new(Arc::new(agent))
+                .with_input_mapper(agent_input_mapper(state.clone(), "codeact_calc".into())),
+            StreamingAgentNodeConfig {
+                id: "codeact_calc".into(),
+                kind: "codeact_agent".into(),
+                endpoint_or_model: "live-test".into(),
+                on_event: None,
+                tool_trace: None,
+                output_key: None,
+                output_schema: None,
+                state: state.clone(),
+                global_keys: ["total_sales".into(), "product_sales".into(), "top_product".into()]
+                    .into_iter()
+                    .collect(),
+                sensitive_fields: BTreeSet::new(),
+            },
+        )
+        .with_codeact_workspace(Arc::new(workspace));
+        let events = node
+            .execute_stream(&NodeContext::new(HashMap::new(), ExecutionConfig::default(), 0))
+            .collect::<Vec<_>>()
+            .await;
+        let request_count = requests.lock().unwrap().len();
+        println!("CodeAct model iterations: {}", request_count);
+        assert!(
+            events.iter().all(|event| event.is_ok()),
+            "CodeAct did not complete (see synthetic transcript)"
+        );
+        let output = state.lock().unwrap().agent_input("consumer").unwrap();
+        assert_eq!(output["total_sales"].as_f64(), Some(3300.0));
+        assert_eq!(output["product_sales"]["产品A"].as_f64(), Some(1300.0));
+        assert_eq!(output["product_sales"]["产品B"].as_f64(), Some(1000.0));
+        assert_eq!(output["product_sales"]["产品C"].as_f64(), Some(1000.0));
+        assert_eq!(output["top_product"], "产品A");
+        println!("Verified sales output: {}", output);
+        let analysis = LlmAgentBuilder::new("business_analysis")
+            .instruction("Review total_sales, product_sales and top_product. Generate a professional Chinese business analysis report based on these figures.")
+            .model(Arc::new(crate::module::assistant::codeact_live_test_model()))
+            .input_guardrails(input_guardrails()).build().unwrap();
+        let analysis = StreamingAgentNode::new(
+            AdkAgentNode::new(Arc::new(analysis))
+                .with_input_mapper(agent_input_mapper(state.clone(), "business_analysis".into())),
+            StreamingAgentNodeConfig {
+                id: "business_analysis".into(),
+                kind: "agent".into(),
+                endpoint_or_model: "live-test".into(),
+                on_event: None,
+                tool_trace: None,
+                output_key: Some("analysis_report".into()),
+                output_schema: None,
+                state: state.clone(),
+                global_keys: ["analysis_report".into()].into_iter().collect(),
+                sensitive_fields: BTreeSet::new(),
+            },
+        );
+        let events = analysis
+            .execute_stream(&NodeContext::new(HashMap::new(), ExecutionConfig::default(), 0))
+            .collect::<Vec<_>>()
+            .await;
+        assert!(
+            events.iter().all(|event| event.is_ok()),
+            "Analysis node did not complete"
+        );
+        let output = state.lock().unwrap().agent_input("consumer").unwrap();
+        let report = output["analysis_report"].as_str().unwrap();
+        assert!(
+            report.contains("3300") || report.contains("3,300"),
+            "Report omitted verified total"
+        );
+        assert!(!report.contains('$'), "Report invented a currency");
+        assert!(!report.contains("2023"), "Report invented a date");
+        assert!(report.contains("产品A"));
+        println!(
+            "Verified downstream Chinese report: {} characters",
+            report.chars().count()
+        );
     }
 }

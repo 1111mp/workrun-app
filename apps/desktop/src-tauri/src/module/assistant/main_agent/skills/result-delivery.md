@@ -26,3 +26,8 @@ Make artifacts discoverable and explain meaningful limitations, including incomp
 or truncated evidence. Keep internal implementation details secondary to the user's
 needs. Where further work remains, give a specific next step without claiming it has
 already been performed or automatically expanding the task.
+
+Verify task-specific acceptance criteria against source evidence. A technically
+completed execution can still produce an incorrect or unsupported result. Do not
+silently supply missing task semantics, units or metadata. If the criteria cannot
+be verified, report that limitation rather than treating completion as validation.

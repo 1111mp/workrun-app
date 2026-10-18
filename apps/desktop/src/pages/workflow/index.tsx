@@ -56,13 +56,17 @@ function WorkflowPage() {
     queryFn: () =>
       isPublishedView ? getPublishedWorkflow(id!) : getWorkflow(id!),
     enabled: Boolean(id),
+    retry: false,
   });
   const historicalRun = useQuery({
     queryKey: ['run-history', historyRunId],
     queryFn: () => inspectRunRecord(historyRunId!),
     enabled: Boolean(historyRunId),
+    retry: false,
     refetchOnMount: 'always',
   });
+
+  const displayedWorkflow = workflow.data;
 
   const outputRunId =
     historicalRun.data?.targetType === 'workflow' &&
@@ -87,7 +91,7 @@ function WorkflowPage() {
     );
   }
 
-  if (!workflow.data) {
+  if (!displayedWorkflow) {
     return (
       <Empty>
         <EmptyHeader>
@@ -105,8 +109,8 @@ function WorkflowPage() {
   return (
     <ReactFlowProvider>
       <WorkflowEditor
-        key={workflow.data.id}
-        workflow={workflow.data}
+        key={displayedWorkflow.id}
+        workflow={displayedWorkflow}
         readOnly={isPublishedView}
         allowRun={isPublishedView}
         autoStartRun={searchParams.get('run') === 'true'}
@@ -116,7 +120,8 @@ function WorkflowPage() {
         }
         historicalRun={
           historicalRun.data?.targetType === 'workflow' &&
-          historicalRun.data.targetId === workflow.data.id
+          (historicalRun.data.targetId === displayedWorkflow.id ||
+            historicalRun.data.targetId === id)
             ? historicalRun.data
             : !historyRunId && !historyChatSessionId
               ? (activeRun.data ?? undefined)

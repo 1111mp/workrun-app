@@ -10,7 +10,7 @@
     "ui:dev": "vite --config vite.config.ts",
     "ui:build": "tsc && vite build",
     "preview": "vite preview",
-    "prebuild": "node scripts/prebuild.mjs && node scripts/build-python-sdk.mjs",
+    "prebuild": "pnpm workflow:generate && node scripts/prebuild.mjs && node scripts/build-python-sdk.mjs",
     "tauri": "tauri",
     "updater": "node scripts/updater.mjs",
     "updater-fixed-webview2": "node scripts/updater-fixed-webview2.mjs",
@@ -25,7 +25,9 @@
     "test:tauri": "vitest run --config vitest.config.ts --project tauri",
     "test:e2e:build": "node scripts/e2e.mjs build",
     "test:e2e": "node scripts/e2e.mjs",
-    "test:browser": "vitest run --config vitest.config.ts --project browser"
+    "test:browser": "vitest run --config vitest.config.ts --project browser",
+    "workflow:generate": "node scripts/generate-workflow-reference.mjs",
+    "workflow:check": "node scripts/generate-workflow-reference.mjs --check"
   },
   "dependencies": {
     "@daveyplate/better-auth-tauri": "^0.1.9",

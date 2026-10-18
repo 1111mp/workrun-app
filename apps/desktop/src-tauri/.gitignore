@@ -11,3 +11,6 @@
 
 # Generated into the Tauri resource bundle by the Desktop prebuild step.
 /resources/python-wheels/
+
+# Generated external assistant skills and authoring references.
+/resources/assistant/

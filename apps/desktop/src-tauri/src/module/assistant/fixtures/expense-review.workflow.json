@@ -6,7 +6,7 @@
       "description": "Read-only local rule: expenses of at least 1000 require manual review. No files, payments, apps, or network operations.",
       "mode": "task",
       "inputSchema": {"fields": [{"id": "amount", "key": "amount", "label": "Amount", "type": "number", "required": true}]},
-      "outputSchema": {"fields": []}
+      "outputSchema": {"fields": [{"key":"amount","type":"number","required":true}]}
     },
     "nodes": [
       {"id": "start", "type": "start", "position": {"x": 0, "y": 0}, "data": {}},

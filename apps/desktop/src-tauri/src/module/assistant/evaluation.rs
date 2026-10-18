@@ -113,14 +113,22 @@ fn grade(case: &Case, intent: Option<Intent>, reply: &AssistantReply, capabiliti
 pub(super) struct ProbeModel {
     inner: Arc<dyn Llm>,
     intents: Arc<Mutex<Vec<Intent>>>,
+    tool_names: Arc<Mutex<Vec<String>>>,
     last_request: tokio::sync::Mutex<Option<tokio::time::Instant>>,
     interval: Duration,
 }
 impl ProbeModel {
+    pub(super) fn called_tools(&self) -> Vec<String> {
+        self.tool_names.lock().unwrap().clone()
+    }
+    pub(super) fn last_intent(&self) -> Option<Intent> {
+        self.intents.lock().unwrap().last().copied()
+    }
     pub(super) fn new(inner: Arc<dyn Llm>, interval: Duration) -> Self {
         Self {
             inner,
             intents: Arc::new(Mutex::new(vec![])),
+            tool_names: Arc::new(Mutex::new(vec![])),
             last_request: tokio::sync::Mutex::new(None),
             interval,
         }
@@ -149,9 +157,13 @@ impl Llm for ProbeModel {
         drop(previous);
         let mut source = self.inner.generate_content(request, stream).await?;
         let intents = self.intents.clone();
+        let tool_names = self.tool_names.clone();
         Ok(Box::pin(async_stream::stream! {
             let mut probe = ReplyStream::new();
             while let Some(response) = source.next().await {
+                if let Ok(response)=&response && let Some(content)=&response.content {
+                    for part in &content.parts {if let Part::FunctionCall{name,..}=part {tool_names.lock().unwrap().push(name.clone());}}
+                }
                 if is_intent && let Ok(response) = &response {
                     let _ = probe.push(response.clone());
                 }
@@ -165,7 +177,7 @@ impl Llm for ProbeModel {
     }
 }
 
-fn error_label(error: &anyhow::Error) -> String {
+pub(super) fn error_label(error: &anyhow::Error) -> String {
     // Keep HTTP status but never serialize a transport URL or credentials.
     let text = error.to_string().to_lowercase();
     if text.contains("429") || text.contains("rate_limit") {
@@ -222,6 +234,7 @@ async fn evaluate_case(
             model,
             &ModelProvider::Gemini,
             AssistantRequest {
+                context: Default::default(),
                 contents: case.messages.clone(),
                 capabilities: capabilities.to_vec(),
             },
@@ -271,6 +284,7 @@ async fn evaluate_case(
                             model,
                             &ModelProvider::Gemini,
                             AssistantRequest {
+                                context: Default::default(),
                                 contents,
                                 capabilities: capabilities.to_vec(),
                             },
@@ -368,6 +382,7 @@ fn grader_separates_intent_routing_arguments_and_incomplete_runs() {
     let suite = baseline();
     let case = suite.cases.iter().find(|case| case.id == "sales-this-week").unwrap();
     let reply = |id: &str, period: &str| AssistantReply {
+        artifacts: vec![],
         content: Content::new("model"),
         text: String::new(),
         call: Some(protocol::WorkflowCall {
@@ -375,6 +390,7 @@ fn grader_separates_intent_routing_arguments_and_incomplete_runs() {
             input: json!({"period":period}),
             tool_name: "execute_workflow".into(),
             call_id: None,
+            input_sources: None,
         }),
     };
     let correct = grade(
@@ -474,6 +490,7 @@ fn grader_distinguishes_missing_inputs_from_invented_values() {
     let suite = baseline();
     let case = suite.cases.iter().find(|case| case.id == "missing-period").unwrap();
     let reply = |input| AssistantReply {
+        artifacts: vec![],
         content: Content::new("model"),
         text: String::new(),
         call: Some(protocol::WorkflowCall {
@@ -481,6 +498,7 @@ fn grader_distinguishes_missing_inputs_from_invented_values() {
             input,
             tool_name: "execute_workflow".into(),
             call_id: None,
+            input_sources: None,
         }),
     };
     assert_eq!(

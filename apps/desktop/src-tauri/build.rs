@@ -1,4 +1,29 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Tauri's dev/build hooks generate these external resources. Refuse stale
+    // bundles (including direct Cargo builds) instead of shipping missing skills.
+    for path in [
+        "../scripts/generate-workflow-reference.mjs",
+        "src/module/assistant/main_agent",
+        "src/module/assistant/workflow_agent",
+        "src/module/workflow/node-contracts.json",
+        "src/module/workflow/SAGA.md",
+        "src/module/workflow/RECOVERY.md",
+        "resources/assistant",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+    let status = std::process::Command::new("node")
+        .arg("../scripts/generate-workflow-reference.mjs")
+        .arg("--check")
+        .current_dir(std::env::var("CARGO_MANIFEST_DIR")?)
+        .status()?;
+    if !status.success() {
+        return Err(
+            "Assistant resources are missing or stale. Run pnpm --dir apps/desktop workflow:generate before building."
+                .into(),
+        );
+    }
+
     let test_manifest = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
         && std::env::var_os("CARGO_FEATURE_WINDOWS_TEST_MANIFEST").is_some();

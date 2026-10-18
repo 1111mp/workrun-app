@@ -1,256 +1,148 @@
-# Workrun main agent
+# Conversational main agent and workflow specialist
 
-The main agent is a conversational runtime, independent of workflow chat nodes.
-Workflows remain executable capabilities backed by the existing run manager.
-Tauri commands handle credentials and durable workspace-scoped sessions; the
-runtime owns instructions, skills, turn interpretation, tool policy and the model loop.
+Users describe outcomes in ordinary language. A one-off analysis does not require a
+Workflow. Reusable automation is created only when requested or accepted by the user.
+Business-specific instructions belong in delegated task contracts and generated node
+configuration, never in global agent instructions.
 
-## Product contract
+## Roles and tools
 
-Workrun's main agent helps users understand, plan and accomplish work through a
-continuous conversation. Users describe outcomes; the agent handles capability
-discovery, input preparation, coordination and delivery. Direct reasoning, writing,
-analysis and discussion are useful deliverables without an execution tool call.
+The main agent owns conversation, clarification, direct work, capability discovery,
+execution authorization and delivery. `read_artifact` reads authorized UTF-8 attachments;
+`run_code` performs bounded Monty computation with attachment inputs and output files.
+Neither tool creates a workflow. The sandbox has no host filesystem or network access.
+Unsupported document formats, packages and external tools require a real available
+capability; the agent must explain missing resources.
 
-“Everything is workflow” describes how executable work is represented and reused.
-Workflows encapsulate operations; apps and connected services contribute capabilities
-through actual tool interfaces. Skills describe methods. The agent connects goals to
-these capabilities without making the user navigate the implementation structure.
+The coordinator registers `workflow_author` through `.sub_agent(...)` when the
+current turn permits workflow authoring. ADK exposes `transfer_to_agent`; the model
+chooses whether to transfer. `prepare_workflow_task` can supply a precise goal,
+outputs, criteria, assumptions and optional revision target before handoff. It only
+prepares data and never invokes a specialist. A direct handoff receives the interpreted
+user goal and general validation criteria; the specialist derives task details or
+returns questions rather than requiring the user to specify nodes.
 
-The base contract lives in `AGENT.md`. Core skills divide its methods by responsibility:
+The specialist discovers resources, progressively loads its own skills, validates and
+saves. It cannot execute or delegate recursively. Completion, clarification and failure
+are recorded natively, then its agent adapter emits an SDK transfer event back to
+`main_agent`. Runner executes the return; the main agent delivers or performs an
+independently authorized execution.
 
-| Skill | Responsibility |
-| --- | --- |
-| `conversation` | Understand goals, resolve references and maintain continuity. |
-| `task-planning` | Establish success criteria and a proportionate approach. |
-| `capability-orchestration` | Discover, select and reuse available capabilities. |
-| `execution-collaboration` | Coordinate execution, progress and human participation. |
-| `result-delivery` | Synthesize evidence and deliver useful answers or artifacts. |
+The main agent's skill catalog excludes node manuals and its tools exclude low-level
+workflow authoring. The specialist has a separate catalog and tool allowlist. Both
+use the selected conversation model initially; separate specialist model selection
+is not implemented.
 
-All five core skills are injected as base guidance. Workspace-selected skills add
-specialist knowledge and are loaded on demand. Permissions belong to the runtime;
-workflow-specific invocation details belong to tool schemas and handlers, not to the
-agent's general identity or method skills. Concrete business examples belong in
-regression/evaluation fixtures rather than the production instructions.
+## Code ownership and ADK composition
 
-## Current capability boundary
+`mod.rs` wires the assistant and exports the public runtime. `main_agent/` owns its
+runtime, `tools.rs`, `skills.rs`, English instructions and general method skills.
+`workflow_agent/` owns its ADK agent, tool catalog, skill catalog, persistence/validation
+adapter and progressive node references. Neither role constructs the other role's
+low-level tool registry. Shared `tools.rs` contains capability types and native service
+ports only; shared `skills.rs` reads catalog entries without selecting an agent role.
 
-The runtime currently exposes workflow discovery and invocation, enabled-skill reading
-and conversation-receipt inspection. It does not yet expose direct app execution,
-arbitrary service tools, or workflow creation/composition. The general instructions
-allow those capabilities to participate when registered, without asserting that they
-already exist. A missing capability must remain an explicit gap.
+Both roles use ADK 2.3 `LlmAgentBuilder`. `orchestration.rs` constructs the parent tree
+with `.sub_agent(...)` and executes it through `Runner`. There is no `AgentTool` or
+custom `delegate_workflow` invocation path. Runner owns model/tool iteration, the
+registered transfer targets and control changes in both directions. The specialist's
+completion adapter emits events; it never directly runs the parent.
 
-## Turn lifecycle
+A scoped SDK session is seeded from durable native history for each turn and always
+starts with the coordinator. This avoids a specialist receiving the next unrelated
+user message. `IncludeContents::None` limits the specialist's initial history to the
+current user message; Workrun adds its explicit task contract and authorized artifact
+references. Subsequent specialist tool history remains SDK-owned. Main and specialist
+instructions/tool catalogs remain separate.
 
-1. Normalize conversation history, preserving tool call IDs and provider signatures.
-2. Interpret the latest user message using structured output and **no tools**.
-   Intent is conversation, status, explanation, clarification or execution.
-3. Open a bounded agent loop with read-only tools. Only an execution decision with
-   an exact action quote from the current message opens workflow execution tools.
-4. `list_workflow` discovers capabilities on demand, with search, exact ID lookup
-   and pagination. Workflow definitions never create individual model tools.
-5. `execute_workflow({workflow_id, input})` yields to the native session owner. Rust
-   resolves the authorized definition, validates input, prepares dependencies,
-   persists run identity, then dispatches through the existing native RunManager.
-6. The native task observes durable execution receipts and resumes the model to
-   answer. This continuation has no execution grant. The task survives renderer
-   reload/disconnection; a process restart exposes explicit reattachment by run ID.
-   Frontend code only submits turn actions and observes snapshots/stream events.
+`sdk.rs` bridges turn-scoped native services to SDK-owned agents without exposing
+credentials or workspace objects. Native execution tools return a validated signed
+proposal to the durable session owner; Runner never submits business runs itself.
+Existing provenance binding, workspace scope and receipt continuation remain enforced.
 
-No regex or keyword routing selects workflows. The model interprets intent and picks
-an available capability. The runtime validates the resulting grant/tool name, but
-semantic intent classification remains model-dependent and needs provider evaluation.
+## Native boundaries
 
-## Files maintained independently
+Structured turn interpretation distinguishes conversation, task, authoring and
+execution (plus status/explanation/clarification). An ordinary task opens direct tools,
+not workflow creation. Authoring and execution require evidence from the current user
+message; creating and executing require separate grants. Model interpretation remains
+fallible and needs provider evaluation.
 
-- `AGENT.md`: base agent contract.
-- `INTENT.md`: structured intent assessment instructions.
-- `skills/*.md`: the five core working-method skills.
-- `skills.rs`: mandatory and workspace-selected skill catalog.
-- `tools.rs`: fixed `list_workflow` / `execute_workflow` contracts, plus skill/receipt tools.
-- `catalog.rs`: native local/Team discovery, authorization, schemas and App preparation.
-- `session.rs`: durable native session ownership, dispatch, observation and continuation.
-- `protocol.rs`: model messages, streaming, history compatibility and call validation.
-- `mod.rs`: profile, turn grants, provider boundary, bounded model/tool loop.
+One delegation and one workflow submission are allowed per user turn. Malformed task
+contracts can be corrected before consuming the delegation. Child tools cannot bypass
+execution policy. Independent reads can be batched (up to eight); writes and execution
+must be isolated. Rejected bindings/tool calls return repairable errors when possible.
 
-The Gemini ADK 2.3 adapter ignores `system` messages. For Gemini the runtime uses
-ADK's own LlmAgent convention of a user instruction preamble; other providers retain
-system instructions. This conversion does not alter persisted user messages.
+Validated authored workflows are saved directly into the normal workspace catalogue.
+The delegation UUID is the stable creation identity; revising an existing target retains
+its UUID. The ordinary editor, node palette, save and execution paths apply. Publication
+is separate. Retries resolve the current saved definition, including user model edits.
+No legacy draft migration or compatibility aliases are maintained.
 
-## Workspace profile
+The native session owns trusted artifact references, credentials, dispatch identity,
+run observation and receipt continuation. Generated artifacts persist with assistant
+messages. Only validated native capability outputs can serve as result bindings.
+Workflow observation survives renderer disconnection; model phases are bounded to
+240 seconds. Interrupted direct/delegation operations are inspectable and never
+silently replayed after restart. This is not automatic subagent resumption.
 
-Optional file: `<active workspace>/assistant/agent.json`. Absence uses defaults;
-malformed profiles fail closed. The runtime reads this file afresh each invocation.
+Direct calls and specialist tool calls are journaled under
+`assistant/operations/<UUID>.json`, scoped to the workspace and conversation.
+`inspect_operations` exposes recent summaries to the main agent. Existing run receipts
+remain the source of workflow execution status. Specialist internal reasoning is not
+streamed as a user answer; explicit progress messages remain available.
 
-```json
-{
-  "skills": [],
-  "instructions": "Answer concisely in the user's language.",
-  "workflowExecution": true,
-  "maxModelSteps": 8
-}
-```
+## Resource layout
 
-`skills` lists names from the existing workspace skill catalog. Enabled custom skill
-summaries are discoverable and `read_skill` loads their bodies. Mandatory skills
-cannot be overridden by name. Skills provide guidance, not new tool permissions:
-their `allowed-tools` metadata does not attach arbitrary workflow-node tools to the
-main agent. New native main-agent tools must be registered with a handler and policy
-in `tools.rs`. The profile is currently file-configured; there is no new settings UI.
+[main_agent/AGENT.md](main_agent/AGENT.md) and [main_agent/INTENT.md](main_agent/INTENT.md) define the general policy. Five core
+skills are mandatory; workspace skills load on demand. The specialist's contract is
+[workflow_agent/AGENT.md](workflow_agent/AGENT.md), with the separate
+[authoring handbook](workflow_agent/reference/README.md). Skill bodies and authoring references live outside the executable
+in Tauri resources; the generator and build check keep them synchronized.
 
-`workflowExecution: false` makes this agent read-only. Step limits are 1–16; a whole
-turn has a 120-second timeout. Existing workflow timeout/human-action policies apply
-inside dispatched workflows. Credentials never enter the profile or model context.
+## Validation and remaining scope
 
-## Verification
-
-Runtime tests exercise the full model request/tool loop with a scripted model:
-operation → receipt → status question → explanation → conversation → explicit retry.
-They check tool grants, current-message binding, disabled execution, hostile tool
-responses, skill/receipt tools and bounded loops. Renderer tests verify the native turn contract and observer-only reattachment.
-Native session tests verify persistence before dispatch, detached waiting, and
-recovery from an uncertain queue response without a second execution.
-
-The optional `gemini_wire_keeps_instructions_and_status_turn_has_no_execution_tool`
-test uses the real ADK Gemini adapter against a local HTTP stub, without API keys or
-business side effects. Run it with `--ignored --nocapture` and a local listener allowed.
-These tests verify runtime behavior and transport, not live-model classification quality.
-
-A second opt-in test, `live_gemini_followups_do_not_propose_another_execution`, reads
-the encrypted Gemini credential from the explicitly supplied
-`WORKRUN_ASSISTANT_LIVE_CONFIG_DIR` installation directory. It evaluates direct writing, planning, capability discussion and report generation,
-as well as status, explanation and explicit retry, against the configured provider. Set
-`WORKRUN_ASSISTANT_LIVE_MODEL` to override the test model. It never instantiates a
-workflow executor, writes configuration or dispatches business operations. Credentials
-remain in memory and are not printed. Live tests are excluded from normal CI.
-
-Live cases are paced to reduce provider request bursts. Set
-`WORKRUN_ASSISTANT_LIVE_FILTER` to run only inputs containing a given substring,
-for example when resuming an evaluation after provider rate limiting.
-
-## Team transport
-
-The renderer supplies its current Better Auth session token to the native turn command.
-Rust uses it only in an authenticated HTTP client for the configured Team server;
-it is never persisted in conversation JSON or passed to the model. The server enables
-Better Auth's bearer plugin so native requests use the same session/ACLs as browser
-requests. Deploy/restart the Team server with this change before using native Team
-workflow discovery. Release-scoped App dependencies are downloaded and checksum-verified
-through the existing native installer. No renderer-provided DSL or catalog is accepted.
-
-The workflow manager owns workflow-level user actions and cancellation. Native assistant
-model steps have a 120-second bound; workflow observation is outside that bound so
-human review or long executions do not time out the assistant's model request.
-
-
-### Public progress and turn presentation
-
-`report_progress({summary})` publishes a concise public approach/progress summary (1–600 characters). It is a read-only communication tool, not permission to execute a workflow. Native `activity` events carry stable activity IDs and the originating user-message `turnId`; summaries persist in `session.activities` when the phase ends, including a failed phase.
-
-Provider-returned `Thinking` text streams separately from answer text through `reasoning` events. Each model invocation owns a stable reasoning ID, cumulative text, completion flag and duration. Authoritative provider snapshots replace accumulated deltas. Signatures remain in model history and are never emitted as display text. Gemini conversation models request thought summaries; Gemini 3 Flash-Lite additionally uses Medium thinking because its default Minimal level may produce no displayable thinking. Workflow model defaults are unchanged. Intent classification does not emit its internal model output.
-
-The renderer groups assistant/tool records by user turn and reasoning/activity records by model phase. Trace expands during thinking, folds when answer text starts, and respects manual expansion choices. Completed and failed provider thinking remains available for review. Public progress is labeled separately and only shown while its phase is active, so preparation messages do not remain as stale statuses after completion. Native persistence retains both records even when the model phase fails. Live records are transient until the phase commits. Workflow execution and user-action waits retain their inline run card; final answers own feedback controls.
-
-## Data-driven evaluation baseline
-
-`fixtures/baseline.json` is the versioned main-agent evaluation set. Its 26 cases
-cover direct answers, planning, status/explanation, explicit retries, contextual
-confirmation/rejection, missing inputs, ambiguity, unavailable capabilities, bilingual
-routing, typed parameters, and result delivery. Four synthetic capabilities provide
-competing destinations; the dataset is independent of a user's workflow catalog.
-
-`evaluation.rs` runs the same main-agent runtime, with the default profile and core
-skills, against a configured Gemini model. It separately scores:
-
-- **Intent:** the structured current-turn assessment, observed from actual model output.
-- **Routing:** no proposal, the correct workflow, or clarification/input collection.
-- **Arguments:** exact fixture-defined values, including canonical reporting periods.
-- **Delivery:** no second execution and fixture-specific factual anchors in the answer.
-
-Delivery checks are targeted assertions, not a general semantic judge. Prior-turn
-fixtures use synthetic conversation summaries. They complement the signed function
-history and native session recovery tests; they do not replace those tests. Scripted
-models validate the evaluation harness, not model classification accuracy.
-
-Run all cases explicitly (this calls the configured provider and may consume quota):
+Offline regressions cover role/tool isolation, direct attachment computation, refusal
+of workflows, clarification without saves, blocked specialist dispatch, graph repair,
+normal catalogue identity, operation persistence, native session execution and receipts.
+Scripted tests prove runtime boundaries, not real-model intent accuracy.
 
 ```sh
-WORKRUN_ASSISTANT_LIVE_CONFIG_DIR='/path/to/workrun/config' \
-WORKRUN_ASSISTANT_EVAL_REPORT='/tmp/workrun-assistant-evaluation.json' \
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib \
-  live_assistant_evaluation_baseline -- --ignored --nocapture
+pnpm --dir apps/desktop workflow:generate
+pnpm --dir apps/desktop workflow:check
+CARGO_INCREMENTAL=0 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib module::assistant
 ```
 
-Use `WORKRUN_ASSISTANT_EVAL_CASES='greeting,sales-this-week,no-match-images'` to select
-exact case IDs. `WORKRUN_ASSISTANT_LIVE_MODEL` overrides the model. Requests are paced
-at six-second intervals, including tool discovery requests. A provider failure stops
-the run and still writes a report; it does not silently count remaining cases as
-passed. Reports include selected IDs, suite size, per-case results, per-dimension
-counts, and an explicit completeness flag. Runtime rejections are failures, while
-provider failures such as rate limits are recorded as incomplete coverage. Neither
-credentials nor provider request URLs are written into reports. Reports contain only
-synthetic fixture inputs/outputs; normal CI does not call a provider.
-
-### Initial measured baseline and next steps
-
-On 2026-10-18, `gemini-3.5-flash-lite` completed all 26 cases with no provider
-errors: 22 cases passed, intent 24/26, routing 23/26, arguments 10/10, delivery 3/3.
-These are one-run regression observations, not a production accuracy estimate.
-The argument score covers explicitly specified inputs; invented defaults are
-separately caught by missing-input routing cases.
-
-The initial run identified four cases requiring fixes:
-
-- `write-email`: answered directly but classified ordinary drafting as execution.
-- `reject-plan`: classified explanation correctly, then the runtime rejected the
-  turn. No execution was returned; investigate the rejected model/tool exchange.
-- `missing-period`: proposed `sales-report` with `this_month` despite no supplied
-  period, rather than collecting the missing input.
-- `ambiguous-followup`: classified an unclear follow-up as execution and proposed
-  `sales-report` with an invented `this_month` period.
-
-The revised intent and coordination instructions distinguish in-conversation writing
-from external actions, require an unambiguous contextual confirmation, honor a pause
-or refusal over earlier execution intent, and require input values from the user,
-established context, or a declared schema default. Enum choices/examples are not
-defaults. Missing scope must be collected before execution. The instructions also
-explicitly prohibit parallel tool calls, matching the runtime's existing constraint.
-Evaluation errors now retain allowlisted runtime rejection categories without exposing
-model text, credentials or request URLs.
-
-On the same date/model, all four original failures passed a focused rerun, followed
-by the unchanged complete baseline passing 26/26: intent 26/26, routing 26/26,
-arguments 10/10, delivery 3/3, with no provider errors. These are model-behavior fixes
-through runtime instructions, not a native proof of semantic input provenance. Native
-execution grants, schema validation and rejection of unauthorized calls remain in force.
-Before automatic composition, add explicit input provenance/collection and unify
-Workflow/App capability contracts and output bindings, then introduce constrained
-composition plus native graph validation.
-The initial real-model acceptance passed with amount 1500, the actual graph's
-manual-review branch and exactly one dispatch; production queue coverage remains
-outside that acceptance test.
-
-## Real read-only workflow acceptance
-
-`fixtures/expense-review.workflow.json` is a local rule graph:
-`Start → amount >= 1000 → End`. It uses no model nodes, Apps, network connections,
-payments, or user files. A temporary SQLite checkpointer backs the actual compiler
-and graph executor. The assistant dispatches through its normal durable identity and
-result handoff, with a test execution transport replacing the production RunManager
-queue. This verifies real graph execution and conversation handoff, not a launched
-Tauri process, Team transport, production queue workers, or App runtimes.
-
-The ordinary `assistant_acceptance_executes_real_expense_rules_and_returns_receipts`
-test checks amounts 800, 1000 and 1500 with a scripted assistant. To exercise a real
-model's selection, parameters and final answer with the real graph:
+Optional real-model checks use configured credentials and temporary data:
 
 ```sh
-WORKRUN_ASSISTANT_LIVE_CONFIG_DIR='/path/to/workrun/config' \
-WORKRUN_ASSISTANT_ACCEPTANCE_REPORT='/tmp/workrun-assistant-acceptance.json' \
+WORKRUN_ASSISTANT_LIVE_CONFIG_DIR='/path/to/workrun/config' CARGO_INCREMENTAL=0 \
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib \
-  live_assistant_real_workflow_acceptance -- --ignored --nocapture
+  live_main_agent_handles_natural_file_requests_without_workflows -- --ignored --nocapture
 ```
 
-The acceptance report includes the computed graph state, final answer and dispatch
-count. Nothing is installed in the user's workspace, and no business workflow is run.
+Direct Tool-kind Apps/MCP are not exposed yet: their confirmation context must be
+preserved before integration. Workflow-kind Apps remain callable through the existing
+capability adapter and native execution policy. Compilation proves structural validity,
+not business correctness. Generated graphs still require semantic evaluation across
+more tasks, providers and resource configurations. Full client/production queue testing
+is separate from temporary-storage model and engine tests.
+
+Validation on 2026-10-18: the SDK parent/sub-agent and Runner composition passes 64 offline assistant tests,
+including real rule-graph execution, role-specific tool/skill isolation, private
+parent-history isolation and repairable missing operation context. A configured Gemini
+save-only acceptance also completed the SDK transfer, validation, save and parent
+delivery without execution, using temporary storage. Frontend behavior
+is unchanged by this backend reorganization. Temporary provider tests remain separate
+from production client/queue acceptance.
+
+```sh
+WORKRUN_ASSISTANT_LIVE_CONFIG_DIR='/path/to/workrun/config' CARGO_INCREMENTAL=0 \
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib \
+  live_draft_only_authoring_has_no_execution_grant -- --ignored --nocapture
+```
+
+Prompt maintenance is product-level: describe roles, protocols, permissions, resource
+limits and general methods. Business examples, formulas and expected outputs belong
+in test fixtures, or in workflow configuration derived from the current authorized
+task. Do not turn a failing example into a global instruction or fixed node topology.

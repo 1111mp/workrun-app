@@ -81,6 +81,7 @@ async fn acceptance(model: &dyn Llm, amount: f64) -> Result<Value> {
             model,
             &ModelProvider::Gemini,
             AssistantRequest {
+                context: Default::default(),
                 contents: vec![Content::new("user").with_text(&input)],
                 capabilities: capabilities(),
             },
@@ -123,6 +124,22 @@ async fn acceptance(model: &dyn Llm, amount: f64) -> Result<Value> {
     dispatch(&pool, "personal", &mut session, call.input, dsl, &runs).await?;
     let record = session["messages"].as_array().unwrap().last().unwrap();
     let response = &record["content"]["parts"][0]["functionResponse"]["response"];
+    // Exercise result binding from the real engine receipt into an App input
+    // contract, including providers that omit function-call IDs. This does not
+    // execute the downstream App or grant another execution in this turn.
+    let app_input_schema = crate::module::process_node::contract_schema(&std::collections::BTreeMap::from([(
+        "amount".into(),
+        json!({"type":"number"}),
+    )]));
+    let app_input = super::bindings::resolve(
+        &app_input_schema,
+        &json!({"amount":{"source":"result","run_id":response["runId"],"pointer":"/amount"}}),
+        &[serde_json::from_value(record["content"].clone())?],
+    )?;
+    anyhow::ensure!(
+        app_input["amount"].as_f64() == Some(amount),
+        "Real workflow output did not bind to App input"
+    );
     let state: Value = serde_json::from_str(response["result"].as_str().context("real graph result missing")?)?;
     let expected_route = if amount >= 1000.0 { "true" } else { "false" };
     anyhow::ensure!(
@@ -144,6 +161,7 @@ async fn acceptance(model: &dyn Llm, amount: f64) -> Result<Value> {
             model,
             &ModelProvider::Gemini,
             AssistantRequest {
+                context: Default::default(),
                 contents,
                 capabilities: capabilities(),
             },

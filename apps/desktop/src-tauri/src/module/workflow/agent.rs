@@ -590,6 +590,23 @@ impl Node for StreamingAgentNode {
                 .map_err(|error| graph_node_error(&self.id, error))?;
             updates.insert("artifacts".into(), artifacts);
         }
+        if self.kind == "codeact_agent" {
+            let missing = self
+                .global_keys
+                .iter()
+                .filter(|key| !updates.contains_key(*key))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(graph_node_error(
+                    &self.id,
+                    format!(
+                        "CodeAct did not produce declared output fields: {}. Return these keys in final_result.value; downstream nodes were not started.",
+                        missing.join(", ")
+                    ),
+                ));
+            }
+        }
         let values = updates
             .iter()
             .filter(|(key, _)| !key.starts_with("workflow."))
@@ -890,12 +907,25 @@ pub(super) fn agent_output_updates(
     if let (Some(output_key), Some(content)) = (context.output_key, output_content) {
         updates.insert(output_key.to_string(), Value::String(content));
     }
-    if context.output_schema.is_some() {
-        let structured = serde_json::from_str::<Value>(&raw_response)
+    let structured = if context.output_schema.is_some() {
+        let value = serde_json::from_str::<Value>(&raw_response)
             .map_err(|error| anyhow!("structured Agent output is not valid JSON: {error}"))?;
-        let values = structured
-            .as_object()
-            .ok_or_else(|| anyhow!("structured Agent output must be a JSON object"))?;
+        if !value.is_object() {
+            bail!("structured Agent output must be a JSON object");
+        }
+        Some(value)
+    } else if context.kind == "codeact_agent" {
+        // CodeAct returns an interpreter-produced final_result value, not an
+        // arbitrary conversational answer. Preserve named object fields even
+        // when no optional validation schema was supplied by the author.
+        serde_json::from_str::<Value>(&raw_response)
+            .ok()
+            .filter(Value::is_object)
+    } else {
+        None
+    };
+    if let Some(structured) = structured {
+        let values = structured.as_object().unwrap();
         if let Some(key) = values.keys().find(|key| !is_output_state_key_safe(key)) {
             bail!("structured Agent output has invalid State property `{key}`");
         }

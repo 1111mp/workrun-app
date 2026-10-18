@@ -13,6 +13,8 @@ use tauri_plugin_http::reqwest::{Client, Response};
 pub struct Catalog {
     workflows: Vec<Value>,
     team: Option<TeamApi>,
+    root: std::path::PathBuf,
+    workspace_id: String,
 }
 struct TeamApi {
     base: String,
@@ -77,13 +79,21 @@ impl Catalog {
             vec![]
         };
         workflows.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-        Ok(Self { workflows, team })
+        Ok(Self {
+            workflows,
+            team,
+            root: dirs::app_home_dir()?,
+            workspace_id: dirs::active_workspace_id(),
+        })
     }
     pub fn capabilities(&self) -> Vec<Capability> {
         self.workflows.iter().filter_map(capability).collect()
     }
 
     pub async fn resolve(&self, id: &str) -> Result<Value> {
+        if let Some(id) = id.strip_prefix("app:") {
+            return super::capability::app_workflow(&feat::process_node_inspect(id).await?);
+        }
         if let Some(api) = &self.team {
             let encoded = encoded(id);
             // Both endpoints enforce server-side ownership/publication ACLs.
@@ -162,6 +172,9 @@ impl Catalog {
 }
 
 pub fn parameters(settings: &Value) -> Value {
+    if let Some(schema) = settings.get("capabilityInputSchema") {
+        return schema.clone();
+    }
     let mut fields = settings["inputSchema"]["fields"]
         .as_array()
         .cloned()
@@ -201,16 +214,22 @@ pub fn validate_input(settings: &Value, input: &Value) -> Result<bool> {
     let mut supplied_schema = schema.clone();
     supplied_schema["required"] = json!([]);
     let mut supplied = input.clone();
-    supplied.as_object_mut().unwrap().retain(|_, value| !value.is_null());
+    let native_schema = settings.get("capabilityInputSchema").is_some();
+    if !native_schema {
+        supplied.as_object_mut().unwrap().retain(|_, value| !value.is_null());
+    }
     if !jsonschema::validator_for(&supplied_schema)?.is_valid(&supplied) {
         bail!("Workflow input does not match its inputSchema");
     }
     let missing = schema["required"].as_array().unwrap().iter().any(|key| {
+        if native_schema {
+            return !values.contains_key(key.as_str().unwrap());
+        }
         values.get(key.as_str().unwrap()).is_none_or(|v| {
             v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()) || v.as_array().is_some_and(Vec::is_empty)
         })
     });
-    if !missing {
+    if !missing && settings.get("capabilityInputSchema").is_none() {
         crate::module::artifact::validate_input(&settings["inputSchema"], input)?;
     }
     Ok(!missing)
@@ -231,6 +250,145 @@ fn encoded(value: &str) -> String {
 
 #[async_trait::async_trait]
 impl super::tools::WorkflowDiscovery for Catalog {
+    async fn direct(
+        &self,
+        name: &str,
+        args: &Value,
+        artifacts: &[crate::module::artifact::ArtifactRef],
+    ) -> Result<Value> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        let store = crate::module::artifact::ArtifactStore::active()?;
+        let (name, args, artifacts) = (name.to_owned(), args.clone(), artifacts.to_vec());
+        let result =
+            tokio::task::spawn_blocking(move || super::main_agent::direct::execute(store, &name, &args, &artifacts))
+                .await??;
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        Ok(result)
+    }
+    async fn inspect_operations(&self, session_id: &str) -> Result<Value> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        let directory = self.root.join("assistant/operations");
+        let mut records = vec![];
+        if directory.exists() {
+            for entry in std::fs::read_dir(directory)? {
+                let path = entry?.path();
+                if path.extension().is_none_or(|extension| extension != "json") {
+                    continue;
+                }
+                let record: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+                if record["sessionId"].as_str() != Some(session_id) {
+                    continue;
+                }
+                records.push(json!({"id":record["id"],"kind":record["kind"],"name":record["name"],"startedAt":record["startedAt"],"status":if record["status"]=="running" {json!("interrupted")} else {record["status"].clone()},"result":record["result"]}));
+            }
+        }
+        records.sort_by(|left, right| right["startedAt"].as_str().cmp(&left["startedAt"].as_str()));
+        records.truncate(5);
+        Ok(
+            json!({"items":records,"note":"Interrupted operations have an uncertain outcome. Inspect existing state; do not recreate or rerun automatically."}),
+        )
+    }
+    async fn record_operation(&self, record: &Value) -> Result<()> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        let id = uuid::Uuid::parse_str(record["id"].as_str().context("Operation ID missing")?)?;
+        let directory = self.root.join("assistant/operations");
+        std::fs::create_dir_all(&directory)?;
+        use std::io::Write;
+        let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+        temporary.write_all(&serde_json::to_vec_pretty(record)?)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(directory.join(format!("{id}.json")))?;
+        Ok(())
+    }
+
+    async fn authoring(&self, name: &str, args: &Value) -> Result<Value> {
+        anyhow::ensure!(
+            dirs::active_workspace_id() == self.workspace_id,
+            "Workspace changed during authoring"
+        );
+        let result = super::workflow_agent::authoring::native_tool(name, args).await?;
+        anyhow::ensure!(
+            dirs::active_workspace_id() == self.workspace_id,
+            "Workspace changed during authoring"
+        );
+        Ok(result)
+    }
+    async fn list_capabilities(&self, args: &Value) -> Result<Value> {
+        use super::capability::{Contract, app_contract};
+        if let Some(id) = args.get("capability_id").and_then(Value::as_str) {
+            let contract = if let Some(app) = id.strip_prefix("app:") {
+                app_contract(&feat::process_node_inspect(app).await?)
+            } else {
+                Contract::workflow(&self.resolve(id).await?)?
+            };
+            return Ok(json!({"items":[contract],"nextCursor":null}));
+        }
+        let limit = args["limit"].as_u64().unwrap_or(20).clamp(1, 50) as usize;
+        let cursor = args["cursor"].as_str().unwrap_or("");
+        // Team workflow ACLs remain server-owned. Page that catalog first, then
+        // workspace-local Apps; never treat release installation caches as Apps.
+        if let Some(api) = &self.team
+            && !cursor.starts_with("apps:")
+        {
+            let page = api
+                .get(&format!(
+                    "/workflow/overview?pageSize={limit}&query={}&cursor={}",
+                    encoded(args["query"].as_str().unwrap_or("")),
+                    encoded(cursor)
+                ))
+                .await?;
+            let items = page["items"]
+                .as_array()
+                .context("Invalid workflow catalog")?
+                .iter()
+                .map(Contract::workflow)
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(
+                json!({"items":items,"nextCursor":page["nextCursor"].as_str().filter(|s|!s.is_empty()).unwrap_or("apps:0")}),
+            );
+        }
+        let mut contracts = if self.team.is_none() {
+            self.workflows
+                .iter()
+                .map(Contract::workflow)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            vec![]
+        };
+        contracts.extend(feat::get_process_nodes().await?.iter().map(app_contract));
+        contracts.sort_by(|a, b| a.id.cmp(&b.id));
+        let query = args["query"].as_str().unwrap_or("").to_lowercase();
+        contracts.retain(|c| {
+            format!("{} {} {}", c.id, c.name, c.description)
+                .to_lowercase()
+                .contains(&query)
+        });
+        let offset: usize = cursor
+            .strip_prefix("apps:")
+            .unwrap_or(if cursor.is_empty() { "0" } else { cursor })
+            .parse()?;
+        let next = offset.saturating_add(limit);
+        let items = contracts.iter().skip(offset).take(limit).collect::<Vec<_>>();
+        Ok(
+            json!({"items":items,"nextCursor":(next<contracts.len()).then(||if self.team.is_some(){format!("apps:{next}")}else{next.to_string()})}),
+        )
+    }
+    async fn describe_capability(&self, id: &str) -> Result<Capability> {
+        let contract = if let Some(app) = id.strip_prefix("app:") {
+            super::capability::app_contract(&feat::process_node_inspect(app).await?)
+        } else {
+            super::capability::Contract::workflow(&self.resolve(id).await?)?
+        };
+        anyhow::ensure!(
+            contract.constraints["executable"] == true,
+            "Capability cannot execute in this context"
+        );
+        let mut capability = contract.legacy();
+        // Preserve the caller's legacy alias while validating its function call.
+        // Dispatch resolves that alias to the current canonical UUID separately.
+        capability.id = id.to_owned();
+        Ok(capability)
+    }
     async fn list(&self, args: &Value) -> Result<Value> {
         if let Some(id) = args.get("workflow_id").and_then(Value::as_str) {
             let cap = self.describe(id).await?;
@@ -256,7 +414,9 @@ impl super::tools::WorkflowDiscovery for Catalog {
         }
     }
     async fn describe(&self, id: &str) -> Result<Capability> {
-        capability(&self.resolve(id).await?).context("Invalid workflow contract")
+        let mut capability = capability(&self.resolve(id).await?).context("Invalid workflow contract")?;
+        capability.id = id.to_owned();
+        Ok(capability)
     }
 }
 fn capability(entry: &Value) -> Option<Capability> {
@@ -271,7 +431,39 @@ fn capability(entry: &Value) -> Option<Capability> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tools::WorkflowDiscovery;
     use super::*;
+    #[tokio::test]
+    async fn operation_records_survive_reload_and_remain_session_scoped() {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = Catalog {
+            workflows: vec![],
+            team: None,
+            root: root.path().into(),
+            workspace_id: dirs::active_workspace_id(),
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        catalog.record_operation(&json!({"id":id,"sessionId":"one","kind":"workflow_authoring","status":"completed","startedAt":"now","result":{"workflow_id":"saved"}})).await.unwrap();
+        catalog.record_operation(&json!({"id":uuid::Uuid::new_v4().to_string(),"sessionId":"two","status":"completed","result":{"private":"other"}})).await.unwrap();
+        let reloaded = Catalog {
+            workflows: vec![],
+            team: None,
+            root: root.path().into(),
+            workspace_id: dirs::active_workspace_id(),
+        };
+        let result = reloaded.inspect_operations("one").await.unwrap();
+        assert_eq!(result["items"].as_array().unwrap().len(), 1);
+        assert_eq!(result["items"][0]["result"]["workflow_id"], "saved");
+        assert!(!result.to_string().contains("private"));
+        catalog
+            .record_operation(&json!({"id":id,"sessionId":"one","status":"running"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            reloaded.inspect_operations("one").await.unwrap()["items"][0]["status"],
+            "interrupted"
+        );
+    }
     #[test]
     fn native_input_contract_preserves_types_required_fields_and_chat_input() {
         let settings = json!({"mode":"task","inputSchema":{"fields":[{"key":"count","type":"number","required":true},{"key":"enabled","type":"boolean","required":true}]}});

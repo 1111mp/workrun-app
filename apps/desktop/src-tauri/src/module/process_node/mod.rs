@@ -13,4 +13,5 @@ pub use types::*;
 
 use project::installation_status;
 pub(crate) use project::project_python_version;
+pub(crate) use tool_definition::object_schema as contract_schema;
 use tool_definition::*;

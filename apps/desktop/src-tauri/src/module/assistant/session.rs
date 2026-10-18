@@ -218,6 +218,7 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
                 bail!("No workflow is awaiting inputs");
             }
             session["activeCall"]["input"] = values.clone();
+            session["activeCall"]["inputSources"] = json!({"source":"user_form"});
             input = Some(values);
             session["status"] = json!("thinking");
         },
@@ -269,7 +270,7 @@ async fn drive(
     loop {
         ensure_workspace(workspace)?;
         let config = BaseConfig::workrun().await.data_arc();
-        let model_id = session["modelId"].as_str().context("Model is missing")?;
+        let model_id = session["modelId"].as_str().context("Model is missing")?.to_owned();
         let definition = model_catalog()
             .into_iter()
             .find(|definition| definition.id == model_id)
@@ -342,6 +343,18 @@ async fn drive(
                 model.as_ref(),
                 &definition.provider,
                 AssistantRequest {
+                    context: super::protocol::AssistantContext {
+                        session_id: session["id"].as_str().map(str::to_owned),
+                        model_profile_id: Some(model_id.to_owned()),
+                        artifacts: session["messages"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|message| matches!(message["role"].as_str(), Some("user" | "assistant")))
+                            .flat_map(|message| message["artifacts"].as_array().into_iter().flatten())
+                            .map(|reference| serde_json::from_value(reference.clone()))
+                            .collect::<std::result::Result<Vec<_>, _>>()?,
+                    },
                     contents,
                     capabilities: vec![],
                 },
@@ -370,7 +383,7 @@ async fn drive(
         session["messages"]
             .as_array_mut()
             .unwrap()
-            .push(json!({"id":message_id,"role":"assistant","text":reply.text,"content":reply.content}));
+            .push(json!({"id":message_id,"role":"assistant","text":reply.text,"content":reply.content,"artifacts":reply.artifacts}));
         if let Some(call) = reply.call {
             let steps = session["steps"].as_u64().unwrap_or(0);
             if steps >= 1 {
@@ -388,6 +401,9 @@ async fn drive(
                 },
             };
             session["activeCall"] = json!({"workflowId":call.workflow_id,"toolName":call.tool_name,"callId":call.call_id,"input":call.input,"workflow":workflow});
+            if call.tool_name == "execute_capability" {
+                session["activeCall"]["inputSources"] = call.input_sources.unwrap_or(Value::Null);
+            }
             session["steps"] = json!(steps + 1);
             session["status"] = json!("thinking");
             commit(pool, workspace, session).await?;
@@ -417,8 +433,32 @@ async fn launch(
     input: Value,
 ) -> Result<bool> {
     ensure_workspace(workspace)?;
-    let workflow = session["activeCall"]["workflow"].clone();
+    // A saved editor change can occur while collecting missing inputs. Resolve
+    // the selected identity again instead of replaying the proposal's snapshot.
+    let id = session["activeCall"]["workflowId"]
+        .as_str()
+        .context("Workflow is missing")?;
+    let workflow = catalog.resolve(id).await?;
+    session["activeCall"]["workflow"] = workflow.clone();
     let settings = &workflow["document"]["settings"];
+    if session["activeCall"]["toolName"] == "execute_capability"
+        && session["activeCall"]["inputSources"]["source"] != "user_form"
+    {
+        // Resolve again against the exact native target snapshot, in case the
+        // catalog changed after discovery. No model-supplied values override it.
+        let contents = session["messages"]
+            .as_array()
+            .context("messages missing")?
+            .iter()
+            .map(|message| serde_json::from_value(message["content"].clone()))
+            .collect::<std::result::Result<Vec<adk_rust::prelude::Content>, _>>()?;
+        let resolved = super::bindings::resolve(
+            &super::catalog::parameters(settings),
+            &session["activeCall"]["inputSources"],
+            &contents,
+        )?;
+        anyhow::ensure!(resolved == input, "Capability bindings changed after discovery");
+    }
     if !validate_input(settings, &input)? {
         session["status"] = json!("needs_input");
         commit(pool, workspace, session).await?;
@@ -525,11 +565,18 @@ async fn wait_with(pool: &SqlitePool, workspace: &str, session: &mut Value, runs
             let result = serde_json::to_string(&state)?;
             let clipped: String = result.chars().take(24000).collect();
             let artifacts = crate::module::artifact::references(&state)?;
-            append_result(
-                session,
-                json!({"runId":id,"workflow":record.name,"status":record.status,"error":record.error,"result":clipped,"truncated":result.chars().count()>24000,"artifacts":artifacts}),
-                &record.status,
-            )?;
+            let mut response = json!({"runId":id,"workflow":record.name,"status":record.status,"error":record.error,"result":clipped,"truncated":result.chars().count()>24000,"artifacts":artifacts});
+            if record.status == "completed" {
+                match super::capability::validated_output(&session["activeCall"]["workflow"], &state) {
+                    Ok(output) => {
+                        response["output"] = output;
+                    },
+                    Err(error) => {
+                        response["outputError"] = json!(error.to_string());
+                    },
+                }
+            }
+            append_result(session, response, &record.status)?;
             commit(pool, workspace, session).await?;
             return Ok(());
         }

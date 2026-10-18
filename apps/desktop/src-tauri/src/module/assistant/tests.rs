@@ -1,12 +1,13 @@
+use super::main_agent::tools::tool_name;
 use super::*;
 use adk_rust::prelude::LlmResponse;
 use serde_json::Value;
 use std::{collections::VecDeque, sync::Mutex};
-use tools::{Capability, tool_name};
+use tools::Capability;
 
 pub(super) struct ScriptedModel {
     responses: Mutex<VecDeque<Content>>,
-    requests: Mutex<Vec<LlmRequest>>,
+    pub(super) requests: Mutex<Vec<LlmRequest>>,
 }
 impl ScriptedModel {
     pub(super) fn new(responses: Vec<Content>) -> Self {
@@ -52,6 +53,7 @@ fn capabilities() -> Vec<Capability> {
 }
 fn request(contents: Vec<Content>) -> AssistantRequest {
     AssistantRequest {
+        context: Default::default(),
         contents,
         capabilities: capabilities(),
     }
@@ -62,7 +64,7 @@ fn text(text: &str) -> Content {
 fn decision(intent: Intent, quote: &str, summary: &str) -> Content {
     text(&json!({"intent":intent,"actionQuote":quote,"summary":summary}).to_string())
 }
-fn call(name: &str, args: Value) -> Content {
+pub(super) fn call(name: &str, args: Value) -> Content {
     Content {
         role: "model".into(),
         parts: vec![Part::FunctionCall {
@@ -143,7 +145,7 @@ async fn conversation_execution_status_explanation_and_explicit_retry_have_separ
         // survive that boundary instead of being silently discarded as system.
         assert_eq!(request.contents[0].role, "user");
         let instruction = content_text(&request.contents[0]);
-        assert!(instruction.contains("Classify ONLY") || instruction.contains("independent conversational agent"));
+        assert!(instruction.contains("Interpret ONLY") || instruction.contains("Workrun main agent"));
         if request
             .config
             .as_ref()
@@ -428,6 +430,7 @@ async fn live_gemini_followups_do_not_propose_another_execution() {
         }
         tokio::time::sleep(Duration::from_secs(10)).await;
         let request = AssistantRequest {
+                    context: Default::default(),
             contents: vec![Content::new("user").with_text(input)],
             capabilities: vec![Capability {
                 id: "sales-report".into(),
@@ -479,6 +482,7 @@ async fn live_gemini_followups_do_not_propose_another_execution() {
                     &model,
                     &ModelProvider::Gemini,
                     AssistantRequest {
+                        context: Default::default(),
                         contents: vec![Content::new("user").with_text(input), reply.content, receipt],
                         capabilities: vec![],
                     },
@@ -502,11 +506,24 @@ impl tools::WorkflowDiscovery for NativeDiscoveryProbe {
     async fn list(&self, _: &Value) -> Result<Value> {
         self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(
-            json!({"items":[{"id":"native-report","name":"Report","inputSchema":{"type":"object","properties":{"period":{"type":"string"}}}}]}),
+            json!({"items":[{"id":"native-report","kind":"workflow","name":"Report","description":"Generate a sales report for the supplied reporting period.","version":null,"inputSchema":{"type":"object","properties":{"period":{"type":"string","enum":["this_week","last_week"]}},"required":["period"],"additionalProperties":false},"outputSchema":{"type":"object"},"constraints":{"executable":true}}],"nextCursor":null}),
         )
+    }
+    async fn list_capabilities(&self, args: &Value) -> Result<Value> {
+        let mut page = self.list(args).await?;
+        page["items"].as_array_mut().unwrap().push(json!({"id":"app:review","kind":"app","name":"Review","description":"Review a supplied expense amount.","version":"1.0.0","inputSchema":{"type":"object","properties":{"amount":{"type":"number"}},"required":["amount"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"review":{"type":"boolean"}}},"constraints":{"executable":true}}));
+        Ok(page)
     }
     async fn describe(&self, id: &str) -> Result<Capability> {
         self.describes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if id == "app:review" {
+            return Ok(Capability {
+                id: id.into(),
+                name: "Review".into(),
+                description: "Review an expense amount".into(),
+                parameters: json!({"type":"object","properties":{"amount":{"type":"number"}},"required":["amount"],"additionalProperties":false}),
+            });
+        }
         if id != "native-report" {
             bail!("Workflow is not available in this workspace");
         }
@@ -514,7 +531,7 @@ impl tools::WorkflowDiscovery for NativeDiscoveryProbe {
             id: id.into(),
             name: "Report".into(),
             description: "Native report".into(),
-            parameters: json!({"type":"object"}),
+            parameters: json!({"type":"object","properties":{"period":{"type":"string","enum":["this_week","last_week"]}},"required":["period"]}),
         })
     }
 }
@@ -528,15 +545,15 @@ async fn native_discovery_is_lazy_and_unified_execution_resolves_a_workspace_aut
     let execution = Content {
         role: "model".into(),
         parts: vec![Part::FunctionCall {
-            name: "execute_workflow".into(),
-            args: json!({"workflow_id":"native-report","input":{"period":"week"}}),
+            name: "execute_capability".into(),
+            args: json!({"capability_id":"native-report","bindings":[{"input":"period","source":"message","message":0,"quote":"week","value_json":"\"this_week\""}]}),
             id: Some("report-call".into()),
             thought_signature: None,
         }],
     };
     let model = ScriptedModel::new(vec![
         decision(Intent::Execution, "Make a report", "I will prepare the report."),
-        call("list_workflow", json!({"query":"Report"})),
+        call("list_capabilities", json!({"query":"Report"})),
         execution,
     ]);
     let reply = runtime()
@@ -544,7 +561,8 @@ async fn native_discovery_is_lazy_and_unified_execution_resolves_a_workspace_aut
             &model,
             &ModelProvider::OpenAi,
             AssistantRequest {
-                contents: vec![Content::new("user").with_text("Make a report")],
+                context: Default::default(),
+                contents: vec![Content::new("user").with_text("Make a report for this week")],
                 capabilities: vec![],
             },
             &|_| Ok(()),
@@ -552,10 +570,15 @@ async fn native_discovery_is_lazy_and_unified_execution_resolves_a_workspace_aut
         )
         .await
         .unwrap();
-    assert_eq!(reply.call.unwrap().workflow_id, "native-report");
+    let call = reply.call.unwrap();
+    assert_eq!(call.workflow_id, "native-report");
+    assert_eq!(call.input_sources.unwrap()[0]["value_json"], "\"this_week\"");
     assert_eq!(discovery.lists.load(Ordering::SeqCst), 1);
     assert_eq!(discovery.describes.load(Ordering::SeqCst), 1);
     let requests = model.requests.lock().unwrap();
+    assert!(requests[1].tools.contains_key("execute_capability"));
+    assert!(!requests[1].tools.contains_key("execute_workflow"));
+    assert!(!requests[1].tools.contains_key("list_workflow"));
     assert!(
         !serde_json::to_string(&requests[1].tools)
             .unwrap()
@@ -566,6 +589,154 @@ async fn native_discovery_is_lazy_and_unified_execution_resolves_a_workspace_aut
             .unwrap()
             .contains("native-report")
     );
+}
+
+#[tokio::test]
+async fn native_binding_rejection_collects_missing_inputs_without_dispatch() {
+    let discovery = NativeDiscoveryProbe {
+        lists: 0.into(),
+        describes: 0.into(),
+    };
+    let model = ScriptedModel::new(vec![
+        decision(Intent::Execution, "Make a report", "Prepare a report"),
+        Content {
+            role: "model".into(),
+            parts: vec![Part::FunctionCall {
+                name: "execute_capability".into(),
+                args: json!({"capability_id":"native-report","bindings":{}}),
+                id: Some("missing-period".into()),
+                thought_signature: None,
+            }],
+        },
+        text("Which reporting period should I use?"),
+    ]);
+    let reply = runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::OpenAi,
+            AssistantRequest {
+                context: Default::default(),
+                contents: vec![Content::new("user").with_text("Make a report")],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &discovery,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    let requests = model.requests.lock().unwrap();
+    let contents = serde_json::to_value(&requests[2].contents).unwrap();
+    let receipt = &contents.as_array().unwrap().last().unwrap()["parts"][0]["functionResponse"]["response"];
+    assert_eq!(receipt["executed"], false);
+    assert!(
+        receipt["error"]
+            .as_str()
+            .unwrap()
+            .contains("Required capability inputs")
+    );
+}
+
+#[tokio::test]
+async fn native_legacy_input_tool_cannot_bypass_bindings() {
+    let discovery = NativeDiscoveryProbe {
+        lists: 0.into(),
+        describes: 0.into(),
+    };
+    let model = ScriptedModel::new(vec![
+        decision(Intent::Execution, "Make a report", "Prepare a report"),
+        call("execute_workflow", json!({"period":"invented"})),
+    ]);
+    let result = runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::OpenAi,
+            AssistantRequest {
+                context: Default::default(),
+                contents: vec![Content::new("user").with_text("Make a report")],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &discovery,
+        )
+        .await;
+    assert!(result.unwrap_err().to_string().contains("not permitted"));
+    assert_eq!(discovery.describes.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+#[ignore = "uses configured Gemini; unified discovery fixture only, no business execution"]
+async fn live_unified_capability_bindings() {
+    use super::evaluation::ProbeModel;
+    let model = ProbeModel::new(
+        std::sync::Arc::new(live_gemini_model_from_env()),
+        Duration::from_secs(6),
+    );
+    let discovery = NativeDiscoveryProbe {
+        lists: 0.into(),
+        describes: 0.into(),
+    };
+    let mut previous = None;
+    for (input, expected) in [
+        ("Use the Report capability to make a report for this week", true),
+        ("Make a report", false),
+    ] {
+        let reply = runtime()
+            .run_with_discovery(
+                &model,
+                &ModelProvider::Gemini,
+                AssistantRequest {
+                    context: Default::default(),
+                    contents: vec![Content::new("user").with_text(input)],
+                    capabilities: vec![],
+                },
+                &|_| Ok(()),
+                &discovery,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reply.call.is_some(),
+            expected,
+            "Unexpected final answer: {}",
+            reply.text
+        );
+        if let Some(call) = reply.call {
+            assert_eq!(call.tool_name, "execute_capability");
+            assert_eq!(call.workflow_id, "native-report");
+            assert!(call.input["period"].as_str().is_some_and(|v| !v.trim().is_empty()));
+            previous = Some((input.to_owned(), reply.content, call.call_id));
+        } else {
+            assert!(!reply.text.trim().is_empty());
+        }
+        println!("Unified capability case: execution proposal={expected}");
+    }
+    let (input, content, id) = previous.unwrap();
+    // Keep the provider's actual signed call; substitute only the synthetic
+    // native receipt. No workflow or App from the user's workspace is run.
+    let receipt=serde_json::from_value(json!({"role":"function","parts":[{"functionResponse":{"name":"execute_capability","response":{"runId":"completed-report","status":"completed","output":{"amount":1500}}},"id":id}]})).unwrap();
+    let reply=runtime().run_with_discovery(&model,&ModelProvider::Gemini,AssistantRequest{context:Default::default(),contents:vec![Content::new("user").with_text(input),content,receipt,text("The report completed."),Content::new("user").with_text("Use the Review App to review the amount from the completed report. Bind its amount input to the report output.")],capabilities:vec![]},&|_|Ok(()),&discovery).await.unwrap();
+    let call = reply.call.expect("App result binding not proposed");
+    assert_eq!(call.workflow_id, "app:review");
+    assert_eq!(call.input, json!({"amount":1500}));
+    let bindings = reply
+        .content
+        .parts
+        .iter()
+        .find_map(|part| match part {
+            Part::FunctionCall { args, .. } => args.get("bindings"),
+            _ => None,
+        })
+        .unwrap();
+    let binding = bindings
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|binding| binding["input"] == "amount")
+        .unwrap();
+    assert_eq!(binding["source"], "result");
+    assert_eq!(binding["run_id"], "completed-report");
+    println!("Unified capability case: Workflow receipt -> App input binding passed");
 }
 #[tokio::test]
 async fn direct_conversation_does_not_fetch_workflow_catalog_or_prepare_execution() {
@@ -583,6 +754,7 @@ async fn direct_conversation_does_not_fetch_workflow_catalog_or_prepare_executio
             &model,
             &ModelProvider::OpenAi,
             AssistantRequest {
+                context: Default::default(),
                 contents: vec![Content::new("user").with_text("Discuss this idea")],
                 capabilities: vec![],
             },
@@ -677,4 +849,221 @@ async fn live_gemini_streams_displayable_reasoning() {
         thoughts.last().is_some_and(|count| *count > 0),
         "provider returned no displayable reasoning"
     );
+}
+
+fn tool_batch(items: &[(&str, Value)]) -> Content {
+    Content {
+        role: "model".into(),
+        parts: items
+            .iter()
+            .enumerate()
+            .map(|(index, (name, args))| Part::FunctionCall {
+                name: (*name).into(),
+                args: args.clone(),
+                id: Some(format!("batch-{index}")),
+                thought_signature: Some(format!("signed-{index}")),
+            })
+            .collect(),
+    }
+}
+
+// SDK emits one function event per call. Compare the ordered response group
+// rather than depending on a particular number of Content envelopes.
+fn last_tool_results(messages: &[Content]) -> Content {
+    let start = messages.iter().rposition(|message| message.role == "model").unwrap() + 1;
+    Content {
+        role: "function".into(),
+        parts: messages[start..]
+            .iter()
+            .filter(|message| message.role == "function")
+            .flat_map(|message| message.parts.clone())
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn batched_general_skills_preserve_ids_and_signatures() {
+    for provider in [ModelProvider::OpenAi, ModelProvider::Gemini] {
+        let batch = tool_batch(&[
+            ("read_skill", json!({"name":"conversation"})),
+            ("read_skill", json!({"name":"task-planning"})),
+            ("read_skill", json!({"name":"result-delivery"})),
+        ]);
+        let expected = serde_json::to_value(&batch).unwrap();
+        let model = ScriptedModel::new(vec![
+            decision(Intent::Authoring, "创建销售分析流程", "先读取相关节点"),
+            batch,
+            text("已经读取相关节点配置。"),
+        ]);
+        let reply = runtime()
+            .run(
+                &model,
+                &provider,
+                request(vec![Content::new("user").with_text("创建销售分析流程，暂时不要执行")]),
+                &|_| Ok(()),
+            )
+            .await
+            .unwrap();
+        assert!(reply.call.is_none());
+        let requests = model.requests.lock().unwrap();
+        let messages = &requests.last().unwrap().contents;
+        assert!(
+            messages
+                .iter()
+                .any(|message| serde_json::to_value(message).unwrap() == expected)
+        );
+        let result = last_tool_results(messages);
+        assert_eq!(result.role, "function");
+        assert_eq!(result.parts.len(), 3);
+        let wire = serde_json::to_value(&result).unwrap().to_string();
+        for expected in [
+            "Understand goals",
+            "proportionate",
+            "evidence-based",
+            "batch-0",
+            "batch-1",
+            "batch-2",
+        ] {
+            assert!(wire.contains(expected), "missing {expected}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn mixed_execution_batch_is_repairable_without_dispatch_or_progress() {
+    let model = ScriptedModel::new(vec![
+        decision(Intent::Execution, "取消订单43", "提交取消"),
+        tool_batch(&[
+            ("execute_workflow", json!({"workflow_id":"cancel-order","input":{}})),
+            ("report_progress", json!({"summary":"should not run"})),
+        ]),
+        call("execute_workflow", json!({})),
+    ]);
+    let activities = Mutex::new(vec![]);
+    let reply = runtime()
+        .run(
+            &model,
+            &ModelProvider::Gemini,
+            request(vec![Content::new("user").with_text("取消订单43")]),
+            &|event| {
+                if let AssistantStreamEvent::Activity { summary } = event {
+                    activities.lock().unwrap().push(summary);
+                }
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.call.unwrap().workflow_id, "cancel-order");
+    assert!(!activities.lock().unwrap().iter().any(|text| text == "should not run"));
+    let requests = model.requests.lock().unwrap();
+    let results = last_tool_results(&requests.last().unwrap().contents);
+    assert_eq!(results.parts.len(), 2);
+    let wire = serde_json::to_value(results).unwrap().to_string();
+    assert_eq!(wire.matches("\"executed\":false").count(), 2);
+}
+
+#[tokio::test]
+async fn batch_read_errors_do_not_discard_other_results_and_large_batches_can_retry() {
+    let oversized = tool_batch(
+        &(0..9)
+            .map(|_| ("read_skill", json!({"name":"task-planning"})))
+            .collect::<Vec<_>>(),
+    );
+    let model = ScriptedModel::new(vec![
+        decision(Intent::Conversation, "", "读取节点目录"),
+        oversized,
+        tool_batch(&[
+            ("read_skill", json!({"name":"nonexistent-skill"})),
+            ("read_skill", json!({"name":"task-planning"})),
+        ]),
+        text("已读取目录。"),
+    ]);
+    let reply = runtime()
+        .run(
+            &model,
+            &ModelProvider::OpenAi,
+            request(vec![Content::new("user").with_text("有哪些节点可以用？")]),
+            &|_| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    let requests = model.requests.lock().unwrap();
+    let result = last_tool_results(&requests.last().unwrap().contents);
+    assert_eq!(result.parts.len(), 2);
+    let wire = serde_json::to_value(&result).unwrap().to_string();
+    assert!(wire.contains("not enabled"));
+    assert!(wire.contains("task-planning"));
+}
+
+#[tokio::test]
+async fn retry_grants_execution_without_authorizing_new_drafts() {
+    let store = RetryDiscovery;
+    let model = ScriptedModel::new(vec![
+        text(&json!({"intent":"execution","actionQuote":"重新执行一下","summary":"复用已保存的流程","reuseExisting":true}).to_string()),
+        call("execute_capability", json!({"capability_id":"cancel-order","bindings":[]})),
+    ]);
+    let reply = runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            request(vec![Content::new("user").with_text("重新执行一下")]),
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_some());
+    let requests = model.requests.lock().unwrap();
+    let tools = &requests.last().unwrap().tools;
+    assert!(tools.contains_key("execute_capability"));
+    assert!(!tools.contains_key("save_workflow_draft"));
+}
+
+struct RetryDiscovery;
+#[async_trait::async_trait]
+impl tools::WorkflowDiscovery for RetryDiscovery {
+    async fn list(&self, _: &Value) -> Result<Value> {
+        Ok(json!({"items":[]}))
+    }
+    async fn describe(&self, _: &str) -> Result<Capability> {
+        Ok(Capability {
+            id: "cancel-order".into(),
+            name: "Saved workflow".into(),
+            description: String::new(),
+            parameters: json!({"type":"object","properties":{}}),
+        })
+    }
+}
+
+#[tokio::test]
+async fn failed_receipt_denies_draft_repair_but_can_deliver_the_original_failure() {
+    let model = ScriptedModel::new(vec![
+        call("save_workflow_draft", json!({"document_json":"{}"})),
+        text("CodeAct failed after reaching its iteration limit. The workflow was not modified."),
+    ]);
+    let reply = runtime()
+        .run(
+            &model,
+            &ModelProvider::Gemini,
+            request(vec![
+                Content::new("user").with_text("重新执行一下"),
+                call("execute_workflow", json!({})),
+                receipt(),
+            ]),
+            &|_| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    assert!(reply.text.contains("iteration limit"));
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let denial = serde_json::to_value(requests.last().unwrap().contents.last().unwrap())
+        .unwrap()
+        .to_string();
+    assert!(denial.contains("permissionDenied"));
+    assert!(denial.contains("not authorized"));
+    assert!(!requests.last().unwrap().tools.contains_key("save_workflow_draft"));
 }

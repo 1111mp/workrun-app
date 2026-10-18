@@ -14,6 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogMedia,
   AlertDialogTitle,
+  Badge,
   Button,
   Checkbox,
   Field,
@@ -914,6 +915,9 @@ function WorkflowEditorContent({
               >
                 <ArrowLeftIcon />
               </Button>
+              {activeWorkflow && !activeWorkflow.releaseId ? (
+                <Badge variant='secondary'>Draft</Badge>
+              ) : null}
               <SidebarTrigger className='-ml-1' />
               <Separator
                 orientation='vertical'

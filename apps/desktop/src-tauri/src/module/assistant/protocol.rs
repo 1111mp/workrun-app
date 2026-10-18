@@ -10,6 +10,17 @@ use serde_json::Value;
 pub struct AssistantRequest {
     pub contents: Vec<Content>,
     pub capabilities: Vec<Capability>,
+    #[serde(default)]
+    pub context: AssistantContext,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantContext {
+    pub session_id: Option<String>,
+    pub model_profile_id: Option<String>,
+    #[serde(default)]
+    pub artifacts: Vec<crate::module::artifact::ArtifactRef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -19,6 +30,8 @@ pub struct WorkflowCall {
     pub input: Value,
     pub tool_name: String,
     pub call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_sources: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -27,6 +40,7 @@ pub struct AssistantReply {
     pub content: Content,
     pub text: String,
     pub call: Option<WorkflowCall>,
+    pub artifacts: Vec<crate::module::artifact::ArtifactRef>,
 }
 
 #[derive(Clone, Serialize)]
@@ -175,6 +189,13 @@ impl ReplyStream {
 }
 
 pub(super) fn parse_reply(content: Content, capabilities: &[Capability]) -> Result<AssistantReply> {
+    parse_reply_with_history(content, capabilities, &[])
+}
+pub(super) fn parse_reply_with_history(
+    content: Content,
+    capabilities: &[Capability],
+    history: &[Content],
+) -> Result<AssistantReply> {
     let mut text = String::new();
     let mut call = None;
     for part in &content.parts {
@@ -184,26 +205,36 @@ pub(super) fn parse_reply(content: Content, capabilities: &[Capability]) -> Resu
                 if call.is_some() {
                     bail!("assistant must call one workflow at a time");
                 }
-                if name != EXECUTE_WORKFLOW {
+                if name != EXECUTE_WORKFLOW && name != "execute_capability" {
                     bail!("assistant selected an unavailable tool");
                 }
                 let workflow_id = args
-                    .get("workflow_id")
+                    .get(if name == "execute_capability" {
+                        "capability_id"
+                    } else {
+                        "workflow_id"
+                    })
                     .and_then(Value::as_str)
                     .context("workflow_id is required")?;
                 let capability = capabilities
                     .iter()
                     .find(|cap| cap.id == workflow_id)
                     .context("assistant selected an unavailable workflow")?;
-                let input = args
-                    .get("input")
-                    .filter(|input| input.is_object())
-                    .context("workflow input must be an object")?;
+                let bound;
+                let input = if name == "execute_capability" {
+                    bound = super::bindings::resolve(&capability.parameters, &args["bindings"], history)?;
+                    &bound
+                } else {
+                    args.get("input")
+                        .filter(|input| input.is_object())
+                        .context("workflow input must be an object")?
+                };
                 call = Some(WorkflowCall {
                     workflow_id: capability.id.clone(),
                     input: input.clone(),
                     tool_name: name.clone(),
                     call_id: id.clone(),
+                    input_sources: (name == "execute_capability").then(|| args["bindings"].clone()),
                 });
             },
             _ => {},
@@ -212,7 +243,12 @@ pub(super) fn parse_reply(content: Content, capabilities: &[Capability]) -> Resu
     if text.trim().is_empty() && call.is_none() {
         bail!("model returned no answer or workflow call");
     }
-    Ok(AssistantReply { content, text, call })
+    Ok(AssistantReply {
+        content,
+        text,
+        call,
+        artifacts: vec![],
+    })
 }
 
 /// Older sessions stored tool results as `user`; Gemini drops those parts.
