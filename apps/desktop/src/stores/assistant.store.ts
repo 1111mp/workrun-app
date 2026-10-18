@@ -8,6 +8,7 @@ import {
   startAssistantTurn,
   type AssistantSession,
   type AssistantActivity,
+  type AssistantReasoning,
   type AssistantTurnAction,
 } from '@/services/assistant';
 import { useWorkrunStore } from '@/stores/workrun.store';
@@ -45,7 +46,19 @@ function publish(session: AssistantSession, scope: string) {
     if (state.scopes[session.id] === scope)
       for (const item of state.sessions[session.id]?.activities ?? [])
         activities.set(item.id, item);
-    session = { ...session, activities: [...activities.values()] };
+    const reasoning = new Map(
+      (session.reasoning ?? []).map((item) => [item.id, item]),
+    );
+    if (state.scopes[session.id] === scope)
+      for (const item of state.sessions[session.id]?.reasoning ?? []) {
+        // Durable snapshots win once committed; live records fill polling gaps.
+        if (!reasoning.has(item.id)) reasoning.set(item.id, item);
+      }
+    session = {
+      ...session,
+      activities: [...activities.values()],
+      reasoning: [...reasoning.values()],
+    };
     const streams = { ...state.streams };
     const stream = streams[session.id];
     if (
@@ -88,9 +101,17 @@ function observe(id: string, scope: string): Promise<void> {
       sessionId: string;
       messageId: string;
       activity?: AssistantActivity;
+      reasoning?: AssistantReasoning;
       event:
         | { type: 'text_delta' | 'text_replace'; text: string }
-        | { type: 'activity'; summary: string };
+        | { type: 'activity'; summary: string }
+        | {
+            type: 'reasoning';
+            id: string;
+            text: string;
+            durationMs: number;
+            complete: boolean;
+          };
     }>('assistant-stream', ({ payload }) => {
       const state = useAssistantStore.getState();
       if (
@@ -99,6 +120,26 @@ function observe(id: string, scope: string): Promise<void> {
         state.scopes[id] !== scope
       )
         return;
+      if (payload.event.type === 'reasoning') {
+        const thought = payload.reasoning;
+        const session = state.sessions[id];
+        if (thought && session)
+          useAssistantStore.setState({
+            sessions: {
+              ...state.sessions,
+              [id]: {
+                ...session,
+                reasoning: [
+                  ...(session.reasoning ?? []).filter(
+                    (item) => item.id !== thought.id,
+                  ),
+                  thought,
+                ],
+              },
+            },
+          });
+        return;
+      }
       if (payload.event.type === 'activity') {
         const activity = payload.activity;
         const session = state.sessions[id];

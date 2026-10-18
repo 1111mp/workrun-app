@@ -10,7 +10,7 @@ use crate::{
     module::{
         run_history::RunHistoryStore,
         run_manager::{self, StartWorkflowRun},
-        workflow::agent::create_model,
+        workflow::agent::create_model_with_thinking,
     },
     utils::dirs,
 };
@@ -274,7 +274,7 @@ async fn drive(
             .into_iter()
             .find(|definition| definition.id == model_id)
             .context("Select a valid assistant model")?;
-        let model = create_model(&definition, &config)?;
+        let model = create_model_with_thinking(&definition, &config, true)?;
         let runtime = AssistantRuntime::load(&dirs::app_home_dir()?)?;
         let catalog = Catalog::load(team_token).await?;
         let contents = session["messages"]
@@ -297,11 +297,30 @@ async fn drive(
             .map(|message| message["id"].clone())
             .unwrap_or(Value::Null);
         let activities = std::sync::Mutex::new(Vec::<Value>::new());
+        let reasoning = std::sync::Mutex::new(Vec::<Value>::new());
         let emit = |event: super::AssistantStreamEvent| {
             let activity = if let super::AssistantStreamEvent::Activity { summary } = &event {
                 let activity = json!({"id":uuid::Uuid::new_v4().to_string(),"turnId":turn_id,"phaseId":message_id,"summary":summary});
                 activities.lock().unwrap().push(activity.clone());
                 Some(activity)
+            } else {
+                None
+            };
+            let thought = if let super::AssistantStreamEvent::Reasoning {
+                id,
+                text,
+                duration_ms,
+                complete,
+            } = &event
+            {
+                let thought = json!({"id":id,"turnId":turn_id,"phaseId":message_id,"text":text,"durationMs":duration_ms,"complete":complete});
+                let mut records = reasoning.lock().unwrap();
+                if let Some(record) = records.iter_mut().find(|record| record["id"] == *id) {
+                    *record = thought.clone();
+                } else {
+                    records.push(thought.clone());
+                }
+                Some(thought)
             } else {
                 None
             };
@@ -312,7 +331,7 @@ async fn drive(
                     "assistant-stream",
                     json!({
                         "sessionId": session["id"], "workspaceId": workspace,
-                        "messageId": message_id, "event": event, "activity": activity,
+                        "messageId": message_id, "event": event, "activity": activity, "reasoning": thought,
                     }),
                 );
             }
@@ -337,7 +356,14 @@ async fn drive(
             .as_array_mut()
             .unwrap()
             .extend(activities.into_inner().unwrap());
-        // Persist public progress even when the model phase fails.
+        if !session["reasoning"].is_array() {
+            session["reasoning"] = json!([]);
+        }
+        session["reasoning"]
+            .as_array_mut()
+            .unwrap()
+            .extend(reasoning.into_inner().unwrap());
+        // Persist thinking and public progress even when the model phase fails.
         commit(pool, workspace, session).await?;
         let reply = reply?;
         ensure_workspace(workspace)?;

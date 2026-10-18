@@ -32,15 +32,33 @@ pub struct AssistantReply {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantStreamEvent {
-    TextDelta { text: String },
-    TextReplace { text: String },
-    // Public approach summaries are distinct from private provider thinking parts.
-    Activity { summary: String },
+    TextDelta {
+        text: String,
+    },
+    TextReplace {
+        text: String,
+    },
+    // Public approach summaries are distinct from provider-returned thinking.
+    Activity {
+        summary: String,
+    },
+    Reasoning {
+        id: String,
+        text: String,
+        #[serde(rename = "durationMs")]
+        duration_ms: u64,
+        complete: bool,
+    },
 }
 
 pub(super) struct ReplyStream {
     content: Content,
     finished: bool,
+    reasoning_id: String,
+    reasoning: String,
+    reasoning_started: Option<std::time::Instant>,
+    reasoning_duration_ms: Option<u64>,
+    reasoning_dirty: bool,
 }
 
 impl ReplyStream {
@@ -48,6 +66,11 @@ impl ReplyStream {
         Self {
             content: Content::new("model"),
             finished: false,
+            reasoning_id: uuid::Uuid::new_v4().to_string(),
+            reasoning: String::new(),
+            reasoning_started: None,
+            reasoning_duration_ms: None,
+            reasoning_dirty: false,
         }
     }
 
@@ -77,6 +100,33 @@ impl ReplyStream {
                 _ => None,
             })
             .collect::<String>();
+        let thinking = content
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::Thinking { thinking, .. } => Some(thinking.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        if !thinking.is_empty() {
+            self.reasoning_started.get_or_insert_with(std::time::Instant::now);
+            // Authoritative provider snapshots replace deltas, including thinking.
+            if replace {
+                self.reasoning = thinking;
+            } else {
+                self.reasoning.push_str(&thinking);
+            }
+            self.reasoning_dirty = true;
+        }
+        if !text.is_empty()
+            || !response.partial
+            || content
+                .parts
+                .iter()
+                .any(|part| matches!(part, Part::FunctionCall { .. }))
+        {
+            self.complete_reasoning();
+        }
         // Some adapters finish with an authoritative snapshot containing the
         // same text and signed tool calls already streamed as deltas.
         if replace {
@@ -86,6 +136,29 @@ impl ReplyStream {
             self.content.parts.extend(content.parts);
             Ok((!text.is_empty()).then_some(AssistantStreamEvent::TextDelta { text }))
         }
+    }
+
+    pub(super) fn complete_reasoning(&mut self) {
+        if self.reasoning_duration_ms.is_none()
+            && let Some(started) = self.reasoning_started
+        {
+            self.reasoning_duration_ms = Some(started.elapsed().as_millis() as u64);
+            self.reasoning_dirty = true;
+        }
+    }
+
+    pub(super) fn take_reasoning_event(&mut self) -> Option<AssistantStreamEvent> {
+        if !std::mem::take(&mut self.reasoning_dirty) {
+            return None;
+        }
+        Some(AssistantStreamEvent::Reasoning {
+            id: self.reasoning_id.clone(),
+            text: self.reasoning.clone(),
+            duration_ms: self
+                .reasoning_duration_ms
+                .unwrap_or_else(|| self.reasoning_started.unwrap().elapsed().as_millis() as u64),
+            complete: self.reasoning_duration_ms.is_some(),
+        })
     }
 
     pub(super) fn finish_content(self) -> Result<Content> {

@@ -299,9 +299,22 @@ async fn generate(
     let mut stream = model.generate_content(request, true).await?;
     let mut reply = ReplyStream::new();
     while let Some(response) = stream.next().await {
-        if let Some(event) = reply.push(response?)? {
+        let event = response
+            .map_err(anyhow::Error::from)
+            .and_then(|response| reply.push(response));
+        if event.is_err() {
+            reply.complete_reasoning();
+        }
+        if let Some(reasoning) = reply.take_reasoning_event() {
+            emit(reasoning)?;
+        }
+        if let Some(event) = event? {
             emit(event)?;
         }
+    }
+    reply.complete_reasoning();
+    if let Some(reasoning) = reply.take_reasoning_event() {
+        emit(reasoning)?;
     }
     reply.finish_content()
 }

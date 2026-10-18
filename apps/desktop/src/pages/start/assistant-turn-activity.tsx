@@ -1,69 +1,143 @@
-import { Spinner } from '@workspace/ui/components';
-import { cn } from '@workspace/ui/lib/utils';
-import { ChevronDownIcon } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from '@workspace/ui/components';
+import { BrainIcon, CircleAlertIcon } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import type {
+  AssistantReasoning,
+  AssistantSession,
+} from '@/services/assistant';
+
+export function AssistantTurnThinking({
+  session,
+  turnId,
+  busy,
+}: {
+  session: AssistantSession;
+  turnId: string;
+  busy: boolean;
+}) {
+  const reasoning = (session.reasoning ?? []).filter(
+    (item) => item.turnId === turnId,
+  );
+  const activities = (session.activities ?? []).filter(
+    (item) => item.turnId === turnId,
+  );
+  const phases = new Set([
+    ...reasoning.map((item) => item.phaseId),
+    ...activities.map((item) => item.phaseId ?? ''),
+    ...(busy ? [session.responsePhaseId ?? ''] : []),
+  ]);
+  return (
+    <div className='flex flex-col gap-3'>
+      {[...phases].map((phaseId) => (
+        <AssistantTurnActivity
+          key={phaseId}
+          reasoning={reasoning.filter((item) => item.phaseId === phaseId)}
+          summaries={activities
+            .filter((item) => (item.phaseId ?? '') === phaseId)
+            .map((item) => item.summary)}
+          busy={busy && phaseId === (session.responsePhaseId ?? '')}
+          failed={
+            session.status === 'error' && phaseId === session.responsePhaseId
+          }
+        />
+      ))}
+    </div>
+  );
+}
 
 export function AssistantTurnActivity({
   summaries,
+  reasoning = [],
   busy,
+  failed = false,
 }: {
   summaries: string[];
+  reasoning?: AssistantReasoning[];
   busy: boolean;
+  failed?: boolean;
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
-  const viewport = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
-  const items = summaries.map((text) => text.trim()).filter(Boolean);
-  const latest = items.at(-1) ?? '';
-  const canExpand = items.length > 0;
-  useEffect(() => {
-    if (expanded && following.current && viewport.current)
-      viewport.current.scrollTop = viewport.current.scrollHeight;
-  }, [latest, expanded]);
-  if (!busy) return null;
-  return (
-    <div className='text-muted-foreground mb-3 text-sm'>
-      <button
-        type='button'
-        aria-expanded={expanded && canExpand}
-        disabled={!canExpand}
-        onClick={() => setExpanded(!expanded)}
-        className='flex w-full min-w-0 items-center gap-2 rounded-md py-2 text-left focus-visible:outline-2'
-      >
-        {busy && <Spinner className='size-3.5 shrink-0' />}
-        <span className='shrink-0'>{t('assistant.progressThinking')}</span>
-        {!expanded && <span className='min-w-0 flex-1 truncate'>{latest}</span>}
-        {canExpand && (
-          <ChevronDownIcon
-            className={cn(
-              'size-4 shrink-0 transition-transform',
-              expanded && 'rotate-180',
-            )}
-          />
-        )}
-      </button>
-      {expanded && canExpand && (
-        <div
-          ref={viewport}
-          onScroll={() => {
-            const el = viewport.current;
-            if (el)
-              following.current =
-                el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-          }}
-          className='border-border flex max-h-48 flex-col gap-3 overflow-y-auto border-l pl-4'
-          role='region'
-          aria-label={t('assistant.progressSummary')}
-        >
-          {items.map((text, index) => (
-            <p className='break-words whitespace-pre-wrap' key={index}>
-              {text}
-            </p>
-          ))}
-        </div>
+  // Automatic expansion follows generation until the reader chooses otherwise.
+  const [open, setOpen] = useState<boolean>();
+  // Progress reports describe a moment in time, so they stop being a status
+  // when the phase ends. Only provider thinking remains available for review.
+  const items = busy
+    ? summaries.map((text) => text.trim()).filter(Boolean)
+    : [];
+  const thoughts = reasoning.filter((item) => item.text.trim());
+  const hasContent = items.length > 0 || thoughts.length > 0;
+  if (!busy && !hasContent) return null;
+  const duration = thoughts.reduce((total, item) => total + item.durationMs, 0);
+  const title = t(
+    failed
+      ? 'assistant.thinkingInterrupted'
+      : busy
+        ? 'assistant.progressThinking'
+        : thoughts.length
+          ? 'assistant.thinkingComplete'
+          : 'assistant.progressComplete',
+  );
+  const line = (
+    <TraceLine status={failed ? 'error' : busy ? 'running' : undefined}>
+      <TraceIcon>{failed ? <CircleAlertIcon /> : <BrainIcon />}</TraceIcon>
+      <TraceTitle>{title}</TraceTitle>
+      {!busy && duration > 0 && (
+        <TraceDescription>
+          {t('assistant.thinkingDuration', {
+            seconds: Math.max(1, Math.round(duration / 1000)),
+          })}
+        </TraceDescription>
       )}
-    </div>
+    </TraceLine>
+  );
+  return (
+    <Trace className='mb-3' data-testid='assistant-thinking'>
+      {hasContent ? (
+        <TraceCollapsible open={open ?? busy} onOpenChange={setOpen}>
+          <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+          <TraceCollapsibleContent>
+            <div
+              className='flex min-w-0 flex-col gap-4'
+              role='region'
+              aria-label={t('assistant.thinkingDetails')}
+            >
+              {thoughts.map((item) => (
+                <p key={item.id} className='wrap-anywhere whitespace-pre-wrap'>
+                  {item.text}
+                </p>
+              ))}
+              {items.length > 0 && (
+                <div className='flex flex-col gap-2'>
+                  <p className='text-xs font-medium'>
+                    {t('assistant.progressSummary')}
+                  </p>
+                  {items.map((text, index) => (
+                    <p
+                      key={index}
+                      className='wrap-anywhere whitespace-pre-wrap'
+                    >
+                      {text}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          </TraceCollapsibleContent>
+        </TraceCollapsible>
+      ) : (
+        line
+      )}
+    </Trace>
   );
 }

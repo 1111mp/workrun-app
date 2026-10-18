@@ -736,7 +736,7 @@ it('keeps an expanded execution in place when the final assistant answer arrives
   expect(document.querySelector('[data-slot="drawer-content"]')).toBeNull();
 });
 
-it('right-aligns user bubbles and removes thinking when the turn leaves the thinking phase', async () => {
+it('right-aligns user bubbles and folds phase summaries when thinking ends', async () => {
   const session = {
     id: 'activity-lifecycle',
     title: '取消订单',
@@ -842,4 +842,85 @@ it('right-aligns user bubbles and removes thinking when the turn leaves the thin
       .element(page.getByText('正在校验订单参数', { exact: true }))
       .not.toBeInTheDocument();
   }
+});
+
+it('streams reasoning through Trace, collapses for the answer and preserves reader choices', async () => {
+  const { AssistantTurnActivity } = await import('./assistant-turn-activity');
+  const thought = {
+    id: 'thinking-1',
+    turnId: 'user',
+    phaseId: 'phase',
+    text: '先核对输入数据',
+    durationMs: 2400,
+    complete: false,
+  };
+  const screen = await render(
+    <AssistantTurnActivity summaries={[]} reasoning={[thought]} busy />,
+  );
+  await expect
+    .element(page.getByRole('button', { name: '正在思考' }))
+    .toHaveAttribute('aria-expanded', 'true');
+  await expect.element(page.getByText(thought.text)).toBeVisible();
+  await screen.rerender(
+    <AssistantTurnActivity
+      summaries={[]}
+      reasoning={[{ ...thought, text: `${thought.text}，然后验证结果。` }]}
+      busy
+    />,
+  );
+  await expect
+    .element(page.getByText('先核对输入数据，然后验证结果。'))
+    .toBeVisible();
+  await screen.rerender(
+    <AssistantTurnActivity
+      summaries={[]}
+      reasoning={[{ ...thought, complete: true }]}
+      busy={false}
+    />,
+  );
+  const completed = page.getByRole('button', { name: /已思考/ });
+  await expect.element(completed).toHaveAttribute('aria-expanded', 'false');
+  await completed.click();
+  await expect.element(page.getByText(thought.text)).toBeVisible();
+  await screen.rerender(
+    <AssistantTurnActivity summaries={[]} reasoning={[thought]} busy />,
+  );
+  const thinking = page.getByRole('button', { name: '正在思考' });
+  await thinking.click();
+  await screen.rerender(
+    <AssistantTurnActivity
+      summaries={['正在校验']}
+      reasoning={[{ ...thought, text: '更新后的思考' }]}
+      busy
+    />,
+  );
+  await expect.element(thinking).toHaveAttribute('aria-expanded', 'false');
+  await expect
+    .poll(
+      () =>
+        screen
+          .getByTestId('assistant-thinking')
+          .element()
+          .getBoundingClientRect().height,
+    )
+    .toBeLessThan(40);
+});
+
+it('removes stale preparation reports after completion even if the reader expanded them', async () => {
+  const { AssistantTurnActivity } = await import('./assistant-turn-activity');
+  const summaries = ['正在为您准备执行订单号 43 的取消工作流...'];
+  const screen = await render(
+    <AssistantTurnActivity summaries={summaries} busy />,
+  );
+  const trigger = page.getByRole('button', { name: '正在思考' });
+  await trigger.click();
+  await trigger.click();
+  await expect.element(trigger).toHaveAttribute('aria-expanded', 'true');
+  await screen.rerender(
+    <AssistantTurnActivity summaries={summaries} busy={false} />,
+  );
+  await expect.element(page.getByText(summaries[0]!)).not.toBeInTheDocument();
+  await expect
+    .element(page.getByTestId('assistant-thinking'))
+    .not.toBeInTheDocument();
 });

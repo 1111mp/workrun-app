@@ -645,3 +645,36 @@ pub(super) fn live_gemini_model_from_env() -> adk_rust::model::GeminiModel {
     let model_name = std::env::var("WORKRUN_ASSISTANT_LIVE_MODEL").unwrap_or_else(|_| "gemini-3.5-flash-lite".into());
     adk_rust::model::GeminiModel::new(api_key.unwrap(), model_name).unwrap()
 }
+
+/// Read-only provider probe: verifies the same displayable thinking used by chat.
+#[tokio::test]
+#[ignore = "uses configured Gemini API credentials and network"]
+async fn live_gemini_streams_displayable_reasoning() {
+    let model = live_gemini_model_from_env().with_thinking_config(
+        crate::module::workflow::agent::conversation_thinking_config("gemini-3.5-flash-lite"),
+    );
+    let events = Mutex::new(Vec::new());
+    let content = generate(&model, LlmRequest {
+        model: model.name().into(),
+        contents: vec![Content::new("user").with_text("Find the smallest positive integer divisible by 7 whose decimal digits sum to 43. Give the integer and verify it. Do not use tools.")],
+        tools: HashMap::new(), config: None, previous_response_id: None,
+    }, &|event| { events.lock().unwrap().push(event); Ok(()) }).await.unwrap();
+    let events = events.into_inner().unwrap();
+    let thoughts = events
+        .iter()
+        .filter_map(|event| match event {
+            AssistantStreamEvent::Reasoning { text, .. } => Some(text.len()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    println!(
+        "reasoning events: {}; final reasoning bytes: {}; answer bytes: {}",
+        thoughts.len(),
+        thoughts.last().unwrap_or(&0),
+        content_text(&content).len()
+    );
+    assert!(
+        thoughts.last().is_some_and(|count| *count > 0),
+        "provider returned no displayable reasoning"
+    );
+}

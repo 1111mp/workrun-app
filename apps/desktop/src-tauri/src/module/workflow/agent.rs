@@ -262,6 +262,26 @@ fn personal_skill_names(node: &WorkflowNode) -> Result<Vec<String>> {
 /// Shared by workflow agents and Workrun-owned background model features.
 /// Callers own their prompt and must not turn an internal request into a graph node.
 pub(crate) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result<Arc<dyn Llm>> {
+    create_model_with_thinking(model, config, false)
+}
+
+pub(crate) fn conversation_thinking_config(model: &str) -> adk_rust::model::gemini::ThinkingConfig {
+    let config = adk_rust::model::gemini::ThinkingConfig::new().with_thoughts_included(true);
+    // Flash-Lite defaults to minimal reasoning. Request actual thinking for chat;
+    // includeThoughts alone only asks for summaries of whatever thinking occurs.
+    if model.starts_with("gemini-3") && model.contains("flash-lite") {
+        config.with_thinking_level(adk_rust::model::gemini::ThinkingLevel::Medium)
+    } else {
+        config
+    }
+}
+
+/// Conversations request displayable thinking without changing workflow model defaults.
+pub(crate) fn create_model_with_thinking(
+    model: &ModelDefinition,
+    config: &IWorkrun,
+    include_thoughts: bool,
+) -> Result<Arc<dyn Llm>> {
     let credential = config.credential_for(&model.provider);
     let headers = credential
         .map(|credential| credential.request_headers())
@@ -276,7 +296,14 @@ pub(crate) fn create_model(model: &ModelDefinition, config: &IWorkrun) -> Result
     }
     let api_key = api_key.unwrap_or_default();
     Ok(match model.provider {
-        ModelProvider::Gemini => Arc::new(GeminiModel::new(api_key, &model.model)?),
+        ModelProvider::Gemini => {
+            let gemini = GeminiModel::new(api_key, &model.model)?;
+            Arc::new(if include_thoughts {
+                gemini.with_thinking_config(conversation_thinking_config(&model.model))
+            } else {
+                gemini
+            })
+        },
         ModelProvider::OpenAi | ModelProvider::OpenAiStrict => {
             let config = match base_url {
                 // ADK's compatible mode is required for local and proxy OpenAI endpoints.
@@ -1378,5 +1405,19 @@ mod attachment_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod conversation_thinking_tests {
+    use super::conversation_thinking_config;
+    #[test]
+    fn flash_lite_chat_requests_thinking_in_addition_to_summaries() {
+        let lite = serde_json::to_value(conversation_thinking_config("gemini-3.5-flash-lite")).unwrap();
+        assert_eq!(lite["includeThoughts"], true);
+        assert_eq!(lite["thinkingLevel"], "medium");
+        let pro = serde_json::to_value(conversation_thinking_config("gemini-3.1-pro-preview")).unwrap();
+        assert_eq!(pro["includeThoughts"], true);
+        assert!(pro.get("thinkingLevel").is_none_or(serde_json::Value::is_null));
     }
 }

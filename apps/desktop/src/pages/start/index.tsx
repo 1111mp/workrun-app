@@ -53,7 +53,7 @@ import {
 import { AssistantMessageActions } from './assistant-message-actions';
 import { AssistantMessageText } from './assistant-message-text';
 import { groupAssistantMessages } from './assistant-turn';
-import { AssistantTurnActivity } from './assistant-turn-activity';
+import { AssistantTurnThinking } from './assistant-turn-activity';
 import { AssistantWorkflowRun } from './assistant-workflow-run';
 
 function StartPage() {
@@ -306,35 +306,19 @@ function AssistantChat({ scope }: { scope: string }) {
                         >
                           <MessageContent>
                             {group.role === 'assistant' && (
-                              <AssistantTurnActivity
-                                key={session.responsePhaseId ?? group.id}
-                                summaries={
-                                  session.responsePhaseId
-                                    ? (session.activities ?? [])
-                                        .filter(
-                                          (item) =>
-                                            item.turnId === group.turnId &&
-                                            item.phaseId ===
-                                              session.responsePhaseId,
-                                        )
-                                        .map((item) => item.summary)
-                                    : // Legacy sessions have no phase IDs. Never carry
-                                      // their discovery hints across a workflow receipt.
-                                      group.messages.some(
-                                          (item) => item.role === 'tool',
-                                        )
-                                      ? []
-                                      : (session.activities ?? [])
-                                          .filter(
-                                            (item) =>
-                                              item.turnId === group.turnId,
-                                          )
-                                          .map((item) => item.summary)
-                                }
+                              <AssistantTurnThinking
+                                session={session}
+                                turnId={group.turnId}
                                 busy={Boolean(
                                   session.status === 'thinking' &&
                                   !session.activeCall &&
-                                  !stream?.text &&
+                                  (!stream?.text ||
+                                    session.reasoning?.some(
+                                      (item) =>
+                                        item.phaseId ===
+                                          session.responsePhaseId &&
+                                        !item.complete,
+                                    )) &&
                                   group.turnId === latestUserId,
                                 )}
                               />

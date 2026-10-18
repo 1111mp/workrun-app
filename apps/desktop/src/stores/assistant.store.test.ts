@@ -250,10 +250,30 @@ it('publishes native stream events and removes the transient message once persis
     },
   });
   expect(current(session.id).activities).toEqual([activity]);
+  const reasoning = {
+    id: 'thought',
+    turnId: 'user1',
+    phaseId: 'answer',
+    text: 'Check the inputs',
+    durationMs: 1200,
+    complete: false,
+  };
+  for (const text of ['Check', 'Check the inputs'])
+    receive({
+      payload: {
+        sessionId: session.id,
+        messageId: 'answer',
+        event: { type: 'reasoning' },
+        reasoning: { ...reasoning, text },
+      },
+    });
+  expect(current(session.id).reasoning).toEqual([reasoning]);
+  // A late polling snapshot must not drop reasoning observed over the event channel.
   finish(store({ ...session, status: 'idle', messages: [assistantMessage] }));
   await sending;
   expect(useAssistantStore.getState().streams[session.id]).toBeUndefined();
   expect(current(session.id).activities).toEqual([activity]);
+  expect(current(session.id).reasoning).toEqual([reasoning]);
 });
 
 it('keeps team authentication in the native request, outside conversation data', async () => {

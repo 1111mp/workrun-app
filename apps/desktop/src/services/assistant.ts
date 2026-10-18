@@ -30,7 +30,16 @@ export type AssistantActivity = {
   phaseId?: string;
   summary: string;
 };
+export type AssistantReasoning = {
+  id: string;
+  turnId: string;
+  phaseId: string;
+  text: string;
+  durationMs: number;
+  complete: boolean;
+};
 export type AssistantSession = {
+  reasoning?: AssistantReasoning[];
   activities?: AssistantActivity[];
   responsePhaseId?: string;
   id: string;

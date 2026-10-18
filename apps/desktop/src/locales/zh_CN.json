@@ -2058,6 +2058,11 @@
     "emptyDescription": "创建或导入应用、工作流，准备好后就能在这里使用。"
   },
   "assistant": {
+    "thinkingInterrupted": "思考已中断",
+    "thinkingComplete": "已思考",
+    "progressComplete": "处理过程",
+    "thinkingDuration": "{{seconds}} 秒",
+    "thinkingDetails": "思考详情",
     "progressThinking": "正在思考",
     "progressSummary": "处理摘要",
     "runLoadFailed": "暂时无法加载执行进展",

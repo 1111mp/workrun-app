@@ -2085,6 +2085,11 @@
     "emptyDescription": "Create or import an app or workflow. It will appear here when ready."
   },
   "assistant": {
+    "thinkingInterrupted": "Thinking interrupted",
+    "thinkingComplete": "Thought",
+    "progressComplete": "Activity",
+    "thinkingDuration": "{{seconds}}s",
+    "thinkingDetails": "Thinking details",
     "progressThinking": "Thinking",
     "progressSummary": "Approach summary",
     "runLoadFailed": "Unable to load execution progress",
