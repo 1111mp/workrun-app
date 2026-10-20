@@ -33,7 +33,9 @@ const CORE_SKILLS: &[(&str, &str, &str)] = &[
 pub(in crate::module::assistant) struct MainSkills(SkillCatalog);
 impl MainSkills {
     pub fn builtin() -> Self {
-        Self(SkillCatalog::resources(CORE_SKILLS, CORE_SKILLS.len()))
+        let mut entries = CORE_SKILLS.to_vec();
+        entries.push(crate::module::assistant::skills::WORKRUN_CAPABILITIES);
+        Self(SkillCatalog::resources(&entries, CORE_SKILLS.len()))
     }
     pub fn load(selected: &[String]) -> Result<Self> {
         let mut skills = Self::builtin();

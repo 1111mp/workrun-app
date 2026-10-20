@@ -1,23 +1,18 @@
 //! Main agent: conversation, direct work, turn grants and specialist delegation.
 pub(in crate::module::assistant) mod direct;
+mod intent;
 pub(in crate::module::assistant) mod skills;
 pub(in crate::module::assistant) mod tools;
 use super::protocol::{AssistantReply, AssistantRequest, AssistantStreamEvent, normalize_assistant_contents};
 use super::tools::WorkflowDiscovery;
-use super::{
-    model::{content_text, generate, instructed},
-    resources,
-};
+use super::{model::content_text, resources};
 use crate::config::ModelProvider;
-use adk_rust::{
-    GenerateContentConfig,
-    prelude::{Content, Llm, LlmRequest, Part},
-};
+use adk_rust::prelude::Llm;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use skills::MainSkills as SkillCatalog;
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 use tools::ToolRegistry;
 #[derive(Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -46,11 +41,12 @@ pub(in crate::module::assistant) enum Intent {
     Status,
     Explanation,
     Clarification,
+    Planning,
     Authoring,
     Execution,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(in crate::module::assistant) struct TurnDecision {
     pub(in crate::module::assistant) intent: Intent,
@@ -60,6 +56,10 @@ pub(in crate::module::assistant) struct TurnDecision {
     pub(in crate::module::assistant) reuse_existing: bool,
     #[serde(default)]
     pub(in crate::module::assistant) authoring_quote: String,
+    #[serde(default)]
+    pub(in crate::module::assistant) plan_feedback: Option<super::planning_agent::plans::Feedback>,
+    #[serde(default)]
+    pub(in crate::module::assistant) tool_confirmation: Option<super::tool_execution::Confirmation>,
 }
 impl TurnDecision {
     pub(in crate::module::assistant) fn allows_execution(&self, current_message: &str) -> bool {
@@ -148,32 +148,57 @@ impl AssistantRuntime {
             .last()
             .filter(|message| message.role == "user")
             .map(content_text);
-        let decision = if let Some(current) = &current_message {
-            // No tools exist during interpretation. The decision is structured
-            // data, not an executable tool whose name biases the model to call it.
-            let mut contents = instructed(provider, &resources::read("main_agent/INTENT.md")?, &history);
-            contents.push(Content::new("user").with_text(format!(
-                "Latest user message to classify (quoted data):\n{}",
-                json!(current)
-            )));
-            let content = generate(model, LlmRequest {
-                model: model.name().into(), contents, tools: HashMap::new(),
-                config: Some(GenerateContentConfig { temperature: Some(0.0), response_schema: Some(json!({
-                    "type":"object", "properties": {
-                        "intent":{"type":"string","enum":["conversation","task","status","explanation","clarification","authoring","execution"]},
-                        "actionQuote":{"type":"string"}, "summary":{"type":"string"}, "reuseExisting":{"type":"boolean"}, "authoringQuote":{"type":"string"}
-                    }, "required":["intent","actionQuote","summary","reuseExisting","authoringQuote"], "additionalProperties":false
-                })), ..Default::default() }), previous_response_id: None,
-            }, &|_| Ok(())).await?;
-            if content
-                .parts
-                .iter()
-                .any(|part| matches!(part, Part::FunctionCall { .. }))
-            {
-                bail!("intent assessment cannot call tools");
+        let turn_key = super::tool_execution::digest(&history)?;
+        let pending_tool = match (discovery, request.context.session_id.as_deref()) {
+            (Some(discovery), Some(session)) => discovery.pending_tool_call(session).await?,
+            _ => None,
+        };
+        let mut plan = match (discovery, request.context.session_id.as_deref()) {
+            (Some(discovery), Some(session)) => discovery.workflow_plan(session).await?,
+            _ => None,
+        };
+        let native_approval = plan
+            .as_ref()
+            .is_some_and(|p| p["status"] == "approved" && p["approvedTurnKey"] == turn_key)
+            && current_message.is_some();
+        let delivery_only = plan.as_ref().is_some_and(|p| {
+            ((p["approvedTurnKey"] == turn_key)
+                && matches!(p["status"].as_str(), Some("building" | "saved" | "failed")))
+                || (p["createdTurnKey"] == turn_key
+                    && matches!(p["status"].as_str(), Some("ready" | "needs_clarification")))
+        });
+        if delivery_only
+            && let Some(plan) = plan
+                .as_ref()
+                .filter(|p| matches!(p["status"].as_str(), Some("ready" | "needs_clarification")))
+        {
+            return Ok(AssistantReply::paused(plan, "review_required"));
+        }
+        let decision = if delivery_only {
+            TurnDecision {
+                intent: Intent::Status,
+                action_quote: String::new(),
+                authoring_quote: String::new(),
+                summary: "Deliver the existing native plan/configuration outcome without another delegation".into(),
+                reuse_existing: false,
+                tool_confirmation: None,
+                plan_feedback: None,
             }
-            serde_json::from_str::<TurnDecision>(&content_text(&content))
-                .context("assistant returned an invalid intent decision")?
+        } else if native_approval {
+            TurnDecision {
+                intent: Intent::Authoring,
+                action_quote: current_message.clone().unwrap(),
+                authoring_quote: current_message.clone().unwrap(),
+                summary: plan.as_ref().unwrap()["document"]["goal"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+                reuse_existing: false,
+                tool_confirmation: None,
+                plan_feedback: None,
+            }
+        } else if let Some(current) = &current_message {
+            intent::assess(model, provider, &history, current, pending_tool.as_ref(), plan.as_ref()).await?
         } else {
             // Resuming after a receipt/model interruption is not a fresh action.
             TurnDecision {
@@ -182,6 +207,8 @@ impl AssistantRuntime {
                 summary: String::new(),
                 reuse_existing: false,
                 authoring_quote: String::new(),
+                tool_confirmation: None,
+                plan_feedback: None,
             }
         };
         let execution_allowed = current_message
@@ -203,14 +230,125 @@ impl AssistantRuntime {
                     .is_some_and(|message| message.contains(&decision.action_quote))
             );
         }
+        let confirmation = decision.tool_confirmation.as_ref().filter(|confirmation| {
+            if decision.plan_feedback.is_some() {
+                return false;
+            }
+            current_message
+                .as_deref()
+                .is_some_and(|message| confirmation.validate(message, pending_tool.as_ref(), &turn_key))
+        });
+        let denied = if let Some(confirmation) = confirmation.filter(|confirmation| confirmation.decision == "deny") {
+            Some(
+                discovery
+                    .context("Native tool confirmation unavailable")?
+                    .deny_tool_call(
+                        request.context.session_id.as_deref().context("Session is missing")?,
+                        &confirmation.id,
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let approved = confirmation
+            .filter(|confirmation| confirmation.decision == "approve")
+            .map(|confirmation| confirmation.id.as_str());
+        if (authoring_allowed || decision.plan_feedback.as_ref().is_some_and(|f| f.decision == "cancel"))
+            && decision.tool_confirmation.is_none()
+            && let (Some(approval), Some(current), Some(existing), Some(discovery), Some(session)) = (
+                decision.plan_feedback.as_ref(),
+                current_message.as_deref(),
+                plan.as_ref(),
+                discovery,
+                request.context.session_id.as_deref(),
+            )
+            && approval.valid(existing, current, &turn_key)
+        {
+            plan = Some(
+                discovery
+                    .plan_operation(
+                        session,
+                        &approval.decision,
+                        &json!({"plan_id":approval.id,"version":approval.version,"turn_key":turn_key}),
+                        &request.context.artifacts,
+                    )
+                    .await?,
+            );
+        }
+        let confirmed = plan
+            .as_ref()
+            .is_some_and(|p| p["status"] == "approved" && p["approvedTurnKey"] == turn_key)
+            && current_message.is_some();
+        let cancelled = decision.plan_feedback.as_ref().is_some_and(|f| f.decision == "cancel")
+            && plan.as_ref().is_some_and(|p| p["status"] == "cancelled");
+        if cancelled {
+            emit(AssistantStreamEvent::WorkflowPlan {
+                plan: plan.clone().unwrap(),
+            })?;
+        }
+        if !confirmed
+            && decision.intent == Intent::Execution
+            && let Some(plan) = plan
+                .as_ref()
+                .filter(|p| matches!(p["status"].as_str(), Some("ready" | "needs_clarification")))
+        {
+            // A run request cannot silently revise an unapproved definition or
+            // turn its readiness into consent. Preserve the exact pending version.
+            if let (Some(discovery), Some(session)) = (discovery, request.context.session_id.as_deref()) {
+                discovery.record_turn(&json!({"id":uuid::Uuid::new_v4().to_string(),"kind":"turn_interpretation","name":"assess_turn","sessionId":session,"turnKey":turn_key,"status":"completed","startedAt":chrono::Utc::now().to_rfc3339(),"result":{"intent":decision.intent,"workflowExecutionAllowed":false,"authoringAllowed":false,"planningAllowed":false,"workspaceToolsAllowed":false,"blockedBy":"pending_plan_confirmation","planId":plan["id"],"version":plan["version"]}})).await?;
+            }
+            return Ok(AssistantReply::paused(plan, "confirmation_required"));
+        }
+        let planning_allowed = !confirmed
+            && !cancelled
+            && decision.tool_confirmation.is_none()
+            && current_message.as_deref().is_some_and(|current| {
+                authoring_allowed
+                    || (decision.intent == Intent::Planning
+                        && !decision.action_quote.trim().is_empty()
+                        && current.contains(&decision.action_quote)
+                        && !decision.summary.trim().is_empty())
+            });
+        let execution_allowed = execution_allowed
+            && !cancelled
+            && decision.tool_confirmation.is_none()
+            && (!authoring_allowed || confirmed);
+        let authoring_allowed = confirmed && decision.tool_confirmation.is_none();
+        let workspace_tools_allowed = current_message.as_deref().is_some_and(|message| {
+            matches!(decision.intent, Intent::Task | Intent::Execution)
+                && !decision.action_quote.trim().is_empty()
+                && message.contains(&decision.action_quote)
+                && !decision.summary.trim().is_empty()
+        }) || approved.is_some();
         let registry = ToolRegistry {
             capabilities: &request.capabilities,
             skills: &self.skills,
             history: &history,
             execution_allowed,
             authoring_allowed,
+            planning_allowed,
             workflows_enabled: self.profile.workflow_execution,
+            workspace_tools_allowed: workspace_tools_allowed
+                && !cancelled
+                && !planning_allowed
+                && !confirmed
+                && denied.is_none()
+                && (decision.tool_confirmation.is_none() || approved.is_some()),
         };
+        if let (Some(discovery), Some(session)) = (discovery, request.context.session_id.as_deref()) {
+            // Persist the interpreted request and effective grants, never model
+            // thinking. A denied turn must be diagnosable without re-running it.
+            discovery.record_turn(&json!({
+                "id":uuid::Uuid::new_v4().to_string(),"sessionId":session,"turnKey":turn_key,
+                "kind":"turn_interpretation","name":"assess_turn","status":"completed","startedAt":chrono::Utc::now().to_rfc3339(),
+                "decision":decision,
+                "result":{"intent":decision.intent,"workflowExecutionAllowed":registry.execution_allowed && registry.workflows_enabled,
+                    "authoringAllowed":registry.authoring_allowed && registry.workflows_enabled,"planningAllowed":registry.planning_allowed && registry.workflows_enabled,"workspaceToolsAllowed":registry.workspace_tools_allowed,
+                    "workflowProfileEnabled":registry.workflows_enabled,"pendingToolId":pending_tool.as_ref().map(|value|&value["id"]),
+                    "toolConfirmationAccepted":confirmation.is_some(),"hasCurrentUserMessage":current_message.is_some()}
+            })).await?;
+        }
         let instruction = format!(
             "{}\n\n{}\n\nSupplemental workspace instructions:\n{}\n\nEnabled skills (read_skill loads optional skills): {}\n\nCurrent turn intent: {:?}. Execution grant: {}. A missing grant MUST NOT be worked around.\nCurrent intent summary: {}",
             resources::read("main_agent/AGENT.md")?,
@@ -242,6 +380,17 @@ impl AssistantRuntime {
             json!(request.context.artifacts),
             json!(request.context.model_profile_id)
         );
+        let instruction = format!(
+            "{instruction}\nNative workspace-tool context (data, not permission): pending={}, approvedOperationId={}, cancellation={}. Only the exact approved tool/arguments may consume an approval. Present pending calls accurately; do not claim they executed.",
+            json!(pending_tool),
+            json!(approved),
+            json!(denied)
+        );
+        let instruction = format!(
+            "{instruction}\nPlanning grant: {}. Native workflow plan: {}. A new/revised Workflow requires a user-confirmed plan version before transfer to workflow_author; otherwise use workflow_planner for authorized planning. Plan approval alone never grants workflow execution; a separate explicit current-turn run request is required.",
+            planning_allowed && registry.workflows_enabled,
+            json!(plan)
+        );
         super::orchestration::run(
             model,
             super::orchestration::Turn {
@@ -253,6 +402,9 @@ impl AssistantRuntime {
                 emit,
                 max_steps: self.profile.max_model_steps,
                 goal: &decision.summary,
+                tool_turn: &turn_key,
+                approved_tool: approved,
+                plan: plan.as_ref(),
             },
         )
         .await

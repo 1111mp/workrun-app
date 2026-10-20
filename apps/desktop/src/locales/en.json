@@ -978,6 +978,7 @@
       }
     },
     "artifacts": {
+      "download": "Download file",
       "add": "Add photos & files",
       "remotePathsDescription": "One visible State path per line. A2A v1.0.1 sends inline file bytes; maximum 10 files and 20 MiB in total. Leave empty to send text only.",
       "remoteTimeout": "Request timeout (seconds)",
@@ -2085,6 +2086,53 @@
     "emptyDescription": "Create or import an app or workflow. It will appear here when ready."
   },
   "assistant": {
+    "toolConfirmation": {
+      "title": "Confirm tool call",
+      "description": "Task paused. Review the tool and complete arguments. Approval applies to this call only.",
+      "waiting": "Waiting for confirmation",
+      "processing": "Processing",
+      "closed": "Handled",
+      "arguments": "Call arguments",
+      "approve": "Approve call",
+      "deny": "Deny call",
+      "approveMessage": "Approve {{tool}} with the displayed arguments.",
+      "denyMessage": "Deny this {{tool}} call.",
+      "failed": "Tool confirmation failed. Review the current request."
+    },
+    "plan": {
+      "revisionTarget": "This plan updates an existing workflow",
+      "title": "Workflow plan",
+      "version": "Version {{version}}",
+      "inputs": "Inputs",
+      "outputs": "Expected outputs",
+      "steps": "Proposed steps",
+      "assumptions": "Assumptions",
+      "questions": "Questions to resolve",
+      "dependencies": "Dependency issues",
+      "details": "Node choices and configuration",
+      "constraints": "Constraints",
+      "acceptance": "How results will be verified",
+      "approve": "Confirm plan and create",
+      "discuss": "Discuss changes",
+      "cancel": "Cancel plan",
+      "openWorkflow": "Open workflow",
+      "creationOnly": "Confirming this plan creates the workflow. It does not run it.",
+      "confirmationRequired": "This is an unapproved plan. No workflow has been created. Confirm the plan and create the workflow before running it.",
+      "waitingFeedback": "Task paused, waiting for your feedback. No workflow has been created.",
+      "approveMessage": "Confirm plan version {{version}} and create the workflow. Do not run it.",
+      "cancelMessage": "Cancel plan version {{version}}.",
+      "editPrompt": "I would like to adjust this plan: ",
+      "decisionFailed": "Could not apply this decision. Review the latest plan and try again.",
+      "status": {
+        "ready": "Ready for review",
+        "needs_clarification": "Needs clarification",
+        "approved": "Confirmed",
+        "building": "Creating workflow",
+        "saved": "Workflow saved",
+        "failed": "Needs attention",
+        "cancelled": "Cancelled"
+      }
+    },
     "thinkingInterrupted": "Thinking interrupted",
     "thinkingComplete": "Thought",
     "progressComplete": "Activity",

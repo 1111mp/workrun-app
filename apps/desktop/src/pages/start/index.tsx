@@ -25,7 +25,7 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
-import { RotateCcwIcon } from 'lucide-react';
+import { RefreshCcwIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
@@ -41,19 +41,24 @@ import { getModelCatalog } from '@/services/cmd';
 import { useWorkrunStore } from '@/stores';
 import {
   createAssistantSession,
+  decideAssistantPlan,
+  decideAssistantTool,
   declineAssistantWorkflow,
   loadAssistantSession,
   provideAssistantInputs,
   resumeAssistant,
   sendAssistantMessage,
   setAssistantFeedback,
+  setAssistantModel,
   useAssistantStore,
 } from '@/stores/assistant.store';
 
 import { AssistantMessageActions } from './assistant-message-actions';
 import { AssistantMessageText } from './assistant-message-text';
+import { AssistantToolConfirmationCard } from './assistant-tool-confirmation';
 import { groupAssistantMessages } from './assistant-turn';
 import { AssistantTurnThinking } from './assistant-turn-activity';
+import { AssistantWorkflowPlan } from './assistant-workflow-plan';
 import { AssistantWorkflowRun } from './assistant-workflow-run';
 
 function StartPage() {
@@ -124,7 +129,10 @@ function AssistantChat({ scope }: { scope: string }) {
       message.id = `workflow-run-${message.runId}`;
   }
 
-  const groups = groupAssistantMessages(messages);
+  const groups = groupAssistantMessages(messages, [
+    ...(session?.workflowPlans ?? []).map((entry) => entry.turnId),
+    ...(session?.toolConfirmations ?? []).map((entry) => entry.turnId),
+  ]);
   const latestMessageId = messages.at(-1)?.id;
   const latestUserId = [...messages]
     .reverse()
@@ -132,7 +140,11 @@ function AssistantChat({ scope }: { scope: string }) {
   if (
     latestUserId &&
     (session?.status === 'thinking' ||
-      session?.activities?.some((item) => item.turnId === latestUserId)) &&
+      session?.activities?.some((item) => item.turnId === latestUserId) ||
+      session?.workflowPlans?.some((entry) => entry.turnId === latestUserId) ||
+      session?.toolConfirmations?.some(
+        (entry) => entry.turnId === latestUserId,
+      )) &&
     !groups.some(
       (group) => group.role === 'assistant' && group.turnId === latestUserId,
     )
@@ -150,8 +162,8 @@ function AssistantChat({ scope }: { scope: string }) {
     queryFn: getModelCatalog,
   });
   const modelId =
-    session?.modelId ||
     chosenModel ||
+    session?.modelId ||
     config?.summary_model_profile_id ||
     models.data?.find(
       (model) =>
@@ -189,6 +201,8 @@ function AssistantChat({ scope }: { scope: string }) {
           draft.trim() || t('assistant.fileTask'),
           scope,
         ));
+      if (current.modelId !== modelId)
+        await setAssistantModel(current.id, modelId, scope);
       const text = draft.trim();
       const attachments = files;
       setDraft('');
@@ -208,59 +222,6 @@ function AssistantChat({ scope }: { scope: string }) {
 
   return (
     <div className='@container flex h-full min-h-0 flex-col'>
-      <div className='flex shrink-0 items-center justify-between gap-3 px-6 pb-3'>
-        <div className='min-w-0 flex-1'>
-          {session ? (
-            <p className='truncate text-sm font-medium'>{session.title}</p>
-          ) : (
-            <Select
-              value={modelId || null}
-              onValueChange={(value) => setChosenModel(value ?? '')}
-            >
-              <SelectTrigger
-                className='max-w-full sm:max-w-80'
-                aria-label={t('assistant.model')}
-              >
-                <SelectValue placeholder={t('assistant.selectModel')}>
-                  {models.data?.find((model) => model.id === modelId)?.name}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent
-                align='start'
-                alignItemWithTrigger={false}
-                className='max-h-[min(24rem,var(--available-height))] w-max max-w-[min(22rem,calc(100vw-2rem))] min-w-(--anchor-width)'
-              >
-                <SelectGroup>
-                  {models.data?.map((model) => (
-                    <SelectItem
-                      key={model.id}
-                      value={model.id}
-                      className='[&>span:first-child]:min-w-0 [&>span:first-child]:shrink [&>span:first-child]:whitespace-normal'
-                    >
-                      <span className='flex min-w-0 flex-col gap-0.5'>
-                        <span className='wrap-anywhere whitespace-normal'>
-                          {model.name}
-                        </span>
-                        <span className='text-muted-foreground text-xs'>
-                          {model.provider}
-                        </span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          )}
-        </div>
-        <Button
-          variant='ghost'
-          size='sm'
-          nativeButton={false}
-          render={<Link to='/start/library' />}
-        >
-          {t('assistant.browse')}
-        </Button>
-      </div>
       {restored.isError && (
         <Alert variant='destructive'>
           <AlertTitle>{t('assistant.loadFailed')}</AlertTitle>
@@ -323,15 +284,119 @@ function AssistantChat({ scope }: { scope: string }) {
                                 )}
                               />
                             )}
+                            {group.role === 'assistant' &&
+                              session.workflowPlans
+                                ?.filter(
+                                  (entry) => entry.turnId === group.turnId,
+                                )
+                                .map((entry) => (
+                                  <div
+                                    key={`${entry.plan.id}-${entry.plan.version}`}
+                                  >
+                                    <AssistantWorkflowPlan
+                                      plan={entry.plan}
+                                      busy={Boolean(busy)}
+                                      active={
+                                        entry ===
+                                          session.workflowPlans?.at(-1) &&
+                                        entry.plan.status ===
+                                          session.workflowPlan?.status
+                                      }
+                                      onDecide={(decision) =>
+                                        void decideAssistantPlan(
+                                          session.id,
+                                          entry.plan.id,
+                                          entry.plan.version,
+                                          decision,
+                                          t(
+                                            decision === 'approve'
+                                              ? 'assistant.plan.approveMessage'
+                                              : 'assistant.plan.cancelMessage',
+                                            { version: entry.plan.version },
+                                          ),
+                                          scope,
+                                        ).catch(() =>
+                                          toast.error(
+                                            t('assistant.plan.decisionFailed'),
+                                            { toasterId: 'global' },
+                                          ),
+                                        )
+                                      }
+                                      onDiscuss={() => {
+                                        setDraft(
+                                          t('assistant.plan.editPrompt'),
+                                        );
+                                        document
+                                          .querySelector<HTMLTextAreaElement>(
+                                            'textarea',
+                                          )
+                                          ?.focus();
+                                      }}
+                                    />
+                                  </div>
+                                ))}
+                            {group.role === 'assistant' &&
+                              session.toolConfirmations
+                                ?.filter(
+                                  (entry) => entry.turnId === group.turnId,
+                                )
+                                .map((entry) => {
+                                  const active =
+                                    session.pendingTool?.id === entry.id;
+                                  const confirmation = active
+                                    ? session.pendingTool!
+                                    : entry;
+                                  return (
+                                    <AssistantToolConfirmationCard
+                                      key={entry.id}
+                                      confirmation={confirmation}
+                                      active={active}
+                                      busy={Boolean(busy)}
+                                      onDecide={(decision) =>
+                                        void decideAssistantTool(
+                                          session.id,
+                                          confirmation,
+                                          decision,
+                                          t(
+                                            decision === 'approve'
+                                              ? 'assistant.toolConfirmation.approveMessage'
+                                              : 'assistant.toolConfirmation.denyMessage',
+                                            {
+                                              tool: confirmation.tool
+                                                .displayName,
+                                            },
+                                          ),
+                                          scope,
+                                        ).catch(() =>
+                                          toast.error(
+                                            t(
+                                              'assistant.toolConfirmation.failed',
+                                            ),
+                                            { toasterId: 'global' },
+                                          ),
+                                        )
+                                      }
+                                    />
+                                  );
+                                })}
                             {group.messages.map((message) => (
                               <div
                                 key={message.id}
                                 className={cn(
                                   'min-w-0',
                                   group.role === 'user' &&
-                                    'flex flex-col items-end',
+                                    'flex flex-col items-end gap-2',
                                 )}
                               >
+                                {message.role === 'user' &&
+                                  Boolean(message.artifacts?.length) && (
+                                    <ArtifactFiles
+                                      compact
+                                      hidePicker
+                                      value={message.artifacts}
+                                      multiple
+                                    />
+                                  )}
                                 {message.role === 'tool' ? (
                                   message.runId ? (
                                     <AssistantWorkflowRun
@@ -342,7 +407,8 @@ function AssistantChat({ scope }: { scope: string }) {
                                     />
                                   ) : (
                                     <span className='text-muted-foreground text-sm'>
-                                      {message.workflowName} ·{' '}
+                                      {message.workflowName ?? message.toolName}{' '}
+                                      ·{' '}
                                       {t(`runs.runStatus.${message.text}`, {
                                         defaultValue: message.text,
                                       })}
@@ -358,7 +424,14 @@ function AssistantChat({ scope }: { scope: string }) {
                                   >
                                     <BubbleContent>
                                       <AssistantMessageText
-                                        text={message.text}
+                                        text={
+                                          message.notice ===
+                                          'plan_confirmation_required'
+                                            ? t(
+                                                'assistant.plan.confirmationRequired',
+                                              )
+                                            : message.text
+                                        }
                                         animate={
                                           message.id === stream?.messageId
                                         }
@@ -366,14 +439,15 @@ function AssistantChat({ scope }: { scope: string }) {
                                     </BubbleContent>
                                   </Bubble>
                                 )}
-                                {Boolean(message.artifacts?.length) && (
-                                  <ArtifactFiles
-                                    compact
-                                    hidePicker
-                                    value={message.artifacts}
-                                    multiple
-                                  />
-                                )}
+                                {message.role !== 'user' &&
+                                  Boolean(message.artifacts?.length) && (
+                                    <ArtifactFiles
+                                      compact
+                                      hidePicker
+                                      value={message.artifacts}
+                                      multiple
+                                    />
+                                  )}
                                 {message.role !== 'tool' &&
                                   message.text &&
                                   message.id !== stream?.messageId && (
@@ -384,6 +458,33 @@ function AssistantChat({ scope }: { scope: string }) {
                                           '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 [@media(hover:hover)]:group-focus-within/message:opacity-100',
                                       )}
                                     >
+                                      {session.error &&
+                                        message.id === latestUserId && (
+                                          <div className='flex items-center'>
+                                            <span className='text-destructive'>
+                                              {t('assistant.responseFailed')}
+                                            </span>
+                                            <Button
+                                              variant='ghost'
+                                              size='icon-xs'
+                                              aria-label={t(
+                                                'assistant.retryResponse',
+                                              )}
+                                              title={t(
+                                                'assistant.retryResponse',
+                                              )}
+                                              disabled={Boolean(busy)}
+                                              onClick={() =>
+                                                void resumeAssistant(
+                                                  session.id,
+                                                  scope,
+                                                )
+                                              }
+                                            >
+                                              <RefreshCcwIcon />
+                                            </Button>
+                                          </div>
+                                        )}
                                       <AssistantMessageActions
                                         text={message.text}
                                         feedback={message.feedback}
@@ -409,33 +510,6 @@ function AssistantChat({ scope }: { scope: string }) {
                                             : undefined
                                         }
                                       />
-                                      {session.error &&
-                                        message.id === latestUserId && (
-                                          <>
-                                            <span className='text-destructive'>
-                                              {t('assistant.responseFailed')}
-                                            </span>
-                                            <Button
-                                              variant='ghost'
-                                              size='icon-xs'
-                                              aria-label={t(
-                                                'assistant.retryResponse',
-                                              )}
-                                              title={t(
-                                                'assistant.retryResponse',
-                                              )}
-                                              disabled={Boolean(busy)}
-                                              onClick={() =>
-                                                void resumeAssistant(
-                                                  session.id,
-                                                  scope,
-                                                )
-                                              }
-                                            >
-                                              <RotateCcwIcon />
-                                            </Button>
-                                          </>
-                                        )}
                                     </MessageFooter>
                                   )}
                               </div>
@@ -444,6 +518,7 @@ function AssistantChat({ scope }: { scope: string }) {
                         </Message>
                       </MessageScrollerItem>
                     ))}
+
                     {active && !active.runId && (
                       <MessageScrollerItem
                         messageId={`call-${active.toolName}`}
@@ -524,6 +599,41 @@ function AssistantChat({ scope }: { scope: string }) {
           </Alert>
         )}
         <WorkflowChatComposer
+          toolbarActions={
+            <Select
+              value={modelId || null}
+              onValueChange={(value) => setChosenModel(value ?? '')}
+            >
+              <SelectTrigger
+                className='max-w-40 border-none! bg-transparent! sm:max-w-64'
+                aria-label={t('assistant.model')}
+              >
+                <SelectValue placeholder={t('assistant.selectModel')}>
+                  {models.data?.find((model) => model.id === modelId)?.name}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className='max-h-[min(24rem,var(--available-height))] w-max max-w-[min(22rem,calc(100vw-2rem))] min-w-(--anchor-width)'>
+                <SelectGroup>
+                  {models.data?.map((model) => (
+                    <SelectItem
+                      key={model.id}
+                      value={model.id}
+                      className='[&>span:first-child]:min-w-0 [&>span:first-child]:shrink [&>span:first-child]:whitespace-normal'
+                    >
+                      <span className='flex min-w-0 flex-col gap-0.5'>
+                        <span className='wrap-anywhere whitespace-normal'>
+                          {model.name}
+                        </span>
+                        <span className='text-muted-foreground text-xs'>
+                          {model.provider}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          }
           fileInputs={[{ ...attachmentsField, label: t('assistant.files') }]}
           filesForInput={() => files}
           onFileChange={(_key, value) => setFiles(artifactReferences(value))}

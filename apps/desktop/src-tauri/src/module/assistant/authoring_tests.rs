@@ -7,22 +7,52 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-struct DraftStore {
-    root: tempfile::TempDir,
-    saved: Mutex<Option<Value>>,
+pub(super) struct DraftStore {
+    pub(super) root: tempfile::TempDir,
+    pub(super) session_id: String,
+    pub(super) saved: Mutex<Option<Value>>,
     rejected: AtomicUsize,
+    pub(super) turns: Mutex<Vec<Value>>,
 }
 impl DraftStore {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             root: tempfile::tempdir().unwrap(),
+            session_id: uuid::Uuid::new_v4().to_string(),
             saved: Mutex::new(None),
             rejected: 0.into(),
+            turns: Mutex::new(vec![]),
         }
     }
 }
 #[async_trait::async_trait]
 impl tools::WorkflowDiscovery for DraftStore {
+    async fn workflow_plan(&self, session: &str) -> Result<Option<Value>> {
+        let store = planning_agent::plans::Store::new(self.root.path());
+        let Some(plan) = store.current(session)? else {
+            return Ok(None);
+        };
+        let tasks = task_runtime::TaskRuntime::open(self.root.path()).await?;
+        if tasks.interaction(&plan).await?.is_none() {
+            // Some engine tests seed an already approved native proposal.
+            let proposal = store.revision(session, plan.version)?;
+            tasks.suspend(&proposal).await?;
+            if plan.status == "approved" {
+                tasks.decide(&proposal, true).await?;
+            }
+        }
+        Ok(Some(tasks.decorate(&plan).await?))
+    }
+
+    async fn plan_operation(
+        &self,
+        session: &str,
+        name: &str,
+        args: &Value,
+        artifacts: &[crate::module::artifact::ArtifactRef],
+    ) -> Result<Value> {
+        super::planning_tests::operate(self.root.path(), session, name, args, artifacts).await
+    }
     async fn list(&self, _: &Value) -> Result<Value> {
         Ok(json!({"items":[],"nextCursor":null}))
     }
@@ -44,6 +74,10 @@ impl tools::WorkflowDiscovery for DraftStore {
             true,
         )?;
         Ok(capability::Contract::workflow(&entry)?.legacy())
+    }
+    async fn record_turn(&self, record: &Value) -> Result<()> {
+        self.turns.lock().unwrap().push(record.clone());
+        Ok(())
     }
     async fn authoring(&self, name: &str, args: &Value) -> Result<Value> {
         let result = match name {
@@ -89,41 +123,22 @@ impl Llm for AuthorModel {
         "scripted-author"
     }
     async fn generate_content(&self, request: LlmRequest, _: bool) -> adk_rust::Result<adk_rust::LlmResponseStream> {
-        let count = self.step.fetch_add(1, Ordering::SeqCst);
-        if count == 2 {
-            assert!(request.tools.contains_key("transfer_to_agent"));
-            return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(
-                super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
-            ))])));
-        }
-        let step = if count >= 3 { count - 1 } else { count };
+        let step = self.step.fetch_add(1, Ordering::SeqCst);
         let mut document = document();
-        let (name, args) = match step {
-            0 => return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::prelude::LlmResponse {
-                content:Some(Content::new("model").with_text(json!({"intent":"execution","actionQuote":"创建并执行","authoringQuote":"创建并执行","summary":"编排金额分流工作流"}).to_string())),..Default::default()
-            })]))),
-            1 => {
-                assert!(!request.tools.contains_key("get_workflow_reference"));
-                ("prepare_workflow_task",json!({"goal":"创建金额分流流程","expected_outputs":["按条件选择分支"],"acceptance_criteria":["金额1500命中true分支"]}))
+        let (name,args)=match step {
+            0=>("transfer_to_agent",json!({"agent_name":"workflow_author"})),
+            1=>("read_skill",json!({"name":"workflow-authoring"})),
+            2=>("get_workflow_reference",json!({"topic":"nodes","node_types":["start","if_else","end"]})),
+            3=>{document["edges"][1]["sourceHandle"]=json!("invalid");("validate_workflow_draft",json!({"document_json":document.to_string()}))},
+            4=>("validate_workflow_draft",json!({"document_json":document.to_string()})),
+            5=>("save_workflow_draft",json!({"document_json":document.to_string()})),
+            6|7|10=>{
+                let text=if step==6 {json!({"status":"completed","summary":"流程已保存","assumptions":[]}).to_string()}
+                    else if step==7 {"流程已保存，没有运行。".into()}else{"1500 命中 true 分支。".into()};
+                return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(Content::new("model").with_text(text)))])));
             },
-            2 => ("read_skill",json!({"name":"workflow-authoring"})),
-            3 => ("get_workflow_reference",json!({"topic":"nodes","node_types":["start","if_else","end"]})),
-            4 => { document["edges"][1]["sourceHandle"]=json!("invalid"); ("validate_workflow_draft",json!({"document_json":document.to_string()})) },
-            5 => ("validate_workflow_draft",json!({"document_json":document.to_string()})),
-            6 => ("save_workflow_draft",json!({"document_json":document.to_string()})),
-            7 => {
-                assert!(!request.tools.contains_key("execute_capability"));
-                return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::prelude::LlmResponse::new(Content::new("model").with_text(json!({"status":"completed","summary":"流程已保存","assumptions":[]}).to_string())))])));
-            },
-            8 => {
-                assert!(!request.tools.contains_key("save_workflow_draft"));
-                let saved=self.store.saved.lock().unwrap().clone().unwrap();
-                ("execute_capability",json!({"capability_id":saved["capability_id"],"bindings":[{"input":"amount","source":"message","message":0,"quote":"1500","value_json":"1500"}]}))
-            },
-            9 => {
-                assert!(!request.tools.contains_key("execute_capability"));
-                return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::prelude::LlmResponse::new(Content::new("model").with_text("1500 命中 true 分支。")))])));
-            },
+            8=>return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(Content::new("model").with_text(json!({"intent":"execution","actionQuote":"执行保存的流程","authoringQuote":"","reuseExisting":true,"summary":"运行已保存流程"}).to_string())))]))),
+            9=>{let saved=self.store.saved.lock().unwrap().clone().unwrap();("execute_capability",json!({"capability_id":saved["capability_id"],"bindings":[{"input":"amount","source":"message","message":0,"quote":"1500","value_json":"1500"}]}))},
             _=>panic!("Unexpected model step"),
         };
         assert!(request.tools.contains_key(name));
@@ -145,13 +160,41 @@ impl Llm for AuthorModel {
 async fn run_generated_graph(model: &dyn Llm, store: &DraftStore, input: &str) -> Result<Value> {
     let runtime = super::tests::runtime();
     let user = Content::new("user").with_text(input);
+    super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
+    let created = runtime
+        .run_with_discovery(
+            model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: protocol::AssistantContext {
+                    session_id: Some(store.session_id.clone()),
+                    ..Default::default()
+                },
+                contents: vec![user.clone()],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            store,
+        )
+        .await?;
+    anyhow::ensure!(
+        created.call.is_none(),
+        "Confirmed plan creates only; execution is separate"
+    );
     let reply = runtime
         .run_with_discovery(
             model,
             &ModelProvider::Gemini,
             AssistantRequest {
-                context: Default::default(),
-                contents: vec![user.clone()],
+                context: protocol::AssistantContext {
+                    session_id: Some(store.session_id.clone()),
+                    ..Default::default()
+                },
+                contents: vec![
+                    user.clone(),
+                    created.content,
+                    Content::new("user").with_text("执行保存的流程"),
+                ],
                 capabilities: vec![],
             },
             &|_| Ok(()),
@@ -260,14 +303,12 @@ async fn generated_workflow_is_repaired_saved_and_executed_from_base_nodes() {
 #[tokio::test]
 async fn authoring_intent_can_save_but_cannot_dispatch() {
     let store = DraftStore::new();
+    super::planning_tests::seed_approved(
+        store.root.path(),
+        &store.session_id,
+        &[Content::new("user").with_text("创建草稿，不要运行")],
+    );
     let model = super::tests::ScriptedModel::new(vec![
-        Content::new("model").with_text(
-            json!({"intent":"authoring","actionQuote":"创建草稿","summary":"只保存流程，不运行"}).to_string(),
-        ),
-        super::tests::call(
-            "prepare_workflow_task",
-            json!({"goal":"创建金额分流草稿","expected_outputs":["可复用流程"],"acceptance_criteria":["编译通过"]}),
-        ),
         super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
         super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
         Content::new("model").with_text(json!({"status":"completed","summary":"已保存","assumptions":[]}).to_string()),
@@ -278,7 +319,10 @@ async fn authoring_intent_can_save_but_cannot_dispatch() {
             &model,
             &ModelProvider::Gemini,
             AssistantRequest {
-                context: Default::default(),
+                context: protocol::AssistantContext {
+                    session_id: Some(store.session_id.clone()),
+                    ..Default::default()
+                },
                 contents: vec![Content::new("user").with_text("创建草稿，不要运行")],
                 capabilities: vec![],
             },
@@ -293,6 +337,8 @@ async fn authoring_intent_can_save_but_cannot_dispatch() {
         true
     );
     let decision = TurnDecision {
+        tool_confirmation: None,
+        plan_feedback: None,
         intent: Intent::Authoring,
         action_quote: "创建草稿".into(),
         summary: "保存草稿".into(),
@@ -316,20 +362,20 @@ async fn live_draft_only_authoring_has_no_execution_grant() {
     let store = DraftStore::new();
     let model = super::evaluation::ProbeModel::new(
         Arc::new(super::tests::live_gemini_model_from_env()),
-        Duration::from_secs(6),
+        Duration::from_secs(2),
     );
-    let reply = super::tests::runtime()
+    let user = Content::new("user").with_text("我经常需要判断一个金额是否达到1000：达到标为大额，否则标为小额。把这个处理方式整理成以后能重复用的流程，先不要运行。");
+    let context = || protocol::AssistantContext {
+        session_id: Some(store.session_id.clone()),
+        ..Default::default()
+    };
+    let proposal = super::tests::runtime()
         .run_with_discovery(
             &model,
             &ModelProvider::Gemini,
             AssistantRequest {
-                context: protocol::AssistantContext {
-                    session_id: Some(uuid::Uuid::new_v4().to_string()),
-                    ..Default::default()
-                },
-                contents: vec![Content::new("user").with_text(
-                    "帮我保存一个以后能重复使用的金额分流流程：输入金额，至少1000归为大额，否则归为小额。先不要运行。",
-                )],
+                context: context(),
+                contents: vec![user.clone()],
                 capabilities: vec![],
             },
             &|_| Ok(()),
@@ -338,28 +384,106 @@ async fn live_draft_only_authoring_has_no_execution_grant() {
         .await
         .unwrap_or_else(|error| {
             panic!(
-                "Live draft authoring failed ({}); tools={:?}, saved={}, empty_answer={}, interrupted={}, intent={:?}",
+                "Live planning failed: {}; tools={:?}",
                 super::evaluation::error_label(&error),
-                model.called_tools(),
-                store.saved.lock().unwrap().is_some(),
-                error.to_string().contains("no answer"),
-                error.to_string().contains("interrupted"),
-                model.last_intent()
+                model.called_tools()
             )
         });
-    assert_eq!(model.last_intent(), Some(Intent::Authoring));
-    assert!(reply.call.is_none());
     assert!(
-        store.saved.lock().unwrap().is_some(),
-        "No workflow saved; tools={:?}, reply={}",
-        model.called_tools(),
-        reply.text
+        proposal.pause.is_some(),
+        "Expected native pause; tools={:?}",
+        model.called_tools()
     );
+    assert!(proposal.text.is_empty());
+    assert!(store.saved.lock().unwrap().is_none());
+    let plan_store = planning_agent::plans::Store::new(store.root.path());
+    let plan = plan_store.current(&store.session_id).unwrap().unwrap();
+    assert_eq!(
+        plan.status, "ready",
+        "A simple fully specified task must be reviewable; questions={:?}, issues={:?}",
+        plan.document.questions, plan.dependency_issues
+    );
+    let tasks = task_runtime::TaskRuntime::open(store.root.path()).await.unwrap();
+    assert_eq!(tasks.interaction(&plan).await.unwrap().unwrap().status, "waiting");
+    assert!(tasks.require_creation(&plan).await.is_err());
+    assert_eq!(model.last_intent(), Some(Intent::Authoring));
+    let tools_before = model.called_tools().len();
+    let run = Content::new("user").with_text("执行一下呢");
+    let blocked = super::tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: context(),
+                contents: vec![user.clone(), run.clone()],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "Live pending-run failed: {}; tools={:?}",
+                super::evaluation::error_label(&error),
+                model.called_tools()
+            )
+        });
+    assert_eq!(
+        blocked.pause.as_ref().map(|p| p["reason"].as_str()),
+        Some(Some("confirmation_required")),
+        "Run request unexpectedly changed the task; tools={:?}",
+        model.called_tools()
+    );
+    assert_eq!(model.called_tools().len(), tools_before);
+    assert_eq!(
+        plan_store.current(&store.session_id).unwrap().unwrap().version,
+        plan.version
+    );
+    let confirmation = Content::new("user").with_text("确认当前方案并创建工作流，先不要运行。");
+    let history = vec![user, run, confirmation];
+    let turn = tool_execution::digest(&protocol::normalize_assistant_contents(history.clone()).unwrap()).unwrap();
+    super::planning_tests::operate(
+        store.root.path(),
+        &store.session_id,
+        "approve",
+        &json!({"plan_id":plan.id,"version":plan.version,"turn_key":turn}),
+        &[],
+    )
+    .await
+    .unwrap();
+    let created = super::tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: context(),
+                contents: history,
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "Live confirmed creation failed: {}; tools={:?}",
+                super::evaluation::error_label(&error),
+                model.called_tools()
+            )
+        });
+    assert!(created.pause.is_none());
+    assert!(created.call.is_none());
+    let saved = plan_store.current(&store.session_id).unwrap().unwrap();
+    assert_eq!(saved.status, "saved", "tools={:?}", model.called_tools());
     assert_eq!(
         store.saved.lock().unwrap().as_ref().unwrap()["validation"]["valid"],
         true
     );
-    println!("Draft-only authoring: saved valid draft without execution grant");
+    println!(
+        "Live synthetic lifecycle: pause=true, workflow_before_approval=false, run_request_replanned=false, confirmed_creation_valid=true, executed=false; tools={:?}",
+        model.called_tools()
+    );
 }
 
 #[tokio::test]
@@ -385,4 +509,71 @@ async fn live_base_node_workflow_authoring_acceptance() {
         .unwrap_or_else(|| std::env::temp_dir().join("workrun-authoring-acceptance.json"));
     std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
     println!("Generated Workflow acceptance: {}", path.display());
+}
+
+#[tokio::test]
+async fn empty_confirmation_does_not_block_save_only_then_explicit_execution() {
+    let store = DraftStore::new();
+    let user = Content::new("user").with_text("以后重复做，整理成流程，先不要运行。输入金额1500");
+    let placeholder = json!({"id":"","decision":"approve","quote":""});
+    super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
+    let author = super::tests::ScriptedModel::new(vec![
+        super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
+        super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
+        Content::new("model")
+            .with_text(json!({"status":"completed","summary":"流程已保存","assumptions":[]}).to_string()),
+        Content::new("model").with_text("流程已保存，没有执行。"),
+    ]);
+    let context = || protocol::AssistantContext {
+        session_id: Some(store.session_id.clone()),
+        ..Default::default()
+    };
+    let saved_reply = super::tests::runtime()
+        .run_with_discovery(
+            &author,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: context(),
+                contents: vec![user.clone()],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap();
+    assert!(saved_reply.call.is_none());
+    let saved = store.saved.lock().unwrap().clone().unwrap();
+    assert_eq!(saved["validation"]["valid"], true);
+    let model=super::tests::ScriptedModel::new(vec![
+        Content::new("model").with_text(json!({"intent":"execution","actionQuote":"执行一下","authoringQuote":"","reuseExisting":true,"summary":"执行刚刚保存的流程","toolConfirmation":placeholder}).to_string()),
+        super::tests::call("execute_capability",json!({"capability_id":saved["capability_id"],"bindings":[{"input":"amount","source":"message","message":0,"quote":"1500","value_json":"1500"}]})),
+    ]);
+    let result = super::tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: context(),
+                contents: vec![user, saved_reply.content, Content::new("user").with_text("执行一下")],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap();
+    let call = result.call.unwrap();
+    assert_eq!(call.workflow_id, saved["capability_id"].as_str().unwrap());
+    assert_eq!(call.input["amount"], 1500);
+    let requests = model.requests.lock().unwrap();
+    assert!(!requests[1].tools.contains_key("transfer_to_agent"));
+    assert!(!requests[1].tools.contains_key("prepare_workflow_task"));
+    let turns = store.turns.lock().unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0]["result"]["authoringAllowed"], true);
+    assert_eq!(turns[0]["result"]["workflowExecutionAllowed"], false);
+    assert_eq!(turns[1]["result"]["authoringAllowed"], false);
+    assert_eq!(turns[1]["result"]["workflowExecutionAllowed"], true);
+    assert!(turns[1]["decision"]["toolConfirmation"].is_null());
 }

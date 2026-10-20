@@ -83,7 +83,7 @@ pub(super) fn tool_guardrails() -> ToolGuardrailSet {
     ToolGuardrailSet::new().with(SecretToolGuardrail)
 }
 
-pub(super) fn ensure_tool_args_safe(args: &Value) -> adk_rust::Result<()> {
+pub(crate) fn ensure_tool_args_safe(args: &Value) -> adk_rust::Result<()> {
     if contains_secret_json(args) {
         return Err(adk_rust::AdkError::tool(
             "Tool arguments contain credentials or authentication secrets",
@@ -92,7 +92,7 @@ pub(super) fn ensure_tool_args_safe(args: &Value) -> adk_rust::Result<()> {
     Ok(())
 }
 
-pub(super) fn ensure_tool_args_resolved(args: &Value) -> adk_rust::Result<()> {
+pub(crate) fn ensure_tool_args_resolved(args: &Value) -> adk_rust::Result<()> {
     if let Some(path) = redacted_argument_path(args, "") {
         return Err(adk_rust::AdkError::tool(format!(
             "Tool argument `{path}` is still redacted; grant raw State access or configure a State Binding"
@@ -101,13 +101,13 @@ pub(super) fn ensure_tool_args_resolved(args: &Value) -> adk_rust::Result<()> {
     Ok(())
 }
 
-pub(super) fn redact_text(text: &str) -> String {
+pub(crate) fn redact_text(text: &str) -> String {
     let (text, _) = PII_REDACTOR.redact(text);
     let text = redact_china_pii(&text);
     redact_secrets(&text)
 }
 
-pub(super) fn redact_json(value: &Value) -> Value {
+pub(crate) fn redact_json(value: &Value) -> Value {
     let mut value = value.clone();
     redact_json_in_place(&mut value);
     value

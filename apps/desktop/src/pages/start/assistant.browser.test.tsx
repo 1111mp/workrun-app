@@ -394,6 +394,10 @@ it('sizes the model menu to short model names instead of filling its maximum wid
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  const textbox = screen.getByRole('textbox');
+  const composer = textbox.element().closest('[data-slot="input-group"]')!;
+  expect(getComputedStyle(composer).cursor).toBe('text');
+  expect(getComputedStyle(textbox.element()).cursor).toBe('text');
   const trigger = screen.getByRole('combobox', { name: '主控模型' });
   await trigger.click();
   const option = screen.getByRole('option', { name: /Gemini 3.5 Flash Lite/ });
@@ -923,4 +927,316 @@ it('removes stale preparation reports after completion even if the reader expand
   await expect
     .element(page.getByTestId('assistant-thinking'))
     .not.toBeInTheDocument();
+});
+
+it('switches the model for the next message in an existing conversation', async () => {
+  host.compactCatalog = true;
+  host.reply.mockResolvedValue({
+    text: '完成',
+    content: { role: 'model', parts: [{ text: '完成' }] },
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/start']}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  const textbox = screen.getByRole('textbox');
+  await textbox.fill('第一条');
+  await screen.getByRole('button', { name: '发送', exact: true }).click();
+  await expect.element(textbox).toBeEnabled();
+  const selector = screen.getByRole('combobox', { name: '主控模型' });
+  await selector.click();
+  await screen.getByRole('option', { name: /GPT-5.6/ }).click();
+  await textbox.fill('第二条');
+  await screen.getByRole('button', { name: '发送', exact: true }).click();
+  await expect.poll(() => host.reply.mock.calls.length).toBe(2);
+  expect([...host.saved.values()][0].modelId).toBe('other');
+  expect(
+    [...host.saved.values()][0].messages.filter(
+      (message: { role: string }) => message.role === 'user',
+    ),
+  ).toHaveLength(2);
+});
+
+it('keeps plan snapshots between their user request and response across later turns', async () => {
+  const plan = {
+    id: 'ordered-plan',
+    sessionId: 'ordered-session',
+    version: 1,
+    status: 'ready' as const,
+    dependencyIssues: [],
+    document: {
+      goal: 'Reusable processing',
+      summary: 'Original proposal',
+      inputs: [],
+      outputs: [],
+      steps: [],
+      constraints: [],
+      assumptions: [],
+      questions: [],
+      acceptance_criteria: [],
+    },
+  };
+  const saved = {
+    ...plan,
+    status: 'saved' as const,
+    document: { ...plan.document, summary: 'Created configuration' },
+  };
+  const message = (id: string, role: 'user' | 'assistant', text: string) => ({
+    id,
+    role,
+    text,
+    content: { role: role === 'user' ? 'user' : 'model', parts: [{ text }] },
+  });
+  const session = {
+    id: plan.sessionId,
+    title: 'Plan ordering',
+    modelId: 'model',
+    status: 'idle' as const,
+    steps: 0,
+    messages: [
+      message('u1', 'user', 'Prepare a reusable process'),
+      message('a1', 'assistant', 'Please review the proposal'),
+      message('u2', 'user', 'Confirm creation'),
+      message('a2', 'assistant', 'Configuration saved'),
+    ],
+    workflowPlan: saved,
+    workflowPlans: [
+      { turnId: 'u1', plan },
+      { turnId: 'u2', plan: saved },
+    ],
+  };
+  host.saved.set(session.id, session);
+  useAssistantStore.setState({
+    sessions: { [session.id]: session },
+    scopes: { [session.id]: host.scope },
+  });
+  await render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter initialEntries={[`/start?session=${session.id}`]}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .element(page.getByText('Original proposal', { exact: true }))
+    .toBeInTheDocument();
+  const texts = [
+    'Prepare a reusable process',
+    'Original proposal',
+    'Please review the proposal',
+    'Confirm creation',
+    'Created configuration',
+    'Configuration saved',
+  ];
+  const nodes = texts.map((text) =>
+    page.getByText(text, { exact: true }).element(),
+  );
+  for (let i = 1; i < nodes.length; i++)
+    expect(
+      nodes[i - 1]!.compareDocumentPosition(nodes[i]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  expect(
+    page.getByRole('button', { name: '确认并创建' }).elements(),
+  ).toHaveLength(0);
+});
+
+it('keeps a paused tool request on its original turn while allowing unrelated conversation', async () => {
+  const confirmation = {
+    id: 'tool-operation',
+    turnId: 'u1',
+    turnKey: 'turn-key',
+    tool: { id: 'mcp:configured:tool', displayName: 'Configured tool' },
+    arguments: { value: 2 },
+    interaction: {
+      id: 'tool:tool-operation',
+      taskId: 'tool-operation',
+      threadId: 'thread',
+      checkpointId: 'checkpoint',
+      version: 1,
+      kind: 'tool_confirmation' as const,
+      status: 'waiting' as const,
+    },
+  };
+  const message = (id: string, role: 'user' | 'assistant', text: string) => ({
+    id,
+    role,
+    text,
+    content: { role: role === 'user' ? 'user' : 'model', parts: [{ text }] },
+  });
+  const session = {
+    id: 'tool-waiting-session',
+    title: 'Pending tool',
+    modelId: 'model',
+    status: 'awaiting_feedback' as const,
+    steps: 0,
+    pendingTool: confirmation,
+    toolConfirmations: [confirmation],
+    messages: [
+      message('u1', 'user', 'Use the selected tool'),
+      message('a1', 'assistant', 'Please review this call'),
+      message('u2', 'user', 'Explain its scope first'),
+      message('a2', 'assistant', 'It applies only to the displayed arguments'),
+    ],
+  };
+  host.saved.set(session.id, session);
+  useAssistantStore.setState({
+    sessions: { [session.id]: session },
+    scopes: { [session.id]: host.scope },
+  });
+  const screen = await render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter initialEntries={[`/start?session=${session.id}`]}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .element(screen.getByRole('button', { name: '确认调用', exact: true }))
+    .toBeEnabled();
+  await expect.element(screen.getByRole('textbox')).toBeEnabled();
+  const proposal = screen
+    .getByText('Configured tool', { exact: true })
+    .element();
+  const followup = screen
+    .getByText('Explain its scope first', { exact: true })
+    .element();
+  expect(
+    proposal.compareDocumentPosition(followup) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(host.start).not.toHaveBeenCalled();
+});
+
+it('shows only the plan card at the pause and a native notice for an unconfirmed run without another plan', async () => {
+  const plan = {
+    id: 'paused-plan',
+    sessionId: 'paused-session',
+    version: 1,
+    status: 'ready' as const,
+    dependencyIssues: [],
+    interaction: {
+      id: 'paused-plan:v1',
+      taskId: 'paused-plan',
+      threadId: 'thread',
+      checkpointId: 'checkpoint',
+      version: 1,
+      kind: 'plan_confirmation' as const,
+      status: 'waiting' as const,
+    },
+    document: {
+      goal: 'Reusable task',
+      summary: 'Review this proposal',
+      inputs: [],
+      outputs: ['Result'],
+      steps: [],
+      constraints: [],
+      assumptions: [],
+      questions: [],
+      acceptance_criteria: [],
+    },
+  };
+  const session = {
+    id: plan.sessionId,
+    title: 'Paused planning',
+    modelId: 'model',
+    status: 'awaiting_feedback' as const,
+    steps: 0,
+    messages: [
+      {
+        id: 'user1',
+        role: 'user' as const,
+        text: 'Prepare a reusable process',
+        content: {
+          role: 'user',
+          parts: [{ text: 'Prepare a reusable process' }],
+        },
+      },
+    ],
+    workflowPlan: plan,
+    workflowPlans: [{ turnId: 'user1', plan }],
+  };
+  host.saved.set(session.id, session);
+  useAssistantStore.setState({
+    sessions: { [session.id]: session },
+    scopes: { [session.id]: host.scope },
+  });
+  const screen = await render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter initialEntries={[`/start?session=${session.id}`]}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .element(screen.getByText('Review this proposal', { exact: true }))
+    .toBeVisible();
+  expect(
+    document.querySelectorAll('[data-align="start"] [data-slot="bubble"]'),
+  ).toHaveLength(0);
+  await expect
+    .element(
+      screen.getByRole('button', { name: '确认方案并创建', exact: true }),
+    )
+    .toBeEnabled();
+  const updated = {
+    ...session,
+    messages: [
+      ...session.messages,
+      {
+        id: 'user2',
+        role: 'user' as const,
+        text: '执行一下呢',
+        content: { role: 'user', parts: [{ text: '执行一下呢' }] },
+      },
+      {
+        id: 'notice',
+        role: 'assistant' as const,
+        text: '',
+        notice: 'plan_confirmation_required' as const,
+        content: {
+          role: 'model',
+          parts: [{ text: 'Native state: confirmation required' }],
+        },
+      },
+    ],
+  };
+  host.saved.set(session.id, updated);
+  useAssistantStore.setState({ sessions: { [session.id]: updated } });
+  await expect
+    .element(
+      screen.getByText(zh.assistant.plan.confirmationRequired, { exact: true }),
+    )
+    .toBeInTheDocument();
+  expect(
+    screen.getByText('Review this proposal', { exact: true }).elements(),
+  ).toHaveLength(1);
+  expect(host.reply).not.toHaveBeenCalled();
+  expect(host.start).not.toHaveBeenCalled();
 });

@@ -8,7 +8,7 @@ pub(crate) mod agent;
 mod ask_user_question;
 pub(crate) mod codeact_agent;
 pub mod contracts;
-mod guardrails;
+pub(crate) mod guardrails;
 mod human_review;
 pub(crate) mod operation_review;
 pub(crate) mod operations;
@@ -1252,7 +1252,7 @@ fn integer_data(node: &WorkflowNode, key: &str, default: u32, min: u32, max: u32
     Ok(value)
 }
 
-fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::Result<()> {
+pub(crate) fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::Result<()> {
     let validator = jsonschema::validator_for(schema)
         .map_err(|error| adk_rust::AdkError::tool(format!("Tool {kind} schema is invalid: {error}")))?;
     if let Some(error) = validator.iter_errors(value).next() {

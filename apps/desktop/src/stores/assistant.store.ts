@@ -9,6 +9,8 @@ import {
   type AssistantSession,
   type AssistantActivity,
   type AssistantReasoning,
+  type WorkflowPlan,
+  type AssistantToolConfirmation,
   type AssistantTurnAction,
 } from '@/services/assistant';
 import { useWorkrunStore } from '@/stores/workrun.store';
@@ -54,8 +56,20 @@ function publish(session: AssistantSession, scope: string) {
         // Durable snapshots win once committed; live records fill polling gaps.
         if (!reasoning.has(item.id)) reasoning.set(item.id, item);
       }
+    const workflowPlans = new Map(
+      (session.workflowPlans ?? []).map((entry) => [
+        `${entry.turnId}/${entry.plan.id}/${entry.plan.version}`,
+        entry,
+      ]),
+    );
+    if (state.scopes[session.id] === scope)
+      for (const entry of state.sessions[session.id]?.workflowPlans ?? []) {
+        const key = `${entry.turnId}/${entry.plan.id}/${entry.plan.version}`;
+        if (!workflowPlans.has(key)) workflowPlans.set(key, entry);
+      }
     session = {
       ...session,
+      workflowPlans: [...workflowPlans.values()],
       activities: [...activities.values()],
       reasoning: [...reasoning.values()],
     };
@@ -100,11 +114,13 @@ function observe(id: string, scope: string): Promise<void> {
     const unlisten = await listen<{
       sessionId: string;
       messageId: string;
+      turnId?: string;
       activity?: AssistantActivity;
       reasoning?: AssistantReasoning;
       event:
         | { type: 'text_delta' | 'text_replace'; text: string }
         | { type: 'activity'; summary: string }
+        | { type: 'workflow_plan'; plan: WorkflowPlan }
         | {
             type: 'reasoning';
             id: string;
@@ -120,6 +136,32 @@ function observe(id: string, scope: string): Promise<void> {
         state.scopes[id] !== scope
       )
         return;
+      if (payload.event.type === 'workflow_plan') {
+        const plan = payload.event.plan;
+        const session = state.sessions[id];
+        if (session)
+          useAssistantStore.setState({
+            sessions: {
+              ...state.sessions,
+              [id]: {
+                ...session,
+                workflowPlan: plan,
+                workflowPlans: payload.turnId
+                  ? [
+                      ...(session.workflowPlans ?? []).filter(
+                        (entry) =>
+                          entry.turnId !== payload.turnId ||
+                          entry.plan.id !== plan.id ||
+                          entry.plan.version !== plan.version,
+                      ),
+                      { turnId: payload.turnId, plan: plan },
+                    ]
+                  : session.workflowPlans,
+              },
+            },
+          });
+        return;
+      }
       if (payload.event.type === 'reasoning') {
         const thought = payload.reasoning;
         const session = state.sessions[id];
@@ -275,7 +317,7 @@ export async function sendAssistantMessage(
   const session = latest(id);
   if (
     session.activeCall ||
-    !['idle', 'error'].includes(session.status) ||
+    !['idle', 'error', 'awaiting_feedback'].includes(session.status) ||
     (!text.trim() && !attachments.length)
   )
     return;
@@ -296,6 +338,24 @@ export async function declineAssistantWorkflow(id: string, scope: string) {
   if (latest(id).status === 'needs_input')
     await act(id, scope, { kind: 'decline' });
 }
+export async function setAssistantModel(
+  id: string,
+  modelId: string,
+  scope: string,
+) {
+  ensureWorkspace(scope);
+  const session = latest(id);
+  if (
+    locks.has(id) ||
+    !['idle', 'error', 'awaiting_feedback'].includes(session.status)
+  )
+    throw new Error('Wait for the current response before changing its model.');
+  const updated = { ...session, modelId };
+  await saveAssistantSession(updated);
+  ensureWorkspace(scope);
+  publish(updated, scope);
+}
+
 export async function setAssistantFeedback(
   id: string,
   messageId: string,
@@ -304,7 +364,7 @@ export async function setAssistantFeedback(
 ) {
   ensureWorkspace(scope);
   const session = latest(id);
-  if (!['idle', 'error'].includes(session.status)) return;
+  if (!['idle', 'error', 'awaiting_feedback'].includes(session.status)) return;
   const updated = {
     ...session,
     messages: session.messages.map((message) =>
@@ -319,4 +379,68 @@ export async function setAssistantFeedback(
   await saveAssistantSession(updated);
   ensureWorkspace(scope);
   publish(updated, scope);
+}
+
+export async function decideAssistantPlan(
+  id: string,
+  planId: string,
+  version: number,
+  decision: 'approve' | 'cancel',
+  text: string,
+  scope: string,
+) {
+  const session = latest(id);
+  if (
+    session.activeCall ||
+    !['idle', 'error', 'awaiting_feedback'].includes(session.status)
+  )
+    return;
+  if (
+    session.workflowPlan?.id !== planId ||
+    session.workflowPlan.version !== version
+  )
+    throw new Error('Plan changed. Review the latest version.');
+  await act(id, scope, {
+    kind: 'planDecision',
+    plan_id: planId,
+    ...(session.workflowPlan.interaction
+      ? {
+          interaction_id: session.workflowPlan.interaction.id,
+          checkpoint_id: session.workflowPlan.interaction.checkpointId,
+        }
+      : {}),
+    version,
+    decision,
+    text,
+  });
+}
+
+export async function decideAssistantTool(
+  id: string,
+  confirmation: AssistantToolConfirmation,
+  decision: 'approve' | 'deny',
+  text: string,
+  scope: string,
+) {
+  const session = latest(id);
+  if (
+    session.activeCall ||
+    !['idle', 'error', 'awaiting_feedback'].includes(session.status)
+  )
+    return;
+  if (
+    session.pendingTool?.id !== confirmation.id ||
+    session.pendingTool.interaction.checkpointId !==
+      confirmation.interaction.checkpointId ||
+    session.pendingTool.interaction.status !== 'waiting'
+  )
+    throw new Error('Tool confirmation changed. Review the latest request.');
+  await act(id, scope, {
+    kind: 'toolDecision',
+    operation_id: confirmation.id,
+    interaction_id: confirmation.interaction.id,
+    checkpoint_id: confirmation.interaction.checkpointId,
+    decision,
+    text,
+  });
 }

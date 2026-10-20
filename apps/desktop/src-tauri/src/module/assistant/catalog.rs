@@ -248,6 +248,60 @@ fn encoded(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
+impl Catalog {
+    async fn plan_dependencies(
+        &self,
+        document: &super::planning_agent::plans::Document,
+        artifacts: &[crate::module::artifact::ArtifactRef],
+    ) -> Result<Vec<String>> {
+        use super::tools::WorkflowDiscovery;
+        let mut issues = vec![];
+        for input in &document.inputs {
+            if let Some(id) = &input.artifact_id {
+                let reference = artifacts
+                    .iter()
+                    .find(|artifact| &artifact.id == id)
+                    .context("Plan refers to an unauthorized attachment")?;
+                crate::module::artifact::ArtifactStore::active()?.resolve(reference)?;
+            }
+        }
+        let dependencies = document
+            .steps
+            .iter()
+            .flat_map(|step| &step.dependencies)
+            .collect::<Vec<_>>();
+        let tools = if dependencies.iter().any(|d| d.kind == "tool") {
+            crate::module::tool_registry::ToolRegistry::list().await?
+        } else {
+            vec![]
+        };
+        let skills = if dependencies.iter().any(|d| d.kind == "skill") {
+            crate::module::skill::SkillRegistry::list()?
+        } else {
+            vec![]
+        };
+        let models = crate::config::model_catalog();
+        for dependency in dependencies {
+            let available = match dependency.kind.as_str() {
+                "model" => models.iter().any(|model| model.id == dependency.id),
+                "tool" => tools.iter().any(|tool| tool.id == dependency.id),
+                "skill" => skills.iter().any(|skill| skill.name == dependency.id),
+                "workflow" | "app" => self.describe_capability(&dependency.id).await.is_ok(),
+                _ => false,
+            };
+            if !available {
+                issues.push(format!("Unavailable {} dependency: {}", dependency.kind, dependency.id));
+            }
+        }
+        if let Some(id) = &document.target_id
+            && self.describe(id).await.is_err()
+        {
+            issues.push(format!("Workflow revision target is unavailable: {id}"));
+        }
+        Ok(issues)
+    }
+}
+
 #[async_trait::async_trait]
 impl super::tools::WorkflowDiscovery for Catalog {
     async fn direct(
@@ -279,7 +333,7 @@ impl super::tools::WorkflowDiscovery for Catalog {
                 if record["sessionId"].as_str() != Some(session_id) {
                     continue;
                 }
-                records.push(json!({"id":record["id"],"kind":record["kind"],"name":record["name"],"startedAt":record["startedAt"],"status":if record["status"]=="running" {json!("interrupted")} else {record["status"].clone()},"result":record["result"]}));
+                records.push(json!({"id":record["id"],"kind":record["kind"],"name":record["name"],"toolId":record["tool"]["id"],"toolName":record["tool"]["displayName"],"startedAt":record["startedAt"],"status":if record["status"]=="running" {json!("interrupted")} else {record["status"].clone()},"result":record["result"]}));
             }
         }
         records.sort_by(|left, right| right["startedAt"].as_str().cmp(&left["startedAt"].as_str()));
@@ -287,6 +341,9 @@ impl super::tools::WorkflowDiscovery for Catalog {
         Ok(
             json!({"items":records,"note":"Interrupted operations have an uncertain outcome. Inspect existing state; do not recreate or rerun automatically."}),
         )
+    }
+    async fn record_turn(&self, record: &Value) -> Result<()> {
+        self.record_operation(record).await
     }
     async fn record_operation(&self, record: &Value) -> Result<()> {
         anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
@@ -301,6 +358,159 @@ impl super::tools::WorkflowDiscovery for Catalog {
         Ok(())
     }
 
+    async fn workflow_plan(&self, session: &str) -> Result<Option<Value>> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        let Some(plan) = super::planning_agent::plans::Store::new(&self.root).current(session)? else {
+            return Ok(None);
+        };
+        let tasks = super::task_runtime::TaskRuntime::open(&self.root).await?;
+        if matches!(plan.status.as_str(), "ready" | "needs_clarification") {
+            tasks.suspend(&plan).await?;
+        }
+        Ok(Some(tasks.decorate(&plan).await?))
+    }
+
+    async fn plan_operation(
+        &self,
+        session: &str,
+        name: &str,
+        args: &Value,
+        artifacts: &[crate::module::artifact::ArtifactRef],
+    ) -> Result<Value> {
+        use super::planning_agent::plans::{Document, Store};
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        let store = Store::new(&self.root);
+        let tasks = super::task_runtime::TaskRuntime::open(&self.root).await?;
+        if name == "get_workflow_plan" {
+            return if let Some(version) = args["version"].as_u64() {
+                Ok(serde_json::to_value(store.revision(session, u32::try_from(version)?)?)?)
+            } else {
+                Ok(self.workflow_plan(session).await?.unwrap_or(Value::Null))
+            };
+        }
+        let turn = args["turn_key"].as_str().context("Native plan turn is missing")?;
+        if name == "save_workflow_plan" {
+            let raw = args["document_json"].as_str().context("Plan document is missing")?;
+            anyhow::ensure!(raw.len() <= 65536, "Plan exceeds 64 KiB");
+            let document = Document::parse(&serde_json::from_str(raw)?)?;
+            let issues = self.plan_dependencies(&document, artifacts).await?;
+            anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+            let previous = store.current(session)?;
+            let plan = store.save(
+                session,
+                turn,
+                u32::try_from(args["base_version"].as_u64().context("Plan base version is missing")?)?,
+                document,
+                issues,
+            )?;
+            tasks.suspend(&plan).await?;
+            if let Some(old) = previous.filter(|p| matches!(p.status.as_str(), "ready" | "needs_clarification")) {
+                tasks.decide(&old, false).await?;
+            }
+            return tasks.decorate(&plan).await;
+        }
+        let id = args["plan_id"].as_str().context("Plan ID is missing")?;
+        let version = u32::try_from(args["version"].as_u64().context("Plan version is missing")?)?;
+        let plan = if matches!(name, "approve" | "cancel") {
+            if name == "approve" {
+                anyhow::ensure!(
+                    super::AssistantRuntime::load(&self.root)?.profile.workflow_execution,
+                    "Workflow creation is disabled in the assistant profile"
+                );
+                let current = store.current(session)?.context("Plan is missing")?;
+                anyhow::ensure!(
+                    current.id == id && current.version == version,
+                    "Plan changed; review its latest version"
+                );
+                let issues = self.plan_dependencies(&current.document, artifacts).await?;
+                if !issues.is_empty() {
+                    let revised = store.save(session, turn, current.version, current.document.clone(), issues)?;
+                    tasks.suspend(&revised).await?;
+                    tasks.decide(&current, false).await?;
+                    anyhow::bail!("Plan dependencies changed; review the new plan version");
+                }
+            }
+            anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+            let current = store.current(session)?.context("Plan is missing")?;
+            // Validate native plan identity before touching its checkpoint.
+            anyhow::ensure!(
+                current.id == id && current.version == version,
+                "Plan changed; review its latest version"
+            );
+            if let Some(expected) = args["interaction_id"].as_str() {
+                let interaction = tasks.interaction(&current).await?.context("Interaction is missing")?;
+                anyhow::ensure!(interaction.id == expected, "Feedback belongs to a stale interaction");
+                if let Some(checkpoint) = args["checkpoint_id"].as_str() {
+                    anyhow::ensure!(
+                        interaction.checkpoint_id == checkpoint,
+                        "Feedback checkpoint changed; reload the task"
+                    );
+                }
+            }
+            if current.status == "approved" && name == "approve" && current.approved_turn_key.as_deref() == Some(turn) {
+                tasks.require_creation(&current).await?;
+                return tasks.decorate(&current).await;
+            }
+            store.preview_decision(session, id, version, name == "approve", turn)?;
+            tasks.decide(&current, name == "approve").await?;
+            store.decide(session, id, version, name == "approve", turn)?
+        } else {
+            let current = store.current(session)?.context("Plan is missing")?;
+            tasks.require_creation(&current).await?;
+            let plan = store.transition(session, id, version, name, args.get("outcome").cloned())?;
+            if matches!(name, "saved" | "failed") {
+                tasks.finish(&plan).await?;
+            }
+            plan
+        };
+        tasks.decorate(&plan).await
+    }
+    async fn pending_tool_call(&self, session: &str) -> Result<Option<Value>> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        super::tool_execution::pending(&self.root, session).await
+    }
+    async fn deny_tool_call(&self, session: &str, id: &str) -> Result<Value> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        super::tool_execution::deny(&self.root, session, id).await
+    }
+    async fn call_workspace_tool(
+        &self,
+        session: &str,
+        turn: &str,
+        args: &Value,
+        approved: Option<&str>,
+    ) -> Result<Value> {
+        super::tool_execution::invoke(
+            &self.root,
+            session,
+            turn,
+            args,
+            approved,
+            &super::tool_execution::NativeBackend(self.workspace_id.clone()),
+        )
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{}",
+                crate::module::workflow::guardrails::redact_text(&error.to_string())
+                    .chars()
+                    .take(4096)
+                    .collect::<String>()
+            )
+        })
+    }
+    async fn workspace_resource(&self, name: &str, args: &Value) -> Result<Value> {
+        anyhow::ensure!(
+            dirs::active_workspace_id() == self.workspace_id,
+            "Workspace changed during discovery"
+        );
+        let result = super::workspace_resources::read(name, args).await?;
+        anyhow::ensure!(
+            dirs::active_workspace_id() == self.workspace_id,
+            "Workspace changed during discovery"
+        );
+        Ok(result)
+    }
     async fn authoring(&self, name: &str, args: &Value) -> Result<Value> {
         anyhow::ensure!(
             dirs::active_workspace_id() == self.workspace_id,

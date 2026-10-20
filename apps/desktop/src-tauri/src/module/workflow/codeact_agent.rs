@@ -473,6 +473,52 @@ mod tests {
     }
 
     #[test]
+    fn configuration_examples_codeact_exports_files_with_native_global_state() {
+        use adk_rust::agent::codeact::{CodeRuntime, RunStep};
+        let examples: Vec<Value> = serde_json::from_str(
+            &std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources/assistant/workflow_agent/reference/configuration-examples.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let example = examples
+            .iter()
+            .find(|example| example["node_type"] == "codeact_agent")
+            .unwrap();
+        let node: WorkflowNode = serde_json::from_value(example["document"]["nodes"][1].clone()).unwrap();
+        let (_root, store, workspace) = test_workspace();
+        let reference = store.save_bytes("input.txt", "文本".as_bytes()).unwrap();
+        workspace.prepare(&json!({"source_file":reference}), None).unwrap();
+        let runtime = build_runtime_with_workspace(&node, Some(&workspace)).unwrap();
+        let step = runtime.start("from pathlib import Path\nimport json\nfiles=json.loads(Path('/artifacts/manifest.json').read_text())\ntext=Path(files[0]['path']).read_text()\nPath('/outputs/copy.txt').write_text(text)\n{'type':'final_result','value':{'result':text}}", "example.py").unwrap();
+        let RunStep::Complete { value, .. } = step else {
+            panic!("local example script did not complete")
+        };
+        let artifacts = workspace.collect().unwrap();
+        let config = node_state_config(&node, &HashSet::from([node.id.clone()])).unwrap();
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge
+            .apply_node_update(
+                &node.id,
+                crate::module::state::NodeStateUpdate::new()
+                    .set("result", value["value"]["result"].clone())
+                    .set("artifacts", artifacts.clone()),
+                &config.global_keys,
+            )
+            .unwrap();
+        assert_eq!(bridge.agent_input("consumer").unwrap()["result"], "文本");
+        assert_eq!(bridge.agent_input("consumer").unwrap()["artifacts"], artifacts);
+        let exported = references(&artifacts).unwrap();
+        assert_eq!(exported.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(store.resolve(&exported[0]).unwrap()).unwrap(),
+            "文本"
+        );
+    }
+
+    #[test]
     fn monty_reads_mapped_resources_and_generates_durable_output() {
         use adk_rust::agent::codeact::{CodeRuntime, RunStep};
         let (_root, store, workspace) = test_workspace();

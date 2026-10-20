@@ -12,6 +12,7 @@ export type AssistantTurnGroup = {
 // turns, including historical sessions without explicit turn metadata.
 export function groupAssistantMessages(
   messages: AssistantMessage[],
+  interactionTurnIds: Iterable<string> = [],
 ): AssistantTurnGroup[] {
   const groups: AssistantTurnGroup[] = [];
   let turnId = '';
@@ -39,6 +40,28 @@ export function groupAssistantMessages(
         groups.push(reply);
       }
       reply.messages.push(message);
+    }
+  }
+  // A paused turn may contain only a native card, with no model answer at all.
+  // Keep that slot after its user message when later user turns arrive.
+  const interactionTurns = new Set(interactionTurnIds);
+  for (let index = groups.length - 1; index >= 0; index--) {
+    const group = groups[index]!;
+    if (
+      group.role === 'user' &&
+      interactionTurns.has(group.turnId) &&
+      !(
+        groups[index + 1]?.role === 'assistant' &&
+        groups[index + 1]?.turnId === group.turnId
+      )
+    ) {
+      groups.splice(index + 1, 0, {
+        id: `reply-${group.turnId}`,
+        turnId: group.turnId,
+        role: 'assistant',
+        messages: [],
+        progress: [],
+      });
     }
   }
   for (const group of groups) {

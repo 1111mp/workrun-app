@@ -3,38 +3,36 @@ import { expect, it } from 'vitest';
 import type { AssistantMessage } from '@/services/assistant';
 
 import { groupAssistantMessages } from './assistant-turn';
-
 const message = (
   id: string,
   role: AssistantMessage['role'],
-  text: string,
-): AssistantMessage => ({ id, role, text, content: { role, parts: [] } });
-it('presents preamble, workflow and final answer as one assistant turn', () => {
-  const groups = groupAssistantMessages([
-    message('u1', 'user', 'Create a report'),
-    message('a1', 'assistant', 'I will find the reporting workflow'),
-    { ...message('t1', 'tool', 'completed'), runId: 'run1' },
-    message('a2', 'assistant', 'Your report is ready'),
-    message('u2', 'user', 'Did it succeed?'),
-    message('a3', 'assistant', 'Yes'),
-  ]);
-  expect(groups.map((group) => group.id)).toEqual([
-    'u1',
-    'reply-u1',
-    'u2',
-    'reply-u2',
-  ]);
-  expect(groups[1].progress.map((item) => item.id)).toEqual(['a1']);
-  expect(groups[1].messages.map((item) => item.id)).toEqual(['t1', 'a2']);
-  expect(groups[3].messages[0].text).toBe('Yes');
+): AssistantMessage => ({
+  id,
+  role,
+  text: id,
+  content: { role: role === 'user' ? 'user' : 'model', parts: [{ text: id }] },
 });
-it('keeps pending function-call text in the activity area', () => {
-  const preamble = message('a', 'assistant', 'Preparing');
-  preamble.content.parts = [{ name: 'execute_workflow', args: {} }];
-  const groups = groupAssistantMessages([
-    message('u', 'user', 'Run'),
-    preamble,
+it('preserves card-only turns between consecutive user messages without inventing stored replies', () => {
+  const messages = [
+    message('first', 'user'),
+    message('second', 'user'),
+    message('notice', 'assistant'),
+  ];
+  const groups = groupAssistantMessages(messages, ['first']);
+  expect(groups.map((group) => [group.id, group.role])).toEqual([
+    ['first', 'user'],
+    ['reply-first', 'assistant'],
+    ['second', 'user'],
+    ['reply-second', 'assistant'],
   ]);
-  expect(groups[1].progress).toEqual([preamble]);
-  expect(groups[1].messages).toEqual([]);
+  expect(groups[1]?.messages).toEqual([]);
+  expect(messages).toHaveLength(3);
+});
+it('does not duplicate an existing answer group when it also contains a card', () => {
+  const groups = groupAssistantMessages(
+    [message('user', 'user'), message('answer', 'assistant')],
+    ['user'],
+  );
+  expect(groups).toHaveLength(2);
+  expect(groups[1]?.messages[0]?.id).toBe('answer');
 });

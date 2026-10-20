@@ -189,6 +189,33 @@ mod authoring_tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn configuration_examples_roundtrip_through_native_catalog_storage() {
+        let examples: Vec<Value> = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources/assistant/workflow_agent/reference/configuration-examples.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut catalog = IWorkflows::default();
+        for example in &examples {
+            let id = Uuid::new_v4().to_string();
+            validate_document(&example["document"], Some(&id)).unwrap();
+            let (saved, _) = apply_authored_workflow(&mut catalog, &id, example["document"].clone(), false).unwrap();
+            assert_eq!(saved.document, example["document"]);
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workflows.json");
+        std::fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+        let restored: IWorkflows = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(restored.workflows.len(), examples.len());
+        for (saved, example) in restored.workflows.iter().zip(examples) {
+            assert_eq!(saved.document, example["document"]);
+        }
+    }
+
+    #[test]
     fn delegated_save_is_idempotent_and_revisions_preserve_identity() {
         let mut data = IWorkflows::default();
         let id = Uuid::new_v4().to_string();

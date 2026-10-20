@@ -37,6 +37,8 @@ pub struct WorkflowCall {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantReply {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause: Option<Value>,
     pub content: Content,
     pub text: String,
     pub call: Option<WorkflowCall>,
@@ -46,6 +48,9 @@ pub struct AssistantReply {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantStreamEvent {
+    WorkflowPlan {
+        plan: Value,
+    },
     TextDelta {
         text: String,
     },
@@ -244,11 +249,26 @@ pub(super) fn parse_reply_with_history(
         bail!("model returned no answer or workflow call");
     }
     Ok(AssistantReply {
+        pause: None,
         content,
         text,
         call,
         artifacts: vec![],
     })
+}
+
+impl AssistantReply {
+    pub(super) fn paused(plan: &Value, reason: &str) -> Self {
+        Self {
+            pause: Some(
+                serde_json::json!({"kind":"workflow_plan","planId":plan["id"],"version":plan["version"],"reason":reason}),
+            ),
+            content: Content::new("model"),
+            text: String::new(),
+            call: None,
+            artifacts: vec![],
+        }
+    }
 }
 
 /// Older sessions stored tool results as `user`; Gemini drops those parts.

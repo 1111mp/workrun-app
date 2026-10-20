@@ -247,9 +247,9 @@ function WorkflowEditorContent({
 
   const workflowDocument = toWorkflowDocument(nodes, edges, workflowSettings);
   const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
-  const [savedDocument, setSavedDocument] = useState<string>(() =>
-    workflow ? JSON.stringify(workflow.document) : workflowDocumentSnapshot,
-  );
+  // Compare the same serialized shape: loaded JSON can have a different key
+  // order or React Flow measurements that toWorkflowDocument strips out.
+  const [savedDocument, setSavedDocument] = useState(workflowDocumentSnapshot);
   const isDirty = workflowDocumentSnapshot !== savedDocument;
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const localReleaseMatchesDraft = Boolean(

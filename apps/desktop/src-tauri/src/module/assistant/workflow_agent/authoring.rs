@@ -19,7 +19,34 @@ pub(in crate::module::assistant) fn reference(args: &Value) -> Result<Value> {
     let topic = args["topic"].as_str().unwrap_or("index");
     Ok(match topic {
         "index" => {
-            json!({"schemaVersion":1,"topics":["nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"],"nodes":contracts::NODE_TYPES.iter().map(|kind|{let c=contracts::node_contract(kind).unwrap();json!({"type":kind,"title":c["title"],"summary":c["summary"],"skill":format!("workflow-node-{kind}")})}).collect::<Vec<_>>(),"next":"read_skill workflow-authoring, then request only relevant node_types"})
+            json!({"schemaVersion":1,"topics":["capabilities","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"],"nodes":contracts::NODE_TYPES.iter().map(|kind|{let c=contracts::node_contract(kind).unwrap();json!({"type":kind,"title":c["title"],"summary":c["summary"],"skill":format!("workflow-node-{kind}")})}).collect::<Vec<_>>(),"next":"read_skill workflow-authoring, then request only relevant node_types"})
+        },
+        "capabilities" => {
+            json!({"schemaVersion":1,"guide":crate::module::assistant::resources::read("reference/workrun-capabilities.md")?})
+        },
+        "configuration" => {
+            json!({"schemaVersion":1,"guide":crate::module::assistant::resources::read("workflow_agent/reference/configuration.md")?})
+        },
+        "examples" => {
+            let examples: Vec<Value> = serde_json::from_str(&crate::module::assistant::resources::read(
+                "workflow_agent/reference/configuration-examples.json",
+            )?)?;
+            let kinds: Vec<String> = serde_json::from_value(args.get("node_types").cloned().unwrap_or(json!([])))?;
+            for kind in &kinds {
+                contracts::node_contract(kind)?;
+            }
+            let items = examples
+                .into_iter()
+                .filter(|example| kinds.is_empty() || kinds.iter().any(|kind| example["node_type"] == *kind))
+                .map(|example| {
+                    if kinds.is_empty() {
+                        json!({"id":example["id"],"node_type":example["node_type"],"summary":example["summary"]})
+                    } else {
+                        example
+                    }
+                })
+                .collect::<Vec<_>>();
+            json!({"schemaVersion":1,"examples":items,"resource_ids":"Discovery placeholders; resolve actual resources before native compilation or execution","executed":false})
         },
         "nodes" | "node-schema" => {
             let kinds = args["node_types"]
@@ -347,15 +374,8 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
             "models" => Ok(
                 json!({"items":crate::config::model_catalog(),"note":"IDs are native modelProfileId values; provider credentials must be configured separately"}),
             ),
-            "skills" => Ok(json!({"items":crate::module::skill::SkillRegistry::list()?})),
-            "tools" => {
-                let tools = crate::module::tool_registry::ToolRegistry::list().await?;
-                let offset = args["cursor"].as_str().unwrap_or("0").parse::<usize>()?;
-                let limit = args["limit"].as_u64().unwrap_or(20).clamp(1, 50) as usize;
-                Ok(
-                    json!({"items":tools.iter().skip(offset).take(limit).collect::<Vec<_>>(),"nextCursor":(offset.saturating_add(limit)<tools.len()).then(||offset.saturating_add(limit).to_string())}),
-                )
-            },
+            "skills" => super::super::workspace_resources::read("list_workspace_skills", args).await,
+            "tools" => super::super::workspace_resources::read("list_workspace_tools", args).await,
             _ => anyhow::bail!(
                 "Unknown resource kind; use models, tools or skills. Apps and workflows use list_capabilities"
             ),
@@ -417,6 +437,27 @@ mod tests {
                 .contains("# Workflow authoring")
         );
     }
+    #[test]
+    fn configuration_examples_are_progressive_native_documents() {
+        let summaries = reference(&json!({"topic":"examples"})).unwrap();
+        assert_eq!(summaries["examples"].as_array().unwrap().len(), 3);
+        assert!(summaries["examples"][0].get("document").is_none());
+        for kind in ["agent", "codeact_agent", "process"] {
+            let detailed = reference(&json!({"topic":"examples","node_types":[kind]})).unwrap();
+            assert_eq!(detailed["examples"].as_array().unwrap().len(), 1);
+            let document = &detailed["examples"][0]["document"];
+            assert!(
+                structural_issues(document).is_empty(),
+                "{}",
+                json!(structural_issues(document))
+            );
+            let dsl =
+                crate::module::assistant::catalog::document_dsl(&json!({"id":"example","document":document})).unwrap();
+            let _: workflow::WorkflowDsl = serde_json::from_value(dsl).unwrap();
+        }
+        assert!(reference(&json!({"topic":"examples","node_types":["invented"]})).is_err());
+    }
+
     #[tokio::test]
     async fn validation_repairs_schema_and_native_graph_errors() {
         let config = IWorkrun::default();
@@ -450,6 +491,29 @@ mod tests {
         document["settings"]["inputSchema"]["fields"][0]["required"] = json!("true");
         assert_eq!(validate(&document, &config).await.unwrap()["valid"], false);
     }
+    #[tokio::test]
+    async fn editor_settings_and_interface_metadata_reach_native_compilation() {
+        let mut document = document();
+        let fields = ["string", "textarea", "number", "boolean", "file", "files"]
+            .into_iter()
+            .map(|kind| {
+                json!({"id":format!("field_{kind}"),"key":format!("input_{kind}"),
+                "label":kind,"type":kind,"required":false,"description":"Editor interface field"})
+            })
+            .collect::<Vec<_>>();
+        document["settings"]["inputSchema"] =
+            json!({"fields":fields,"rawReaders":["review-rule"],"sensitiveFields":["input_string"]});
+        document["settings"]["outputSchema"] = json!({"fields":fields});
+        document["settings"]["sessionStateFields"] = json!(["input_string"]);
+        document["viewport"] = json!({"x":12,"y":34,"zoom":0.8});
+        for mode in ["task", "chat"] {
+            document["settings"]["mode"] = json!(mode);
+            let report = validate(&document, &IWorkrun::default()).await.unwrap();
+            assert_eq!(report["valid"], true, "{report}");
+            assert_eq!(report["executed"], false);
+        }
+    }
+
     #[tokio::test]
     async fn draft_revisions_are_durable_isolated_and_hash_checked() {
         let root = tempfile::tempdir().unwrap();

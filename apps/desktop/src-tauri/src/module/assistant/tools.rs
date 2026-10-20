@@ -22,6 +22,36 @@ pub trait WorkflowDiscovery: Send + Sync {
     async fn describe_capability(&self, id: &str) -> Result<Capability> {
         self.describe(id).await
     }
+    async fn workspace_resource(&self, _name: &str, _args: &Value) -> Result<Value> {
+        bail!("Workspace resources are unavailable")
+    }
+    async fn workflow_plan(&self, _session: &str) -> Result<Option<Value>> {
+        Ok(None)
+    }
+    async fn plan_operation(
+        &self,
+        _session: &str,
+        _name: &str,
+        _args: &Value,
+        _artifacts: &[crate::module::artifact::ArtifactRef],
+    ) -> Result<Value> {
+        bail!("Workflow planning is unavailable")
+    }
+    async fn pending_tool_call(&self, _session: &str) -> Result<Option<Value>> {
+        Ok(None)
+    }
+    async fn deny_tool_call(&self, _session: &str, _id: &str) -> Result<Value> {
+        bail!("Tool confirmations are unavailable")
+    }
+    async fn call_workspace_tool(
+        &self,
+        _session: &str,
+        _turn: &str,
+        _args: &Value,
+        _approved: Option<&str>,
+    ) -> Result<Value> {
+        bail!("Workspace tool execution is unavailable")
+    }
     async fn direct(
         &self,
         _name: &str,
@@ -32,6 +62,9 @@ pub trait WorkflowDiscovery: Send + Sync {
     }
     async fn inspect_operations(&self, _session_id: &str) -> Result<Value> {
         Ok(json!({"items":[]}))
+    }
+    async fn record_turn(&self, _record: &Value) -> Result<()> {
+        Ok(())
     }
     async fn record_operation(&self, _record: &Value) -> Result<()> {
         Ok(())

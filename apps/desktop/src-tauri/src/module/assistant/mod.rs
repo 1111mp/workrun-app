@@ -5,13 +5,17 @@ pub mod catalog;
 mod main_agent;
 mod model;
 mod orchestration;
+mod planning_agent;
 mod protocol;
 mod resources;
 mod sdk;
 pub mod session;
 mod skills;
+mod task_runtime;
+mod tool_execution;
 mod tools;
 mod workflow_agent;
+mod workspace_resources;
 #[cfg(test)]
 use crate::config::ModelProvider;
 #[cfg(test)]
@@ -45,6 +49,12 @@ mod tests;
 
 #[cfg(test)]
 mod evaluation;
+#[cfg(test)]
+mod native_outcome_tests;
+#[cfg(test)]
+mod outcome_evaluation;
+#[cfg(test)]
+mod task_outcome_tests;
 
 #[cfg(test)]
 mod acceptance;
@@ -58,3 +68,6 @@ pub(crate) fn codeact_live_test_model() -> adk_rust::model::GeminiModel {
 
 #[cfg(test)]
 mod multi_agent_tests;
+
+#[cfg(test)]
+mod planning_tests;

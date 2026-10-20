@@ -3,6 +3,13 @@ use crate::module::skill::SkillRegistry;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
+/// One packaged overview, shared across role catalogs without preloading node manuals.
+pub(super) const WORKRUN_CAPABILITIES: (&str, &str, &str) = (
+    "workrun-capabilities",
+    "Workrun native capabilities, configuration concepts and discovery/read paths",
+    "reference/workrun-capabilities.md",
+);
+
 pub(super) struct SkillCatalog {
     documents: Vec<(String, String, SkillBody)>,
     mandatory_count: usize,

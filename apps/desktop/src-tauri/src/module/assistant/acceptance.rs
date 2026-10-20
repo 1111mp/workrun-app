@@ -142,13 +142,19 @@ async fn acceptance(model: &dyn Llm, amount: f64) -> Result<Value> {
     );
     let state: Value = serde_json::from_str(response["result"].as_str().context("real graph result missing")?)?;
     let expected_route = if amount >= 1000.0 { "true" } else { "false" };
-    anyhow::ensure!(
-        state["workflow"]["workflow.trace"][0]["result"]["route"] == expected_route,
-        "engine selected incorrect expense branch"
+    let observation = runs
+        .inspect(response["runId"].as_str().context("run ID missing")?)
+        .await?;
+    let assessment = super::outcome_evaluation::assess(
+        Some(&observation),
+        &[
+            ("/global/amount", json!(amount)),
+            ("/workflow/workflow.trace/0/result/route", json!(expected_route)),
+        ],
     );
     anyhow::ensure!(
-        state["global"]["amount"].as_f64() == Some(amount),
-        "engine did not receive selected inputs"
+        assessment.verdict == super::outcome_evaluation::Verdict::Passed,
+        "native run did not fulfill independent outcome checks: {assessment:?}"
     );
     let contents = session["messages"]
         .as_array()

@@ -6,13 +6,13 @@ Publish explicit producer keys with data.state.globalKeys. For example, declare 
 
 For private sharing, list consumer IDs in the producer's state.access.readers. Add consumers to rawReaders only when they need original unredacted data. rawReaders must be a subset of readers. Neither list may reference the producer itself, nonexistent nodes, start, end or layout nodes. state.sensitiveFields uses dotted paths. Published global keys cannot use the reserved workflow. prefix.
 
-Visible state flattens global fields and represents accessible private fields as nodeId.key. Path lookup checks an exact key before traversing dotted segments. Do not invent paths such as nodes.nodeId.result. Agent prompts receive visible state only; authorized original values may be bound at the tool execution boundary.
+Node input combines global fields and accessible private namespace fields into one flat object, using the original field keys. A private producer result is read as result, not an automatic producerId.result alias. Duplicate keys across visible sources raise InputKeyConflict instead of being overwritten; choose distinct output keys or deliberately wrap related fields in one output object. Path lookup checks an exact key before traversing nested dotted segments. Do not invent paths such as nodes.nodeId.result. Agent prompts receive visible state only; authorized original values may be bound at the tool execution boundary.
 
 Agent/CodeAct toolStateBindings are [{toolId,argumentPath,statePath}]. argumentPath is a dotted tool-argument path; statePath is an accessible state path. Reference a selected toolId and its actual argument schema. The runtime only replaces argument positions already present in the model's call; it does not expand the call automatically.
 
 Process Apps receive visible inputs and produce private output keys. Reuse their exact input/output schemas and publish downstream keys with globalKeys. Subworkflows receive parent-visible inputs and return only declared outputSchema global keys; the parent node must publish them again as needed.
 
-Parallel branches cannot assume each other's outputs exist. Design dependencies and joins explicitly; multiple incoming edges do not imply identical consumer semantics. Validate a clear serial path before introducing concurrency.
+Edges establish execution dependencies; state access does not establish order. A published global value exists only after its producer writes it. For branches and fan-in, use native routing and graph semantics and account for which producers run. Neither global publication nor readers makes a consumer wait for a producer.
 
 Files must use runtime ArtifactRef values. Never fabricate local paths, content references or base64 state. attachmentPaths selects references from visible state. CodeAct reads authorized files through /artifacts/manifest.json and writes artifacts to /outputs. Keep large content in artifacts rather than inline JSON.
 

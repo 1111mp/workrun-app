@@ -382,6 +382,7 @@ fn grader_separates_intent_routing_arguments_and_incomplete_runs() {
     let suite = baseline();
     let case = suite.cases.iter().find(|case| case.id == "sales-this-week").unwrap();
     let reply = |id: &str, period: &str| AssistantReply {
+        pause: None,
         artifacts: vec![],
         content: Content::new("model"),
         text: String::new(),
@@ -490,6 +491,7 @@ fn grader_distinguishes_missing_inputs_from_invented_values() {
     let suite = baseline();
     let case = suite.cases.iter().find(|case| case.id == "missing-period").unwrap();
     let reply = |input| AssistantReply {
+        pause: None,
         artifacts: vec![],
         content: Content::new("model"),
         text: String::new(),

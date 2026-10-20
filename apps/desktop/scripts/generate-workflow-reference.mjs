@@ -31,7 +31,7 @@ function output(path, content) {
     );
 }
 // Built-in skills and shared references remain external files in every bundle.
-for (const role of ['main_agent', 'workflow_agent']) {
+for (const role of ['main_agent', 'workflow_agent', 'planning_agent']) {
   const source = new URL(
     `../src-tauri/src/module/assistant/${role}/`,
     import.meta.url,
@@ -48,19 +48,42 @@ for (const role of ['main_agent', 'workflow_agent']) {
           'result-delivery',
         ].map((name) => `skills/${name}.md`),
       ]
-    : ['AGENT.md', 'skills/workflow-authoring.md']) {
+    : role === 'workflow_agent'
+      ? ['AGENT.md', 'skills/workflow-authoring.md']
+      : ['AGENT.md', 'skills/workflow-planning.md']) {
     writeOutput(
       new URL(`${role}/${file}`, resources),
       readFileSync(new URL(file, source), 'utf8'),
     );
   }
 }
-for (const name of ['format', 'state', 'routing', 'recovery']) {
+// The shared capability overview is loaded through each role's existing Skill catalog.
+writeOutput(
+  new URL('reference/workrun-capabilities.md', resources),
+  readFileSync(
+    new URL(
+      '../src-tauri/src/module/assistant/reference/workrun-capabilities.md',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+);
+for (const name of [
+  'format',
+  'state',
+  'routing',
+  'recovery',
+  'configuration',
+]) {
   writeOutput(
     new URL(`workflow_agent/reference/${name}.md`, resources),
     readFileSync(new URL(`${name}.md`, base), 'utf8'),
   );
 }
+writeOutput(
+  new URL('workflow_agent/reference/configuration-examples.json', resources),
+  readFileSync(new URL('configuration-examples.json', base), 'utf8'),
+);
 for (const [topic, file] of [
   ['compensation', 'SAGA'],
   ['execution-recovery', 'RECOVERY'],

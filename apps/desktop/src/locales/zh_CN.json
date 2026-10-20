@@ -965,6 +965,7 @@
       }
     },
     "artifacts": {
+      "download": "下载文件",
       "add": "添加照片与文件",
       "remotePathsDescription": "每行一个可见 State 路径。通过 A2A v1.0.1 发送实际文件内容，最多 10 个文件、合计 20 MiB。留空仅发送文本。",
       "remoteTimeout": "请求超时（秒）",
@@ -2058,6 +2059,53 @@
     "emptyDescription": "创建或导入应用、工作流，准备好后就能在这里使用。"
   },
   "assistant": {
+    "toolConfirmation": {
+      "title": "工具调用确认",
+      "description": "任务已暂停，请核对工具及完整参数。确认仅授权本次调用。",
+      "waiting": "等待确认",
+      "processing": "处理中",
+      "closed": "已处理",
+      "arguments": "调用参数",
+      "approve": "确认调用",
+      "deny": "拒绝调用",
+      "approveMessage": "确认调用 {{tool}}，使用已展示的参数。",
+      "denyMessage": "拒绝本次 {{tool}} 调用。",
+      "failed": "工具确认失败，请重新查看当前请求。"
+    },
+    "plan": {
+      "revisionTarget": "此方案将修改现有工作流",
+      "title": "工作流规划",
+      "version": "版本 {{version}}",
+      "inputs": "输入资料",
+      "outputs": "预期产出",
+      "steps": "处理步骤",
+      "assumptions": "当前假设",
+      "questions": "需要确认的问题",
+      "dependencies": "待解决的依赖",
+      "details": "查看节点选择与配置",
+      "constraints": "约束条件",
+      "acceptance": "如何验证结果",
+      "approve": "确认方案并创建",
+      "discuss": "讨论或调整",
+      "cancel": "取消方案",
+      "openWorkflow": "打开工作流",
+      "creationOnly": "确认方案只创建工作流，不会执行。",
+      "confirmationRequired": "当前只有待确认方案，尚未创建工作流。请先确认方案并创建，再执行。",
+      "waitingFeedback": "任务已暂停，等待你的反馈。尚未创建工作流。",
+      "approveMessage": "确认第 {{version}} 版方案并创建工作流，先不要运行。",
+      "cancelMessage": "取消第 {{version}} 版方案。",
+      "editPrompt": "我想调整这个方案：",
+      "decisionFailed": "未能应用此操作，请查看最新方案后重试。",
+      "status": {
+        "ready": "待确认",
+        "needs_clarification": "待澄清",
+        "approved": "已确认",
+        "building": "正在创建",
+        "saved": "已保存工作流",
+        "failed": "需要处理",
+        "cancelled": "已取消"
+      }
+    },
     "thinkingInterrupted": "思考已中断",
     "thinkingComplete": "已思考",
     "progressComplete": "处理过程",

@@ -31,3 +31,17 @@ Verify task-specific acceptance criteria against source evidence. A technically
 completed execution can still produce an incorrect or unsupported result. Do not
 silently supply missing task semantics, units or metadata. If the criteria cannot
 be verified, report that limitation rather than treating completion as validation.
+
+When reporting a Workflow result, preserve values from observed execution outputs
+and distinguish them from interpretation. Compare against available source evidence
+and the approved acceptance criteria; the report itself is not independent evidence.
+If execution was not requested, deliver the saved definition and identify checks as
+pending. Do not run it merely to make the delivery appear verified.
+
+If an output contains conflicting values, incompatible tables or a later narrative
+"correction", report the inconsistency explicitly. Do not silently select one version
+and call it the verified Workflow result. A model's recalculation or rewritten report
+is not independent validation. Where an authorized independent check establishes a
+correction, distinguish that correction from the original Workflow output and state
+that the reusable definition still needs repair. Do not alter or rerun it without
+the relevant authorization. A failed or unobserved criterion must remain visible.

@@ -1,7 +1,10 @@
 # Progressive workflow authoring reference
 
-Only the Workflow Subagent receives this reference catalog. The main agent delegates
-an authorized outcome; it does not read every node manual or construct graphs itself.
+Planning and Workflow authoring specialists read this reference through
+get_workflow_reference. The main agent delegates an authorized outcome; it does not
+load node manuals or construct graphs itself. All three roles can read the same
+optional workrun-capabilities Skill, packaged at reference/workrun-capabilities.md.
+The overview supplies capability boundaries and discovery paths, not installed IDs.
 
 The specialist first reads `workflow-authoring`, then requests the format/state/routing
 reference and resource catalog as needed. The node index contains concise capability
@@ -43,7 +46,8 @@ pnpm --dir apps/desktop workflow:check
 ```
 
 `generate-workflow-reference.mjs` generates the node index, 13 independent node skills
-and TypeScript views from the shared contract. It copies these and general agent/skill
+and TypeScript views from the shared contract. It also packages the shared capability
+overview for all three role catalogs. It copies these and general agent/skill
 resources into `src-tauri/resources/assistant/`. Update source files, not generated
 copies. Node parser changes must also update contracts and meaningful regressions.
 
@@ -59,3 +63,15 @@ stable native identity and real rule-graph compilation/execution in temporary st
 Optional provider tests use the configured model; they do not install workflows into
 the user's catalogue. No sample-specific formula or reporting instruction belongs in
 the product's general prompts.
+
+## Native configuration examples
+
+`configuration.md` describes native resource selection, Skill activation, tool/state
+bindings and file/output behavior. `configuration-examples.json` contains ordinary
+Workflow documents using discovery placeholders; it is packaged with the guides.
+`get_workflow_reference(topic=examples)` returns summaries, and selected node_types
+return matching documents. These are syntax examples, not executable installed
+resources. Local tests cover node schemas, native catalog storage, editor document
+round-tripping, private state/tool bindings and Monty file export with global state.
+Full compiler/provider/App execution requires resolved real resources and is not
+established by placeholder validation.

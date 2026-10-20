@@ -11,12 +11,15 @@ export type WorkflowCall = {
   callId?: string;
 };
 export type AssistantMessage = {
+  notice?: 'plan_confirmation_required';
   id: string;
   role: 'user' | 'assistant' | 'tool';
   text: string;
   content: ModelContent;
   runId?: string;
   workflowName?: string;
+  toolName?: string;
+  toolOperationId?: string;
   artifacts?: ArtifactRef[];
   feedback?: 'helpful' | 'unhelpful';
 };
@@ -38,7 +41,75 @@ export type AssistantReasoning = {
   durationMs: number;
   complete: boolean;
 };
+export type AssistantInteraction = {
+  id: string;
+  taskId: string;
+  threadId: string;
+  checkpointId: string;
+  kind: 'plan_confirmation' | 'clarification' | 'tool_confirmation';
+  version: number;
+  status:
+    | 'waiting'
+    | 'creating'
+    | 'executing'
+    | 'completed'
+    | 'unknown'
+    | 'saved'
+    | 'failed'
+    | 'cancelled';
+};
+export type AssistantToolConfirmation = {
+  id: string;
+  turnId: string;
+  turnKey: string;
+  tool: { id: string; displayName: string; name?: string };
+  arguments: unknown;
+  interaction: AssistantInteraction;
+};
+export type WorkflowPlan = {
+  interaction?: AssistantInteraction | null;
+  id: string;
+  sessionId: string;
+  version: number;
+  status:
+    | 'ready'
+    | 'needs_clarification'
+    | 'approved'
+    | 'building'
+    | 'saved'
+    | 'failed'
+    | 'cancelled';
+  dependencyIssues: string[];
+  workflowId?: string | null;
+  outcome?: { summary?: string; status?: string } | null;
+  document: {
+    goal: string;
+    summary: string;
+    target_id?: string | null;
+    inputs: {
+      name: string;
+      description: string;
+      artifact_id?: string | null;
+    }[];
+    outputs: string[];
+    steps: {
+      title: string;
+      description: string;
+      node_types: string[];
+      configuration_notes: string;
+      dependencies: { kind: string; id: string; purpose: string }[];
+    }[];
+    constraints: string[];
+    assumptions: string[];
+    questions: string[];
+    acceptance_criteria: string[];
+  };
+};
 export type AssistantSession = {
+  pendingTool?: AssistantToolConfirmation | null;
+  toolConfirmations?: AssistantToolConfirmation[];
+  workflowPlan?: WorkflowPlan | null;
+  workflowPlans?: { turnId: string; plan: WorkflowPlan }[];
   reasoning?: AssistantReasoning[];
   activities?: AssistantActivity[];
   responsePhaseId?: string;
@@ -46,7 +117,13 @@ export type AssistantSession = {
   title: string;
   modelId: string;
   messages: AssistantMessage[];
-  status: 'idle' | 'thinking' | 'running' | 'needs_input' | 'error';
+  status:
+    | 'idle'
+    | 'thinking'
+    | 'running'
+    | 'needs_input'
+    | 'awaiting_feedback'
+    | 'error';
   activeCall?: ActiveWorkflowCall;
   error?: string;
   steps: number;
@@ -65,6 +142,23 @@ export const saveAssistantSession = (session: AssistantSession) =>
 
 export type AssistantTurnAction =
   | { kind: 'send'; text: string; attachments: unknown[] }
+  | {
+      kind: 'planDecision';
+      interaction_id?: string;
+      checkpoint_id?: string;
+      plan_id: string;
+      version: number;
+      decision: 'approve' | 'cancel';
+      text: string;
+    }
+  | {
+      kind: 'toolDecision';
+      operation_id: string;
+      interaction_id: string;
+      checkpoint_id: string;
+      decision: 'approve' | 'deny';
+      text: string;
+    }
   | { kind: 'continue' }
   | { kind: 'inputs'; input: Record<string, unknown> }
   | { kind: 'decline' };

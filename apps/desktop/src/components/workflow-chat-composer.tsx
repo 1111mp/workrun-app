@@ -12,7 +12,13 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import { ArrowUpIcon, PaperclipIcon, PlusIcon } from 'lucide-react';
-import { useEffect, useRef, useState, type SubmitEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type SubmitEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -31,7 +37,9 @@ export function WorkflowChatComposer({
   onMessageChange,
   disabled,
   onSubmit,
+  toolbarActions,
 }: {
+  toolbarActions?: ReactNode;
   fileInputs: WorkflowInput[];
   filesForInput: (key: string) => unknown;
   onFileChange: (
@@ -89,7 +97,20 @@ export function WorkflowChatComposer({
         else onSubmit(event);
       }}
     >
-      <InputGroup className='rounded-3xl'>
+      <InputGroup
+        className='cursor-text rounded-3xl'
+        onClick={(event) => {
+          if (
+            disabled ||
+            picking ||
+            (event.target as HTMLElement).closest(
+              'button, a, input, textarea, [role="combobox"]',
+            )
+          )
+            return;
+          event.currentTarget.querySelector('textarea')?.focus();
+        }}
+      >
         {attachedFields.length > 0 && (
           <InputGroupAddon
             align='block-start'
@@ -118,7 +139,7 @@ export function WorkflowChatComposer({
         )}
         <InputGroupTextarea
           rows={1}
-          className='max-h-52 min-h-0 overflow-y-auto px-4 py-3 leading-6'
+          className='max-h-52 min-h-0 cursor-text overflow-y-auto px-4 py-3 leading-6 disabled:cursor-not-allowed'
           aria-label={t('workflowEditor.output.message')}
           disabled={disabled || picking}
           placeholder={t('workflowEditor.output.messagePlaceholder')}
@@ -183,16 +204,19 @@ export function WorkflowChatComposer({
               {t('workflowEditor.output.sendHint')}
             </InputGroupText>
           </div>
-          <InputGroupButton
-            className='rounded-full'
-            disabled={disabled || picking || !message.trim()}
-            size='icon-sm'
-            type='submit'
-            variant='default'
-            aria-label={t('workflowEditor.output.send')}
-          >
-            <ArrowUpIcon />
-          </InputGroupButton>
+          <div className='flex min-w-0 items-center gap-2'>
+            {toolbarActions}
+            <InputGroupButton
+              className='rounded-full'
+              disabled={disabled || picking || !message.trim()}
+              size='icon-sm'
+              type='submit'
+              variant='default'
+              aria-label={t('workflowEditor.output.send')}
+            >
+              <ArrowUpIcon />
+            </InputGroupButton>
+          </div>
         </InputGroupAddon>
       </InputGroup>
     </form>

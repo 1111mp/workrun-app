@@ -4,7 +4,9 @@ description: Use a configured model, tools and personal skills.
 ---
 # Local agent (agent)
 
-Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.
+Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.
+
+Tool IDs and callable names are different: select the discovered ID in toolIds and toolStateBindings.toolId; use the tool contract for its callable name and argument schema. With no selected Skills, selected tools are attached directly. With skillRefs, SkillToolset exposes Skill discovery/loading and resolves tools after the declaring Skill is loaded. Every Skill-declared tool must be selected; nonempty allowedTools declarations restrict the effective tool set to their union. Reading a Skill during planning does not activate it in this node. Read reference topic=configuration for resource wiring and topic=examples with node_types=["agent"] for a native example.
 
 ## Configuration
 

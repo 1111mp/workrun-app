@@ -1,0 +1,351 @@
+[
+  {
+    "id": "agent-tool-skill-private",
+    "node_type": "agent",
+    "summary": "Selected tool and personal Skill, argument binding, optional text attachment and private output sharing.",
+    "document": {
+      "settings": {
+        "name": "Agent resource configuration",
+        "description": "Configuration example; resolve discovered resources before native validation or execution.",
+        "mode": "task",
+        "inputSchema": {
+          "fields": [
+            {
+              "id": "request",
+              "key": "request",
+              "label": "request",
+              "type": "string",
+              "required": true
+            },
+            {
+              "id": "source_text",
+              "key": "source_text",
+              "label": "source_text",
+              "type": "string",
+              "required": true
+            },
+            {
+              "id": "source_file",
+              "key": "source_file",
+              "label": "source_file",
+              "type": "file",
+              "required": false
+            }
+          ]
+        },
+        "outputSchema": {
+          "fields": [
+            {
+              "id": "response",
+              "key": "response",
+              "label": "response",
+              "type": "string",
+              "required": true
+            }
+          ]
+        },
+        "sessionStateFields": []
+      },
+      "nodes": [
+        {
+          "id": "start",
+          "type": "start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "data": {}
+        },
+        {
+          "id": "transform",
+          "type": "agent",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "data": {
+            "modelProfileId": "DISCOVER_MODEL_ID",
+            "instruction": "Use the selected Skill and tool to transform source_text according to request. Inspect source_file when supplied. Return the tool-derived result as the result field.",
+            "toolIds": [
+              "DISCOVER_TOOL_ID"
+            ],
+            "skillRefs": [
+              {
+                "source": "personal",
+                "name": "discover-skill-name"
+              }
+            ],
+            "toolStateBindings": [
+              {
+                "toolId": "DISCOVER_TOOL_ID",
+                "argumentPath": "text",
+                "statePath": "source_text"
+              }
+            ],
+            "attachmentPaths": [
+              "source_file"
+            ],
+            "outputSchema": {
+              "type": "object",
+              "properties": {
+                "result": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "result"
+              ]
+            },
+            "state": {
+              "access": {
+                "readers": [
+                  "present"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "present",
+          "type": "agent",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "data": {
+            "modelProfileId": "DISCOVER_MODEL_ID",
+            "instruction": "Present the visible result according to request. State limitations in the source result.",
+            "outputKey": "response",
+            "state": {
+              "globalKeys": [
+                "response"
+              ]
+            }
+          }
+        },
+        {
+          "id": "end",
+          "type": "end",
+          "position": {
+            "x": 780,
+            "y": 0
+          },
+          "data": {}
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge_0",
+          "source": "start",
+          "target": "transform"
+        },
+        {
+          "id": "edge_1",
+          "source": "transform",
+          "target": "present"
+        },
+        {
+          "id": "edge_2",
+          "source": "present",
+          "target": "end"
+        }
+      ]
+    }
+  },
+  {
+    "id": "codeact-file-global",
+    "node_type": "codeact_agent",
+    "summary": "Restricted Python with visible files, native result fields and exported artifacts published globally.",
+    "document": {
+      "settings": {
+        "name": "CodeAct file configuration",
+        "description": "Configuration example; resolve discovered resources before native validation or execution.",
+        "mode": "task",
+        "inputSchema": {
+          "fields": [
+            {
+              "id": "request",
+              "key": "request",
+              "label": "request",
+              "type": "string",
+              "required": true
+            },
+            {
+              "id": "source_file",
+              "key": "source_file",
+              "label": "source_file",
+              "type": "file",
+              "required": true
+            }
+          ]
+        },
+        "outputSchema": {
+          "fields": [
+            {
+              "id": "result",
+              "key": "result",
+              "label": "result",
+              "type": "string",
+              "required": true
+            },
+            {
+              "id": "artifacts",
+              "key": "artifacts",
+              "label": "artifacts",
+              "type": "files",
+              "required": false
+            }
+          ]
+        },
+        "sessionStateFields": []
+      },
+      "nodes": [
+        {
+          "id": "start",
+          "type": "start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "data": {}
+        },
+        {
+          "id": "compute",
+          "type": "codeact_agent",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "data": {
+            "modelProfileId": "DISCOVER_MODEL_ID",
+            "instruction": "Process source_file according to request using supported Python or selected tools. Match its ArtifactRef ID in /artifacts/manifest.json and read the entry path. Write deliverables under /outputs. Finish with a last expression {\"type\":\"final_result\",\"value\":{\"result\":\"computed result summary\"}} using actual computed values. Workrun exports files as artifacts; do not fabricate ArtifactRefs.",
+            "maxIterations": 8,
+            "maxScriptDurationSeconds": 5,
+            "maxScriptMemoryMiB": 256,
+            "outputSchema": {
+              "type": "object",
+              "properties": {
+                "result": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "result"
+              ]
+            },
+            "state": {
+              "globalKeys": [
+                "result",
+                "artifacts"
+              ]
+            }
+          }
+        },
+        {
+          "id": "end",
+          "type": "end",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "data": {}
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge_0",
+          "source": "start",
+          "target": "compute"
+        },
+        {
+          "id": "edge_1",
+          "source": "compute",
+          "target": "end"
+        }
+      ]
+    }
+  },
+  {
+    "id": "workflow-app-global",
+    "node_type": "process",
+    "summary": "An installed Workflow App using visible inputs and declared global outputs.",
+    "document": {
+      "settings": {
+        "name": "Workflow App configuration",
+        "description": "Configuration example; resolve discovered resources before native validation or execution.",
+        "mode": "task",
+        "inputSchema": {
+          "fields": [
+            {
+              "id": "source_text",
+              "key": "source_text",
+              "label": "source_text",
+              "type": "string",
+              "required": true
+            }
+          ]
+        },
+        "outputSchema": {
+          "fields": [
+            {
+              "id": "result",
+              "key": "result",
+              "label": "result",
+              "type": "string",
+              "required": true
+            }
+          ]
+        },
+        "sessionStateFields": []
+      },
+      "nodes": [
+        {
+          "id": "start",
+          "type": "start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "data": {}
+        },
+        {
+          "id": "app",
+          "type": "process",
+          "position": {
+            "x": 260,
+            "y": 0
+          },
+          "data": {
+            "processNodeId": "DISCOVER_WORKFLOW_APP_ID",
+            "state": {
+              "globalKeys": [
+                "result"
+              ]
+            }
+          }
+        },
+        {
+          "id": "end",
+          "type": "end",
+          "position": {
+            "x": 520,
+            "y": 0
+          },
+          "data": {}
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge_0",
+          "source": "start",
+          "target": "app"
+        },
+        {
+          "id": "edge_1",
+          "source": "app",
+          "target": "end"
+        }
+      ]
+    }
+  }
+]

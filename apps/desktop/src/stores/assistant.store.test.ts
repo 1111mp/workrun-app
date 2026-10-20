@@ -39,6 +39,7 @@ import {
   declineAssistantWorkflow,
   resumeAssistant,
   setAssistantFeedback,
+  setAssistantModel,
   useAssistantStore,
 } from './assistant.store';
 const scope = JSON.stringify(['personal', '', '']);
@@ -250,6 +251,29 @@ it('publishes native stream events and removes the transient message once persis
     },
   });
   expect(current(session.id).activities).toEqual([activity]);
+  const plan = { id: 'plan', version: 1, status: 'ready' };
+  for (const [turnId, status] of [
+    ['user1', 'ready'],
+    ['user2', 'building'],
+    ['user2', 'saved'],
+  ])
+    receive({
+      payload: {
+        sessionId: session.id,
+        messageId: 'answer',
+        turnId,
+        event: { type: 'workflow_plan', plan: { ...plan, status } },
+      },
+    });
+  expect(
+    current(session.id).workflowPlans?.map((entry) => [
+      entry.turnId,
+      entry.plan.status,
+    ]),
+  ).toEqual([
+    ['user1', 'ready'],
+    ['user2', 'saved'],
+  ]);
   const reasoning = {
     id: 'thought',
     turnId: 'user1',
@@ -274,6 +298,9 @@ it('publishes native stream events and removes the transient message once persis
   expect(useAssistantStore.getState().streams[session.id]).toBeUndefined();
   expect(current(session.id).activities).toEqual([activity]);
   expect(current(session.id).reasoning).toEqual([reasoning]);
+  expect(
+    current(session.id).workflowPlans?.map((entry) => entry.plan.status),
+  ).toEqual(['ready', 'saved']);
 });
 
 it('keeps team authentication in the native request, outside conversation data', async () => {
@@ -311,4 +338,190 @@ it('persists feedback without replaying the native turn', async () => {
   await setAssistantFeedback(session.id, 'answer', 'helpful', scope);
   expect(current(session.id).messages[0]?.feedback).toBe('helpful');
   expect(host.turn).not.toHaveBeenCalled();
+});
+
+it('persists a new model without replacing conversation history', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  await sendAssistantMessage(session.id, 'Hello', scope);
+  const messages = current(session.id).messages;
+  await setAssistantModel(session.id, 'other', scope);
+  expect(current(session.id).modelId).toBe('other');
+  expect(current(session.id).messages).toEqual(messages);
+  expect((host.saved.get(session.id) as AssistantSession).modelId).toBe(
+    'other',
+  );
+});
+
+it('submits only an exact plan version decision to native and rejects stale cards', async () => {
+  const { decideAssistantPlan } = await import('./assistant.store');
+  const session = await createAssistantSession('model', 'Plan', scope);
+  const plan = {
+    id: 'plan-id',
+    sessionId: session.id,
+    version: 2,
+    status: 'ready' as const,
+    dependencyIssues: [],
+    document: {
+      goal: 'Process input',
+      summary: 'Reviewable approach',
+      inputs: [],
+      outputs: ['Report'],
+      steps: [],
+      constraints: [],
+      assumptions: [],
+      questions: [],
+      acceptance_criteria: ['Verified output'],
+    },
+  };
+  useAssistantStore.setState({
+    sessions: { [session.id]: { ...session, workflowPlan: plan } },
+  });
+  store({ ...session, workflowPlan: plan });
+  await expect(
+    decideAssistantPlan(session.id, plan.id, 1, 'approve', 'Create', scope),
+  ).rejects.toThrow('Plan changed');
+  expect(host.turn).not.toHaveBeenCalled();
+  await decideAssistantPlan(
+    session.id,
+    plan.id,
+    2,
+    'approve',
+    'Confirm and create',
+    scope,
+  );
+  expect(host.turn).toHaveBeenCalledExactlyOnceWith({
+    sessionId: session.id,
+    action: {
+      kind: 'planDecision',
+      plan_id: plan.id,
+      version: 2,
+      decision: 'approve',
+      text: 'Confirm and create',
+    },
+    teamToken: undefined,
+  });
+});
+
+it('allows conversation while a task waits and binds button feedback to its interaction', async () => {
+  const { decideAssistantPlan } = await import('./assistant.store');
+  const session = await createAssistantSession('model', 'Waiting task', scope);
+  const pending = {
+    ...session,
+    status: 'awaiting_feedback' as const,
+    workflowPlan: {
+      id: 'plan-id',
+      sessionId: session.id,
+      version: 1,
+      status: 'ready' as const,
+      dependencyIssues: [],
+      interaction: {
+        id: 'plan-id:v1',
+        taskId: 'plan-id',
+        threadId: 'thread',
+        checkpointId: 'checkpoint',
+        version: 1,
+        kind: 'plan_confirmation' as const,
+        status: 'waiting' as const,
+      },
+      document: {
+        goal: 'Process records',
+        summary: 'Review approach',
+        inputs: [],
+        outputs: [],
+        steps: [],
+        constraints: [],
+        assumptions: [],
+        questions: [],
+        acceptance_criteria: [],
+      },
+    },
+  };
+  store(pending);
+  useAssistantStore.setState({ sessions: { [session.id]: pending } });
+  await sendAssistantMessage(session.id, 'Explain the proposed steps', scope);
+  expect(host.turn.mock.calls[0]![0].action).toEqual({
+    kind: 'send',
+    text: 'Explain the proposed steps',
+    attachments: [],
+  });
+  store(pending);
+  useAssistantStore.setState({ sessions: { [session.id]: pending } });
+  await decideAssistantPlan(
+    session.id,
+    'plan-id',
+    1,
+    'approve',
+    'Confirm',
+    scope,
+  );
+  expect(host.turn.mock.calls[1]![0].action).toEqual({
+    kind: 'planDecision',
+    plan_id: 'plan-id',
+    version: 1,
+    interaction_id: 'plan-id:v1',
+    checkpoint_id: 'checkpoint',
+    decision: 'approve',
+    text: 'Confirm',
+  });
+});
+
+it('sends only frozen tool and checkpoint identities for explicit feedback and rejects stale cards', async () => {
+  const { decideAssistantTool } = await import('./assistant.store');
+  const session = await createAssistantSession('model', 'Tool approval', scope);
+  const confirmation = {
+    id: 'operation',
+    turnId: 'turn',
+    turnKey: 'key',
+    tool: { id: 'tool', displayName: 'Tool' },
+    arguments: { value: 2 },
+    interaction: {
+      id: 'tool:operation',
+      taskId: 'operation',
+      threadId: 'thread',
+      checkpointId: 'checkpoint',
+      kind: 'tool_confirmation' as const,
+      version: 1,
+      status: 'waiting' as const,
+    },
+  };
+  const waiting = {
+    ...session,
+    status: 'awaiting_feedback' as const,
+    pendingTool: confirmation,
+    toolConfirmations: [confirmation],
+  };
+  store(waiting);
+  useAssistantStore.setState({ sessions: { [session.id]: waiting } });
+  await expect(
+    decideAssistantTool(
+      session.id,
+      {
+        ...confirmation,
+        interaction: { ...confirmation.interaction, checkpointId: 'stale' },
+      },
+      'approve',
+      'Approve',
+      scope,
+    ),
+  ).rejects.toThrow('changed');
+  expect(host.turn).not.toHaveBeenCalled();
+  await decideAssistantTool(
+    session.id,
+    confirmation,
+    'approve',
+    'Approve exact call',
+    scope,
+  );
+  expect(host.turn).toHaveBeenCalledExactlyOnceWith({
+    sessionId: session.id,
+    teamToken: undefined,
+    action: {
+      kind: 'toolDecision',
+      operation_id: 'operation',
+      interaction_id: 'tool:operation',
+      checkpoint_id: 'checkpoint',
+      decision: 'approve',
+      text: 'Approve exact call',
+    },
+  });
 });

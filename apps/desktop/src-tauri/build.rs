@@ -5,6 +5,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "../scripts/generate-workflow-reference.mjs",
         "src/module/assistant/main_agent",
         "src/module/assistant/workflow_agent",
+        "src/module/assistant/planning_agent",
+        "src/module/assistant/reference",
         "src/module/workflow/node-contracts.json",
         "src/module/workflow/SAGA.md",
         "src/module/workflow/RECOVERY.md",

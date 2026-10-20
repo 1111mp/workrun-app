@@ -189,3 +189,10 @@ it('omits the file menu for workflows without file inputs and keeps IME Enter fr
   });
   expect(onSend).toHaveBeenCalledOnce();
 });
+
+it('focuses the message when clicking the composer background', async () => {
+  const { container } = await render([]);
+  const user = userEvent.setup();
+  await user.click(container.querySelector('[data-slot="input-group"]')!);
+  expect(screen.getByRole('textbox')).toHaveFocus();
+});

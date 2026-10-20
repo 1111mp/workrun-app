@@ -1,5 +1,8 @@
 import {
   Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentMedia,
   AttachmentContent,
   AttachmentDescription,
   AttachmentTitle,
@@ -10,7 +13,13 @@ import {
   FieldDescription,
   Spinner,
 } from '@workspace/ui/components';
-import { DownloadIcon, EyeIcon, PaperclipIcon, XIcon } from 'lucide-react';
+import {
+  DownloadIcon,
+  EyeIcon,
+  FileIcon,
+  PaperclipIcon,
+  XIcon,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -67,6 +76,8 @@ export function ArtifactFiles({
   }, [preview]);
   const references = artifactReferences(value);
   const FileContainer = compact ? Attachment : 'div';
+  const FileActions = compact ? AttachmentActions : 'div';
+  const FileAction = compact ? AttachmentAction : Button;
   async function pick() {
     setBusy(true);
     try {
@@ -121,27 +132,14 @@ export function ArtifactFiles({
         <FileContainer
           key={`${reference.id}:${reference.version}`}
           {...(compact ? { size: 'sm' as const } : {})}
-          className={
-            compact ? 'max-w-full gap-1 p-1' : 'flex items-center gap-2'
-          }
+          className={compact ? 'max-w-full' : 'flex items-center gap-2'}
         >
-          <Button
-            type='button'
-            variant='ghost'
-            className={
-              compact
-                ? 'h-auto max-w-56 min-w-0 flex-1 justify-start px-2 py-1'
-                : 'min-w-0 flex-1 justify-start'
-            }
-            onClick={() => {
-              void exportArtifact(reference).catch((error) =>
-                toast.error(String(error), { toasterId: 'global' }),
-              );
-            }}
-          >
-            <DownloadIcon data-icon='inline-start' />
-            {compact ? (
-              <AttachmentContent className='text-left'>
+          {compact ? (
+            <>
+              <AttachmentMedia>
+                <FileIcon />
+              </AttachmentMedia>
+              <AttachmentContent className='max-w-56'>
                 <AttachmentTitle title={reference.name}>
                   {reference.name}
                 </AttachmentTitle>
@@ -151,70 +149,97 @@ export function ArtifactFiles({
                     : `${(reference.size / 1024 / 1024).toFixed(1)} MiB`}
                 </AttachmentDescription>
               </AttachmentContent>
-            ) : (
+            </>
+          ) : (
+            <Button
+              type='button'
+              variant='ghost'
+              className='min-w-0 flex-1 justify-start'
+              onClick={() => {
+                void exportArtifact(reference).catch((error) =>
+                  toast.error(String(error), { toasterId: 'global' }),
+                );
+              }}
+            >
+              <DownloadIcon data-icon='inline-start' />
               <span className='truncate'>{reference.name}</span>
-            )}
-          </Button>
+            </Button>
+          )}
           {!compact && (
             <FieldDescription>
               {(reference.size / 1024 / 1024).toFixed(1)} MiB
             </FieldDescription>
           )}
-          {(reference.mimeType.startsWith('image/') ||
-            reference.mimeType === 'application/pdf' ||
-            reference.mimeType.startsWith('video/')) && (
-            <Button
-              type='button'
-              variant='ghost'
-              size={compact ? 'icon-xs' : 'icon'}
-              disabled={busy}
-              aria-label={t(
-                reference.mimeType === 'application/pdf'
-                  ? 'workflowEditor.artifacts.openPdf'
-                  : 'workflowEditor.artifacts.preview',
-              )}
-              title={t(
-                reference.mimeType === 'application/pdf'
-                  ? 'workflowEditor.artifacts.openPdf'
-                  : 'workflowEditor.artifacts.preview',
-              )}
-              onClick={() => {
-                setBusy(true);
-                // Native PDF handling follows the OS file association instead
-                // of depending on an embedded WebView PDF viewer.
-                const opening =
-                  reference.mimeType === 'application/pdf'
-                    ? openPdfArtifact(reference)
-                    : previewArtifact(reference).then((url) =>
-                        setPreview({ reference, url }),
-                      );
-                void opening
-                  .catch((error) =>
+          <FileActions className='flex items-center gap-1'>
+            {compact && (
+              <AttachmentAction
+                aria-label={`${t('workflowEditor.artifacts.download')} ${reference.name}`}
+                title={t('workflowEditor.artifacts.download')}
+                onClick={() => {
+                  void exportArtifact(reference).catch((error) =>
                     toast.error(String(error), { toasterId: 'global' }),
-                  )
-                  .finally(() => setBusy(false));
-              }}
-            >
-              <EyeIcon />
-            </Button>
-          )}
-          {onChange && (
-            <Button
-              type='button'
-              variant='ghost'
-              size={compact ? 'icon-xs' : 'icon'}
-              disabled={disabled || busy}
-              aria-label={t('workflowEditor.artifacts.remove')}
-              onClick={() => {
-                const remaining = references.filter(
-                  (item) => item.id !== reference.id,
-                );
-                onChange(multiple ? remaining : undefined);
-              }}
-            >
-              <XIcon />
-            </Button>
-          )}
+                  );
+                }}
+              >
+                <DownloadIcon />
+              </AttachmentAction>
+            )}
+            {(reference.mimeType.startsWith('image/') ||
+              reference.mimeType === 'application/pdf' ||
+              reference.mimeType.startsWith('video/')) && (
+              <FileAction
+                type='button'
+                variant='ghost'
+                size={compact ? 'icon-xs' : 'icon'}
+                disabled={busy}
+                aria-label={t(
+                  reference.mimeType === 'application/pdf'
+                    ? 'workflowEditor.artifacts.openPdf'
+                    : 'workflowEditor.artifacts.preview',
+                )}
+                title={t(
+                  reference.mimeType === 'application/pdf'
+                    ? 'workflowEditor.artifacts.openPdf'
+                    : 'workflowEditor.artifacts.preview',
+                )}
+                onClick={() => {
+                  setBusy(true);
+                  // Native PDF handling follows the OS file association instead
+                  // of depending on an embedded WebView PDF viewer.
+                  const opening =
+                    reference.mimeType === 'application/pdf'
+                      ? openPdfArtifact(reference)
+                      : previewArtifact(reference).then((url) =>
+                          setPreview({ reference, url }),
+                        );
+                  void opening
+                    .catch((error) =>
+                      toast.error(String(error), { toasterId: 'global' }),
+                    )
+                    .finally(() => setBusy(false));
+                }}
+              >
+                <EyeIcon />
+              </FileAction>
+            )}
+            {onChange && (
+              <FileAction
+                type='button'
+                variant='ghost'
+                size={compact ? 'icon-xs' : 'icon'}
+                disabled={disabled || busy}
+                aria-label={t('workflowEditor.artifacts.remove')}
+                onClick={() => {
+                  const remaining = references.filter(
+                    (item) => item.id !== reference.id,
+                  );
+                  onChange(multiple ? remaining : undefined);
+                }}
+              >
+                <XIcon />
+              </FileAction>
+            )}
+          </FileActions>
         </FileContainer>
       ))}
       {modalPreview ? (

@@ -7,6 +7,10 @@ Apply when fulfilling a request requires capabilities beyond direct conversation
 or when the user asks what work the workspace can support.
 
 ## Method
+Use read_skill(name=workrun-capabilities) when Workrun's capability boundaries or
+reuse/configuration options matter. It is a shared overview; node configuration
+references belong to the planning and authoring specialists.
+
 Start from the required outcome, not a preferred tool. Discover available capabilities
 and relevant skills. Compare documented purpose, input requirements, expected outputs,
 operating constraints and potential effects. Choose a capability only when it addresses
