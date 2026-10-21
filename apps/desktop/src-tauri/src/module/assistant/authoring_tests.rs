@@ -577,3 +577,62 @@ async fn empty_confirmation_does_not_block_save_only_then_explicit_execution() {
     assert_eq!(turns[1]["result"]["workflowExecutionAllowed"], true);
     assert!(turns[1]["decision"]["toolConfirmation"].is_null());
 }
+
+#[tokio::test]
+async fn explicit_specialist_return_preserves_transfer_receipt_after_saving() {
+    let store = DraftStore::new();
+    let user = Content::new("user").with_text("创建草稿，不要运行");
+    super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
+    let named_call = |target: &str, id: &str| {
+        let mut content = super::tests::call("transfer_to_agent", json!({"agent_name":target}));
+        if let Part::FunctionCall { id: call_id, .. } = &mut content.parts[0] {
+            *call_id = Some(id.into());
+        }
+        content
+    };
+    let model = super::tests::ScriptedModel::new(vec![
+        named_call("workflow_author", "enter-author"),
+        super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
+        named_call("main_agent", "return-to-main"),
+        Content::new("model").with_text("Saved without execution."),
+    ]);
+    let reply = super::tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::DeepSeek,
+            AssistantRequest {
+                context: protocol::AssistantContext {
+                    session_id: Some(store.session_id.clone()),
+                    ..Default::default()
+                },
+                contents: vec![user],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    assert!(store.saved.lock().unwrap().is_some());
+    let requests = model.requests.lock().unwrap();
+    let contents = &requests.last().unwrap().contents;
+    let calls = contents
+        .iter()
+        .flat_map(|c| &c.parts)
+        .filter(|part| {
+            matches!(part,
+        Part::FunctionCall {id:Some(id),..} if id=="return-to-main")
+        })
+        .count();
+    let receipts = contents
+        .iter()
+        .flat_map(|c| &c.parts)
+        .filter(|part| {
+            matches!(part,
+        Part::FunctionResponse {id:Some(id),..} if id=="return-to-main")
+        })
+        .count();
+    assert_eq!(calls, 1);
+    assert_eq!(receipts, 1);
+}

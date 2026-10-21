@@ -7,8 +7,8 @@ use std::collections::HashMap;
 pub(in crate::module::assistant) fn declarations() -> HashMap<String, Value> {
     let mut tools = HashMap::new();
     tools.extend(crate::module::assistant::workspace_resources::declarations());
-    tools.insert("get_workflow_reference".into(),json!({"name":"get_workflow_reference","description":"Read Workrun authoring reference progressively. topic=index lists all supported base nodes and reference topics; nodes returns only selected English node skills with generated TypeScript configuration, handles and examples. node-schema returns exact JSON Schema only for requested node_types. Other topics: configuration (native resource wiring); examples lists summaries, or supply node_types to read matching native documents with resource placeholders; capabilities (shared Workrun overview), format, state, routing, recovery; compensation and execution-recovery load detailed native design references. Read workflow-authoring skill before constructing a new workflow.","parameters":{"type":"object","properties":{"topic":{"type":"string","enum":["index","capabilities","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"]},"node_types":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}}));
-    tools.insert("list_authoring_resources".into(),json!({"name":"list_authoring_resources","description":"List native IDs and public configuration contracts for workflow nodes: models (modelProfileId), tools (toolIds summaries), skills (personal skillRefs summaries). Retrieve selected tool schemas and policies with list_workspace_tools(tool_id); read selected Skill instructions with read_workspace_skill. Never invent IDs. Apps and existing workflows are discovered with list_capabilities.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["models","tools","skills"]},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}));
+    tools.insert("get_workflow_reference".into(),json!({"name":"get_workflow_reference","description":"Read Workrun authoring reference progressively. topic=index lists all supported base nodes and reference topics; nodes includes the linked runtime language/OS briefing for CodeAct and returns only selected English node skills with generated TypeScript configuration, handles and examples. node-schema returns exact JSON Schema only for requested node_types. Other topics: configuration (native resource wiring); examples lists summaries, or supply node_types to read matching native documents with resource placeholders; capabilities (shared Workrun overview), format, state, routing, recovery; compensation and execution-recovery load detailed native design references. Read workflow-authoring skill before constructing a new workflow.","parameters":{"type":"object","properties":{"topic":{"type":"string","enum":["index","capabilities","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"]},"node_types":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}}));
+    tools.insert("list_authoring_resources".into(),json!({"name":"list_authoring_resources","description":"Discover native modelProfileId values. Use list_workspace_tools for tools, list_workspace_skills for Skills, and list_capabilities for Apps and workflows. Never invent IDs.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["models"]},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}));
     tools.insert("validate_workflow_draft".into(),json!({"name":"validate_workflow_draft","description":"Validate a Workflow document against node contracts and the actual native graph compiler using temporary checkpoint storage. Provide either document_json (JSON text containing settings,nodes,edges) or draft_id. Returns valid, structured issues with phases/paths and executed=false. Does not execute nodes or install dependencies. Compile errors can require native model/tool/App configuration.","parameters":{"type":"object","properties":{"document_json":{"type":"string"},"draft_id":{"type":"string"}},"additionalProperties":false}}));
     tools.insert("get_workflow_draft".into(),json!({"name":"get_workflow_draft","description":"Read the current saved workflow definition by workspace-local draft_id. If opened in the editor, returns its latest catalog definition, including saved model changes. Rerun this definition directly; do not clone it just to retry. Does not execute or publish.","parameters":{"type":"object","properties":{"draft_id":{"type":"string"}},"required":["draft_id"],"additionalProperties":false}}));
     {
@@ -60,6 +60,16 @@ mod tests {
             assert!(!tools.contains_key(forbidden));
         }
         assert!(tools.contains_key("save_workflow_draft"));
+        for tools in [
+            tools.clone(),
+            crate::module::assistant::planning_agent::tools::declarations(),
+        ] {
+            let schema = &tools["list_authoring_resources"]["parameters"];
+            assert!(jsonschema::validate(schema, &json!({"kind":"models"})).is_ok());
+            for kind in ["tools", "skills"] {
+                assert!(jsonschema::validate(schema, &json!({"kind":kind})).is_err());
+            }
+        }
         for name in ["list_workspace_tools", "list_workspace_skills", "read_workspace_skill"] {
             assert!(tools.contains_key(name));
         }

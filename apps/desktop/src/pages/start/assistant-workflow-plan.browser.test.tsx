@@ -51,6 +51,7 @@ it('keeps the proposal readable at desktop and narrow widths and exposes details
     },
   };
   const decide = vi.fn();
+  const discuss = vi.fn();
   const screen = await render(
     <MemoryRouter>
       <main style={{ padding: 24, maxWidth: 840, margin: '0 auto' }}>
@@ -58,7 +59,7 @@ it('keeps the proposal readable at desktop and narrow widths and exposes details
           plan={plan}
           busy={false}
           onDecide={decide}
-          onDiscuss={() => {}}
+          onDiscuss={discuss}
         />
       </main>
     </MemoryRouter>,
@@ -71,6 +72,8 @@ it('keeps the proposal readable at desktop and narrow widths and exposes details
       .toBeDisabled();
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
   }
+  await screen.getByRole('button', { name: '回答此问题' }).click();
+  expect(discuss).toHaveBeenCalledWith('最终报告需要覆盖哪些范围？');
   await screen.getByRole('button', { name: '查看节点选择与配置' }).click();
   await expect
     .element(

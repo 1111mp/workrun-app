@@ -27,3 +27,10 @@ planning: the user requests a Workflow plan, discusses or changes a current plan
 When a native pending plan is provided, planFeedback may contain {"id":"exact native plan ID","version":1,"decision":"approve"|"cancel","quote":"exact current-user acceptance/refusal excerpt"}. Approve only a ready plan the user explicitly accepts for creation now; use authoring intent with current authoring evidence. Explicit refusal/cancellation is cancel, without an authoring grant. Questions, amendments, explanations and unrelated requests return null/omit planFeedback and leave the interaction waiting. Never infer consent from readiness or earlier messages. A changed version requires new feedback. Approval never grants execution permission. A native decision button is independently version-bound.
 
 When a plan is still awaiting review, a request to run the not-yet-created Workflow is execution intent, not a revision request or implicit plan approval. Do not invent an authoringQuote to remove constraints or revise the plan. Return null planFeedback unless the current message separately and explicitly accepts creation of that exact version.
+
+When discussing a current plan, answers, partial answers, corrections and delegated
+preferences (such as asking the planner to choose an appropriate default) express
+planning feedback. They are not plan approval merely because they resolve a question.
+Use the latest native version and require a distinct acceptance of the ready plan
+before creation. Do not turn a business clarification into a request for node/tool
+configuration. A fully specified request may proceed directly to a reviewable plan.

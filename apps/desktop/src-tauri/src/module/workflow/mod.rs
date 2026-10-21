@@ -1041,6 +1041,9 @@ pub(super) async fn compile_with_path(
 #[cfg(test)]
 tokio::task_local! { pub(crate) static TEST_CHECKPOINT_DB: String; }
 
+#[cfg(test)]
+tokio::task_local! { pub(crate) static TEST_SUBWORKFLOW_CATALOG: std::path::PathBuf; }
+
 // Authoring compilation uses a temporary checkpointer, never the user's run DB.
 tokio::task_local! { pub(crate) static VALIDATION_CHECKPOINT_DB: String; }
 

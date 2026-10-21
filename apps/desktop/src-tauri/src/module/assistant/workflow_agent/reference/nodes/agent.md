@@ -4,7 +4,7 @@ description: Use a configured model, tools and personal skills.
 ---
 # Local agent (agent)
 
-Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.
+Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths containing ArtifactRefs (files), never ordinary text, JSON strings or objects. Visible ordinary values are already available as scoped state; refer to their existing keys in instruction and use native state visibility. Do not add attachmentPaths merely to pass a previous node result. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.
 
 Tool IDs and callable names are different: select the discovered ID in toolIds and toolStateBindings.toolId; use the tool contract for its callable name and argument schema. With no selected Skills, selected tools are attached directly. With skillRefs, SkillToolset exposes Skill discovery/loading and resolves tools after the declaring Skill is loaded. Every Skill-declared tool must be selected; nonempty allowedTools declarations restrict the effective tool set to their union. Reading a Skill during planning does not activate it in this node. Read reference topic=configuration for resource wiring and topic=examples with node_types=["agent"] for a native example.
 
@@ -33,9 +33,8 @@ export interface AgentNodeData {
   /** {"minLength":1} */
   "modelProfileId": string;
   "instruction"?: string;
-  "outputSchema"?: string | {
-    [key: string]: unknown;
-  };
+  /** {"description":"JSON-serialized object schema; the visual editor stores this field as JSON text."} */
+  "outputSchema"?: string;
   /** {"uniqueItems":true} */
   "toolIds"?: Array<string>;
   "toolStateBindings"?: Array<{
@@ -86,17 +85,7 @@ Replace discovery placeholders with real resource IDs before validation.
   "data": {
     "modelProfileId": "DISCOVER_MODEL_ID",
     "instruction": "Analyze visible inputs and return structured findings.",
-    "outputSchema": {
-      "type": "object",
-      "properties": {
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "summary"
-      ]
-    },
+    "outputSchema": "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}},\"required\":[\"summary\"]}",
     "state": {
       "globalKeys": [
         "summary"

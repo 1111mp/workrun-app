@@ -149,6 +149,22 @@ Monty supports only the modules listed in its language briefing. Passing bound d
 The last Python expression must be {"type":"final_result","value":{...named output fields...}}. Return computed values, not a claim that global state was written. Workrun maps this object to node-private state; the configured state.globalKeys publishes selected fields. Do not call imaginary state tools or repeat computation just to publish.
 Write deliverable files under /outputs with pathlib.Path; successful regular files are exported as artifacts. Do not invent ArtifactRef objects, host paths or dependencies. Use configured tools for unsupported document/media processing."#;
 
+/// A pure description of the standard virtual workspace: no paths are opened,
+/// no host configuration is read, and no script or external tool is executed.
+/// Reuse the runtime's own briefing so dependency upgrades update discovery too.
+pub(crate) fn codeact_environment_guide() -> String {
+    use adk_rust::agent::codeact::CodeRuntime;
+    let runtime = MontyRuntime::builder()
+        .system_clock(true)
+        .allow_path("/artifacts", PathBuf::from("/artifacts"), PathAccess::ReadOnly)
+        .allow_path("/outputs", PathBuf::from("/outputs"), PathAccess::ReadWrite)
+        .build();
+    format!(
+        "## Linked runtime language and OS briefing\n\nReference policy only, not an execution grant or a complete Python API inventory. This describes the standard virtual workspace; actual mounts, environment, clock, limits and selected tools come from node configuration. Instructions below describe scripts inside the node, not the planning/authoring role.\n\n{}",
+        runtime.capabilities().prompt
+    )
+}
+
 fn build_runtime_with_workspace(
     node: &WorkflowNode,
     workspace: Option<&CodeActWorkspace>,
@@ -553,6 +569,24 @@ Path("/outputs/report.txt").write_text("".join(texts))
             std::fs::read_to_string(store.resolve(&second).unwrap()).unwrap(),
             "beta\n"
         );
+    }
+
+    #[test]
+    fn codeact_environment_briefing_matches_basic_runtime_probes() {
+        use adk_rust::agent::codeact::{CodeRuntime, RunStep};
+        let runtime = MontyRuntime::builder().build();
+        let result = runtime.start(
+            "import json\nimport re\nvalues=json.loads('[2,4,6]')\n{'sum':sum(values),'match':re.search('ab+', 'abbb').group(0)}",
+            "environment-probe.py",
+        ).unwrap();
+        assert!(matches!(result, RunStep::Complete { value, .. }
+            if value == json!({"sum":12,"match":"abbb"})));
+        for script in ["import numpy\nnumpy.zeros(3)", "import socket\nsocket.socket()"] {
+            assert!(
+                matches!(runtime.start(script, "unsupported.py").unwrap(), RunStep::Raised { .. }),
+                "unexpected support: {script}"
+            );
+        }
     }
 
     #[test]

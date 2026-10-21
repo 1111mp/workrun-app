@@ -75,6 +75,12 @@ Native output validation checks that contract, not the factual truth of its valu
 
 ## Files and CodeAct
 
+Ordinary text, numbers, objects and JSON strings pass through native scoped state.
+A downstream Agent can use their visible keys in its instruction without
+attachmentPaths. Publish with globalKeys or grant namespace readers as needed;
+an execution edge alone does not grant visibility. attachmentPaths is exclusively
+for file references, not a general input mapping or a request to parse JSON text.
+
 Agent attachmentPaths reads ArtifactRefs from visible state and includes supported
 file contents as model input. It does not attach a reader/calculator tool. Read the
 Agent guide for format/provider/size limits and use a capable executor when needed.
@@ -82,6 +88,11 @@ Agent guide for format/provider/size limits and use a capable executor when need
 CodeAct maps visible files through /artifacts/manifest.json, an array of
 {reference:{id,name,...},path} entries. Match the actual input reference ID and read
 entry.path; no attachmentPaths is needed. Use only supported Python modules/tools.
+Read CodeAct node details (topic=nodes, node_types=["codeact_agent"]) for the linked
+runtime language/module and supported
+OS/path-operation briefing. It describes the standard virtual workspace, not host
+permissions or a complete Python API inventory. Do not assume arbitrary library
+or method availability.
 Write deliverables under /outputs; Workrun imports them and writes real references
 into the node's artifacts state key. final_result.value supplies other named output
 fields; publish/share result and artifacts using normal state configuration.

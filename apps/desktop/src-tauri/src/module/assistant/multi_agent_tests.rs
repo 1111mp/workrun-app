@@ -81,6 +81,7 @@ async fn simple_file_request_and_declining_workflow_use_direct_tools_only() {
             .store
             .save_bytes("inventory.csv", "item,count,unit_cost\n笔,3,2\n本,4,5\n".as_bytes())
             .unwrap();
+        let expected_input = json!({"id":reference.id,"version":reference.version});
         let model = tests::ScriptedModel::new(vec![
             task_decision(),
             tests::call("read_artifact", json!({"artifact_id":reference.id})),
@@ -114,6 +115,20 @@ async fn simple_file_request_and_declining_workflow_use_direct_tools_only() {
             std::fs::read_to_string(workspace.store.resolve(&reply.artifacts[0]).unwrap()).unwrap(),
             "26"
         );
+        {
+            let records = workspace.records.lock().unwrap();
+            let direct: Vec<_> = records
+                .iter()
+                .filter(|record| record["kind"] == "direct_tool")
+                .collect();
+            assert!(!direct.is_empty());
+            assert!(
+                direct
+                    .iter()
+                    .all(|record| record["sessionId"] == "session"
+                        && record["inputArtifacts"] == json!([expected_input]))
+            );
+        }
         assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
         assert!(!workspace.root.path().join("workflow.json").exists());
         for request in model
@@ -472,9 +487,13 @@ async fn mixed_sdk_handoffs_are_repaired_without_running_siblings_or_losing_sign
             .iter()
             .any(|content| serde_json::to_value(content).unwrap() == serde_json::to_value(&rejected).unwrap())
     );
-    let receipt = retry.last().unwrap();
-    assert_eq!(receipt.parts.len(), 2);
-    let wire = serde_json::to_value(receipt).unwrap().to_string();
+    let receipts = retry
+        .iter()
+        .filter(|content| content.role == "function")
+        .flat_map(|content| content.parts.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(receipts.len(), 2);
+    let wire = serde_json::to_value(receipts).unwrap().to_string();
     assert!(wire.contains("handoff-0") && wire.contains("handoff-1"));
     assert_eq!(wire.matches("\"executed\":false").count(), 2);
     assert!(!requests[5].tools.contains_key("execute_capability"));

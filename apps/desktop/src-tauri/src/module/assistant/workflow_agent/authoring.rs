@@ -68,7 +68,12 @@ pub(in crate::module::assistant) fn reference(args: &Value) -> Result<Value> {
                         .iter()
                         .find(|(name, _, _)| *name == kind)
                         .context("Missing packaged node reference")?;
-                    Ok(json!({"type":kind,"skill":format!("workflow-node-{kind}"),"guide":crate::module::assistant::resources::read(guide)?}))
+                    let mut guide = crate::module::assistant::resources::read(guide)?;
+                    if kind == "codeact_agent" {
+                        guide.push_str("\n\n");
+                        guide.push_str(&workflow::codeact_agent::codeact_environment_guide());
+                    }
+                    Ok(json!({"type":kind,"skill":format!("workflow-node-{kind}"),"guide":guide}))
                 })
                 .collect::<Result<Vec<_>>>()?;
             json!({"schemaVersion":1,"nodes":nodes})
@@ -374,10 +379,8 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
             "models" => Ok(
                 json!({"items":crate::config::model_catalog(),"note":"IDs are native modelProfileId values; provider credentials must be configured separately"}),
             ),
-            "skills" => super::super::workspace_resources::read("list_workspace_skills", args).await,
-            "tools" => super::super::workspace_resources::read("list_workspace_tools", args).await,
             _ => anyhow::bail!(
-                "Unknown resource kind; use models, tools or skills. Apps and workflows use list_capabilities"
+                "Unknown resource kind; use models. Tools and Skills use workspace resource tools; Apps and workflows use list_capabilities"
             ),
         },
         _ => anyhow::bail!("Unknown authoring tool"),
@@ -437,6 +440,33 @@ mod tests {
                 .contains("# Workflow authoring")
         );
     }
+    #[test]
+    fn model_node_output_schemas_match_native_json_text_fields() {
+        for kind in ["agent", "codeact_agent"] {
+            let contract = contracts::node_contract(kind).unwrap();
+            let schema = &contract["dataSchema"]["properties"]["outputSchema"];
+            let object = json!({"type":"object","properties":{"answer":{"type":"string"}}});
+            assert!(jsonschema::validate(schema, &json!(object.to_string())).is_ok());
+            assert!(jsonschema::validate(schema, &object).is_err());
+        }
+    }
+    #[test]
+    fn codeact_node_details_include_linked_runtime_briefing_without_preloading() {
+        let index = reference(&json!({})).unwrap();
+        assert!(!index.to_string().contains("Linked runtime language"));
+        let detail = reference(&json!({"topic":"nodes","node_types":["codeact_agent"]})).unwrap();
+        let guide = detail["nodes"][0]["guide"].as_str().unwrap();
+        assert!(guide.ends_with(&workflow::codeact_agent::codeact_environment_guide()));
+        assert!(guide.contains("call_tool"));
+        assert!(guide.contains("/artifacts"));
+        assert!(guide.contains("/outputs"));
+        assert!(guide.contains("final_result"));
+        let other = reference(&json!({"topic":"nodes","node_types":["agent"]})).unwrap();
+        assert!(!other.to_string().contains("Linked runtime language"));
+        let schema = reference(&json!({"topic":"node-schema","node_types":["codeact_agent"]})).unwrap();
+        assert!(schema["nodes"][0].get("guide").is_none());
+    }
+
     #[test]
     fn configuration_examples_are_progressive_native_documents() {
         let summaries = reference(&json!({"topic":"examples"})).unwrap();

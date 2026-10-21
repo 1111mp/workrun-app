@@ -11,6 +11,9 @@ import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
+  Questionnaire,
+  QuestionnaireItem,
+  QuestionnaireTitle,
 } from '@workspace/ui/components';
 import { ChevronDownIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -29,7 +32,7 @@ export function AssistantWorkflowPlan({
   plan: WorkflowPlan;
   busy: boolean;
   onDecide: (decision: 'approve' | 'cancel') => void;
-  onDiscuss: () => void;
+  onDiscuss: (question?: string) => void;
 }) {
   const { t } = useTranslation();
   const doc = plan.document;
@@ -74,6 +77,40 @@ export function AssistantWorkflowPlan({
             {t('assistant.plan.waitingFeedback')}
           </p>
         )}
+        {doc.questions.length > 0 && (
+          <section
+            className='flex flex-col gap-2'
+            aria-label={t('assistant.plan.questions')}
+          >
+            <h3 className='font-medium'>{t('assistant.plan.questions')}</h3>
+            <p className='text-muted-foreground text-sm'>
+              {t('assistant.plan.clarificationHint')}
+            </p>
+            {doc.questions.map((question, index) => (
+              <Questionnaire
+                key={index}
+                onSubmit={(event) => event.preventDefault()}
+              >
+                <QuestionnaireItem
+                  name={`plan-${plan.id}-v${plan.version}-question-${index}`}
+                >
+                  <QuestionnaireTitle>{question}</QuestionnaireTitle>
+                  {active && editable && plan.status !== 'approved' && (
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      disabled={busy}
+                      onClick={() => onDiscuss(question)}
+                    >
+                      {t('assistant.plan.answerQuestion')}
+                    </Button>
+                  )}
+                </QuestionnaireItem>
+              </Questionnaire>
+            ))}
+          </section>
+        )}
         <p>{doc.goal}</p>
         {doc.target_id && (
           <Link
@@ -108,7 +145,7 @@ export function AssistantWorkflowPlan({
           </ol>
         </section>
         {list(t('assistant.plan.assumptions'), doc.assumptions)}
-        {list(t('assistant.plan.questions'), doc.questions)}
+        {list(t('assistant.plan.acceptance'), doc.acceptance_criteria)}
         {list(t('assistant.plan.dependencies'), plan.dependencyIssues)}
         {plan.outcome?.summary && <p role='status'>{plan.outcome.summary}</p>}
         <Collapsible>
@@ -118,7 +155,6 @@ export function AssistantWorkflowPlan({
           </CollapsibleTrigger>
           <CollapsibleContent className='flex flex-col gap-4 pt-3'>
             {list(t('assistant.plan.constraints'), doc.constraints)}
-            {list(t('assistant.plan.acceptance'), doc.acceptance_criteria)}
             {doc.steps.map((step, index) => (
               <section key={index} className='flex flex-col gap-2'>
                 <h3 className='font-medium'>{step.title}</h3>
@@ -156,7 +192,7 @@ export function AssistantWorkflowPlan({
             <Button
               variant='outline'
               disabled={busy || plan.status === 'approved'}
-              onClick={onDiscuss}
+              onClick={() => onDiscuss()}
             >
               {t('assistant.plan.discuss')}
             </Button>

@@ -125,3 +125,52 @@ it('explicitly distinguishes a paused proposal from a created workflow', () => {
   ).toBeInTheDocument();
   expect(screen.queryByRole('link')).not.toBeInTheDocument();
 });
+
+it('offers question-specific replies without approving the proposal', async () => {
+  const user = userEvent.setup();
+  const { decide, discuss } = view({
+    ...plan,
+    status: 'needs_clarification',
+    document: {
+      ...plan.document,
+      questions: ['Which audience?', 'What is the scope?'],
+    },
+  });
+  expect(screen.getByText('assistant.plan.clarificationHint')).toBeVisible();
+  await user.click(
+    screen.getAllByRole('button', {
+      name: 'assistant.plan.answerQuestion',
+    })[1]!,
+  );
+  expect(discuss).toHaveBeenCalledWith('What is the scope?');
+  expect(decide).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole('button', { name: 'assistant.plan.approve' }),
+  ).toBeDisabled();
+});
+
+it('shows acceptance criteria without opening technical configuration', () => {
+  view(plan);
+  expect(screen.getByText('Report matches verified inputs')).toBeVisible();
+});
+
+it('keeps historical questions readable without offering stale reply actions', () => {
+  render(
+    <MemoryRouter>
+      <AssistantWorkflowPlan
+        plan={{
+          ...plan,
+          document: { ...plan.document, questions: ['Which audience?'] },
+        }}
+        busy={false}
+        active={false}
+        onDiscuss={vi.fn()}
+        onDecide={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+  expect(screen.getByText('Which audience?')).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: 'assistant.plan.answerQuestion' }),
+  ).not.toBeInTheDocument();
+});

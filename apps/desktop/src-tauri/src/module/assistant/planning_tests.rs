@@ -163,7 +163,7 @@ async fn planning_clarification_revision_native_approval_and_creation_are_separa
     ];
     let revised = document();
     let planner = tests::ScriptedModel::new(vec![
-        assessment("planning", "阈值1000"),
+        assessment("planning", ""),
         tests::call("transfer_to_agent", json!({"agent_name":"workflow_planner"})),
         tests::call("get_workflow_plan", json!({})),
         tests::call(
@@ -620,4 +620,146 @@ async fn hard_pause_repairs_invalid_plan_then_accepts_unspecified_nodes_and_pres
         checkpoint
     );
     assert!(workspace.saved.lock().unwrap().is_none());
+}
+
+/// Scripted models test feedback transport/versioning, not question-selection quality.
+#[tokio::test]
+async fn partial_answers_and_delegated_choices_revise_without_approval() {
+    let workspace = authoring_tests::DraftStore::new();
+    let sid = &workspace.session_id;
+    let store = Store::new(workspace.root.path());
+    let mut draft = json!({
+        "goal":"把资料整理为可复用摘要流程","summary":"先确认用途与篇幅",
+        "inputs":[{"name":"source","description":"输入资料"}],"outputs":["摘要"],
+        "steps":[{"title":"整理资料","description":"按明确的用途与篇幅生成摘要","dependencies":[],"configuration_notes":"使用原生可用能力"}],
+        "constraints":["不执行外部操作"],"assumptions":[],
+        "questions":["摘要面向谁？这决定表述方式。","篇幅需要多长？这决定输出范围。"],
+        "acceptance_criteria":["摘要适合确定的受众，且保留原文事实"]
+    });
+    let mut history = vec![];
+    for (index, message) in [
+        "把资料整理成可复用流程，先不要运行",
+        "面向新同事，篇幅还没决定",
+        "篇幅你决定，先给我看更新的方案",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 1 {
+            draft["constraints"] = json!(["不执行外部操作", "面向新同事，避免未解释的术语"]);
+            draft["questions"] = json!(["篇幅需要多长？这决定输出范围。"]);
+            draft["summary"] = json!("受众已明确为新同事，篇幅待定");
+        } else if index == 2 {
+            draft["assumptions"] = json!(["用户委托选择篇幅，默认简短摘要；不改变原文事实"]);
+            draft["questions"] = json!([]);
+            draft["summary"] = json!("保留新同事受众，采用简短摘要，等待确认");
+        }
+        history.push(Content::new("user").with_text(message));
+        let model = tests::ScriptedModel::new(vec![
+            assessment(if index == 0 { "authoring" } else { "planning" }, message),
+            tests::call("transfer_to_agent", json!({"agent_name":"workflow_planner"})),
+            tests::call("get_workflow_plan", json!({})),
+            tests::call(
+                "save_workflow_plan",
+                json!({"base_version":index,"document_json":draft.to_string()}),
+            ),
+        ]);
+        let reply = tests::runtime()
+            .run_with_discovery(
+                &model,
+                &ModelProvider::Gemini,
+                AssistantRequest {
+                    context: context(sid),
+                    contents: history.clone(),
+                    capabilities: vec![],
+                },
+                &|_| Ok(()),
+                &workspace,
+            )
+            .await
+            .unwrap();
+        assert!(reply.call.is_none());
+        assert!(workspace.saved.lock().unwrap().is_none());
+        let plan = store.current(sid).unwrap().unwrap();
+        assert_eq!(plan.version, (index + 1) as u32);
+        assert_eq!(plan.status, if index == 2 { "ready" } else { "needs_clarification" });
+        assert!(plan.approved_turn_key.is_none());
+        if index > 0 {
+            assert!(plan.document.constraints.iter().any(|value| value.contains("新同事")));
+            let requests = model.requests.lock().unwrap();
+            let child = requests
+                .iter()
+                .find(|request| request.tools.contains_key("save_workflow_plan"))
+                .unwrap();
+            let context = serde_json::to_string(&child.contents).unwrap();
+            assert!(context.contains("面向新同事"));
+        }
+        history.push(reply.content);
+    }
+    let plan = store.current(sid).unwrap().unwrap();
+    assert!(store.decide(sid, &plan.id, 2, true, "stale-approval").is_err());
+    assert!(!store.revision(sid, 1).unwrap().document.questions.is_empty());
+    assert!(!store.revision(sid, 2).unwrap().document.questions.is_empty());
+    assert!(plan.document.questions.is_empty());
+    assert_eq!(plan.document.assumptions.len(), 1);
+}
+
+#[tokio::test]
+async fn planner_receives_source_labeled_conversation_without_historical_replay() {
+    let workspace = authoring_tests::DraftStore::new();
+    let mut proposal = document();
+    proposal["questions"] = json!(["输入值的处理口径是什么？不同口径会改变输出。"]);
+    let model = tests::ScriptedModel::new(vec![
+        assessment("authoring", "整理成流程"),
+        tests::call("transfer_to_agent", json!({"agent_name":"workflow_planner"})),
+        tests::call(
+            "save_workflow_plan",
+            json!({"base_version":0,"document_json":proposal.to_string()}),
+        ),
+    ]);
+    let reply = tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: context(&workspace.session_id),
+                capabilities: vec![],
+                contents: vec![
+                    Content::new("user").with_text("先看输入资料"),
+                    Content::new("model").with_text("我猜所有记录都已获批准"),
+                    Content::new("user").with_text("以后重复做，整理成流程，先不要运行"),
+                ],
+            },
+            &|_| Ok(()),
+            &workspace,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    assert!(workspace.saved.lock().unwrap().is_none());
+    let requests = model.requests.lock().unwrap();
+    let request = requests
+        .iter()
+        .find(|request| request.tools.contains_key("save_workflow_plan"))
+        .unwrap();
+    let injected: Value = request
+        .contents
+        .iter()
+        .find_map(|content| {
+            serde_json::from_str::<Value>(&model::content_text(content))
+                .ok()
+                .filter(|value| value.get("conversation").is_some())
+        })
+        .unwrap();
+    assert_eq!(injected["conversation"][1]["source"], "assistant_generated_unverified");
+    assert_eq!(injected["conversation"][2]["source"], "user_expression");
+    assert!(injected.get("prior_execution_evidence").is_none());
+    assert!(!request.tools.contains_key("run_code"));
+    assert!(!request.tools.contains_key("save_workflow_draft"));
+    let plan = Store::new(workspace.root.path())
+        .current(&workspace.session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.status, "needs_clarification");
+    assert!(plan.approved_turn_key.is_none());
 }

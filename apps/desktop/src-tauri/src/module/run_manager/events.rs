@@ -534,23 +534,27 @@ async fn persist_app_output(run_id: String, mut receiver: mpsc::UnboundedReceive
     Ok(())
 }
 
-fn emit_on_main_thread<S>(event_name: &'static str, payload: S) -> Result<()>
+pub(crate) fn emit_on_main_thread<S>(event_name: &'static str, payload: S) -> Result<()>
 where
     S: Serialize + Clone + Send + 'static,
 {
-    let Some(app) = crate::APP_HANDLE.get() else {
-        // Persistence also runs before the renderer exists and in native tests.
-        return Ok(());
-    };
-    let emit_app = app.clone();
-    // Wry synchronously evaluates listeners for an emit from a background
-    // worker. Queue it on the main loop so a concurrent WebView IPC request
-    // cannot invert the WebView lock and freeze the renderer.
-    app.run_on_main_thread(move || {
-        if let Err(error) = emit_app.emit(event_name, payload) {
-            log::warn!("failed to emit {event_name}: {error}");
-        }
-    })?;
+    // Native tests persist events without initializing a Tauri application.
+    #[cfg(test)]
+    let _ = (event_name, payload);
+    #[cfg(not(test))]
+    {
+        use tauri::Emitter;
+
+        let app = crate::core::handle::Handle::app_handle();
+        let emit_app = app.clone();
+        // Queue on the main loop to avoid inversion of the WebView lock
+        // between background event delivery and concurrent frontend IPC.
+        app.run_on_main_thread(move || {
+            if let Err(error) = emit_app.emit(event_name, payload) {
+                log::warn!("failed to emit {event_name}: {error}");
+            }
+        })?;
+    }
     Ok(())
 }
 

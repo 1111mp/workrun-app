@@ -85,17 +85,7 @@
             "attachmentPaths": [
               "source_file"
             ],
-            "outputSchema": {
-              "type": "object",
-              "properties": {
-                "result": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "result"
-              ]
-            },
+            "outputSchema": "{\"type\":\"object\",\"properties\":{\"result\":{\"type\":\"string\"}},\"required\":[\"result\"]}",
             "state": {
               "access": {
                 "readers": [
@@ -222,17 +212,7 @@
             "maxIterations": 8,
             "maxScriptDurationSeconds": 5,
             "maxScriptMemoryMiB": 256,
-            "outputSchema": {
-              "type": "object",
-              "properties": {
-                "result": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "result"
-              ]
-            },
+            "outputSchema": "{\"type\":\"object\",\"properties\":{\"result\":{\"type\":\"string\"}},\"required\":[\"result\"]}",
             "state": {
               "globalKeys": [
                 "result",

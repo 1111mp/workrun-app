@@ -4,7 +4,7 @@ description: Compose authorized tools with restricted Python.
 ---
 # CodeAct agent (codeact_agent)
 
-Uses the restricted Monty Python runtime, not an unrestricted Python terminal or package installer. Read input files through /artifacts/manifest.json; write deliverables under /outputs for runtime export. maxIterations: 1–50, default 8; script duration: 1–300 seconds, default 5; memory: 16–4096 MiB, default 256. mounts/environment grant real host access and must come from explicitly authorized configuration. Never invent paths or secrets. Reserve /artifacts and /outputs; mounts must not overlap. Compilation currently requires a configured model and workspace runtime. The artifact manifest is an array of {reference:{id,name,...},path}; read entry.path, not a guessed input-name key or artifact directory. Inspect input structure before processing. Finish with a last-expression {"type":"final_result","value":{...named output fields...}}. Object fields enter private state and state.globalKeys publishes them; use outputSchema for explicit validation. Do not invent global-state tools. Avoid bound dictionary methods as callbacks in Monty; use explicit loops.
+Uses the restricted Monty Python runtime, not an unrestricted Python terminal or package installer. Read reference topic=nodes with node_types=["codeact_agent"] for the linked runtime language/module/OS briefing before committing to an implementation; Python familiarity does not establish library or method support. Read input files through /artifacts/manifest.json; write deliverables under /outputs for runtime export. maxIterations: 1–50, default 8; script duration: 1–300 seconds, default 5; memory: 16–4096 MiB, default 256. mounts/environment grant real host access and must come from explicitly authorized configuration. Never invent paths or secrets. Reserve /artifacts and /outputs; mounts must not overlap. Compilation currently requires a configured model and workspace runtime. The artifact manifest is an array of {reference:{id,name,...},path}; read entry.path, not a guessed input-name key or artifact directory. Inspect input structure before processing. Finish with a last-expression {"type":"final_result","value":{...named output fields...}}. Object fields enter private state and state.globalKeys publishes them; use outputSchema for explicit validation. Do not invent global-state tools. Avoid bound dictionary methods as callbacks in Monty; use explicit loops.
 
 CodeAct selects executable dependencies with discovered toolIds and may bind arguments with toolStateBindings. It does not support personal skillRefs or Agent outputKey/attachmentPaths. Visible ArtifactRefs are mapped to its file workspace automatically. Workrun writes exported files to the artifacts state key; publish artifacts with state.globalKeys or share the namespace through readers when downstream nodes need them. Do not put invented ArtifactRefs into final_result. Read reference topic=configuration and topic=examples with node_types=["codeact_agent"] for a native example.
 
@@ -33,9 +33,8 @@ export interface CodeactAgentNodeData {
   /** {"minLength":1} */
   "modelProfileId": string;
   "instruction"?: string;
-  "outputSchema"?: string | {
-    [key: string]: unknown;
-  };
+  /** {"description":"JSON-serialized object schema; the visual editor stores this field as JSON text."} */
+  "outputSchema"?: string;
   /** {"uniqueItems":true} */
   "toolIds"?: Array<string>;
   "toolStateBindings"?: Array<{

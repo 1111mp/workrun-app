@@ -18,9 +18,8 @@ export interface CodeactAgentNodeData {
   /** {"minLength":1} */
   "modelProfileId": string;
   "instruction"?: string;
-  "outputSchema"?: string | {
-    [key: string]: unknown;
-  };
+  /** {"description":"JSON-serialized object schema; the visual editor stores this field as JSON text."} */
+  "outputSchema"?: string;
   /** {"uniqueItems":true} */
   "toolIds"?: Array<string>;
   "toolStateBindings"?: Array<{

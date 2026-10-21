@@ -322,9 +322,20 @@ function AssistantChat({ scope }: { scope: string }) {
                                           ),
                                         )
                                       }
-                                      onDiscuss={() => {
-                                        setDraft(
-                                          t('assistant.plan.editPrompt'),
+                                      onDiscuss={(question) => {
+                                        // Keep an unfinished reply when the user selects another question.
+                                        setDraft((current) =>
+                                          current.trim()
+                                            ? current
+                                            : question
+                                              ? t(
+                                                  'assistant.plan.answerPrompt',
+                                                  {
+                                                    version: entry.plan.version,
+                                                    question,
+                                                  },
+                                                )
+                                              : t('assistant.plan.editPrompt'),
                                         );
                                         document
                                           .querySelector<HTMLTextAreaElement>(

@@ -26,10 +26,7 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{
-    Emitter,
-    ipc::{Channel, InvokeResponseBody},
-};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::{Notify, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -473,4 +470,4 @@ pub use workflow::{
 #[cfg(test)]
 mod tests;
 
-pub(crate) use events::emit_cleanup_event;
+pub(crate) use events::{emit_cleanup_event, emit_on_main_thread};

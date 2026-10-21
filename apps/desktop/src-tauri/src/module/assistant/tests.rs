@@ -883,7 +883,7 @@ fn last_tool_results(messages: &[Content]) -> Content {
 
 #[tokio::test]
 async fn batched_general_skills_preserve_ids_and_signatures() {
-    for provider in [ModelProvider::OpenAi, ModelProvider::Gemini] {
+    for provider in [ModelProvider::OpenAi, ModelProvider::Gemini, ModelProvider::DeepSeek] {
         let batch = tool_batch(&[
             ("read_skill", json!({"name":"conversation"})),
             ("read_skill", json!({"name":"task-planning"})),

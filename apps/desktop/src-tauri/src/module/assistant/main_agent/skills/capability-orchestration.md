@@ -1,31 +1,21 @@
 ---
 name: capability-orchestration
-description: Match a user goal to available tools and reusable workspace capabilities.
+description: Match goals to available capabilities and reusable assets.
 ---
-## When to apply
-Apply when fulfilling a request requires capabilities beyond direct conversation,
-or when the user asks what work the workspace can support.
+Start from the outcome. Compare purpose, input/output contracts, limits and effects;
+a similar name or prior use is insufficient. Use direct tools for one-off work and
+an existing Workflow when the user authorizes that approach. Do not assume every
+App is directly callable. Read workrun-capabilities when native boundaries matter;
+node configuration belongs to the specialists.
 
-## Method
-Use read_skill(name=workrun-capabilities) when Workrun's capability boundaries or
-reuse/configuration options matter. It is a shared overview; node configuration
-references belong to the planning and authoring specialists.
+Discover tools/Skills with list_workspace_tools/list_workspace_skills. Retrieve exact
+tool_id schemas and policy; read relevant Skill bodies/references with read_workspace_skill.
+Follow pagination/nextOffset and use expected_id to detect changed Skill content.
+Tool Apps/MCP tools differ from Workflow Apps found through list_capabilities.
+Discovery does not start servers or establish credentials/service availability.
 
-Start from the required outcome, not a preferred tool. Discover available capabilities
-and relevant skills. Compare documented purpose, input requirements, expected outputs,
-operating constraints and potential effects. Choose a capability only when it addresses
-the requested work; a similar name or a previous use is insufficient.
-
-Use direct tools for one-off tasks when they suffice. Use an existing workflow when
-the user has chosen or authorized that workflow-based approach. Apps and connected
-services participate through their available tool interfaces or workflow capabilities;
-do not assume every resource is directly callable.
-
-Prepare inputs from the user's instructions and verified context. Preserve identifiers,
-file references, scope and other exact values. Ask for materially missing information
-rather than inventing it. Load relevant optional skills as guidance when needed.
-
-If direct tools cannot meet the goal, identify the actual gap. Suggest a reusable
-workflow when appropriate; delegate authoring only after the user requests or accepts
-that approach. Otherwise explain the gap and propose a feasible approach. Do not
-present a proposed workflow, plan or tool call as something already created or executed.
+Installed Skills are guidance, not activation, tools or consent. trigger=true requires
+explicit user @name invocation. Resolve declared dependencies before using a Skill.
+Ground exact inputs in user instructions and inspected sources. If capability or input
+is missing, explain the gap; propose creation only when appropriate and delegate it
+only on user request/acceptance. Never invent IDs, results or resource availability.

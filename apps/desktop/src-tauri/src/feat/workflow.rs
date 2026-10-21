@@ -97,6 +97,17 @@ fn apply_authored_workflow(
 /// Get a workflow by its ID from the config
 pub async fn get_workflow(id: &str) -> Result<IWorkflow> {
     validate_id(id)?;
+    // All test-time discovery/validation/execution share this explicit disk
+    // catalog. Missing fixtures never fall through to process-global user data.
+    #[cfg(test)]
+    if let Ok(root) = crate::module::workflow::TEST_SUBWORKFLOW_CATALOG.try_with(Clone::clone) {
+        let file = root.join(format!("{id}.json"));
+        let workflow: IWorkflow = serde_json::from_slice(
+            &std::fs::read(file).map_err(|_| anyhow::anyhow!("Test catalog workflow is unavailable: {id}"))?,
+        )?;
+        anyhow::ensure!(workflow.id == id, "Test catalog identity mismatch");
+        return Ok(workflow);
+    }
 
     let workflows = Config::workflows().await.data_arc();
     workflows

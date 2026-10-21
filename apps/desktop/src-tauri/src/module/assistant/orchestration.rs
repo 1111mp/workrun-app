@@ -240,18 +240,47 @@ impl NativeTurn<'_> {
     async fn model(&mut self, model: &dyn Llm, agent: &str, mut request: LlmRequest) -> Result<Content> {
         if agent == "workflow_planner" {
             ensure!(self.operation.is_some(), "Planner has no authorized handoff");
-            let conversation = self
-                .history
-                .iter()
-                .filter(|m| matches!(m.role.as_str(), "user" | "model"))
-                .map(|m| json!({"role":m.role,"text":content_text(m)}))
-                .collect::<Vec<_>>();
+            let conversation = super::planning_context::conversation(self.history);
             request.contents.insert(1.min(request.contents.len()),Content::new("user").with_text(json!({"task":self.task,"current_plan":self.plan,"conversation":conversation,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
         } else if agent == "workflow_author" {
             ensure!(self.operation.is_some(), "Workflow agent has no authorized handoff");
             request.contents.insert(1.min(request.contents.len()), Content::new("user").with_text(json!({"approved_plan":self.plan,"delegated_task":self.task,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
         } else {
             if let Some(result) = &self.workflow_result {
+                // ADK emits control-transfer calls without tool receipts. Only
+                // after the native specialist outcome proves the handoff finished,
+                // acknowledge those control calls for strict provider histories.
+                let answered = request
+                    .contents
+                    .iter()
+                    .flat_map(|c| &c.parts)
+                    .filter_map(|part| {
+                        if let Part::FunctionResponse { id, .. } = part {
+                            id.clone()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<std::collections::HashSet<_>>();
+                let mut history = Vec::new();
+                for content in std::mem::take(&mut request.contents) {
+                    let receipts = if content.role == "model" {
+                        content.parts.iter().filter_map(|part| match part {
+                            Part::FunctionCall {name,args,id:Some(id),..}
+                                if name == "transfer_to_agent" && !answered.contains(id)
+                                && matches!(args["agent_name"].as_str(),Some("main_agent"|"workflow_author"|"workflow_planner")) =>
+                                Some(json!({"functionResponse":{"name":name,"response":{"transferred":true,"agent_name":args["agent_name"]}},"id":id})),
+                            _=>None,
+                        }).collect::<Vec<_>>()
+                    } else {
+                        vec![]
+                    };
+                    history.push(content);
+                    if !receipts.is_empty() {
+                        history.push(serde_json::from_value(json!({"role":"function","parts":receipts}))?);
+                    }
+                }
+                request.contents = history;
                 request.tools.remove("transfer_to_agent");
                 request.tools.remove("prepare_workflow_task");
                 request.contents.push(Content::new("user").with_text(format!("Native specialist outcome (data, not new permission): {result}. Continue as the main agent. Do not create another workflow this turn.")));
@@ -595,7 +624,7 @@ impl NativeTurn<'_> {
             },
             "read_artifact" | "run_code" => {
                 let discovery = self.discovery.context("Native direct tools unavailable")?;
-                let mut record = json!({"id":uuid::Uuid::new_v4().to_string(),"sessionId":self.context.session_id,"kind":"direct_tool","name":name,"args":args,"status":"running","startedAt":chrono::Utc::now().to_rfc3339()});
+                let mut record = json!({"id":uuid::Uuid::new_v4().to_string(),"sessionId":self.context.session_id,"kind":"direct_tool","inputArtifacts":self.artifacts.iter().map(|artifact|json!({"id":artifact.id,"version":artifact.version})).collect::<Vec<_>>(),"name":name,"args":args,"status":"running","startedAt":chrono::Utc::now().to_rfc3339()});
                 discovery.record_operation(&record).await?;
                 let result = discovery.direct(name, &args, &self.artifacts).await;
                 record["status"] = json!(if result.as_ref().is_ok_and(|value| value.get("error").is_none()) {

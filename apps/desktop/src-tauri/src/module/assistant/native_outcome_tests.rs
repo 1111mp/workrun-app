@@ -32,7 +32,7 @@ async fn save_fixture(case: &Case) -> Result<(authoring_tests::DraftStore, Value
     let plan = json!({
         "goal":case.request,"summary":case.id,
         "inputs":case.runs[0].input.as_object().unwrap().keys().map(|key|json!({"name":key,"description":"Run input"})).collect::<Vec<_>>(),
-        "outputs":["Selected route"],
+        "outputs":case.document["settings"]["outputSchema"]["fields"].as_array().unwrap().iter().map(|field|field["key"].clone()).collect::<Vec<_>>(),
         "steps":[{"title":"Apply agreed rule","description":case.document["nodes"][1]["data"].to_string(),"dependencies":[],"configuration_notes":"Use native routing and preserve the input"}],
         "constraints":["Do not run during creation"],"assumptions":[],"questions":[],
         "acceptance_criteria":case.runs.iter().map(|run|format!("{} selects {}",run.input,run.expected_route)).collect::<Vec<_>>()
@@ -199,4 +199,279 @@ async fn native_outcomes_structurally_valid_wrong_rule_fails_outcome_check() -> 
     );
     assert_eq!(assessment.verdict, Verdict::Incorrect, "{assessment:?}");
     Ok(())
+}
+
+#[tokio::test]
+async fn native_outcomes_saved_interactive_workflows_pause_reload_and_follow_both_decisions() -> Result<()> {
+    use crate::module::workflow;
+    for kind in ["human_review", "ask_user_question"] {
+        let gate = if kind == "human_review" {
+            json!({"title":"Review input","contentKey":"payload","editable":false})
+        } else {
+            json!({"title":"Choose a path","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]})
+        };
+        let handles = if kind == "human_review" {
+            ["approved", "rejected"]
+        } else {
+            ["option:a", "option:b"]
+        };
+        let branch =
+            json!({"conditions":{"true":{"condition":"payload != \"\""},"false":{"condition":"payload == \"\""}}});
+        let document = json!({
+            "settings":{"name":format!("Interactive {kind}"),"mode":"task",
+                "inputSchema":{"fields":[{"key":"payload","type":"string","required":true}]},
+                "outputSchema":{"fields":[{"key":"payload","type":"string","required":true}]}},
+            "nodes":[
+                {"id":"start","type":"start","data":{},"position":{"x":0,"y":0}},
+                {"id":"gate","type":kind,"data":gate,"position":{"x":200,"y":0}},
+                {"id":"path_a","type":"if_else","data":branch,"position":{"x":400,"y":0}},
+                {"id":"path_b","type":"if_else","data":branch,"position":{"x":400,"y":200}},
+                {"id":"end","type":"end","data":{},"position":{"x":600,"y":0}}],
+            "edges":[
+                {"id":"entry","source":"start","target":"gate"},
+                {"id":"choose-a","source":"gate","target":"path_a","sourceHandle":handles[0]},
+                {"id":"choose-b","source":"gate","target":"path_b","sourceHandle":handles[1]},
+                {"id":"a-true","source":"path_a","target":"end","sourceHandle":"true"},
+                {"id":"a-false","source":"path_a","target":"end","sourceHandle":"false"},
+                {"id":"b-true","source":"path_b","target":"end","sourceHandle":"true"},
+                {"id":"b-false","source":"path_b","target":"end","sourceHandle":"false"}]});
+        let case = Case {
+            id: kind.into(),
+            request: "Create a reusable workflow that waits for a human decision, follows the selected path and preserves the supplied text. Do not run during creation.".into(),
+            document,
+            runs: vec![
+                Run { input:json!({"payload":"first input"}), expected_route:"path_a".into() },
+                Run { input:json!({"payload":"changed input"}), expected_route:"path_b".into() },
+            ],
+        };
+        let (store, draft) = save_fixture(&case).await?;
+        let path = store.root.path().join("interactive.sqlite");
+        std::fs::File::create(&path)?;
+        let dsl: workflow::WorkflowDsl = serde_json::from_value(catalog::document_dsl(&draft)?)?;
+        workflow::TEST_CHECKPOINT_DB
+            .scope(format!("sqlite://{}", path.display()), async {
+                for (index, run) in case.runs.iter().enumerate() {
+                    let thread = format!("{kind}-{index}");
+                    let graph = workflow::compile(dsl.clone(), &Default::default(), None).await?;
+                    let paused = graph
+                        .run_stream(serde_json::from_value(run.input.clone())?, &thread, false, None, |_| {})
+                        .await?;
+                    anyhow::ensure!(paused.interrupted, "human participation was bypassed");
+                    let state = serde_json::to_value(paused.state)?;
+                    anyhow::ensure!(
+                        state
+                            .pointer("/workflow/workflow.trace")
+                            .is_none_or(|v| v.as_array().is_some_and(Vec::is_empty)),
+                        "downstream work ran before a decision"
+                    );
+                    // Use the same native action preparation as the run center, not
+                    // fabricated run inputs containing internal approval/answer keys.
+                    let updates = if kind == "human_review" {
+                        workflow::prepare_human_review_checkpoint(
+                            serde_json::to_value(&dsl)?,
+                            thread.clone(),
+                            "gate".into(),
+                            index == 0,
+                            Default::default(),
+                            None,
+                        )
+                        .await?
+                    } else {
+                        anyhow::ensure!(
+                            workflow::prepare_ask_user_question_checkpoint(
+                                serde_json::to_value(&dsl)?,
+                                thread.clone(),
+                                "gate".into(),
+                                "unknown".into(),
+                                None
+                            )
+                            .await
+                            .is_err(),
+                            "unknown option was accepted"
+                        );
+                        workflow::prepare_ask_user_question_checkpoint(
+                            serde_json::to_value(&dsl)?,
+                            thread.clone(),
+                            "gate".into(),
+                            if index == 0 { "a" } else { "b" }.into(),
+                            None,
+                        )
+                        .await?
+                    };
+                    // Reload from the unchanged saved definition and durable SQLite
+                    // checkpoint; no compiled graph instance survives the pause.
+                    let graph = workflow::compile(dsl.clone(), &Default::default(), None).await?;
+                    graph.update_state(&thread, updates).await?;
+                    let resumed = graph
+                        .run_stream(Default::default(), &thread, true, None, |_| {})
+                        .await?;
+                    anyhow::ensure!(!resumed.interrupted, "decision did not resume execution");
+                    let observation = session::RunObservation {
+                        status: "completed".into(),
+                        name: kind.into(),
+                        error: None,
+                        state: serde_json::to_value(resumed.state)?,
+                    };
+                    let expected = [
+                        ("/global/payload", run.input["payload"].clone()),
+                        ("/workflow/workflow.trace/0/nodeId", json!("gate")),
+                        ("/workflow/workflow.trace/1/nodeId", json!(run.expected_route)),
+                    ];
+                    let assessment = assess(Some(&observation), &expected);
+                    anyhow::ensure!(
+                        assessment.verdict == Verdict::Passed,
+                        "{kind} decision {index}: {assessment:?}"
+                    );
+                    anyhow::ensure!(
+                        observation.state["workflow"]["workflow.trace"]
+                            .as_array()
+                            .unwrap()
+                            .len()
+                            == 2,
+                        "unexpected branch executed"
+                    );
+                    anyhow::ensure!(
+                        capability::validated_output(&draft, &observation.state)? == run.input,
+                        "export changed the input"
+                    );
+                }
+                anyhow::Ok(())
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_outcomes_subworkflow_reuses_persisted_definition_and_reports_unavailable_child() -> Result<()> {
+    use crate::module::workflow;
+    let child_case = cases()
+        .into_iter()
+        .find(|case| case.id == "boolean-routing")
+        .context("missing reusable rule fixture")?;
+    let (_child_store, child) = save_fixture(&child_case).await?;
+    let catalog = tempfile::tempdir()?;
+    let child_id = uuid::Uuid::new_v4().to_string();
+    let child_file = catalog.path().join(format!("{child_id}.json"));
+    // Persist the authored definition as an ordinary catalog entry; the only
+    // substituted boundary is its storage root, not child execution or outputs.
+    let entry = crate::config::IWorkflow {
+        id: child_id.clone(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+        document: child["document"].clone(),
+    };
+    std::fs::write(&child_file, serde_json::to_vec(&entry)?)?;
+    let mut parent_document = child_case.document.clone();
+    parent_document["settings"]["name"] = json!("Reuse a saved rule");
+    parent_document["settings"]["inputSchema"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"key":"extra_context","type":"string","required":true}));
+    parent_document["nodes"] = json!([
+        {"id":"start","type":"start","data":{},"position":{"x":0,"y":0}},
+        {"id":"reuse","type":"subworkflow","data":{"workflowId":child_id,"state":{"globalKeys":["enabled"]}},"position":{"x":200,"y":0}},
+        {"id":"end","type":"end","data":{},"position":{"x":400,"y":0}}]);
+    parent_document["edges"] = json!([
+        {"id":"enter","source":"start","target":"reuse"},
+        {"id":"finish","source":"reuse","target":"end"}]);
+    let case = Case {id:"subworkflow-reuse".into(),
+        request:"Create a reusable workflow that invokes the selected saved boolean rule and exports its declared result. Do not run during creation.".into(),
+        document:parent_document, runs:vec![
+            Run {input:json!({"enabled":true,"extra_context":"first"}),expected_route:"true".into()},
+            Run {input:json!({"enabled":false,"extra_context":"changed"}),expected_route:"false".into()}]};
+    workflow::TEST_SUBWORKFLOW_CATALOG
+        .scope(catalog.path().to_path_buf(), async {
+            let (store, draft) = save_fixture(&case).await?;
+            let checkpoint = store.root.path().join("reuse.sqlite");
+            std::fs::File::create(&checkpoint)?;
+            let dsl: workflow::WorkflowDsl = serde_json::from_value(catalog::document_dsl(&draft)?)?;
+            workflow::TEST_CHECKPOINT_DB
+                .scope(format!("sqlite://{}", checkpoint.display()), async {
+                    for (index, run) in case.runs.iter().enumerate() {
+                        let graph = workflow::compile(dsl.clone(), &Default::default(), None).await?;
+                        let result = graph
+                            .run_stream(
+                                serde_json::from_value(run.input.clone())?,
+                                &format!("reuse-{index}"),
+                                false,
+                                None,
+                                |_| {},
+                            )
+                            .await?;
+                        anyhow::ensure!(!result.interrupted, "unexpected child pause");
+                        let observation = session::RunObservation {
+                            status: "completed".into(),
+                            name: case.id.clone(),
+                            error: None,
+                            state: serde_json::to_value(result.state)?,
+                        };
+                        let expected = [
+                            (
+                                "/workflow/workflow.trace/0/result",
+                                json!({"enabled":run.input["enabled"]}),
+                            ),
+                            (
+                                "/workflow/workflow.trace/0/execution/0/result/route",
+                                json!(run.expected_route),
+                            ),
+                        ];
+                        let assessment = assess(Some(&observation), &expected);
+                        anyhow::ensure!(assessment.verdict == Verdict::Passed, "child outcome: {assessment:?}");
+                        anyhow::ensure!(
+                            capability::validated_output(&draft, &observation.state)?
+                                == json!({"enabled":run.input["enabled"]}),
+                            "undeclared child data escaped export"
+                        );
+                    }
+                    // Disappearance after creation is a capability failure, not a reason
+                    // to invent a replacement or use another workflow with a similar name.
+                    std::fs::remove_file(&child_file)?;
+                    let validation = authoring::validate(&draft["document"], &Default::default()).await?;
+                    anyhow::ensure!(
+                        validation["valid"] == false
+                            && validation["issues"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|issue| issue["phase"] == "resource"
+                                    && issue["message"]
+                                        .as_str()
+                                        .is_some_and(|message| message.contains(&child_id))),
+                        "unavailable dependency was not exposed during validation"
+                    );
+                    let result = match workflow::compile(dsl.clone(), &Default::default(), None).await {
+                        Ok(graph) => graph
+                            .run_stream(
+                                serde_json::from_value(case.runs[0].input.clone())?,
+                                "missing-child",
+                                false,
+                                None,
+                                |_| {},
+                            )
+                            .await
+                            .map(|_| ()),
+                        Err(error) => Err(error),
+                    };
+                    let error = result.err().context("missing dependency was reported as successful")?;
+                    anyhow::ensure!(
+                        error.to_string().contains(&child_id),
+                        "missing dependency identity was lost: {error}"
+                    );
+                    let observation = session::RunObservation {
+                        status: "failed".into(),
+                        name: case.id.clone(),
+                        error: Some(error.to_string()),
+                        state: Value::Null,
+                    };
+                    anyhow::ensure!(
+                        assess(Some(&observation), &[("/global/enabled", json!(true))]).verdict
+                            == Verdict::ExecutionFailed,
+                        "failure was graded as a valid output"
+                    );
+                    anyhow::Ok(())
+                })
+                .await
+        })
+        .await
 }

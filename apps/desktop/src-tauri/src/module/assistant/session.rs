@@ -20,7 +20,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use std::{collections::HashSet, sync::LazyLock, time::Duration};
-use tauri::Emitter;
 
 static OWNERS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 struct Lease(String);
@@ -75,7 +74,8 @@ pub async fn get(pool: &SqlitePool, workspace: &str, id: &str) -> Result<Value> 
         session["status"] = json!("error");
         session["error"] = json!("Assistant response was interrupted. Continue to retry the response.");
     }
-    if crate::APP_HANDLE.get().is_some() && dirs::active_workspace_id() == workspace {
+    #[cfg(not(test))]
+    if dirs::active_workspace_id() == workspace {
         let store = super::planning_agent::plans::Store::new(&dirs::app_home_dir()?);
         let mut plan = store.current(id)?;
         if plan.as_ref().is_some_and(|p| p.status == "building")
@@ -166,12 +166,10 @@ async fn refresh_tool_feedback(root: &std::path::Path, session: &mut Value) -> R
 
 async fn commit(pool: &SqlitePool, workspace: &str, session: &Value) -> Result<()> {
     save(pool, workspace, session).await?;
-    if let Some(app) = crate::APP_HANDLE.get() {
-        let _ = app.emit(
-            "assistant-session-updated",
-            json!({"id":session["id"],"workspaceId":workspace}),
-        );
-    }
+    let _ = run_manager::emit_on_main_thread(
+        "assistant-session-updated",
+        json!({"id":session["id"],"workspaceId":workspace}),
+    );
     Ok(())
 }
 /// Hold the same lease as turn dispatch so deletion cannot race a native writer.
@@ -610,15 +608,13 @@ async fn drive(
             };
             // Missing observers are harmless; native persistence and execution
             // continue independently of this delivery channel.
-            if let Some(app) = crate::APP_HANDLE.get() {
-                let _ = app.emit(
-                    "assistant-stream",
-                    json!({
-                        "sessionId": session["id"], "workspaceId": workspace,
-                        "messageId": message_id, "turnId": turn_id, "event": event, "activity": activity, "reasoning": thought,
-                    }),
-                );
-            }
+            let _ = run_manager::emit_on_main_thread(
+                "assistant-stream",
+                json!({
+                    "sessionId": session["id"], "workspaceId": workspace,
+                    "messageId": message_id, "turnId": turn_id, "event": event, "activity": activity, "reasoning": thought,
+                }),
+            );
             Ok(())
         };
         let reply = runtime

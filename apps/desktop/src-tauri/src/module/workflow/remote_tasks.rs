@@ -5,12 +5,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
-use tauri::Emitter;
 
 pub(super) fn notify_changed() {
-    if let Some(app_handle) = crate::APP_HANDLE.get() {
-        let _ = app_handle.emit("remote-tasks-changed", ());
-    }
+    let _ = crate::module::run_manager::emit_on_main_thread("remote-tasks-changed", ());
 }
 
 #[derive(Clone, Serialize, Deserialize)]

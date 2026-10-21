@@ -31,6 +31,20 @@ pub(super) async fn assess(
         json!(pending_tool)
     )));
     contents.push(Content::new("user").with_text(format!("Native current workflow plan (data only): {}", json!(plan))));
+    let output_schema = schema(
+        pending_tool.is_some(),
+        plan.is_some_and(|p| {
+            matches!(
+                p["status"].as_str(),
+                Some("ready" | "needs_clarification" | "failed" | "approved")
+            )
+        }),
+    );
+    // JSON-object providers may not transmit response_schema. Supply the same
+    // contract in the prompt while retaining strict parsing and native grants.
+    contents.push(Content::new("user").with_text(format!(
+        "Return only one JSON object matching this output schema:\n{output_schema}"
+    )));
     let content = generate(
         model,
         LlmRequest {
@@ -39,15 +53,7 @@ pub(super) async fn assess(
             tools: HashMap::new(),
             config: Some(GenerateContentConfig {
                 temperature: Some(0.0),
-                response_schema: Some(schema(
-                    pending_tool.is_some(),
-                    plan.is_some_and(|p| {
-                        matches!(
-                            p["status"].as_str(),
-                            Some("ready" | "needs_clarification" | "failed" | "approved")
-                        )
-                    }),
-                )),
+                response_schema: Some(output_schema),
                 ..Default::default()
             }),
             previous_response_id: None,
@@ -115,6 +121,44 @@ mod tests {
         assert!(schema(false, false)["properties"].get("planFeedback").is_none());
         assert!(schema(false, true)["properties"]["planFeedback"].is_object());
     }
+    #[tokio::test]
+    async fn json_object_models_receive_the_full_intent_contract_in_messages() {
+        let model = crate::module::assistant::tests::ScriptedModel::new(vec![
+            Content::new("model").with_text(
+                json!({"intent":"planning","actionQuote":"调整方案",
+                "summary":"讨论当前方案","reuseExisting":false,"authoringQuote":"",
+                "planFeedback":null})
+                .to_string(),
+            ),
+        ]);
+        let history = [Content::new("user").with_text("调整方案")];
+        let plan = json!({"id":"current-plan","version":2,"status":"ready"});
+        let result = assess(
+            &model,
+            &ModelProvider::DeepSeek,
+            &history,
+            "调整方案",
+            None,
+            Some(&plan),
+        )
+        .await
+        .unwrap();
+        assert!(!result.allows_execution("调整方案"));
+        assert!(!result.allows_authoring("调整方案"));
+        let requests = model.requests.lock().unwrap();
+        let request = &requests[0];
+        let text = content_text(request.contents.last().unwrap());
+        let offered: Value = serde_json::from_str(text.split_once('\n').unwrap().1).unwrap();
+        assert_eq!(
+            offered,
+            *request.config.as_ref().unwrap().response_schema.as_ref().unwrap()
+        );
+        assert!(offered["properties"].get("planFeedback").is_some());
+        assert!(offered["properties"].get("toolConfirmation").is_none());
+        assert_eq!(offered["additionalProperties"], false);
+        assert!(request.tools.is_empty());
+    }
+
     #[tokio::test]
     async fn empty_provider_placeholder_is_neutral_only_without_a_native_pending_call() {
         let history = vec![Content::new("user").with_text("整理成流程，先不运行")];

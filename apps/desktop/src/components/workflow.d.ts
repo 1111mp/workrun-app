@@ -66,6 +66,11 @@ type WorkflowNodeStateConfig = {
   sensitiveFields?: string[];
 };
 
+/** Native documents and the inspector store sharing controls under data.state. */
+type WorkflowStatefulNodeData = {
+  state?: WorkflowNodeStateConfig;
+};
+
 type WorkflowSettings = {
   name: string;
   description: string;
@@ -85,10 +90,10 @@ type WorkflowSettings = {
 };
 
 // ---------- Agent Node ----------
-type WorkflowAgentNodeData = WorkflowNodeStateConfig & {
+type WorkflowAgentNodeData = WorkflowStatefulNodeData & {
   name: string;
   modelProfileId: string;
-  /** Dot-separated paths in this node’s visible State, injected as model attachments. */
+  /** Visible State paths containing ArtifactRefs, injected as model attachments. */
   attachmentPaths?: string[];
   description: string;
   instruction: string;
@@ -119,7 +124,7 @@ type WorkflowCodeActEnvironmentBinding = {
   name: string;
   value: string;
 };
-type WorkflowCodeActAgentNodeData = WorkflowNodeStateConfig & {
+type WorkflowCodeActAgentNodeData = WorkflowStatefulNodeData & {
   name: string;
   modelProfileId: string;
   description: string;
@@ -143,7 +148,7 @@ type WorkflowCodeActAgentNode = WorkflowBaseNode & {
 };
 
 // ---------- Remote Agent Node ----------
-type WorkflowRemoteAgentNodeData = WorkflowNodeStateConfig & {
+type WorkflowRemoteAgentNodeData = WorkflowStatefulNodeData & {
   authentication?: import('@/services/remote-agent').RemoteAuthentication;
   attachmentPaths?: string[];
   timeoutSeconds?: number;
@@ -157,7 +162,7 @@ type WorkflowRemoteAgentNode = WorkflowBaseNode & {
 };
 
 // ---------- Process Node ----------
-type WorkflowProcessNodeData = WorkflowNodeStateConfig & {
+type WorkflowProcessNodeData = WorkflowStatefulNodeData & {
   name: string;
   processNodeId: string;
   description: string;
@@ -170,7 +175,7 @@ type WorkflowProcessNode = WorkflowBaseNode & {
 };
 
 // ---------- Subworkflow Node ----------
-type WorkflowSubworkflowNodeData = WorkflowNodeStateConfig & {
+type WorkflowSubworkflowNodeData = WorkflowStatefulNodeData & {
   workflowId: string;
   workflowName?: string;
 };
@@ -212,7 +217,7 @@ type WorkflowIfElseBranch = {
   condition: string;
 };
 
-type WorkflowIfElseNodeData = WorkflowNodeStateConfig & {
+type WorkflowIfElseNodeData = WorkflowStatefulNodeData & {
   label?: string;
   /** Conditions evaluated independently for the two outgoing branches. */
   conditions: {
@@ -240,7 +245,7 @@ type WorkflowSwitchDefault = {
   /** Description of the unmatched cases; this is not evaluated. */
   condition: string;
 };
-type WorkflowSwitchNodeData = WorkflowNodeStateConfig & {
+type WorkflowSwitchNodeData = WorkflowStatefulNodeData & {
   label?: string;
   cases: WorkflowSwitchCase[];
   /** Fallback branch used when no case condition matches. */
@@ -252,7 +257,7 @@ type WorkflowSwitchNode = WorkflowBaseNode & {
 };
 
 // ---------- Human Review Node ----------
-type WorkflowHumanReviewNodeData = WorkflowNodeStateConfig & {
+type WorkflowHumanReviewNodeData = WorkflowStatefulNodeData & {
   title: string;
   description: string;
   /** State key whose value is presented to the reviewer. */
@@ -277,7 +282,7 @@ type WorkflowAskUserQuestionOption = {
   label: string;
   description?: string;
 };
-type WorkflowAskUserQuestionNodeData = WorkflowNodeStateConfig & {
+type WorkflowAskUserQuestionNodeData = WorkflowStatefulNodeData & {
   title: string;
   description: string;
   options: WorkflowAskUserQuestionOption[];

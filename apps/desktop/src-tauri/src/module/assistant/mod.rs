@@ -6,6 +6,7 @@ mod main_agent;
 mod model;
 mod orchestration;
 mod planning_agent;
+mod planning_context;
 mod protocol;
 mod resources;
 mod sdk;

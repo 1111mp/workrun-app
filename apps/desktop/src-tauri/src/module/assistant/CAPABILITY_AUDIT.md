@@ -1,219 +1,116 @@
-# Native capability knowledge audit
+# Native capability knowledge and coverage
 
-This is a maintainer inventory, not a model protocol or execution policy. The model
-entry point is [workrun-capabilities](reference/workrun-capabilities.md), exposed
-through the three roles' existing Skill catalogs. Node details remain generated
-from `../workflow/node-contracts.json`; installed resources remain dynamic.
+This is a maintainer audit, not an Agent instruction or a prescribed graph. It
+compares existing product surfaces and identifies verification gaps. A documented
+or compilable capability is not evidence of autonomous selection or correctness.
+No task-specific rule or new state/plan protocol is introduced.
 
-## Configuration inventory
+## Node inventory
 
-| Capability | Editor/configuration | Native implementation | Model reference/discovery |
-| --- | --- | --- | --- |
-| Workflow input/output and task/chat mode | workflow settings; native document settings | `../workflow/mod.rs`, `../../feat/workflow.rs` | reference/format.md, reference/state.md |
-| Local model, instructions, structured output | agent node inspector | `../workflow/agent.rs` | generated agent guide; list_authoring_resources(models) |
-| Restricted Python, runtime limits, mounts | codeact_agent node inspector | `../workflow/codeact_agent.rs` | generated CodeAct guide |
-| Workflow App | processNodeId / appRef | `../workflow/process.rs`, `../process_node/` | generated process guide; list_capabilities |
-| Tool App and MCP selection | toolIds, toolStateBindings | `../tool_registry.rs`, `../workflow/tool.rs`, `../mcp_server/` | list_workspace_tools; selected full contract |
-| Personal Skill selection | agent.skillRefs; absent on CodeAct | `../skill.rs`, `../workflow/agent.rs` | list_workspace_skills, read_workspace_skill |
-| Remote agent | endpoint, authentication, attachments | `../workflow/remote_agent.rs`, remote_auth.rs | generated remote_agent guide |
-| State publication and access | state.globalKeys, state.access.readers/rawReaders, sensitiveFields | `../workflow/state_bridge.rs`, `../state/` | reference/state.md; node data schemas |
-| File references and deliverables | file/files interface fields; attachmentPaths | `../artifact.rs`, workflow/agent.rs, workflow/codeact_agent.rs | state and generated Agent/CodeAct guides |
-| Conditions | if_else, switch and source handles | `../workflow/routing.rs` | reference/routing.md; generated node guides |
-| Human decisions | human_review, ask_user_question | corresponding native node modules | routing/recovery and generated guides |
-| Reuse | subworkflow.workflowId | `../workflow/subworkflow.rs` | generated guide; list_capabilities |
-| Lifecycle/layout | start, end, terminate, group | `../workflow/mod.rs` and routing.rs | generated guides; format reference |
-| Effects and recovery | native operation/recovery/compensation configuration | workflow/operations.rs, recovery.rs, saga.rs | recovery, compensation, execution-recovery |
+The editor union (`components/workflow.d.ts`), native `workflow/contracts.rs`
+NODE_TYPES and `workflow/node-contracts.json` contain the same 13 node kinds.
+`contracts::tests` checks that set and validates each contract example against its
+schema. Generated references expose summaries, detailed guides and exact schemas.
+The native compiler dispatch is in `workflow/mod.rs`.
 
-The editor source for node fields is
-`apps/desktop/src/components/workflow-node-inspector.tsx` from the repository root.
-The model authors `settings/nodes/edges`, then saves into the ordinary Workflow
-catalog through `feat/workflow.rs::save_authored_workflow`. No separate graph format
-or state transport is needed.
-
-## Confirmed corrections in this increment
-
-- The reference README described access as author-only, although the planner
-  already calls the same reference reader. Updated the explanation.
-- Roles had separate entry Skills with no shared Workrun capability map. Added
-  one optional external Skill reused by all three catalogs and the specialists'
-  reference reader. The main role still has no node-reference/configuration tool.
-- The state guide advised building serial graphs before parallel graphs. Removed
-  this extra topology preference; described native scheduling versus visibility.
-- Kept tool discovery factual: Agent/CodeAct toolIds resolve MCP and Tool Apps.
-  Conversation read_artifact/run_code are not Workflow tool IDs. Personal Skills
-  are supported on Agent; CodeAct's current contract does not expose skillRefs.
-
-## Node-resource knowledge and example checks
-
-The Agent, CodeAct and Process semantic guides now explain their actual resource
-configuration paths and link to topic=configuration/examples. Configuration examples
-are ordinary Workflow documents in workflow_agent/reference/configuration-examples.json,
-with explicit discovery placeholders and assumed tool/App contracts.
-
-- Corrected an existing state-reference error: native scoped input flattens permitted
-  private/global fields using their original keys, not automatic nodeId.key aliases.
-  Duplicate visible keys raise InputKeyConflict. Regression coverage checks both
-  private visibility and the conflict, without changing the runtime.
-- Agent: private output sharing, outputSchema/outputKey alternatives, tool IDs versus
-  callable names, argument binding and SkillToolset activation. Skill-declared tools
-  must be selected; nonempty allowedTools declarations restrict the effective set.
-- CodeAct: visible ArtifactRefs, manifest format, supported configuration, final_result
-  and automatic artifacts export. CodeAct does not expose skillRefs, outputKey or
-  attachmentPaths in its current contract.
-- Process: installed Workflow App ID and visible input/output field names; Tool Apps
-  and MCP tools belong in Agent/CodeAct toolIds, not processNodeId.
-
-Validation levels remain explicit: examples pass node-schema/document-shape checks,
-native catalog serialization in temporary storage and editor load/document round-trip
-checks. Local native state/tool bindings and Monty file export test the illustrated
-state semantics. Placeholders do not establish full compilation with dependencies,
-provider behavior, installed Skill activation or external App/MCP execution.
-
-## Code/knowledge alignment status
-
-1. **Planning granularity — corrected:** node_types can be omitted or empty and
-   supplied types are suggestions, not saved-graph requirements. The planner may
-   leave routine configuration to authoring. Committed dependencies retain native
-   discovery/availability and saved-graph checks; substantive user requirements
-   remain in the approved plan. No new planning schema or mapping protocol was added.
-2. **Validation parity — reviewed for current settings/interface fields:** editor
-   `components/workflow.d.ts` and workflow-settings.tsx expose the same six settings
-   keys and six interface types accepted by authoring. A local regression passes
-   these fields, input rawReaders/sensitiveFields, task/chat modes, session state
-   and viewport through native compilation. No restriction was removed merely
-   because another validation layer exists. Remaining limits and node field parity
-   still need incremental review as capabilities evolve.
-3. **Capability availability:** ToolRegistry currently has Process and MCP sources.
-   Better documentation cannot create an absent executor. Use discovered resources
-   or CodeAct where suitable; record a real gap before proposing new tools.
-4. **Autonomy evidence:** local tests establish discovery, resource packaging,
-   configuration and native behavior, not the quality of model choices. Build
-   varied authoring evaluations without requiring a particular graph shape.
-   Real-provider evaluation still requires separate authorization.
-5. **Existing browser checks:** the previous rollback audit found two unchanged
-   activity-summary browser tests expecting a different trigger layout. Sidebar
-   timing also failed once and passed in isolation. These unrelated UI checks are
-   not fixed by this knowledge increment.
-
-## Outcome evaluation contract
-
-The shared overview now explains operation-based capability selection, reusable
-inputs and observable task checks. Planner/author Skills point to it; result delivery
-preserves execution evidence. This is model guidance, not a new runtime validator.
-
-Evaluate autonomy across these independent dimensions. A scripted model can test
-protocols and the evaluator, but cannot establish model decision quality.
-
-| Dimension | Evidence required | Insufficient evidence |
+| Node | Configuration/behavior to preserve | Verification still needed across autonomous tasks |
 | --- | --- | --- |
-| Intent and consent | One-off work stays direct; reuse request produces a proposal; confirmation creates; separate execution authorization | A generated graph alone |
-| Capability fit | Selected resources exist and their contracts support the required operation and input format | An instruction promising to perform the operation |
-| Native configuration | Saved definition passes native checks and preserves inputs, resource configuration and intended state access | A plausible JSON document |
-| Outcome correctness | Observed outputs match independently derived task expectations | completed status, output schema, or the model's self-assessment |
-| Reusability | The same saved definition accepts changed inputs and produces their independently expected outputs | Repeating the original sample answer |
-| Honest limitations | Missing resources, failed checks and unobserved criteria remain explicit | A success narrative after a tool failure |
+| start | Run inputs enter global state; entry restrictions | Deriving reusable input contracts from user intent |
+| end | Completion and Workflow-declared global outputs | Export completeness and correct required/type choices |
+| agent | Visible state, file references, output modes, selected tools/Skills | Selecting real executable dependencies when needed; factual quality |
+| codeact_agent | Restricted runtime, manifest, final_result, files and limits | Environment-aware implementation and changed-input execution |
+| process | Discovered App identity/release and exact input/output names | Local/team resource selection and unavailable dependencies |
+| remote_agent | Endpoint, authentication, attachments and timeout | Authorized configuration, service failure and returned output handling |
+| if_else | Independent true/false expressions and source handles | Boundary cases and paths where neither condition matches |
+| switch | Ordered cases and default | Overlapping cases, unmatched inputs and downstream visibility |
+| human_review | Native pause/resume, editability and decision handles | Resume/cancel behavior and safe handling of human edits |
+| ask_user_question | Native option selection and source handles | User decision integration across run lifecycle |
+| subworkflow | Discovered definition, recursion constraints, declared global outputs | Reuse with changing inputs and parent output publication |
+| terminate | Explicit early completion | Intentional termination versus missing-result failure |
+| group | Layout only, no executable edges | Preserving layout without treating it as processing |
 
-Use varied evaluation tasks: exact aggregation, record filtering/deduplication,
-language transformation, file generation and an unavailable-capability request.
-For each, keep the request, input fixtures, expected facts and comparison rules in
-test assets, separate from production Skills. Include malformed/missing input where
-meaningful. Unknown source metadata must stay unknown. Evaluate equivalent valid
-graphs by behavior, not by required node names, topology or tool choice.
+This inventory establishes existence and documentation coverage, not full field
+or behavioral parity. The editor inspector also provides dynamic record-based
+controls; a TypeScript declaration alone does not establish its behavior.
 
-Replay the multi-turn path: direct request; reusable Workflow request without
-execution; proposal feedback; confirmation; creation; separately authorized run.
-Then change the input and run the same saved definition. Test expectations should
-come from fixture logic or an independent reference implementation, not from the
-report being evaluated. Record execution failure, incorrect output and missing
-observations separately. An unobserved criterion is not a pass.
+## Cross-cutting contracts and discovery
 
-Current local tests cover role isolation, approval protocols, packaged references,
-native configuration, state/tool binding and local file export. They do not yet
-supply a complete autonomous multi-task outcome benchmark. Real-provider runs and
-external App/MCP behavior remain untested here and need separate authorization;
-no evaluation scores should be inferred from documentation changes.
+| Capability | Current implementation/reference | Evidence boundary / next verification |
+| --- | --- | --- |
+| Native document | workflow_agent/reference/format.md; authoring validator/compiler | Positive/negative generated definitions; no goal correctness implied |
+| Scoped state | workflow/state_bridge.rs; reference/state.md and configuration.md | Global/private/raw access, conflicts, branch ordering, nested values |
+| Models | list_authoring_resources(kind=models) | Profile discovery does not establish credentials or service availability |
+| Tool Apps and MCP | workspace_resources.rs; ToolRegistry; Agent toolIds/toolStateBindings | Exact schemas, confirmation policy, selected ID versus callable name |
+| Personal Skills | workspace discovery/read; Agent skillRefs | Declared tools, lazy loading, trigger and compatibility requirements |
+| Workflow Apps | Catalog list_capabilities and Process App contracts | App IDs/release identity and actual input/output keys |
+| Existing Workflows | Catalog discovery; subworkflow or authorized execution | Explicit/current target identity, reuse and revision boundaries |
+| Files | ArtifactRefs; Agent attachmentPaths; CodeAct manifest/export | Supported content types, sizes, authorization and actual generated files |
+| Runtime environment | codeact_agent.rs; CodeAct node details use linked runtime capabilities | Language/OS briefing is discoverable; complete API inventory and autonomous implementation remain unverified |
+| Recovery/effects | workflow/SAGA.md, RECOVERY.md; operation records | Interrupted operations, retries and external effects in isolated fixtures |
+| Conversation lifecycle | main/planning/authoring roles, task_runtime checkpoints | Clarification, version feedback, creation versus execution authorization |
+| Outcome evidence | Test-only outcome_evaluation.rs and task fixtures | No production-wide business verifier; autonomous multi-task evidence incomplete |
 
-## Maintenance
+References are progressively available through shared workrun-capabilities Skill,
+get_workflow_reference and workspace resource discovery. Reading an installed Skill
+or describing a tool does not grant execution. Tools available to the conversation
+are not automatically selectable Workflow tools.
 
-Update semantic guides with runtime changes and regenerate packaged resources with
-`node apps/desktop/scripts/generate-workflow-reference.mjs`. `--check` and build.rs
-reject stale referenced assets. Generation proves document/schema consistency;
-it does not prove complete editor/runtime parity. Test representative native
-configurations and preserve role isolation. No task-specific instructions or
-extra step/data mapping declarations belong in this knowledge layer.
+## Current evidence and limits
 
-### Runnable local outcome grading
+- Editor state declarations match the existing data.state shape. Ordinary values
+  use scoped state; attachmentPaths selects file references. Neither introduces a
+  separate data transport or task-specific interpretation.
+- CodeAct language/OS information is appended when its node details are requested,
+  using the linked runtime briefing. It is not a complete Python API inventory or
+  evidence that a generated implementation will work.
+- Planner receives the current conversation with user/model source labels, the
+  current plan and authorized artifacts. There is no automatic operation-directory
+  scan or historical code/result replay. Existing operation receipts remain intact.
+- Existing requests are not routed through a new mandatory diagnostics writer.
+  The earlier wrong-target incident remains unresolved; no complete historical
+  provider request is available to attribute its source.
+- Planning feedback uses existing proposal fields/versions and native confirmation.
+  Questions are visible in the plan card and answered through the existing composer.
+  Answers, delegated preferences and proposal confirmation remain distinct.
 
-`outcome_evaluation.rs` is compiled only for tests. It compares native RunObservation
-state using explicit JSON-pointer expectations, with per-check expected/observed
-values. It distinguishes incorrect results, missing evidence and failed execution;
-empty criteria and missing observations cannot pass. The acceptance test now uses
-this grader on actual local Graph executions with changed inputs against a fixed
-saved definition. Synthetic cases cover stale numeric answers, structured/text
-values, invented metadata and missing versus explicit-null outputs. These test the
-grader; they do not establish autonomous task implementation or file correctness.
+## Local verification
 
-Run `CARGO_INCREMENTAL=0 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
---lib --no-default-features outcome_evaluation` and the same command with filter
-`assistant_acceptance_executes_real_expense_rules_and_returns_receipts`. Neither
-command calls an external model. The remaining gap is a varied autonomous-authoring
-benchmark with independent task fixtures and actual resulting runs.
+| Coverage | Test location | What it establishes |
+| --- | --- | --- |
+| Editor/native node set and schema examples | workflow/contracts.rs | 13-kind inventory and example/schema validity |
+| Role boundaries, clarification, confirmation and execution grants | planning_tests.rs, multi_agent_tests.rs, authoring_tests.rs | Scripted lifecycle behavior; not autonomous reasoning |
+| Outcome grading | outcome_evaluation.rs | Passed, incorrect, unobserved and failed execution stay distinct |
+| Saved routing definitions and varied inputs | native_outcome_tests.rs | Actual native Graph behavior and negative-rule grading |
+| Saved human participation | native_outcome_tests.rs | Four paths through pause, SQLite reload, native decision preparation and branch/output checks |
+| Persisted child reuse and disappearance | native_outcome_tests.rs | Actual child Graph outputs and resource failure; cfg(test) temporary catalog substitutes Config storage |
+| File aggregation, deduplication and exact formatting | task_outcome_tests.rs; fixtures/tasks | Independent expectations and offline recorded-output grading; recordings remain required |
+| CodeAct environment | workflow/codeact_agent.rs; authoring references | Linked briefing discovery and basic runtime probes, not all APIs |
+| Numeric redaction regression | workflow/guardrails.rs | Numeric values preserved while tested real PII remains protected |
 
-### Native authoring outcome fixtures
+Rust checks use CARGO_INCREMENTAL=0. Run the Assistant suite with:
 
-`fixtures/native-outcomes.json` contains numeric boundary, text classification and
-boolean routing tasks with eight input/expected-route pairs. These are evaluation
-assets, not production instructions. `native_outcome_tests.rs` seeds matching
-approved proposals, scripts the author subagent's reference/validation/save calls,
-reloads the saved definitions and executes each unchanged definition with varied
-inputs through the native compiler and Graph. The harness checks outputs and
-observed routes, not a required node-type set. A negative fixture deliberately
-saves a structurally valid wrong rule and must be graded incorrect after execution.
-All storage is temporary. Creation must return no execution request; the harness
-then executes test fixtures separately. Interactive plan feedback and execution
-consent remain covered by the existing planning tests rather than this harness.
+```sh
+CARGO_INCREMENTAL=0 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib module::assistant::
+```
 
-Run with the Rust test filter `native_outcomes` and `CARGO_INCREMENTAL=0`.
-These fixtures establish local authoring/execution/evaluation plumbing across
-native input types. They do not test autonomous graph selection, exact computation,
-file processing, installed resources or external models. Those remain distinct
-coverage gaps; increasing routing fixtures does not close them.
+Resource consistency: `node apps/desktop/scripts/generate-workflow-reference.mjs --check`.
+Desktop declarations: `pnpm --dir apps/desktop typecheck`.
+Ignored real-provider/network tests are not evidence of a pass. Use temporary
+storage and independent expectations; no user Workflow execution is needed here.
 
-### Task fixtures and offline recorded-output grading
+## Remaining product questions
 
-`fixtures/tasks/requests.json` now provides file aggregation, stable deduplication
-and exact text-formatting requests, each with changed inputs. Hidden evaluator
-answers live separately in `expected.json`; Rust reference operations independently
-check them against the fixture inputs. Neither file is packaged into Agent knowledge.
-`task_outcome_tests.rs` can grade recorded native states using the actual saved
-output contract, with same-definition reuse checks and per-field diagnostics.
-See `fixtures/tasks/README.md` for the envelope, command and conversation protocol.
-Missing recordings are failures to observe, never successful model evaluations.
-Synthetic grader tests do not count as actual authoring/execution observations.
-Installed-tool and unavailable-capability evaluations still require isolated
-workspace fixtures and are explicitly pending. No provider evaluation was run.
+Knowledge availability, compilation and scripted acceptance do not establish
+correct autonomous capability selection. Evaluate the plan, saved native definition
+and observed outcome together across unrelated tasks and changed inputs. Judge
+behavior, not node names, topology or a preferred executor.
 
-Contract review also clarified two knowledge gaps in `reference/configuration.md`:
-workspace discovery uses textual matching/pagination, and Workflow output export
-requires declared global output keys. Evidence: `workspace_resources.rs::page` and
-`capability.rs::validated_output`. No runtime behavior changed.
+Installed tool/Skill composition, unavailable external resources, team ACLs and
+production child journaling/persistence need separate isolated coverage. No complete
+autonomous multi-task benchmark or external-provider result is claimed. Preserve
+missing observations as unverified; completed execution is not business correctness.
 
-### Decision guidance after observed native runs
-
-Read-only operation records showed the planner had read the exact current shared
-overview, but still proposed model-only exact processing and creation-only acceptance
-criteria. The author discovered model profiles and saved a structurally valid graph
-without an executable processing dependency. Native node output contained conflicting
-results, and final delivery partially rewrote them. Knowledge availability therefore
-was established; decision quality was not.
-
-Planner AGENT and its always-loaded planning Skill now ask for operation-to-executor
-feasibility in existing fields, relevant contract discovery, and separate creation
-and future-run criteria. Author AGENT and its always-loaded authoring Skill now ask
-for semantic review of the actual draft before native validation, including execution,
-inputs, outputs, state visibility and failure handling. Routine topology may vary;
-substantive approved processing requirements remain binding. Main result delivery
-now explicitly surfaces contradictory outputs and distinguishes independent corrections
-from the original Workflow result. No new graph protocol, validator or runtime tool
-was added. These changes guide the model; they do not prove compliance or guarantee
-correctness. Provider-backed evaluation of resulting choices remains outstanding.
+Keep Agent documents focused on responsibilities and handoffs, Skills on methods
+and formats, and native references on configuration contracts. Update source
+contracts/guides and regenerate packaged resources; do not add domain-specific
+rules, mandatory topologies or another state/plan protocol.

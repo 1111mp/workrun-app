@@ -300,14 +300,15 @@ impl AssistantRuntime {
             }
             return Ok(AssistantReply::paused(plan, "confirmation_required"));
         }
+        // Discussing a proposal grants no creation or execution authority.
+        // Unlike action grants, clarification answers need no action quote.
         let planning_allowed = !confirmed
             && !cancelled
             && decision.tool_confirmation.is_none()
             && current_message.as_deref().is_some_and(|current| {
                 authoring_allowed
                     || (decision.intent == Intent::Planning
-                        && !decision.action_quote.trim().is_empty()
-                        && current.contains(&decision.action_quote)
+                        && !current.trim().is_empty()
                         && !decision.summary.trim().is_empty())
             });
         let execution_allowed = execution_allowed
