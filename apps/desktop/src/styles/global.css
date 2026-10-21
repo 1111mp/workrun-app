@@ -84,7 +84,7 @@
   --workrun-shadow: 0 8px 30px oklch(0.08 0.02 265 / 16%);
 }
 
-/* One background spans navigation and content; neither child paints over it. */
+/* Share the theme palette while keeping the sidebar inset layout intact. */
 .workrun-shell {
   background-color: var(--workrun-surface);
   background-image:
@@ -105,27 +105,22 @@
     );
 }
 
+/* Let the inset navigation share the outer chrome instead of painting a
+   square panel inside the rounded window. Floating editor palettes stay solid. */
+.workrun-shell
+  [data-slot='sidebar'][data-variant='inset']
+  [data-slot='sidebar-inner'] {
+  background: transparent;
+}
+
+/* SidebarInset owns its spacing, radius and shadow. Only theme its surface. */
 .workrun-shell .workrun-surface {
-  margin: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.workrun-shell [data-slot='sidebar-inner'] {
-  background: transparent;
-}
-
-.workrun-shell [data-slot='sidebar-container'] {
-  border-right: 1px solid color-mix(in oklch, var(--border) 45%, transparent);
+  background-color: var(--workrun-surface);
+  background-image: inherit;
 }
 
 .workrun-topbar {
   border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
-}
-
-.workrun-shell [data-slot='sidebar-menu-button'][data-active='true'] {
-  box-shadow: inset 3px 0 var(--primary);
 }
 
 .workrun-library-toolbar {
@@ -234,7 +229,8 @@
 /* Frame the editable surface only; the helper text stays outside its border. */
 .workrun-start-composer [data-slot='input-group'] {
   background: var(--workrun-panel);
-  border-color: color-mix(in oklch, var(--primary) 20%, var(--border));
+  /* Mix in sRGB to avoid hue shifts toward pink when blending with neutral gray. */
+  border-color: color-mix(in srgb, var(--primary) 20%, var(--border));
   box-shadow: var(--workrun-shadow);
 }
 
