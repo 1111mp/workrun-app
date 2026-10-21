@@ -8,10 +8,25 @@ import { page } from 'vitest/browser';
 import { WorkflowEditorToolbar } from '@/components/workflow-editor/workflow-editor-toolbar';
 import zh from '@/locales/zh_CN.json';
 
-vi.mock('@/services/assistant', () => ({
-  listAssistantSessions: async () => [],
+vi.mock('@/services/assistant', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/assistant')>()),
+  getAssistantListSnapshot: async () => ({
+    workspaceId: 'personal',
+    sessionId: '',
+    epoch: 'test',
+    sequence: 0,
+    type: 'list',
+    payload: [],
+  }),
   deleteAssistantSession: vi.fn(),
 }));
+vi.mock('@/lib/auth-client', () => ({ createTeamAuthClient: vi.fn() }));
+vi.mock('@/stores/workrun.store', () => ({
+  useWorkrunStore: {
+    getState: () => ({ config: { workspace_mode: 'personal' } }),
+  },
+}));
+vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }));
 vi.mock('@/stores', () => ({
   useWorkrunStore: (select: (state: unknown) => unknown) =>
     select({ config: { workspace_mode: 'personal' } }),

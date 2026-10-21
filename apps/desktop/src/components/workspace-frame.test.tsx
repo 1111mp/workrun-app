@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { MemoryRouter, useNavigate } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 
@@ -18,8 +18,15 @@ vi.mock('@/components/app-sidebar', () => ({
 vi.mock('@/components/run-center', () => ({
   RunCenter: () => <div data-testid='run-center' />,
 }));
+const tracker = vi.hoisted(() => ({ mounted: vi.fn(), disposed: vi.fn() }));
 vi.mock('@/components/run-event-tracker', () => ({
-  RunEventTracker: () => <div data-testid='run-tracker' />,
+  RunEventTracker: () => {
+    useEffect(() => {
+      tracker.mounted();
+      return tracker.disposed;
+    }, []);
+    return <div data-testid='run-tracker' />;
+  },
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -28,6 +35,7 @@ vi.mock('react-i18next', () => ({
 import { WorkspaceFrame } from './workspace-frame';
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.stubGlobal('OS_PLATFORM', 'darwin');
 });
 
@@ -86,4 +94,6 @@ it('restores navigation when returning from the editor to the workflow list', ()
   fireEvent.click(screen.getByRole('button', { name: 'Back to workflows' }));
   expect(screen.getByTestId('global-navigation')).toBeInTheDocument();
   expect(screen.getByTestId('run-tracker')).toBeInTheDocument();
+  expect(tracker.mounted).toHaveBeenCalledOnce();
+  expect(tracker.disposed).not.toHaveBeenCalled();
 });

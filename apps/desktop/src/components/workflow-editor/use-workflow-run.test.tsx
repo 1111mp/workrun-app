@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 
+import { prepareWorkflowProcessApps } from '@/services/process-node';
 import { listActiveRuns, type RunRecordSummary } from '@/services/run-history';
 import {
   startBackgroundWorkflowRun,
@@ -227,4 +228,49 @@ it('publishes a burst of tool-approval events in one frame without flashing a co
     await view.close();
     vi.unstubAllGlobals();
   }
+});
+
+it('releases a late listener after unmount and never dispatches that run', async () => {
+  const view = await mount([]);
+  const stop = vi.fn();
+  let resolve!: (stop: () => void) => void;
+  vi.mocked(subscribeWorkflowRun).mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  await act(async () => {
+    view.hook.startWorkflowRun({});
+  });
+  await vi.waitFor(() => expect(subscribeWorkflowRun).toHaveBeenCalledOnce());
+  await view.close();
+  await act(async () => {
+    resolve(stop);
+  });
+  expect(stop).toHaveBeenCalledOnce();
+  expect(startBackgroundWorkflowRun).not.toHaveBeenCalled();
+});
+
+it('does not launch after navigation while App preparation is pending', async () => {
+  const view = await mount([]);
+  const stop = vi.fn();
+  vi.mocked(subscribeWorkflowRun).mockResolvedValueOnce(stop);
+  let resolve!: (dsl: unknown) => void;
+  vi.mocked(prepareWorkflowProcessApps).mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  await act(async () => {
+    view.hook.startWorkflowRun({});
+  });
+  await vi.waitFor(() =>
+    expect(prepareWorkflowProcessApps).toHaveBeenCalledOnce(),
+  );
+  await view.close();
+  await act(async () => {
+    resolve({ nodes: [], edges: [] });
+  });
+  expect(stop).toHaveBeenCalledOnce();
+  expect(startBackgroundWorkflowRun).not.toHaveBeenCalled();
 });

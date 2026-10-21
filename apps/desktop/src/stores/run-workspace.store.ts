@@ -84,16 +84,23 @@ export const useRunWorkspaceStore = create<RunWorkspaceState>()((set) => ({
       ),
     })),
   noteEvent: (runId) =>
-    set((state) => ({
-      tabs: state.tabs.map((tab) =>
-        tab.id === runId
-          ? {
-              ...tab,
-              unreadEvents:
-                tab.id === state.activeRunId ? 0 : tab.unreadEvents + 1,
-            }
-          : tab,
-      ),
-    })),
+    set((state) => {
+      if (
+        state.activeRunId === runId ||
+        !state.tabs.some((tab) => tab.id === runId)
+      )
+        return state;
+      return {
+        tabs: state.tabs.map((tab) =>
+          tab.id === runId
+            ? {
+                ...tab,
+                unreadEvents:
+                  tab.id === state.activeRunId ? 0 : tab.unreadEvents + 1,
+              }
+            : tab,
+        ),
+      };
+    }),
   setOpen: (open) => set({ open }),
 }));

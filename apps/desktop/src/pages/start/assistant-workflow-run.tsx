@@ -15,7 +15,7 @@ import {
   CircleAlertIcon,
   CircleXIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -24,7 +24,6 @@ import { WorkflowExecutionDetails } from '@/components/workflow-output-panel';
 import { inspectRunRecord } from '@/services/run-history';
 import {
   cancelBackgroundWorkflowRun,
-  subscribeWorkflowRun,
   type WorkflowDocument,
   type WorkflowRunEvent,
   type WorkflowRunExecution,
@@ -70,8 +69,6 @@ export function AssistantWorkflowRun({
   const query = useQuery({
     queryKey,
     queryFn: () => inspectRunRecord(runId),
-    refetchInterval: (query) =>
-      terminal(query.state.data?.status) ? false : 1000,
   });
   const record = query.data;
   const status = terminal(fallbackStatus)
@@ -100,37 +97,6 @@ export function AssistantWorkflowRun({
         : undefined,
     [record, runId, snapshot],
   );
-
-  useEffect(() => {
-    if (!live) return;
-    let disposed = false;
-    let stop: (() => void) | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // Coalesce streamed tokens while reconciling from durable history. This
-    // shares the editor's projection without touching its global run store.
-    void subscribeWorkflowRun(runId, () => {
-      if (disposed || timer) return;
-      timer = setTimeout(() => {
-        timer = undefined;
-        if (!disposed) void client.invalidateQueries({ queryKey });
-      }, 100);
-    })
-      .then((unlisten) => {
-        if (disposed) unlisten();
-        else {
-          stop = unlisten;
-          void client.invalidateQueries({ queryKey });
-        }
-      })
-      .catch(() => {
-        /* Polling still reconciles runs when the event channel is unavailable. */
-      });
-    return () => {
-      disposed = true;
-      stop?.();
-      if (timer) clearTimeout(timer);
-    };
-  }, [client, live, queryKey, runId]);
 
   const nodeName = (id: string) => {
     const node = nodes.find((node) => node.id === id);

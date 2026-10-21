@@ -654,19 +654,11 @@ function AppHistoryDrawer({
 function AppsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const externalRunId = searchParams.get('runId');
-  // Recover output already emitted before navigation and keep the drawer current
-  // until the native run reaches a terminal status.
+  // Recover output emitted before navigation; native events refresh later changes.
   const externalRun = useQuery({
     queryKey: ['run-history', externalRunId],
     queryFn: () => inspectRunRecord(externalRunId!),
     enabled: Boolean(externalRunId),
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return !status ||
-        ['queued', 'running', 'waiting_for_input'].includes(status)
-        ? 500
-        : false;
-    },
   });
   const externalAppRun =
     externalRun.data?.targetType === 'app'
@@ -691,6 +683,7 @@ function AppsPage() {
   const pendingOutput = useRef<Record<string, ProcessNodeOutput>>({});
   const frames = useRef<Record<string, number | undefined>>({});
   const unlistenRuns = useRef<Record<string, () => void>>({});
+  const mounted = useRef(false);
   const preparationSummaryTimers = useRef<Record<string, number | undefined>>(
     {},
   );
@@ -708,8 +701,10 @@ function AppsPage() {
 
   const { t } = useTranslation();
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       Object.values(frames.current).forEach((frame) => {
         if (frame !== undefined) cancelAnimationFrame(frame);
       });
@@ -717,9 +712,11 @@ function AppsPage() {
       Object.values(preparationSummaryTimers.current).forEach((timer) => {
         if (timer !== undefined) window.clearTimeout(timer);
       });
-    },
-    [],
-  );
+      frames.current = {};
+      preparationSummaryTimers.current = {};
+      unlistenRuns.current = {};
+    };
+  }, []);
 
   const receiveOutput = (runId: string, chunk: ProcessNodeOutputChunk) => {
     const output = pendingOutput.current[runId] ?? { stdout: '', stderr: '' };
@@ -804,6 +801,7 @@ function AppsPage() {
       }
     }
 
+    if (!mounted.current) return;
     const runId = crypto.randomUUID();
     pendingOutput.current[runId] = { stdout: '', stderr: '' };
     setRuns((current) => ({
@@ -817,40 +815,45 @@ function AppsPage() {
       },
     }));
     try {
-      unlistenRuns.current[runId] = await subscribeProcessNodeRun(
-        runId,
-        (event) => {
-          if (event.type === 'output') receiveOutput(runId, event);
-          else if (event.type === 'app_done') {
-            setRuns((current) => ({
-              ...current,
-              [runId]: {
-                ...current[runId],
-                execution: event.execution,
-                isRunning: false,
-              },
-            }));
-            unlistenRuns.current[runId]?.();
-            delete unlistenRuns.current[runId];
-          } else if (event.type === 'app_cancelled') {
-            setRuns((current) => ({
-              ...current,
-              [runId]: { ...current[runId], cancelled: true, isRunning: false },
-            }));
-            unlistenRuns.current[runId]?.();
-            delete unlistenRuns.current[runId];
-          } else if (event.type === 'error') {
-            setRuns((current) => ({
-              ...current,
-              [runId]: {
-                ...current[runId],
-                error: event.message,
-                isRunning: false,
-              },
-            }));
-          }
-        },
-      );
+      const stop = await subscribeProcessNodeRun(runId, (event) => {
+        if (!mounted.current) return;
+        if (event.type === 'output') receiveOutput(runId, event);
+        else if (event.type === 'app_done') {
+          setRuns((current) => ({
+            ...current,
+            [runId]: {
+              ...current[runId],
+              execution: event.execution,
+              isRunning: false,
+            },
+          }));
+          unlistenRuns.current[runId]?.();
+          delete unlistenRuns.current[runId];
+        } else if (event.type === 'app_cancelled') {
+          setRuns((current) => ({
+            ...current,
+            [runId]: { ...current[runId], cancelled: true, isRunning: false },
+          }));
+          unlistenRuns.current[runId]?.();
+          delete unlistenRuns.current[runId];
+        } else if (event.type === 'error') {
+          setRuns((current) => ({
+            ...current,
+            [runId]: {
+              ...current[runId],
+              error: event.message,
+              isRunning: false,
+            },
+          }));
+          unlistenRuns.current[runId]?.();
+          delete unlistenRuns.current[runId];
+        }
+      });
+      if (!mounted.current) {
+        stop();
+        return;
+      }
+      unlistenRuns.current[runId] = stop;
       await startBackgroundProcessNodeRun({
         runId,
         targetId: runnableNode.definition.id,

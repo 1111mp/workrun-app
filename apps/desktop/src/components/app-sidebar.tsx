@@ -35,13 +35,10 @@ import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate } from 'react-router';
 
 import { useConfirm } from '@/lib/confirm-context';
-import {
-  deleteAssistantSession,
-  listAssistantSessions,
-} from '@/services/assistant';
 import { runDetailsPath } from '@/services/run-center';
 import { deleteRunRecord, listRunHistoryPage } from '@/services/run-history';
 import { useWorkrunStore } from '@/stores';
+import { useAssistantStore } from '@/stores/assistant.store';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 
 export function useEntryWorkspace() {
@@ -57,15 +54,28 @@ export function useEntryWorkspace() {
 }
 
 export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
+  const loadAssistantList = useAssistantStore(
+    (state) => state.loadAssistantList,
+  );
   const { t } = useTranslation();
   const { pathname, search, key } = useLocation();
   const { setOpenMobile } = useSidebar();
   const workspace = useEntryWorkspace();
   const mode = useWorkrunStore((state) => state.config?.workspace_mode);
-  const conversations = useQuery({
-    queryKey: ['assistant-sessions', workspace],
-    queryFn: listAssistantSessions,
-  });
+  const entries = useAssistantStore((state) => state.summaries[workspace]);
+  const syncError = useAssistantStore((state) => state.listErrors[workspace]);
+  const conversations = { data: entries, isPending: entries === undefined };
+  useEffect(() => {
+    const refresh = () => {
+      void loadAssistantList(workspace).catch(() => {});
+    };
+    refresh();
+    const recover = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('focus', recover);
+    return () => window.removeEventListener('focus', recover);
+  }, [workspace, loadAssistantList]);
   const recent = useQuery({
     queryKey: ['run-history', 'entry-recent', workspace],
     queryFn: () => listRunHistoryPage({ pageSize: 15 }),
@@ -178,7 +188,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                 />
               </SidebarMenuItem>
             ))}
-            {conversations.isPending && (
+            {conversations.isPending && !syncError && (
               <SidebarMenuItem>
                 <Skeleton className='h-8 w-full' />
               </SidebarMenuItem>
@@ -188,9 +198,13 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                 {t('sidebar.noConversations')}
               </li>
             )}
-            {conversations.isError && (
+            {syncError && (
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={() => void conversations.refetch()}>
+                <SidebarMenuButton
+                  onClick={() =>
+                    void loadAssistantList(workspace).catch(() => {})
+                  }
+                >
                   {t('assistant.retryConversations')}
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -275,22 +289,8 @@ function RecentActions({
       actionVariant: 'destructive',
       onConfirm: async () => {
         await (kind === 'conversation'
-          ? deleteAssistantSession(id)
+          ? useAssistantStore.getState().deleteAssistantSession(id, workspace)
           : deleteRunRecord(id));
-        if (kind === 'conversation') {
-          const { useAssistantStore } =
-            await import('@/stores/assistant.store');
-          useAssistantStore.setState((state) => {
-            if (state.scopes[id] !== workspace) return state;
-            const sessions = { ...state.sessions };
-            const scopes = { ...state.scopes };
-            const streams = { ...state.streams };
-            delete sessions[id];
-            delete scopes[id];
-            delete streams[id];
-            return { sessions, scopes, streams };
-          });
-        }
         if (kind === 'run') useRunWorkspaceStore.getState().closeRun(id);
         const params = new URLSearchParams(location.search);
         if (
@@ -303,16 +303,12 @@ function RecentActions({
             replace: true,
           });
         }
-        // Refresh all history projections, including the full history page.
-        await client.invalidateQueries({
-          queryKey: [
-            kind === 'conversation' ? 'assistant-sessions' : 'run-history',
-          ],
-        });
-        if (kind === 'run')
+        if (kind === 'run') {
+          await client.invalidateQueries({ queryKey: ['run-history'] });
           await client.invalidateQueries({
             queryKey: ['run-history-timeline'],
           });
+        }
         client.removeQueries({
           queryKey:
             kind === 'conversation'

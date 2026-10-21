@@ -19,24 +19,53 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
-use std::{collections::HashSet, sync::LazyLock, time::Duration};
+#[cfg(test)]
+use std::time::Duration;
+use std::{collections::HashMap, sync::LazyLock};
+use tokio_util::sync::CancellationToken;
 
-static OWNERS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+#[derive(Clone, Default)]
+struct TurnControl {
+    cancel: CancellationToken,
+    finished: CancellationToken,
+}
+static OWNERS: LazyLock<Mutex<HashMap<String, TurnControl>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 struct Lease(String);
 impl Drop for Lease {
     fn drop(&mut self) {
-        OWNERS.lock().remove(&self.0);
+        if let Some(control) = OWNERS.lock().remove(&self.0) {
+            control.finished.cancel();
+        }
     }
 }
 fn acquire(workspace: &str, id: &str) -> Result<Lease> {
     let key = format!("{workspace}/{id}");
-    if !OWNERS.lock().insert(key.clone()) {
+    let mut owners = OWNERS.lock();
+    if owners.contains_key(&key) {
         bail!("This conversation already has an active native turn");
     }
+    owners.insert(key.clone(), TurnControl::default());
     Ok(Lease(key))
 }
 fn running(workspace: &str, id: &str) -> bool {
-    OWNERS.lock().contains(&format!("{workspace}/{id}"))
+    OWNERS.lock().contains_key(&format!("{workspace}/{id}"))
+}
+
+pub async fn stop(id: &str) -> Result<Value> {
+    let workspace = dirs::active_workspace_id();
+    let pool = DBManager::global().pool()?;
+    // Verify ownership before touching the in-memory cancellation handle.
+    let session = get(&pool, &workspace, id).await?;
+    if matches!(session["status"].as_str(), Some("thinking" | "running")) {
+        let control = OWNERS.lock().get(&format!("{workspace}/{id}")).cloned();
+        if let Some(control) = control {
+            control.cancel.cancel();
+            // Acknowledge only after the writer has persisted its terminal state
+            // and released the lease, so the next message can start immediately.
+            control.finished.cancelled().await;
+        }
+    }
+    get(&pool, &workspace, id).await
 }
 fn ensure_workspace(workspace: &str) -> Result<()> {
     if dirs::active_workspace_id() != workspace {
@@ -52,11 +81,18 @@ pub async fn save(pool: &SqlitePool, workspace: &str, session: &Value) -> Result
     if data.len() > 4 * 1024 * 1024 {
         bail!("conversation is too large; start a new conversation");
     }
+    let updated_at = chrono::Utc::now().to_rfc3339();
     let result=sqlx::query("INSERT INTO assistant_sessions (id, workspace_id, session_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET session_json = excluded.session_json, updated_at = excluded.updated_at WHERE assistant_sessions.workspace_id = excluded.workspace_id")
-        .bind(id).bind(workspace).bind(data).bind(chrono::Utc::now().to_rfc3339()).execute(pool).await?;
+        .bind(id).bind(workspace).bind(data).bind(&updated_at).execute(pool).await?;
     if result.rows_affected() != 1 {
         bail!("conversation belongs to another workspace");
     }
+    super::events::snapshot(workspace, session);
+    super::events::list_change(
+        workspace,
+        id,
+        json!({"id":id,"title":session["title"],"updatedAt":updated_at}),
+    );
     Ok(())
 }
 pub async fn get(pool: &SqlitePool, workspace: &str, id: &str) -> Result<Value> {
@@ -165,12 +201,7 @@ async fn refresh_tool_feedback(root: &std::path::Path, session: &mut Value) -> R
 }
 
 async fn commit(pool: &SqlitePool, workspace: &str, session: &Value) -> Result<()> {
-    save(pool, workspace, session).await?;
-    let _ = run_manager::emit_on_main_thread(
-        "assistant-session-updated",
-        json!({"id":session["id"],"workspaceId":workspace}),
-    );
-    Ok(())
+    save(pool, workspace, session).await
 }
 /// Hold the same lease as turn dispatch so deletion cannot race a native writer.
 pub async fn delete(pool: &SqlitePool, workspace: &str, id: &str) -> Result<()> {
@@ -186,6 +217,7 @@ pub async fn delete(pool: &SqlitePool, workspace: &str, id: &str) -> Result<()> 
         .bind(workspace)
         .execute(pool)
         .await?;
+    super::events::list_change(workspace, id, Value::Null);
     Ok(())
 }
 
@@ -487,7 +519,13 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
     }
     tauri::async_runtime::spawn(async move {
         let _lease = lease;
-        let result = drive(&pool, &workspace, &mut session, request.team_token.as_deref(), input).await;
+        let control = OWNERS.lock().get(&_lease.0).unwrap().clone();
+        let partial = Mutex::new(None);
+        let result = tokio::select! {
+            biased;
+            _ = control.cancel.cancelled() => finish_stopped(&pool, &workspace, &mut session, &partial).await,
+            result = drive(&pool, &workspace, &mut session, request.team_token.as_deref(), input, &partial) => result,
+        };
         if let Err(error) = result {
             session["status"] = json!("error");
             // A rejected/uncertain tool directive must not trap subsequent user
@@ -501,12 +539,72 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
     Ok(acknowledged)
 }
 
+async fn finish_stopped(
+    pool: &SqlitePool,
+    workspace: &str,
+    session: &mut Value,
+    partial: &Mutex<Option<(String, String)>>,
+) -> Result<()> {
+    *session = super::events::decorate(workspace, session);
+    let text = partial.lock().take();
+    if let Some((id, text)) = text
+        && !text.is_empty()
+        && !session["messages"]
+            .as_array()
+            .context("Messages missing")?
+            .iter()
+            .any(|message| message["id"] == id)
+    {
+        session["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":id,"role":"assistant","text":text,"content":{"role":"model","parts":[{"text":text}]}}));
+    }
+    if let Some(run_id) = session["activeCall"]["runId"].as_str().map(str::to_owned) {
+        // Dispatch persists its identity before queue creation. Cancellation can
+        // land between those writes, when there is no worker to stop yet.
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_records WHERE id=? AND workspace_id=?)")
+            .bind(&run_id)
+            .bind(workspace)
+            .fetch_one(pool)
+            .await?;
+        if exists {
+            let record = RunHistoryStore::inspect(&run_id).await?;
+            if !matches!(
+                record.summary.status.as_str(),
+                "completed" | "failed" | "cancelled" | "interrupted"
+            ) {
+                run_manager::cancel_waiting_workflow(&run_id).await?;
+            }
+            wait(pool, workspace, session).await?;
+        } else {
+            session["activeCall"].as_object_mut().unwrap().remove("runId");
+            append_result(
+                session,
+                json!({"status":"cancelled","reason":"Stopped before dispatch"}),
+                "cancelled",
+            )?;
+        }
+    } else if session["activeCall"].is_object() {
+        append_result(
+            session,
+            json!({"status":"cancelled","reason":"Stopped by user"}),
+            "cancelled",
+        )?;
+    }
+    session["pendingToolDecision"] = Value::Null;
+    session["status"] = json!("idle");
+    session["error"] = Value::Null;
+    commit(pool, workspace, session).await
+}
+
 async fn drive(
     pool: &SqlitePool,
     workspace: &str,
     session: &mut Value,
     team_token: Option<&str>,
     input: Option<Value>,
+    partial: &Mutex<Option<(String, String)>>,
 ) -> Result<()> {
     ensure_workspace(workspace)?;
     if session["status"] == "needs_input" {
@@ -553,6 +651,7 @@ async fn drive(
             .map(|message| serde_json::from_value(message["content"].clone()))
             .collect::<std::result::Result<_, _>>()?;
         let message_id = uuid::Uuid::new_v4().to_string();
+        *partial.lock() = None;
         // A workflow receipt starts a new model phase within the same user turn.
         // Its thinking indicator must not reuse discovery summaries from before execution.
         session["responsePhaseId"] = json!(message_id);
@@ -569,6 +668,17 @@ async fn drive(
         let reasoning = std::sync::Mutex::new(Vec::<Value>::new());
         let plans = std::sync::Mutex::new(Vec::<Value>::new());
         let emit = |event: super::AssistantStreamEvent| {
+            match &event {
+                super::AssistantStreamEvent::TextDelta { text } => {
+                    let mut current = partial.lock();
+                    let entry = current.get_or_insert_with(|| (message_id.clone(), String::new()));
+                    entry.1.push_str(text);
+                },
+                super::AssistantStreamEvent::TextReplace { text } => {
+                    *partial.lock() = Some((message_id.clone(), text.clone()));
+                },
+                _ => {},
+            }
             if let super::AssistantStreamEvent::WorkflowPlan { plan } = &event {
                 let entry = json!({"turnId":turn_id,"plan":plan});
                 let mut records = plans.lock().unwrap();
@@ -608,8 +718,9 @@ async fn drive(
             };
             // Missing observers are harmless; native persistence and execution
             // continue independently of this delivery channel.
-            let _ = run_manager::emit_on_main_thread(
-                "assistant-stream",
+            super::events::stream(
+                workspace,
+                session["id"].as_str().unwrap(),
                 json!({
                     "sessionId": session["id"], "workspaceId": workspace,
                     "messageId": message_id, "turnId": turn_id, "event": event, "activity": activity, "reasoning": thought,
@@ -801,10 +912,14 @@ pub(super) struct RunObservation {
 pub(super) trait WorkflowRuns: Send + Sync {
     async fn start(&self, request: StartWorkflowRun) -> Result<()>;
     async fn inspect(&self, id: &str) -> Result<RunObservation>;
+    fn status_changes(&self) -> tokio::sync::broadcast::Receiver<String>;
 }
 struct NativeRuns;
 #[async_trait::async_trait]
 impl WorkflowRuns for NativeRuns {
+    fn status_changes(&self) -> tokio::sync::broadcast::Receiver<String> {
+        run_manager::run_status_changes()
+    }
     async fn start(&self, request: StartWorkflowRun) -> Result<()> {
         run_manager::start_workflow(request).await
     }
@@ -868,6 +983,8 @@ async fn wait_with(pool: &SqlitePool, workspace: &str, session: &mut Value, runs
         .as_str()
         .context("Run ID is missing")?
         .to_owned();
+    // Register before reading so completion racing the snapshot cannot be lost.
+    let mut changes = runs.status_changes();
     loop {
         ensure_workspace(workspace)?;
         let record = runs.inspect(&id).await?;
@@ -894,7 +1011,15 @@ async fn wait_with(pool: &SqlitePool, workspace: &str, session: &mut Value, runs
             commit(pool, workspace, session).await?;
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        loop {
+            match changes.recv().await {
+                Ok(changed_id) if changed_id == id => break,
+                Ok(_) => continue,
+                // Reconcile once if a burst overflowed the buffer.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => bail!("Run status notifications closed"),
+            }
+        }
     }
 }
 fn apply_pause(session: &mut Value, message_id: &str, pause: &Value) -> Result<()> {
@@ -937,6 +1062,47 @@ fn append_result(session: &mut Value, response: Value, text: &str) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn stopping_between_run_identity_and_queue_creation_does_not_leave_a_pending_call() {
+        let pool = pool().await;
+        sqlx::query("CREATE TABLE run_records (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut session = json!({"id":id,"status":"running","messages":[],"activeCall":{"runId":"not-dispatched","toolName":"execute_workflow","callId":"call"}});
+        finish_stopped(&pool, "personal", &mut session, &Mutex::new(None))
+            .await
+            .unwrap();
+        let restored = get(&pool, "personal", &id).await.unwrap();
+        assert_eq!(restored["status"], "idle");
+        assert!(restored["activeCall"].is_null());
+        assert_eq!(restored["messages"][0]["text"], "cancelled");
+        assert!(restored["messages"][0]["runId"].is_null());
+    }
+
+    #[tokio::test]
+    async fn stopping_preserves_partial_answer_and_releases_the_turn_for_follow_up() {
+        let pool = pool().await;
+        let id = uuid::Uuid::new_v4().to_string();
+        let lease = acquire("personal", &id).unwrap();
+        let control = OWNERS.lock().get(&lease.0).unwrap().clone();
+        let mut session = json!({"id":id,"status":"thinking","messages":[{"id":"user","role":"user","content":{"role":"user","parts":[{"text":"Hello"}]}}]});
+        let partial = Mutex::new(Some(("answer".into(), "Partial answer".into())));
+        control.cancel.cancel();
+        finish_stopped(&pool, "personal", &mut session, &partial).await.unwrap();
+        assert!(acquire("personal", &id).is_err());
+        drop(lease);
+        assert!(control.finished.is_cancelled());
+        let _next = acquire("personal", &id).unwrap();
+        let restored = get(&pool, "personal", &id).await.unwrap();
+        assert_eq!(restored["status"], "idle");
+        assert_eq!(restored["messages"][1]["text"], "Partial answer");
+        assert_eq!(restored["messages"][1]["content"]["parts"][0]["text"], "Partial answer");
+        assert!(restored["activeCall"].is_null());
+        assert!(!running("another-workspace", &id));
+    }
+
     async fn pool() -> SqlitePool {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -1050,10 +1216,16 @@ mod tests {
         starts: std::sync::atomic::AtomicUsize,
         inspections: std::sync::atomic::AtomicUsize,
         complete: std::sync::atomic::AtomicBool,
+        final_status: Mutex<String>,
+        complete_during_inspection: std::sync::atomic::AtomicBool,
         lose_response: bool,
+        changes: tokio::sync::broadcast::Sender<String>,
     }
     #[async_trait::async_trait]
     impl WorkflowRuns for TestRuns {
+        fn status_changes(&self) -> tokio::sync::broadcast::Receiver<String> {
+            self.changes.subscribe()
+        }
         async fn start(&self, request: StartWorkflowRun) -> Result<()> {
             use std::sync::atomic::Ordering;
             self.starts.fetch_add(1, Ordering::SeqCst);
@@ -1074,16 +1246,20 @@ mod tests {
             }
             Ok(())
         }
-        async fn inspect(&self, _: &str) -> Result<RunObservation> {
+        async fn inspect(&self, id: &str) -> Result<RunObservation> {
             use std::sync::atomic::Ordering;
             self.inspections.fetch_add(1, Ordering::SeqCst);
+            let status = if self.complete.load(Ordering::SeqCst) {
+                self.final_status.lock().clone()
+            } else {
+                "running".to_owned()
+            };
+            if self.complete_during_inspection.swap(false, Ordering::SeqCst) {
+                self.complete.store(true, Ordering::SeqCst);
+                self.changes.send(id.to_owned()).unwrap();
+            }
             Ok(RunObservation {
-                status: if self.complete.load(Ordering::SeqCst) {
-                    "completed"
-                } else {
-                    "running"
-                }
-                .into(),
+                status,
                 name: "Report".into(),
                 error: None,
                 state: json!({"summary":"Ready"}),
@@ -1104,7 +1280,10 @@ mod tests {
             starts: 0.into(),
             inspections: 0.into(),
             complete: false.into(),
+            final_status: Mutex::new("completed".into()),
+            complete_during_inspection: false.into(),
             lose_response,
+            changes: tokio::sync::broadcast::channel(16).0,
         });
         (pool, session, runs)
     }
@@ -1139,13 +1318,75 @@ mod tests {
         .unwrap();
         assert_eq!(get(&pool, "personal", &id).await.unwrap()["status"], "running");
         assert!(acquire("personal", &id).is_err());
+        let reads = runs.inspections.load(Ordering::SeqCst);
+        runs.changes.send("unrelated-run".into()).unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(runs.inspections.load(Ordering::SeqCst), reads, "waiting must not poll");
         runs.complete.store(true, Ordering::SeqCst);
-        let completed = task.await.unwrap();
+        let run_id: String = sqlx::query_scalar("SELECT id FROM run_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        runs.changes.send(run_id).unwrap();
+        let completed = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(runs.starts.load(Ordering::SeqCst), 1);
         assert!(completed["activeCall"].is_null());
         assert_eq!(completed["messages"][0]["content"]["role"], "function");
         assert!(completed["messages"][0]["content"].to_string().contains("Ready"));
     }
+    #[tokio::test]
+    async fn completion_during_initial_inspection_is_not_lost() {
+        use std::sync::atomic::Ordering;
+        let (pool, mut session, runs) = dispatch_fixture(false).await;
+        runs.complete_during_inspection.store(true, Ordering::SeqCst);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            dispatch(
+                &pool,
+                "personal",
+                &mut session,
+                json!({"period":"week"}),
+                json!({}),
+                runs.as_ref(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(runs.inspections.load(Ordering::SeqCst), 2);
+        assert!(session["activeCall"].is_null());
+    }
+
+    #[tokio::test]
+    async fn already_terminal_runs_deliver_without_waiting_for_another_event() {
+        use std::sync::atomic::Ordering;
+        for status in ["completed", "failed", "cancelled", "interrupted"] {
+            let (pool, mut session, runs) = dispatch_fixture(false).await;
+            *runs.final_status.lock() = status.into();
+            runs.complete.store(true, Ordering::SeqCst);
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                dispatch(
+                    &pool,
+                    "personal",
+                    &mut session,
+                    json!({"period":"week"}),
+                    json!({}),
+                    runs.as_ref(),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(runs.inspections.load(Ordering::SeqCst), 1);
+            assert!(session["activeCall"].is_null());
+            assert_eq!(session["messages"][0]["text"], status);
+        }
+    }
+
     #[tokio::test]
     async fn uncertain_queue_response_is_recovered_by_inspection_of_original_run_id() {
         use std::sync::atomic::Ordering;

@@ -17,16 +17,19 @@ it('shows the latest public summary and expands the bounded activity history', a
       busy
     />,
   );
-  const toggle = page.getByRole('button', { expanded: false });
+  const toggle = page.getByRole('button', { expanded: true });
   await expect
     .element(
-      toggle.getByText('Validate the selected workflow inputs', {
-        exact: true,
-      }),
+      page
+        .getByRole('region')
+        .getByText('Validate the selected workflow inputs', {
+          exact: true,
+        }),
     )
     .toBeVisible();
-  await expect.element(page.getByRole('region')).not.toBeInTheDocument();
   await toggle.click();
+  await expect.element(page.getByRole('region')).not.toBeInTheDocument();
+  await page.getByRole('button', { expanded: false }).click();
   await expect
     .element(
       page
@@ -56,6 +59,8 @@ it('updates the live summary even when a previous summary repeats', async () => 
     />,
   );
   await expect
-    .element(page.getByRole('button').getByText('Searching', { exact: true }))
+    .element(
+      page.getByRole('region').getByText('Searching', { exact: true }).last(),
+    )
     .toBeVisible();
 });

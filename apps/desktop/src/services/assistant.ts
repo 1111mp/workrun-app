@@ -133,10 +133,6 @@ export type AssistantSessionSummary = {
   title: string;
   updatedAt: string;
 };
-export const listAssistantSessions = () =>
-  invoke<AssistantSessionSummary[]>('assistant_session_list');
-export const getAssistantSession = (id: string) =>
-  invoke<AssistantSession>('assistant_session_get', { id });
 export const saveAssistantSession = (session: AssistantSession) =>
   invoke('assistant_session_save', { session });
 
@@ -174,3 +170,47 @@ export const startAssistantTurn = (
 
 export const deleteAssistantSession = (id: string) =>
   invoke<void>('assistant_session_delete', { id });
+
+export const stopAssistantTurn = (id: string) =>
+  invoke<AssistantSession>('assistant_turn_stop', { id });
+
+export type AssistantStream = { messageId: string; text: string };
+export type AssistantSnapshot = {
+  session: AssistantSession;
+  stream: AssistantStream | null;
+};
+export type AssistantStreamUpdate = {
+  sessionId: string;
+  messageId: string;
+  turnId?: string;
+  activity?: AssistantActivity;
+  reasoning?: AssistantReasoning;
+  event:
+    | { type: 'text_delta' | 'text_replace'; text: string }
+    | { type: 'activity'; summary: string }
+    | { type: 'workflow_plan'; plan: WorkflowPlan }
+    | {
+        type: 'reasoning';
+        id: string;
+        text: string;
+        durationMs: number;
+        complete: boolean;
+      };
+};
+export type AssistantEvent = {
+  workspaceId: string;
+  sessionId: string;
+  epoch: string;
+  sequence: number;
+} & (
+  | { type: 'snapshot'; payload: AssistantSnapshot }
+  | { type: 'stream'; payload: AssistantStreamUpdate }
+  | { type: 'list'; payload: AssistantSessionSummary[] }
+  | { type: 'summary'; payload: AssistantSessionSummary | null }
+);
+
+// One-time reads used when opening a conversation or restoring the window.
+export const getAssistantSnapshot = (id: string) =>
+  invoke<AssistantEvent>('assistant_session_get', { id });
+export const getAssistantListSnapshot = () =>
+  invoke<AssistantEvent>('assistant_session_list');

@@ -13,6 +13,52 @@ pub async fn assistant_turn_start(request: crate::module::assistant::session::Tu
     crate::module::assistant::session::start(request).await.stringify_err()
 }
 
+#[tauri::command]
+pub async fn assistant_turn_stop(id: String) -> CmdResult<Value> {
+    crate::module::assistant::session::stop(&id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn assistant_session_get(id: String) -> CmdResult<Value> {
+    async {
+        let workspace = active_workspace_id();
+        let pool = DBManager::global().pool()?;
+        loop {
+            let before = crate::module::assistant::events::revision(&workspace, &id);
+            let session = crate::module::assistant::session::get(&pool, &workspace, &id).await?;
+            anyhow::ensure!(
+                workspace == active_workspace_id(),
+                "Workspace changed while reading conversation"
+            );
+            if let Some(snapshot) = crate::module::assistant::events::read_snapshot(&workspace, &id, before, session) {
+                return Ok(snapshot);
+            }
+        }
+    }
+    .await
+    .stringify_err()
+}
+
+#[tauri::command]
+pub async fn assistant_session_list() -> CmdResult<Value> {
+    async {
+        let workspace = active_workspace_id();
+        loop {
+            let before = crate::module::assistant::events::list_revision(&workspace);
+            let loaded = list_in_workspace(&workspace).await?;
+            anyhow::ensure!(
+                workspace == active_workspace_id(),
+                "Workspace changed while reading conversations"
+            );
+            if let Some(snapshot) = crate::module::assistant::events::read_list(&workspace, before, loaded) {
+                return Ok(snapshot);
+            }
+        }
+    }
+    .await
+    .stringify_err()
+}
+
 #[cfg(test)]
 async fn save_session_in_pool(pool: &sqlx::SqlitePool, workspace: &str, session: &Value) -> Result<()> {
     crate::module::assistant::session::save(pool, workspace, session).await
@@ -25,22 +71,11 @@ pub async fn assistant_session_save(session: Value) -> CmdResult {
         .stringify_err()
 }
 
-#[tauri::command]
-pub async fn assistant_session_list() -> CmdResult<Vec<Value>> {
-    async {
-        let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, json_extract(session_json, '$.title') AS title, updated_at FROM assistant_sessions WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT 50")
-            .bind(active_workspace_id()).fetch_all(&pool).await?;
-        rows.into_iter().map(|row| Ok(json!({"id": row.try_get::<String, _>("id")?, "title": row.try_get::<String, _>("title")?, "updatedAt": row.try_get::<String, _>("updated_at")?}))).collect::<Result<Vec<_>>>()
-    }.await.stringify_err()
-}
-
-#[tauri::command]
-pub async fn assistant_session_get(id: String) -> CmdResult<Value> {
-    let pool = DBManager::global().pool().stringify_err()?;
-    crate::module::assistant::session::get(&pool, &active_workspace_id(), &id)
-        .await
-        .stringify_err()
+async fn list_in_workspace(workspace: &str) -> Result<Vec<Value>> {
+    let pool = DBManager::global().pool()?;
+    let rows = sqlx::query("SELECT id, json_extract(session_json, '$.title') AS title, updated_at FROM assistant_sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT 50")
+        .bind(workspace).fetch_all(&pool).await?;
+    rows.into_iter().map(|row| Ok(json!({"id": row.try_get::<String, _>("id")?, "title": row.try_get::<String, _>("title")?, "updatedAt": row.try_get::<String, _>("updated_at")?}))).collect()
 }
 
 #[cfg(test)]

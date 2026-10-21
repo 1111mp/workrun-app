@@ -3,11 +3,12 @@ import { expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 
+import { RunEventTracker } from '@/components/run-event-tracker';
 import zh from '@/locales/zh_CN.json';
 
 const host = vi.hoisted(() => ({
   record: {} as Record<string, unknown>,
-  listener: undefined as (() => void) | undefined,
+  listeners: new Map<string, (event: { payload: unknown }) => void>(),
   cancel: vi.fn(),
   unlisten: vi.fn(),
 }));
@@ -29,9 +30,17 @@ vi.mock('@/services/run-history', () => ({
 }));
 vi.mock('@/services/workflow', () => ({
   cancelBackgroundWorkflowRun: host.cancel,
-  subscribeWorkflowRun: async (_id: string, listener: () => void) => {
-    host.listener = listener;
-    return host.unlisten;
+}));
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: async (
+    name: string,
+    callback: (event: { payload: unknown }) => void,
+  ) => {
+    host.listeners.set(name, callback);
+    return () => {
+      host.listeners.delete(name);
+      host.unlisten();
+    };
   },
 }));
 vi.mock('@/components/workflow-actions', () => ({
@@ -67,7 +76,7 @@ const event = (sequence: number, value: unknown) => ({
 });
 beforeEach(() => {
   vi.clearAllMocks();
-  host.listener = undefined;
+  host.listeners.clear();
   host.record = {
     id: 'order-43',
     targetName: '订单取消：风险路由与回归评测',
@@ -100,6 +109,7 @@ it('shows the latest node while collapsed, streams full node receipts inline, an
   });
   const tree = (status = 'running') => (
     <QueryClientProvider client={client}>
+      <RunEventTracker />
       <div className='mx-auto max-w-3xl p-6'>
         <AssistantWorkflowRun
           runId='order-43'
@@ -142,7 +152,9 @@ it('shows the latest node while collapsed, streams full node receipts inline, an
       is_final: true,
     }),
   ];
-  host.listener?.();
+  host.listeners.get('run-event')?.({
+    payload: { runId: 'order-43', event: { type: 'message' } },
+  });
   await expect
     .poll(
       () => screen.getByTestId('workflow-run-summary').element().textContent,
@@ -165,7 +177,9 @@ it('shows the latest node while collapsed, streams full node receipts inline, an
       total_steps: 2,
     }),
   ];
-  await client.invalidateQueries({ queryKey: ['run-history'] });
+  host.listeners.get('run-status-changed')?.({
+    payload: { runId: 'order-43', status: 'completed' },
+  });
   await screen.rerender(tree('completed'));
   await expect
     .poll(
@@ -197,6 +211,7 @@ it('keeps progress and failures readable at a narrow width without opening a dra
   });
   const screen = await render(
     <QueryClientProvider client={client}>
+      <RunEventTracker />
       <div className='p-4'>
         <AssistantWorkflowRun
           runId='order-43'
@@ -229,6 +244,7 @@ it('lets long execution output grow naturally with the conversation', async () =
   });
   const screen = await render(
     <QueryClientProvider client={client}>
+      <RunEventTracker />
       <div className='p-4'>
         <AssistantWorkflowRun
           runId='long-output'

@@ -6,15 +6,41 @@ import { page } from 'vitest/browser';
 
 import zh from '@/locales/zh_CN.json';
 
-const host = vi.hoisted(() => ({
-  reply: vi.fn(),
-  start: vi.fn(),
-  inspect: vi.fn(),
-  saved: new Map(),
-  compactCatalog: false,
-  listeners: new Set<(event: unknown) => void>(),
-  scope: JSON.stringify(['personal', '', '']),
-}));
+const host = vi.hoisted(() => {
+  const sequences = new Map<string, number>();
+  const listeners = new Set<(event: unknown) => void>();
+  const saved = new (class extends Map {
+    override set(id: string, value: unknown) {
+      super.set(id, value);
+      const sequence = (sequences.get(id) ?? 0) + 1;
+      sequences.set(id, sequence);
+      for (const receive of listeners)
+        receive({
+          payload: {
+            workspaceId: 'personal',
+            sessionId: id,
+            epoch: 'native-test',
+            sequence,
+            type: 'snapshot',
+            payload: { session: structuredClone(value), stream: null },
+          },
+        });
+      return this;
+    }
+  })();
+  return {
+    reply: vi.fn(),
+    start: vi.fn(),
+    inspect: vi.fn(),
+    saved,
+    compactCatalog: false,
+    snapshotGate: undefined as Promise<void> | undefined,
+    listeners,
+    sequences,
+    commands: [] as string[],
+    scope: JSON.stringify(['personal', '', '']),
+  };
+});
 const state = vi.hoisted(() => ({
   config: { workspace_mode: 'personal', summary_model_profile_id: 'model' },
   teamUser: undefined,
@@ -88,6 +114,34 @@ vi.mock('@tauri-apps/api/core', () => ({
     onmessage?: (event: unknown) => void;
   },
   invoke: async (command: string, args: Record<string, unknown>) => {
+    host.commands.push(command);
+    if (command === 'assistant_session_list')
+      return {
+        workspaceId: 'personal',
+        sessionId: '',
+        epoch: 'native-test',
+        sequence: 0,
+        type: 'list',
+        payload: [],
+      };
+    if (command === 'assistant_session_get') {
+      await host.snapshotGate;
+      const id = args.id as string;
+      return {
+        workspaceId: 'personal',
+        sessionId: id,
+        epoch: 'native-test',
+        sequence: host.sequences.get(id) ?? 0,
+        type: 'snapshot',
+        payload: { session: structuredClone(host.saved.get(id)), stream: null },
+      };
+    }
+    if (command === 'assistant_turn_stop') {
+      const session = structuredClone(host.saved.get(args.id));
+      session.status = 'idle';
+      host.saved.set(args.id as string, session);
+      return session;
+    }
     if (command === 'assistant_turn_start') {
       // Native-host contract substitute: the page submits a turn and observes
       // snapshots/events. Workflow ownership stays behind this IPC boundary.
@@ -112,12 +166,22 @@ vi.mock('@tauri-apps/api/core', () => ({
         try {
           let messageId = crypto.randomUUID();
           const channel = {
-            onmessage: (event: unknown) =>
+            onmessage: (event: unknown) => {
+              const sequence = (host.sequences.get(session.id) ?? 0) + 1;
+              host.sequences.set(session.id, sequence);
               host.listeners.forEach((receive) =>
                 receive({
-                  payload: { sessionId: session.id, messageId, event },
+                  payload: {
+                    workspaceId: 'personal',
+                    sessionId: session.id,
+                    epoch: 'native-test',
+                    sequence,
+                    type: 'stream',
+                    payload: { sessionId: session.id, messageId, event },
+                  },
                 }),
-              ),
+              );
+            },
           };
           let reply = await host.reply(
             {
@@ -195,8 +259,6 @@ vi.mock('@tauri-apps/api/core', () => ({
       host.saved.set(session.id, structuredClone(session));
       return;
     }
-    if (command === 'assistant_session_get')
-      return structuredClone(host.saved.get(args.id));
     throw new Error(`Unexpected command ${command}`);
   },
 }));
@@ -244,14 +306,20 @@ vi.mock('@/services/workflow', () => {
 });
 
 import { useAssistantStore } from '@/stores/assistant.store';
+const { disposeAssistantEvents } = useAssistantStore.getState();
 
 import { Component as StartPage } from './index';
 
 beforeEach(() => {
+  disposeAssistantEvents();
+  host.sequences.clear();
+  host.commands.length = 0;
   vi.resetAllMocks();
+  localStorage.clear();
   host.saved.clear();
   host.listeners.clear();
   host.compactCatalog = false;
+  host.snapshotGate = undefined;
   useAssistantStore.setState({ sessions: {}, scopes: {}, streams: {} });
   host.start.mockResolvedValue(undefined);
   host.inspect.mockResolvedValue({
@@ -267,6 +335,122 @@ beforeEach(() => {
       },
     ],
   });
+});
+
+it('keeps the composer at the bottom while restoring a recent conversation', async () => {
+  let release!: () => void;
+  host.snapshotGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  host.saved.set('history', {
+    id: 'history',
+    title: '历史对话',
+    modelId: 'model',
+    status: 'idle',
+    steps: 0,
+    messages: [
+      {
+        id: 'user-1',
+        role: 'user',
+        text: '之前的消息',
+        content: { role: 'user', parts: [{ text: '之前的消息' }] },
+      },
+    ],
+  });
+  const screen = await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter initialEntries={['/start?session=history']}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .element(
+      screen.getByRole('status', { name: zh.assistant.loadingConversation }),
+    )
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole('heading', { name: zh.start.title }))
+    .not.toBeInTheDocument();
+  const textbox = screen.getByRole('textbox');
+  await expect.element(textbox).toBeDisabled();
+  const bottom = textbox.element().getBoundingClientRect().bottom;
+  release();
+  await expect
+    .element(screen.getByText('之前的消息', { exact: true }))
+    .toBeVisible();
+  await expect.element(textbox).toBeEnabled();
+  expect(
+    Math.abs(textbox.element().getBoundingClientRect().bottom - bottom),
+  ).toBeLessThan(1);
+});
+
+it('allows drafting during a response and sends the preserved draft after stopping', async () => {
+  host.reply
+    .mockImplementationOnce(() => new Promise(() => {}))
+    .mockResolvedValueOnce({
+      text: '第二次回答',
+      content: { role: 'model', parts: [{ text: '第二次回答' }] },
+    });
+  const client = new QueryClient();
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/start']}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  const textbox = screen.getByRole('textbox');
+  await textbox.fill('第一条');
+  await screen.getByRole('button', { name: '发送', exact: true }).click();
+  const stop = screen.getByRole('button', { name: '停止回答' });
+  await expect.element(stop).toBeEnabled();
+  await expect.poll(() => host.reply.mock.calls.length).toBe(1);
+  await expect
+    .element(screen.getByText('第一条', { exact: true }))
+    .toBeVisible();
+  await textbox.fill('下一条');
+  textbox
+    .element()
+    .dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+  expect([...host.saved.values()][0].messages).toHaveLength(1);
+  await stop.click();
+  const send = screen.getByRole('button', { name: '发送', exact: true });
+  await expect.element(textbox).toHaveValue('下一条');
+  await expect.element(send).toBeEnabled();
+  await send.click();
+  await expect
+    .element(screen.getByText('第二次回答', { exact: true }))
+    .toBeVisible();
+  expect(
+    [...host.saved.values()][0].messages.filter(
+      (message: { role: string }) => message.role === 'user',
+    ),
+  ).toHaveLength(2);
+});
+
+it('remembers the selected model when opening a new conversation', async () => {
+  host.compactCatalog = true;
+  const client = new QueryClient();
+  const chat = (key: string) => (
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/start']}>
+        <StartPage key={key} />
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+  const screen = await render(chat('first'));
+  const selector = screen.getByRole('combobox', { name: '主控模型' });
+  await selector.click();
+  await screen.getByRole('option', { name: /GPT-5.6/ }).click();
+  await screen.rerender(chat('new'));
+  await expect.poll(() => selector.element().textContent).toContain('GPT-5.6');
 });
 
 it('keeps typing focus, lets the model dispatch a workflow, and returns its result into the same conversation', async () => {
@@ -446,7 +630,10 @@ it('shows streamed text while the model request is pending and replaces it with 
     .element(screen.getByText('你好，', { exact: true }))
     .toBeVisible();
   expect(host.start).not.toHaveBeenCalled();
-  await expect.element(screen.getByRole('textbox')).toBeDisabled();
+  await expect.element(screen.getByRole('textbox')).toBeEnabled();
+  await expect
+    .element(screen.getByRole('button', { name: '停止回答' }))
+    .toBeEnabled();
   channel.onmessage({ type: 'text_delta', text: '有什么可以帮你？' });
   await expect
     .element(screen.getByText('你好，有什么可以帮你？', { exact: true }))
@@ -455,7 +642,9 @@ it('shows streamed text while the model request is pending and replaces it with 
     text: '你好，有什么可以帮你？',
     content: { role: 'model', parts: [{ text: '你好，有什么可以帮你？' }] },
   });
-  await expect.element(screen.getByRole('textbox')).toBeEnabled();
+  await expect
+    .element(screen.getByRole('button', { name: '发送', exact: true }))
+    .toBeVisible();
   await expect
     .element(screen.getByText('你好，有什么可以帮你？', { exact: true }))
     .toBeVisible();
@@ -464,6 +653,9 @@ it('shows streamed text while the model request is pending and replaces it with 
   ).toHaveLength(1);
   channel.onmessage({ type: 'text_delta', text: '重复片段' });
   expect(useAssistantStore.getState().streams).toEqual({});
+  expect(host.commands.some((command) => command.includes('subscribe'))).toBe(
+    false,
+  );
 });
 
 it('animates a buffered response and keeps revealing it after the completed message replaces the stream preview', async () => {

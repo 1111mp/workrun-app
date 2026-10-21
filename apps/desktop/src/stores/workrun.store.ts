@@ -6,11 +6,8 @@ import { immer } from 'zustand/middleware/immer';
 import { localProfileAvatarUrl } from '@/lib/avatar';
 import { i18n } from '@/lib/i18n';
 import { applyPendingTheme } from '@/lib/utils';
-import {
-  getSystemTheme,
-  getWorkrunConfig,
-  patchWorkrunConfig,
-} from '@/services/cmd';
+import { getSystemTheme, patchWorkrunConfig } from '@/services/cmd';
+import { getAppInitialData, getStartupData } from '@/services/init';
 import type { TeamUser } from '@/services/session';
 
 import { useRunWorkspaceStore } from './run-workspace.store';
@@ -25,6 +22,7 @@ type WorkrunState = {
   updateTheme: (theme: AppTheme) => Promise<void>;
 };
 
+let firstHydration = true;
 let previousConfig: IWorkrunConfig | null = null;
 let updateConfigPromiseResolver:
   | ((value: void | PromiseLike<void>) => void)
@@ -33,9 +31,11 @@ let updateConfigPromiseResolver:
 const storage: PersistStorage<Pick<WorkrunState, 'config' | 'resolvedTheme'>> =
   {
     getItem: async (_name) => {
-      const config = await getWorkrunConfig();
+      const load = firstHydration ? getStartupData : getAppInitialData;
+      firstHydration = false;
+      const [config, systemTheme] = await load();
       const resolvedTheme =
-        config.theme === 'system' ? await getSystemTheme() : config.theme;
+        config.theme === 'system' ? systemTheme : config.theme;
 
       previousConfig = structuredClone(config);
 

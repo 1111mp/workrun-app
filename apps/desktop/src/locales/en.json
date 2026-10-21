@@ -2086,6 +2086,8 @@
     "emptyDescription": "Create or import an app or workflow. It will appear here when ready."
   },
   "assistant": {
+    "syncFailed": "Conversation sync failed. Reconnect to restore updates.",
+    "stop": "Stop response",
     "toolConfirmation": {
       "title": "Confirm tool call",
       "description": "Task paused. Review the tool and complete arguments. Approval applies to this call only.",
@@ -2156,6 +2158,7 @@
     "fileTask": "Work with attached files",
     "files": "Files",
     "loadFailed": "Conversation could not be loaded",
+    "loadingConversation": "Loading conversation…",
     "retry": "Retry",
     "details": "View execution",
     "inputsNeeded": "Complete the required inputs",

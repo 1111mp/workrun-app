@@ -2059,6 +2059,8 @@
     "emptyDescription": "创建或导入应用、工作流，准备好后就能在这里使用。"
   },
   "assistant": {
+    "syncFailed": "对话同步失败，请重新连接",
+    "stop": "停止回答",
     "toolConfirmation": {
       "title": "工具调用确认",
       "description": "任务已暂停，请核对工具及完整参数。确认仅授权本次调用。",
@@ -2129,6 +2131,7 @@
     "fileTask": "处理附件",
     "files": "文件",
     "loadFailed": "无法加载对话",
+    "loadingConversation": "正在加载对话…",
     "retry": "重试",
     "details": "查看执行详情",
     "inputsNeeded": "请补充必填参数",

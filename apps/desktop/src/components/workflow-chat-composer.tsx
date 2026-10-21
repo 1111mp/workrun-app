@@ -11,7 +11,7 @@ import {
   InputGroupTextarea,
   Spinner,
 } from '@workspace/ui/components';
-import { ArrowUpIcon, PaperclipIcon, PlusIcon } from 'lucide-react';
+import { ArrowUpIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
 import {
   useEffect,
   useRef,
@@ -38,7 +38,13 @@ export function WorkflowChatComposer({
   disabled,
   onSubmit,
   toolbarActions,
+  responding = false,
+  stopping = false,
+  onStop,
 }: {
+  responding?: boolean;
+  stopping?: boolean;
+  onStop?: () => void;
   toolbarActions?: ReactNode;
   fileInputs: WorkflowInput[];
   filesForInput: (key: string) => unknown;
@@ -93,7 +99,7 @@ export function WorkflowChatComposer({
     <form
       className='w-full'
       onSubmit={(event) => {
-        if (disabled || busy.current) event.preventDefault();
+        if (disabled || responding || busy.current) event.preventDefault();
         else onSubmit(event);
       }}
     >
@@ -208,13 +214,36 @@ export function WorkflowChatComposer({
             {toolbarActions}
             <InputGroupButton
               className='rounded-full'
-              disabled={disabled || picking || !message.trim()}
+              disabled={
+                responding
+                  ? stopping || !onStop
+                  : disabled || picking || !message.trim()
+              }
               size='icon-sm'
-              type='submit'
+              type={responding ? 'button' : 'submit'}
+              onClick={
+                responding
+                  ? (event) => {
+                      // Stopping may immediately turn this control back into Submit.
+                      event.preventDefault();
+                      onStop?.();
+                    }
+                  : undefined
+              }
               variant='default'
-              aria-label={t('workflowEditor.output.send')}
+              aria-label={t(
+                responding ? 'assistant.stop' : 'workflowEditor.output.send',
+              )}
             >
-              <ArrowUpIcon />
+              {responding ? (
+                stopping ? (
+                  <Spinner />
+                ) : (
+                  <SquareIcon className='size-3 fill-current' />
+                )
+              ) : (
+                <ArrowUpIcon />
+              )}
             </InputGroupButton>
           </div>
         </InputGroupAddon>

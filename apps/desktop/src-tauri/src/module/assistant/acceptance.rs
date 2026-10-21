@@ -19,6 +19,10 @@ struct GraphRuns {
 }
 #[async_trait::async_trait]
 impl WorkflowRuns for GraphRuns {
+    fn status_changes(&self) -> tokio::sync::broadcast::Receiver<String> {
+        // Acceptance executes synchronously in start; inspect already sees the result.
+        tokio::sync::broadcast::channel(1).1
+    }
     async fn start(&self, request: crate::module::run_manager::StartWorkflowRun) -> Result<()> {
         let persisted: String = sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id=?")
             .bind(&self.session_id)

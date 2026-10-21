@@ -1,446 +1,273 @@
-import { listen } from '@tauri-apps/api/event';
 import { create } from 'zustand';
+import { immer } from 'zustand/middleware/immer';
 
-import { createTeamAuthClient } from '@/lib/auth-client';
 import {
-  getAssistantSession,
   saveAssistantSession,
-  startAssistantTurn,
+  deleteAssistantSession as deleteSession,
+  stopAssistantTurn,
   type AssistantSession,
-  type AssistantActivity,
-  type AssistantReasoning,
-  type WorkflowPlan,
+  type AssistantSessionSummary,
   type AssistantToolConfirmation,
-  type AssistantTurnAction,
 } from '@/services/assistant';
-import { useWorkrunStore } from '@/stores/workrun.store';
 
-export const useAssistantStore = create<{
+import {
+  initializeAssistantEvents,
+  disposeAssistantEvents,
+  loadAssistantList,
+  loadAssistantSession,
+  ensureWorkspace,
+  ensureEvents,
+  latest,
+  act,
+  isAssistantActing,
+} from './assistant.runtime';
+
+type AssistantState = {
+  initializeAssistantEvents: () => Promise<() => void>;
+  disposeAssistantEvents: () => void;
+  loadAssistantList: (scope: string) => Promise<AssistantSessionSummary[]>;
+  createAssistantSession: (
+    modelId: string,
+    title: string,
+    scope: string,
+  ) => Promise<AssistantSession>;
+  loadAssistantSession: (
+    id: string,
+    scope: string,
+  ) => Promise<AssistantSession>;
+  deleteAssistantSession: (id: string, scope: string) => Promise<void>;
+  sendAssistantMessage: (
+    id: string,
+    text: string,
+    scope: string,
+    attachments?: unknown[],
+  ) => Promise<void>;
+  provideAssistantInputs: (
+    id: string,
+    input: Record<string, unknown>,
+    scope: string,
+  ) => Promise<void>;
+  resumeAssistant: (id: string, scope: string) => Promise<void>;
+  stopAssistant: (id: string, scope: string) => Promise<void>;
+  declineAssistantWorkflow: (id: string, scope: string) => Promise<void>;
+  setAssistantModel: (
+    id: string,
+    modelId: string,
+    scope: string,
+  ) => Promise<void>;
+  setAssistantFeedback: (
+    id: string,
+    messageId: string,
+    value: 'helpful' | 'unhelpful',
+    scope: string,
+  ) => Promise<void>;
+  decideAssistantPlan: (
+    id: string,
+    planId: string,
+    version: number,
+    decision: 'approve' | 'cancel',
+    text: string,
+    scope: string,
+  ) => Promise<void>;
+  decideAssistantTool: (
+    id: string,
+    confirmation: AssistantToolConfirmation,
+    decision: 'approve' | 'deny',
+    text: string,
+    scope: string,
+  ) => Promise<void>;
+  syncErrors: Record<string, string>;
+  summaries: Record<string, AssistantSessionSummary[]>;
+  listErrors: Record<string, string>;
   sessions: Record<string, AssistantSession>;
   scopes: Record<string, string>;
   streams: Record<string, { messageId: string; text: string }>;
-}>(() => ({ sessions: {}, scopes: {}, streams: {} }));
-const observers = new Map<string, Promise<void>>();
-const locks = new Set<string>();
-const workspace = () => {
-  const state = useWorkrunStore.getState();
-  return JSON.stringify([
-    state.config?.workspace_mode ?? 'personal',
-    state.config?.workspace_mode === 'team'
-      ? state.config.team?.server_url
-      : '',
-    state.config?.workspace_mode === 'team' ? state.teamUser?.id : '',
-  ]);
 };
-function ensureWorkspace(scope: string) {
-  if (workspace() !== scope)
-    throw new Error(
-      'Workspace changed. Reopen this conversation in its workspace.',
-    );
-}
-function publish(session: AssistantSession, scope: string) {
-  useAssistantStore.setState((state) => {
-    // Polling snapshots may predate a live progress event. Preserve it until
-    // the native phase commits the same ID to durable history.
-    const activities = new Map(
-      (session.activities ?? []).map((item) => [item.id, item]),
-    );
-    if (state.scopes[session.id] === scope)
-      for (const item of state.sessions[session.id]?.activities ?? [])
-        activities.set(item.id, item);
-    const reasoning = new Map(
-      (session.reasoning ?? []).map((item) => [item.id, item]),
-    );
-    if (state.scopes[session.id] === scope)
-      for (const item of state.sessions[session.id]?.reasoning ?? []) {
-        // Durable snapshots win once committed; live records fill polling gaps.
-        if (!reasoning.has(item.id)) reasoning.set(item.id, item);
-      }
-    const workflowPlans = new Map(
-      (session.workflowPlans ?? []).map((entry) => [
-        `${entry.turnId}/${entry.plan.id}/${entry.plan.version}`,
-        entry,
-      ]),
-    );
-    if (state.scopes[session.id] === scope)
-      for (const entry of state.sessions[session.id]?.workflowPlans ?? []) {
-        const key = `${entry.turnId}/${entry.plan.id}/${entry.plan.version}`;
-        if (!workflowPlans.has(key)) workflowPlans.set(key, entry);
-      }
-    session = {
-      ...session,
-      workflowPlans: [...workflowPlans.values()],
-      activities: [...activities.values()],
-      reasoning: [...reasoning.values()],
-    };
-    const streams = { ...state.streams };
-    const stream = streams[session.id];
-    if (
-      stream &&
-      (session.messages.some((message) => message.id === stream.messageId) ||
-        !['thinking', 'running'].includes(session.status))
-    )
-      delete streams[session.id];
-    return {
-      sessions: { ...state.sessions, [session.id]: session },
-      scopes: { ...state.scopes, [session.id]: scope },
-      streams,
-    };
-  });
-}
-function latest(id: string) {
-  const session = useAssistantStore.getState().sessions[id];
-  if (!session) throw new Error('Conversation is not loaded.');
-  return session;
-}
-async function teamToken() {
-  const config = useWorkrunStore.getState().config;
-  if (config?.workspace_mode !== 'team') return;
-  const server = config.team?.server_url;
-  if (!server) throw new Error('Team server URL is not configured.');
-  const session = await createTeamAuthClient(server).getSession();
-  if (!session.data?.session.token)
-    throw new Error('Sign in to access Team workflows.');
-  return session.data.session.token;
-}
 
-// Observation never calls a model or dispatches a workflow. Native ownership
-// continues when this loop, the renderer, or the stream listener disappears.
-function observe(id: string, scope: string): Promise<void> {
-  const key = `${scope}/${id}`;
-  const existing = observers.get(key);
-  if (existing) return existing;
-  const task = (async () => {
-    const unlisten = await listen<{
-      sessionId: string;
-      messageId: string;
-      turnId?: string;
-      activity?: AssistantActivity;
-      reasoning?: AssistantReasoning;
-      event:
-        | { type: 'text_delta' | 'text_replace'; text: string }
-        | { type: 'activity'; summary: string }
-        | { type: 'workflow_plan'; plan: WorkflowPlan }
-        | {
-            type: 'reasoning';
-            id: string;
-            text: string;
-            durationMs: number;
-            complete: boolean;
-          };
-    }>('assistant-stream', ({ payload }) => {
-      const state = useAssistantStore.getState();
+export const useAssistantStore = create<AssistantState>()(
+  immer((set, get) => ({
+    sessions: {},
+    scopes: {},
+    streams: {},
+    syncErrors: {},
+    summaries: {},
+    listErrors: {},
+    initializeAssistantEvents,
+    disposeAssistantEvents,
+    loadAssistantList,
+    loadAssistantSession,
+    async createAssistantSession(
+      modelId: string,
+      title: string,
+      scope: string,
+    ) {
+      ensureWorkspace(scope);
+      const session: AssistantSession = {
+        id: crypto.randomUUID(),
+        title: title.slice(0, 72),
+        modelId,
+        messages: [],
+        status: 'idle',
+        steps: 0,
+      };
+      await ensureEvents(scope);
+      await saveAssistantSession(session);
+      ensureWorkspace(scope);
+      return get().loadAssistantSession(session.id, scope);
+    },
+    async sendAssistantMessage(
+      id: string,
+      text: string,
+      scope: string,
+      attachments: unknown[] = [],
+    ) {
+      const session = latest(id);
       if (
-        workspace() !== scope ||
-        payload.sessionId !== id ||
-        state.scopes[id] !== scope
+        session.activeCall ||
+        !['idle', 'error', 'awaiting_feedback'].includes(session.status) ||
+        (!text.trim() && !attachments.length)
       )
         return;
-      if (payload.event.type === 'workflow_plan') {
-        const plan = payload.event.plan;
-        const session = state.sessions[id];
-        if (session)
-          useAssistantStore.setState({
-            sessions: {
-              ...state.sessions,
-              [id]: {
-                ...session,
-                workflowPlan: plan,
-                workflowPlans: payload.turnId
-                  ? [
-                      ...(session.workflowPlans ?? []).filter(
-                        (entry) =>
-                          entry.turnId !== payload.turnId ||
-                          entry.plan.id !== plan.id ||
-                          entry.plan.version !== plan.version,
-                      ),
-                      { turnId: payload.turnId, plan: plan },
-                    ]
-                  : session.workflowPlans,
-              },
-            },
-          });
-        return;
-      }
-      if (payload.event.type === 'reasoning') {
-        const thought = payload.reasoning;
-        const session = state.sessions[id];
-        if (thought && session)
-          useAssistantStore.setState({
-            sessions: {
-              ...state.sessions,
-              [id]: {
-                ...session,
-                reasoning: [
-                  ...(session.reasoning ?? []).filter(
-                    (item) => item.id !== thought.id,
-                  ),
-                  thought,
-                ],
-              },
-            },
-          });
-        return;
-      }
-      if (payload.event.type === 'activity') {
-        const activity = payload.activity;
-        const session = state.sessions[id];
-        if (
-          activity &&
-          session &&
-          !session.activities?.some((item) => item.id === activity.id)
-        )
-          useAssistantStore.setState({
-            sessions: {
-              ...state.sessions,
-              [id]: {
-                ...session,
-                activities: [...(session.activities ?? []), activity],
-              },
-            },
-          });
-        return;
-      }
-      const event = payload.event;
+      await act(id, scope, { kind: 'send', text, attachments });
+    },
+    async provideAssistantInputs(
+      id: string,
+      input: Record<string, unknown>,
+      scope: string,
+    ) {
+      if (latest(id).status === 'needs_input')
+        await act(id, scope, { kind: 'inputs', input });
+    },
+    async resumeAssistant(id: string, scope: string) {
+      await act(id, scope, { kind: 'continue' });
+    },
+    async stopAssistant(id: string, scope: string) {
+      ensureWorkspace(scope);
+      await ensureEvents(scope);
+      await stopAssistantTurn(id);
+      ensureWorkspace(scope);
+    },
+    async declineAssistantWorkflow(id: string, scope: string) {
+      if (latest(id).status === 'needs_input')
+        await act(id, scope, { kind: 'decline' });
+    },
+    async setAssistantModel(id: string, modelId: string, scope: string) {
+      ensureWorkspace(scope);
+      const session = latest(id);
       if (
-        state.sessions[id]?.messages.some(
-          (message) => message.id === payload.messageId,
-        )
+        isAssistantActing(scope, id) ||
+        !['idle', 'error', 'awaiting_feedback'].includes(session.status)
       )
-        return;
-      useAssistantStore.setState((state) => {
-        const stream = state.streams[id];
-        return {
-          streams: {
-            ...state.streams,
-            [id]: {
-              messageId: payload.messageId,
-              text:
-                event.type === 'text_replace'
-                  ? event.text
-                  : (stream?.messageId === payload.messageId
-                      ? stream.text
-                      : '') + event.text,
-            },
-          },
-        };
-      });
-    }).catch(() => () => {});
-    try {
-      while (
-        workspace() === scope &&
-        useAssistantStore.getState().scopes[id] === scope
-      ) {
-        const session = await getAssistantSession(id);
-        ensureWorkspace(scope);
-        if (useAssistantStore.getState().scopes[id] !== scope) return;
-        publish(session, scope);
-        if (!['thinking', 'running'].includes(session.status)) return;
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    } finally {
-      unlisten();
-    }
-  })().finally(() => observers.delete(key));
-  observers.set(key, task);
-  return task;
-}
-
-export async function createAssistantSession(
-  modelId: string,
-  title: string,
-  scope: string,
-) {
-  ensureWorkspace(scope);
-  const session: AssistantSession = {
-    id: crypto.randomUUID(),
-    title: title.slice(0, 72),
-    modelId,
-    messages: [],
-    status: 'idle',
-    steps: 0,
-  };
-  await saveAssistantSession(session);
-  ensureWorkspace(scope);
-  publish(session, scope);
-  return session;
-}
-export async function loadAssistantSession(id: string, scope: string) {
-  ensureWorkspace(scope);
-  const session = await getAssistantSession(id);
-  ensureWorkspace(scope);
-  publish(session, scope);
-  if (['thinking', 'running'].includes(session.status))
-    void observe(id, scope).catch(() => {});
-  return session;
-}
-async function act(id: string, scope: string, action: AssistantTurnAction) {
-  if (locks.has(id)) return;
-  locks.add(id);
-  let ownsLock = true;
-  try {
-    ensureWorkspace(scope);
-    const token = await teamToken();
-    ensureWorkspace(scope);
-    const session = await startAssistantTurn(id, action, token);
-    ensureWorkspace(scope);
-    publish(session, scope);
-    // Native ownership now guards the turn. Release the submission guard before
-    // observation publishes a terminal state and enables the next user action.
-    locks.delete(id);
-    ownsLock = false;
-    await observe(id, scope);
-  } catch (error) {
-    if (workspace() === scope && useAssistantStore.getState().sessions[id]) {
-      // An uncertain IPC response never authorizes a retry. Prefer the native
-      // state; a running task remains running despite a transport failure.
-      const session = await getAssistantSession(id).catch(() => undefined);
-      if (session && ['thinking', 'running'].includes(session.status)) {
-        publish(session, scope);
-        void observe(id, scope).catch(() => {});
-      } else
-        publish(
-          { ...(session ?? latest(id)), status: 'error', error: String(error) },
-          scope,
+        throw new Error(
+          'Wait for the current response before changing its model.',
         );
-    }
-  } finally {
-    if (ownsLock) locks.delete(id);
-  }
-}
-export async function sendAssistantMessage(
-  id: string,
-  text: string,
-  scope: string,
-  attachments: unknown[] = [],
-) {
-  const session = latest(id);
-  if (
-    session.activeCall ||
-    !['idle', 'error', 'awaiting_feedback'].includes(session.status) ||
-    (!text.trim() && !attachments.length)
-  )
-    return;
-  await act(id, scope, { kind: 'send', text, attachments });
-}
-export async function provideAssistantInputs(
-  id: string,
-  input: Record<string, unknown>,
-  scope: string,
-) {
-  if (latest(id).status === 'needs_input')
-    await act(id, scope, { kind: 'inputs', input });
-}
-export async function resumeAssistant(id: string, scope: string) {
-  await act(id, scope, { kind: 'continue' });
-}
-export async function declineAssistantWorkflow(id: string, scope: string) {
-  if (latest(id).status === 'needs_input')
-    await act(id, scope, { kind: 'decline' });
-}
-export async function setAssistantModel(
-  id: string,
-  modelId: string,
-  scope: string,
-) {
-  ensureWorkspace(scope);
-  const session = latest(id);
-  if (
-    locks.has(id) ||
-    !['idle', 'error', 'awaiting_feedback'].includes(session.status)
-  )
-    throw new Error('Wait for the current response before changing its model.');
-  const updated = { ...session, modelId };
-  await saveAssistantSession(updated);
-  ensureWorkspace(scope);
-  publish(updated, scope);
-}
+      const updated = { ...session, modelId };
+      await saveAssistantSession(updated);
+      ensureWorkspace(scope);
+    },
+    async setAssistantFeedback(
+      id: string,
+      messageId: string,
+      value: 'helpful' | 'unhelpful',
+      scope: string,
+    ) {
+      ensureWorkspace(scope);
+      const session = latest(id);
+      if (!['idle', 'error', 'awaiting_feedback'].includes(session.status))
+        return;
+      const updated = {
+        ...session,
+        messages: session.messages.map((message) =>
+          message.id === messageId && message.role === 'assistant'
+            ? {
+                ...message,
+                feedback: message.feedback === value ? undefined : value,
+              }
+            : message,
+        ),
+      };
+      await saveAssistantSession(updated);
+      ensureWorkspace(scope);
+    },
+    async decideAssistantPlan(
+      id: string,
+      planId: string,
+      version: number,
+      decision: 'approve' | 'cancel',
+      text: string,
+      scope: string,
+    ) {
+      const session = latest(id);
+      if (
+        session.activeCall ||
+        !['idle', 'error', 'awaiting_feedback'].includes(session.status)
+      )
+        return;
+      if (
+        session.workflowPlan?.id !== planId ||
+        session.workflowPlan.version !== version
+      )
+        throw new Error('Plan changed. Review the latest version.');
+      await act(id, scope, {
+        kind: 'planDecision',
+        plan_id: planId,
+        ...(session.workflowPlan.interaction
+          ? {
+              interaction_id: session.workflowPlan.interaction.id,
+              checkpoint_id: session.workflowPlan.interaction.checkpointId,
+            }
+          : {}),
+        version,
+        decision,
+        text,
+      });
+    },
+    async decideAssistantTool(
+      id: string,
+      confirmation: AssistantToolConfirmation,
+      decision: 'approve' | 'deny',
+      text: string,
+      scope: string,
+    ) {
+      const session = latest(id);
+      if (
+        session.activeCall ||
+        !['idle', 'error', 'awaiting_feedback'].includes(session.status)
+      )
+        return;
+      if (
+        session.pendingTool?.id !== confirmation.id ||
+        session.pendingTool.interaction.checkpointId !==
+          confirmation.interaction.checkpointId ||
+        session.pendingTool.interaction.status !== 'waiting'
+      )
+        throw new Error(
+          'Tool confirmation changed. Review the latest request.',
+        );
+      await act(id, scope, {
+        kind: 'toolDecision',
+        operation_id: confirmation.id,
+        interaction_id: confirmation.interaction.id,
+        checkpoint_id: confirmation.interaction.checkpointId,
+        decision,
+        text,
+      });
+    },
+    async deleteAssistantSession(id: string, scope: string) {
+      ensureWorkspace(scope);
+      await deleteSession(id);
+      ensureWorkspace(scope);
+      set((state) => {
+        delete state.sessions[id];
+        delete state.scopes[id];
+        delete state.streams[id];
+        delete state.syncErrors[id];
+      });
+    },
+  })),
+);
 
-export async function setAssistantFeedback(
-  id: string,
-  messageId: string,
-  value: 'helpful' | 'unhelpful',
-  scope: string,
-) {
-  ensureWorkspace(scope);
-  const session = latest(id);
-  if (!['idle', 'error', 'awaiting_feedback'].includes(session.status)) return;
-  const updated = {
-    ...session,
-    messages: session.messages.map((message) =>
-      message.id === messageId && message.role === 'assistant'
-        ? {
-            ...message,
-            feedback: message.feedback === value ? undefined : value,
-          }
-        : message,
-    ),
-  };
-  await saveAssistantSession(updated);
-  ensureWorkspace(scope);
-  publish(updated, scope);
-}
-
-export async function decideAssistantPlan(
-  id: string,
-  planId: string,
-  version: number,
-  decision: 'approve' | 'cancel',
-  text: string,
-  scope: string,
-) {
-  const session = latest(id);
-  if (
-    session.activeCall ||
-    !['idle', 'error', 'awaiting_feedback'].includes(session.status)
-  )
-    return;
-  if (
-    session.workflowPlan?.id !== planId ||
-    session.workflowPlan.version !== version
-  )
-    throw new Error('Plan changed. Review the latest version.');
-  await act(id, scope, {
-    kind: 'planDecision',
-    plan_id: planId,
-    ...(session.workflowPlan.interaction
-      ? {
-          interaction_id: session.workflowPlan.interaction.id,
-          checkpoint_id: session.workflowPlan.interaction.checkpointId,
-        }
-      : {}),
-    version,
-    decision,
-    text,
-  });
-}
-
-export async function decideAssistantTool(
-  id: string,
-  confirmation: AssistantToolConfirmation,
-  decision: 'approve' | 'deny',
-  text: string,
-  scope: string,
-) {
-  const session = latest(id);
-  if (
-    session.activeCall ||
-    !['idle', 'error', 'awaiting_feedback'].includes(session.status)
-  )
-    return;
-  if (
-    session.pendingTool?.id !== confirmation.id ||
-    session.pendingTool.interaction.checkpointId !==
-      confirmation.interaction.checkpointId ||
-    session.pendingTool.interaction.status !== 'waiting'
-  )
-    throw new Error('Tool confirmation changed. Review the latest request.');
-  await act(id, scope, {
-    kind: 'toolDecision',
-    operation_id: confirmation.id,
-    interaction_id: confirmation.interaction.id,
-    checkpoint_id: confirmation.interaction.checkpointId,
-    decision,
-    text,
-  });
-}
+if (import.meta.hot)
+  import.meta.hot.dispose(() =>
+    useAssistantStore.getState().disposeAssistantEvents(),
+  );

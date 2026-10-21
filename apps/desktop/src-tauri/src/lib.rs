@@ -115,6 +115,7 @@ pub fn run() {
             cmd::artifact::artifact_pick,
             // assistant
             cmd::assistant::assistant_turn_start,
+            cmd::assistant::assistant_turn_stop,
             cmd::assistant::assistant_session_save,
             cmd::assistant::assistant_session_list,
             cmd::assistant::assistant_session_delete,

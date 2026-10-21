@@ -393,6 +393,9 @@ pub(super) async fn complete_app_cancellation(run_id: &str) -> Result<()> {
 
 pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> Result<()> {
     RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
+    // Native waiters must observe the durable outcome even if ancillary
+    // finalization fails before the renderer notification below.
+    let _ = STATUS_CHANGES.send(run_id.to_owned());
     let pool = crate::core::db::DBManager::global().pool()?;
     crate::module::run_history::recovery::complete_attempt(&pool, run_id).await?;
     if matches!(status, RunStatus::Completed | RunStatus::Cancelled | RunStatus::Failed) {
@@ -433,14 +436,14 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
     {
         log::warn!("failed to complete evaluation result for run {run_id}: {error:#}");
     }
-    // Output events precede the durable status update. Publish a separate
-    // notification afterwards so shell-level active-run queries cannot retain
-    // the stale "running" result from that earlier event.
+    // Refresh renderer projections after dependent chat/evaluation writes finish.
     publish_run_status(run_id, status)?;
     Ok(())
 }
 
 pub(super) fn publish_run_status(run_id: &str, status: RunStatus) -> Result<()> {
+    // Wake native waiters after persistence, independently of renderer delivery.
+    let _ = STATUS_CHANGES.send(run_id.to_owned());
     RunManager::global().supervisor.notify();
     emit_on_main_thread(
         "run-status-changed",

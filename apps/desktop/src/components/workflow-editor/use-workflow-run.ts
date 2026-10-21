@@ -128,6 +128,8 @@ function useWorkflowRun(
     queryFn: listActiveRuns,
   });
   const starting = useRef(false);
+  const mounted = useRef(false);
+  const listenerGeneration = useRef(0);
   const [isStarting, setIsStarting] = useState(false);
   const [isRestoringChatSession, setIsRestoringChatSession] = useState(false);
   // `undefined` follows a restored history run, while `null` records that the
@@ -221,14 +223,18 @@ function useWorkflowRun(
     pendingFrame.current = requestAnimationFrame(drain);
   };
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      listenerGeneration.current = listenerGeneration.current + 1;
       if (pendingFrame.current !== undefined)
         cancelAnimationFrame(pendingFrame.current);
+      pendingFrame.current = undefined;
       unlistenRunEvents.current?.();
-    },
-    [],
-  );
+      unlistenRunEvents.current = undefined;
+    };
+  }, []);
 
   const handleTerminalEvent = (event: WorkflowRunEvent) => {
     if (event.type === 'done') {
@@ -272,7 +278,7 @@ function useWorkflowRun(
     // Keep this restored-run subscription intact while routing events through
     // the current render's handler and state.
     void subscribeWorkflowRun(restoredRun.id, (event) => {
-      handleEventRef.current(event);
+      if (!disposed) handleEventRef.current(event);
     }).then((unlisten) => {
       if (disposed) unlisten();
       else unlistenRunEvents.current = unlisten;
@@ -296,6 +302,7 @@ function useWorkflowRun(
       // Check durable runs again at submission, including runs started in
       // another window since this editor's last active-run refresh.
       const active = await listActiveRuns();
+      if (!mounted.current) return;
       if (
         active.some(
           (run) =>
@@ -417,7 +424,18 @@ function useWorkflowRun(
     let isPreparingTeamApp = false;
     try {
       unlistenRunEvents.current?.();
-      unlistenRunEvents.current = await subscribeWorkflowRun(id, handleEvent);
+      const generation = ++listenerGeneration.current;
+      const stop = await subscribeWorkflowRun(id, (event) => {
+        if (mounted.current && listenerGeneration.current === generation)
+          handleEventRef.current(event);
+      });
+      // Registration can finish after navigation or a reset. Release that late
+      // listener and never dispatch a run from a view that has already closed.
+      if (!mounted.current || listenerGeneration.current !== generation) {
+        stop();
+        return;
+      }
+      unlistenRunEvents.current = stop;
       const sessionSnapshot = chatSessionSnapshot.current;
       const executionReleaseId = sessionSnapshot?.releaseId ?? releaseId;
       const dsl = await prepareWorkflowProcessApps(
@@ -433,6 +451,7 @@ function useWorkflowRun(
         },
       );
       if (isPreparingTeamApp) toast.dismiss(preparationToastId);
+      if (!mounted.current || listenerGeneration.current !== generation) return;
       if (sessionSnapshot && chatSessionId.current) {
         // Team App preparation resolves immutable releases to local executable
         // IDs. Persist that resolved DSL before native code reloads the session.
@@ -443,6 +462,7 @@ function useWorkflowRun(
         );
         chatSessionSnapshot.current = preparedSnapshot;
       }
+      if (!mounted.current || listenerGeneration.current !== generation) return;
       await startBackgroundWorkflowRun({
         runId: id,
         targetId: executionWorkflowId,
@@ -562,6 +582,7 @@ function useWorkflowRun(
   };
 
   const resetRunContext = (clearChatSession = true) => {
+    listenerGeneration.current = listenerGeneration.current + 1;
     if (pendingFrame.current !== undefined) {
       cancelAnimationFrame(pendingFrame.current);
       pendingFrame.current = undefined;

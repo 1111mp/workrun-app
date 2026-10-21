@@ -170,7 +170,7 @@ export function AssistantWorkflowPlan({
                 </p>
                 <ul className='list-disc pl-5'>
                   {step.dependencies.map((dependency, i) => (
-                    <li key={i} className='break-words'>
+                    <li key={i} className='wrap-break-word'>
                       {dependency.purpose} · {dependency.kind}: {dependency.id}
                     </li>
                   ))}

@@ -494,7 +494,6 @@ function ProcessNodeDetailPage() {
   const { id } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
-  const liveRun = searchParams.get('live') === 'true';
   const isCatalogApp = searchParams.get('catalog') === 'true';
   const teamUserId = useWorkrunStore((state) => state.teamUser?.id);
   const node = useQuery({
@@ -508,16 +507,6 @@ function ProcessNodeDetailPage() {
     queryFn: () => inspectRunRecord(historyRunId!),
     enabled: Boolean(historyRunId),
     refetchOnMount: 'always',
-    // A run opened from Run Center keeps using this detail page's output
-    // panel while native execution continues after the originating page closes.
-    refetchInterval: (query) =>
-      liveRun &&
-      (!query.state.data ||
-        ['queued', 'running', 'waiting_for_input'].includes(
-          query.state.data.status,
-        ))
-        ? 500
-        : false,
   });
 
   if (node.isError) {

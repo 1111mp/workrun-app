@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
   AlertDescription,
@@ -22,7 +22,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Spinner,
+  Skeleton,
 } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
 import { RefreshCcwIcon } from 'lucide-react';
@@ -39,19 +39,7 @@ import { artifactReferences, type ArtifactRef } from '@/services/artifact';
 import type { AssistantMessage } from '@/services/assistant';
 import { getModelCatalog } from '@/services/cmd';
 import { useWorkrunStore } from '@/stores';
-import {
-  createAssistantSession,
-  decideAssistantPlan,
-  decideAssistantTool,
-  declineAssistantWorkflow,
-  loadAssistantSession,
-  provideAssistantInputs,
-  resumeAssistant,
-  sendAssistantMessage,
-  setAssistantFeedback,
-  setAssistantModel,
-  useAssistantStore,
-} from '@/stores/assistant.store';
+import { useAssistantStore } from '@/stores/assistant.store';
 
 import { AssistantMessageActions } from './assistant-message-actions';
 import { AssistantMessageText } from './assistant-message-text';
@@ -62,8 +50,24 @@ import { AssistantWorkflowPlan } from './assistant-workflow-plan';
 import { AssistantWorkflowRun } from './assistant-workflow-run';
 
 function StartPage() {
+  const loadAssistantSession = useAssistantStore(
+    (state) => state.loadAssistantSession,
+  );
   const scope = useEntryWorkspace();
   const location = useLocation();
+  useEffect(() => {
+    const recover = () => {
+      const id = new URLSearchParams(location.search).get('session');
+      if (document.visibilityState === 'visible' && id)
+        void loadAssistantSession(id, scope).catch(() => {});
+    };
+    window.addEventListener('focus', recover);
+    document.addEventListener('visibilitychange', recover);
+    return () => {
+      window.removeEventListener('focus', recover);
+      document.removeEventListener('visibilitychange', recover);
+    };
+  }, [scope, location.search, loadAssistantSession]);
   return <AssistantChat key={`${scope}:${location.key}`} scope={scope} />;
 }
 
@@ -76,19 +80,59 @@ const attachmentsField: WorkflowInput = {
 };
 
 function AssistantChat({ scope }: { scope: string }) {
+  const createAssistantSession = useAssistantStore(
+    (state) => state.createAssistantSession,
+  );
+  const decideAssistantPlan = useAssistantStore(
+    (state) => state.decideAssistantPlan,
+  );
+  const decideAssistantTool = useAssistantStore(
+    (state) => state.decideAssistantTool,
+  );
+  const declineAssistantWorkflow = useAssistantStore(
+    (state) => state.declineAssistantWorkflow,
+  );
+  const loadAssistantSession = useAssistantStore(
+    (state) => state.loadAssistantSession,
+  );
+  const provideAssistantInputs = useAssistantStore(
+    (state) => state.provideAssistantInputs,
+  );
+  const resumeAssistant = useAssistantStore((state) => state.resumeAssistant);
+  const sendAssistantMessage = useAssistantStore(
+    (state) => state.sendAssistantMessage,
+  );
+  const setAssistantFeedback = useAssistantStore(
+    (state) => state.setAssistantFeedback,
+  );
+  const setAssistantModel = useAssistantStore(
+    (state) => state.setAssistantModel,
+  );
+  const stopAssistant = useAssistantStore((state) => state.stopAssistant);
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const id = params.get('session') ?? undefined;
-  const client = useQueryClient();
   const config = useWorkrunStore((state) => state.config);
   const [draft, setDraft] = useState('');
   const [files, setFiles] = useState<ArtifactRef[]>([]);
   const [chosenModel, setChosenModel] = useState('');
+  const modelPreferenceKey = `assistant:last-model:${scope}`;
+  const [lastModel] = useState(() => {
+    try {
+      return localStorage.getItem(modelPreferenceKey) ?? '';
+    } catch {
+      return '';
+    }
+  });
   const [creating, setCreating] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const submitting = useRef(false);
   const cached = useAssistantStore((state) =>
     id && state.scopes[id] === scope ? state.sessions[id] : undefined,
+  );
+  const syncError = useAssistantStore((state) =>
+    id ? state.syncErrors[id] : undefined,
   );
   const stream = useAssistantStore((state) =>
     id && state.scopes[id] === scope ? state.streams[id] : undefined,
@@ -98,6 +142,8 @@ function AssistantChat({ scope }: { scope: string }) {
     queryFn: () => loadAssistantSession(id!, scope),
     enabled: Boolean(id),
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const session = cached ?? restored.data;
   const messages: AssistantMessage[] = (session?.messages ?? []).map(
@@ -164,6 +210,7 @@ function AssistantChat({ scope }: { scope: string }) {
   const modelId =
     chosenModel ||
     session?.modelId ||
+    models.data?.find((model) => model.id === lastModel)?.id ||
     config?.summary_model_profile_id ||
     models.data?.find(
       (model) =>
@@ -177,10 +224,6 @@ function AssistantChat({ scope }: { scope: string }) {
   const busy =
     creating || session?.status === 'thinking' || session?.status === 'running';
   const active = session?.activeCall;
-
-  useEffect(() => {
-    void client.invalidateQueries({ queryKey: ['assistant-sessions'] });
-  }, [client, session?.id, session?.messages.length]);
 
   const submit = async () => {
     if (
@@ -222,6 +265,21 @@ function AssistantChat({ scope }: { scope: string }) {
 
   return (
     <div className='@container flex h-full min-h-0 flex-col'>
+      {syncError && !restored.isError && (
+        <Alert variant='destructive'>
+          <AlertTitle>{t('assistant.syncFailed')}</AlertTitle>
+          <AlertDescription>
+            {syncError}
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => void restored.refetch()}
+            >
+              {t('assistant.retry')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {restored.isError && (
         <Alert variant='destructive'>
           <AlertTitle>{t('assistant.loadFailed')}</AlertTitle>
@@ -237,7 +295,33 @@ function AssistantChat({ scope }: { scope: string }) {
           </AlertDescription>
         </Alert>
       )}
-      {!session?.messages.length ? (
+      {id && !session ? (
+        <>
+          <div className='min-h-0 flex-1 overflow-hidden'>
+            {!restored.isError && (
+              <div
+                role='status'
+                aria-label={t('assistant.loadingConversation')}
+                className='mx-auto flex w-full max-w-[clamp(56rem,80cqw,84rem)] flex-col gap-10 px-6 py-5'
+              >
+                <div aria-hidden='true' className='flex flex-col gap-10'>
+                  <Skeleton className='h-14 w-2/5 self-end rounded-2xl motion-reduce:animate-none' />
+                  <div className='flex w-4/5 flex-col gap-3'>
+                    <Skeleton className='h-4 w-full motion-reduce:animate-none' />
+                    <Skeleton className='h-4 w-full motion-reduce:animate-none' />
+                    <Skeleton className='h-4 w-3/4 motion-reduce:animate-none' />
+                    <Skeleton className='mt-3 h-4 w-5/6 motion-reduce:animate-none' />
+                    <Skeleton className='h-4 w-1/2 motion-reduce:animate-none' />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] shrink-0 px-6 pt-3 pb-5'>
+            {renderComposer()}
+          </div>
+        </>
+      ) : !session?.messages.length ? (
         <div className='mx-auto flex w-full max-w-[clamp(48rem,72cqw,76rem)] flex-1 flex-col justify-center gap-6 px-6 pb-10'>
           <div className='text-center'>
             <h1 className='text-3xl font-medium tracking-tight sm:text-4xl'>
@@ -247,7 +331,7 @@ function AssistantChat({ scope }: { scope: string }) {
               {t('assistant.subtitle')}
             </p>
           </div>
-          {id && restored.isPending ? <Spinner /> : renderComposer()}
+          {renderComposer()}
         </div>
       ) : (
         <>
@@ -601,7 +685,7 @@ function AssistantChat({ scope }: { scope: string }) {
   function renderComposer() {
     return (
       <div className='flex flex-col gap-3'>
-        {!modelId && (
+        {!modelId && (!id || session) && (
           <Alert>
             <AlertTitle>{t('assistant.selectModel')}</AlertTitle>
             <AlertDescription>
@@ -613,10 +697,19 @@ function AssistantChat({ scope }: { scope: string }) {
           toolbarActions={
             <Select
               value={modelId || null}
-              onValueChange={(value) => setChosenModel(value ?? '')}
+              onValueChange={(value) => {
+                if (!value) return;
+                setChosenModel(value);
+                // Keep new-chat defaults separate from each conversation's model.
+                try {
+                  localStorage.setItem(modelPreferenceKey, value);
+                } catch {
+                  // Model selection still works when local storage is unavailable.
+                }
+              }}
             >
               <SelectTrigger
-                className='max-w-40 border-none! bg-transparent! sm:max-w-64'
+                className='max-w-40 border-none! bg-transparent! focus-visible:ring-0 sm:max-w-64'
                 aria-label={t('assistant.model')}
               >
                 <SelectValue placeholder={t('assistant.selectModel')}>
@@ -650,13 +743,24 @@ function AssistantChat({ scope }: { scope: string }) {
           onFileChange={(_key, value) => setFiles(artifactReferences(value))}
           message={draft}
           onMessageChange={setDraft}
-          disabled={Boolean(busy || active || !modelId || (id && !session))}
+          disabled={Boolean((active && !busy) || !modelId || (id && !session))}
+          responding={Boolean(busy)}
+          stopping={stopping || creating}
+          onStop={() => {
+            if (!session || stopping) return;
+            setStopping(true);
+            void stopAssistant(session.id, scope)
+              .catch((error) =>
+                toast.error(String(error), { toasterId: 'global' }),
+              )
+              .finally(() => setStopping(false));
+          }}
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
           }}
         />
-        {!session && (
+        {!id && !session && (
           <p className='text-muted-foreground text-center text-xs'>
             {t('assistant.hint')}
           </p>

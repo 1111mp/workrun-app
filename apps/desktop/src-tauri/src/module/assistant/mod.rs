@@ -2,6 +2,7 @@
 mod bindings;
 mod capability;
 pub mod catalog;
+pub mod events;
 mod main_agent;
 mod model;
 mod orchestration;

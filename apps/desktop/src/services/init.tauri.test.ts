@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { mockTauriCommands } from '@/test/tauri';
 
-import { getAppInitialData } from './init';
+import { getAppInitialData, getStartupData } from './init';
 
 describe('application initialization through Tauri IPC', () => {
   it('uses injected startup data once, then reloads current settings', async () => {
@@ -45,4 +45,23 @@ describe('application initialization through Tauri IPC', () => {
       'Configuration unavailable',
     );
   });
+});
+
+it('shares one startup read between concurrent consumers and keeps explicit reloads fresh', async () => {
+  const config: IWorkrunConfig = { theme: 'system' };
+  const calls = mockTauriCommands({
+    get_workrun_config: () => config,
+    'plugin:window|theme': () => 'dark',
+  });
+  const first = getStartupData();
+  const second = getStartupData();
+  expect(first).toBe(second);
+  await expect(first).resolves.toEqual([config, 'dark']);
+  expect(
+    calls.mock.calls.filter(([command]) => command === 'get_workrun_config'),
+  ).toHaveLength(1);
+  await getAppInitialData();
+  expect(
+    calls.mock.calls.filter(([command]) => command === 'get_workrun_config'),
+  ).toHaveLength(2);
 });

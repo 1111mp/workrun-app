@@ -196,3 +196,46 @@ it('focuses the message when clicking the composer background', async () => {
   await user.click(container.querySelector('[data-slot="input-group"]')!);
   expect(screen.getByRole('textbox')).toHaveFocus();
 });
+
+it('keeps the draft editable while responding and stops only when the stop button is clicked', async () => {
+  const onSubmit = vi.fn();
+  const onStop = vi.fn();
+  function Harness({ responding = true, stopping = false }) {
+    const [message, setMessage] = useState('');
+    return (
+      <WorkflowChatComposer
+        fileInputs={[]}
+        filesForInput={() => []}
+        onFileChange={vi.fn()}
+        message={message}
+        onMessageChange={setMessage}
+        disabled={false}
+        responding={responding}
+        stopping={stopping}
+        onStop={onStop}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit(message);
+        }}
+      />
+    );
+  }
+  const user = userEvent.setup();
+  const view = renderComponent(<Harness />);
+  const textbox = screen.getByRole('textbox');
+  expect(textbox).toBeEnabled();
+  await user.type(textbox, 'Next question{Enter}');
+  expect(textbox).toHaveValue('Next question');
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(onStop).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'assistant.stop' }));
+  expect(onStop).toHaveBeenCalledOnce();
+  view.rerender(<Harness stopping />);
+  expect(screen.getByRole('button', { name: 'assistant.stop' })).toBeDisabled();
+  expect(textbox).toBeEnabled();
+  view.rerender(<Harness responding={false} />);
+  await user.click(
+    screen.getByRole('button', { name: 'workflowEditor.output.send' }),
+  );
+  expect(onSubmit).toHaveBeenCalledWith('Next question');
+});

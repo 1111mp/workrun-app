@@ -17,25 +17,49 @@ const api = vi.hoisted(() => ({
   deleteRun: vi.fn(),
   sessions: true,
   longHistory: false,
+  receive: undefined as
+    | ((event: import('@/services/assistant').AssistantEvent) => void)
+    | undefined,
 }));
-vi.mock('@/services/assistant', () => ({
-  listAssistantSessions: async () =>
+vi.mock('@/services/assistant', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/assistant')>();
+  const list = () =>
     api.sessions
       ? [
-          { id: 's1', title: '测试对话' },
+          { id: 's1', title: '测试对话', updatedAt: '2026-10-21T00:00:00Z' },
           ...(api.longHistory
             ? Array.from({ length: 49 }, (_, i) => ({
                 id: `history-${i}`,
                 title: `历史对话 ${i}`,
+                updatedAt: '2026-10-20T00:00:00Z',
               }))
             : []),
         ]
-      : [],
-  deleteAssistantSession: async (id: string) => {
-    await api.deleteSession(id);
-    api.sessions = false;
-  },
-}));
+      : [];
+  return {
+    ...actual,
+    getAssistantListSnapshot: async () => ({
+      workspaceId: 'personal',
+      sessionId: '',
+      epoch: 'test',
+      sequence: 0,
+      type: 'list',
+      payload: list(),
+    }),
+    deleteAssistantSession: async (id: string) => {
+      await api.deleteSession(id);
+      api.sessions = false;
+      api.receive?.({
+        workspaceId: 'personal',
+        sessionId: id,
+        epoch: 'test',
+        sequence: 1,
+        type: 'summary',
+        payload: null,
+      });
+    },
+  };
+});
 vi.mock('@/services/run-history', () => ({
   listRunHistoryPage: async () => ({
     items: [
@@ -59,8 +83,21 @@ vi.mock('@/stores', () => ({
   useWorkrunStore: (select: (state: unknown) => unknown) =>
     select({ config: { workspace_mode: 'personal' } }),
 }));
-vi.mock('@/stores/assistant.store', () => ({
-  useAssistantStore: { setState: vi.fn() },
+vi.mock('@/lib/auth-client', () => ({ createTeamAuthClient: vi.fn() }));
+vi.mock('@/stores/workrun.store', () => ({
+  useWorkrunStore: {
+    getState: () => ({ config: { workspace_mode: 'personal' } }),
+  },
+}));
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: async (_name: string, receive: (event: unknown) => void) => {
+    const dispatch: NonNullable<typeof api.receive> = (event) =>
+      receive({ payload: event });
+    api.receive = dispatch;
+    return () => {
+      if (api.receive === dispatch) api.receive = undefined;
+    };
+  },
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -78,9 +115,21 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+import { useAssistantStore } from '@/stores/assistant.store';
+const { disposeAssistantEvents } = useAssistantStore.getState();
+
 import { AppSidebar } from './app-sidebar';
 
 beforeEach(() => {
+  disposeAssistantEvents();
+  useAssistantStore.setState({
+    summaries: {},
+    listErrors: {},
+    sessions: {},
+    scopes: {},
+    streams: {},
+    syncErrors: {},
+  });
   vi.stubGlobal('OS_PLATFORM', 'linux');
   api.sessions = true;
   api.longHistory = false;
@@ -140,8 +189,10 @@ it('keeps icon anchors and row heights stable throughout repeated collapse and e
       history.scrollTop = history.scrollHeight;
       expect(history.scrollTop).toBeGreaterThan(0);
     }
+    // Browser automation can delay the click under load. Record through the
+    // completed transition before beginning the next collapse/expand cycle.
+    let clickedAt = Infinity;
     const recording = new Promise<void>((resolve) => {
-      const started = performance.now();
       const sample = () => {
         const rect = icon.getBoundingClientRect();
         brandSamples.push(brand.getBoundingClientRect());
@@ -151,7 +202,7 @@ it('keeps icon anchors and row heights stable throughout repeated collapse and e
           height: nav.getBoundingClientRect().height,
           left: document.querySelector('main')!.getBoundingClientRect().left,
         });
-        if (performance.now() - started < 280) requestAnimationFrame(sample);
+        if (performance.now() - clickedAt < 280) requestAnimationFrame(sample);
         else resolve();
       };
       requestAnimationFrame(sample);
@@ -161,6 +212,7 @@ it('keeps icon anchors and row heights stable throughout repeated collapse and e
       .getByRole('main')
       .getByRole('button', { name: 'Toggle Sidebar' })
       .click();
+    clickedAt = performance.now();
     await recording;
     const positions = samples.slice(sampleStart).map((s) => s.left);
     for (let index = 1; index < positions.length; index++) {
@@ -182,6 +234,39 @@ it('keeps icon anchors and row heights stable throughout repeated collapse and e
     Math.max(...brandSamples.map((s) => Math.abs(s.y - brandOrigin.y))),
   ).toBeLessThan(1);
   expect(samples.every((s) => Number.isFinite(s.left))).toBe(true);
+});
+
+it('updates conversation titles and removes deleted rows from native notifications', async () => {
+  const screen = await setup();
+  await expect
+    .element(screen.getByRole('link', { name: '测试对话', exact: true }))
+    .toBeVisible();
+  api.receive?.({
+    workspaceId: 'personal',
+    sessionId: 's1',
+    epoch: 'test',
+    sequence: 1,
+    type: 'summary',
+    payload: {
+      id: 's1',
+      title: '推送后的标题',
+      updatedAt: '2026-10-21T01:00:00Z',
+    },
+  });
+  await expect
+    .element(screen.getByRole('link', { name: '推送后的标题', exact: true }))
+    .toBeVisible();
+  api.receive?.({
+    workspaceId: 'personal',
+    sessionId: 's1',
+    epoch: 'test',
+    sequence: 2,
+    type: 'summary',
+    payload: null,
+  });
+  await expect
+    .element(screen.getByRole('link', { name: '推送后的标题', exact: true }))
+    .not.toBeInTheDocument();
 });
 
 it('opens row actions without navigating and confirms deletion of the selected conversation', async () => {
