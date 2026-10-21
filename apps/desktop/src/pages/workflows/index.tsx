@@ -58,16 +58,15 @@ function WorkflowCard({
   const { settings } = workflow.document;
   const inputCount = settings.inputSchema.fields.length;
   return (
-    <Card
-      size='sm'
-      className='h-full border-violet-500/35 bg-violet-500/5 transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-violet-500/55 hover:shadow-md'
-    >
-      <CardHeader>
-        <div className='flex items-center gap-2'>
-          <div className='flex size-9 items-center justify-center rounded-lg bg-violet-500/10 text-violet-700 dark:text-violet-300'>
+    <Card size='sm' className='workrun-library-card h-full'>
+      <CardHeader className='workrun-library-card-header'>
+        <div className='flex min-w-0 items-center gap-3'>
+          <div className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-700 dark:text-violet-300'>
             <WorkflowIcon className='size-4' />
           </div>
-          <CardTitle className='truncate'>{settings.name}</CardTitle>
+          <CardTitle className='line-clamp-2 min-w-0' title={settings.name}>
+            {settings.name}
+          </CardTitle>
         </div>
         <CardDescription className='line-clamp-2 min-h-10'>
           {settings.description || t('workflows.noDescription')}
@@ -88,7 +87,7 @@ function WorkflowCard({
         </CardAction>
       </CardHeader>
       <CardContent className='flex-1'>
-        <div className='bg-background/60 grid grid-cols-3 overflow-hidden rounded-lg border border-violet-500/15 text-xs'>
+        <div className='workrun-workflow-metrics grid grid-cols-3 overflow-hidden rounded-lg text-xs'>
           <div className='flex flex-col gap-1 p-2.5'>
             <WorkflowIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
             <span className='text-foreground font-medium'>
@@ -98,7 +97,7 @@ function WorkflowCard({
               {t('workflows.nodes')}
             </span>
           </div>
-          <div className='flex flex-col gap-1 border-x border-violet-500/15 p-2.5'>
+          <div className='border-border flex flex-col gap-1 border-x p-2.5'>
             <GitBranchIcon className='size-3.5 text-violet-600 dark:text-violet-400' />
             <span className='text-foreground font-medium'>
               {workflow.document.edges.length}
@@ -163,7 +162,7 @@ function WorkflowCard({
 
 function WorkflowListSkeleton() {
   return (
-    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
+    <div className='workrun-library-grid grid gap-4'>
       {Array.from({ length: 3 }, (_, index) => (
         <Card key={index} size='sm'>
           <CardHeader>
@@ -226,20 +225,25 @@ function WorkflowsPage() {
   }, [query, workflows.data]);
 
   return (
-    <div className='size-full overflow-y-auto'>
-      <main className='mx-auto flex w-full flex-col gap-3 px-6 py-3'>
-        <section className='flex min-w-0 flex-wrap items-center gap-2.5'>
-          <div className='mr-1 flex items-baseline gap-2'>
-            <h1 className='text-lg font-semibold tracking-tight'>
+    <div className='workrun-library size-full overflow-y-auto'>
+      <main className='mx-auto flex w-full max-w-400 flex-col gap-5 px-5 py-6 lg:px-8'>
+        <div className='flex flex-col gap-2'>
+          <div className='flex flex-wrap items-baseline gap-3'>
+            <h1 className='text-2xl font-semibold tracking-tight'>
               {t('workflows.title')}
             </h1>
-            <span className='text-muted-foreground text-xs whitespace-nowrap'>
+            <span className='text-muted-foreground text-xs'>
               {t('workflows.localCount', {
                 count: workflows.data?.length ?? '—',
               })}
             </span>
           </div>
-          <InputGroup className='order-last w-full sm:order-0 sm:ml-auto sm:w-64'>
+          <p className='text-muted-foreground max-w-2xl text-sm leading-relaxed'>
+            {t('workflows.libraryDescription')}
+          </p>
+        </div>
+        <section className='workrun-library-toolbar flex min-w-0 flex-wrap items-center gap-2.5'>
+          <InputGroup className='w-full sm:mr-auto sm:w-64'>
             <InputGroupAddon>
               <SearchIcon />
             </InputGroupAddon>
@@ -277,7 +281,7 @@ function WorkflowsPage() {
           <WorkflowListSkeleton />
         ) : null}
         {filteredWorkflows?.length ? (
-          <section className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
+          <section className='workrun-library-grid grid gap-4'>
             {filteredWorkflows.map((workflow) => (
               <WorkflowCard
                 key={workflow.id}

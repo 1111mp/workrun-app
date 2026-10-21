@@ -49,6 +49,7 @@ function OnboardingPage() {
   if (!selectedMode) {
     return (
       <AuthPageLayout
+        wide
         description={t('onboarding.description')}
         title={t('onboarding.title')}
       >
@@ -81,10 +82,12 @@ function OnboardingPage() {
         await updateConfig({
           workspace_mode: 'personal',
           local_profile: profile,
-          onboarding_completed: true,
         });
         useWorkrunStore.getState().setTeamUser(undefined);
-        await router.navigate('/start');
+        // Keep onboarding visible until the destination (including lazy modules)
+        // is ready; revealing RouterProvider first briefly shows the old /login.
+        await router.navigate('/start', { replace: true });
+        await updateConfig({ onboarding_completed: true });
       }}
     />
   ) : (
@@ -96,9 +99,11 @@ function OnboardingPage() {
         await updateConfig({
           workspace_mode: 'team',
           team: { server_url: serverUrl },
-          onboarding_completed: true,
         });
-        await router.navigate(teamUser ? '/start' : '/login');
+        await router.navigate(teamUser ? '/start' : '/login', {
+          replace: true,
+        });
+        await updateConfig({ onboarding_completed: true });
       }}
     />
   );
@@ -156,7 +161,7 @@ function PersonalProfileStep({
         </div>
         <div className='space-y-3'>
           <Label>{t('onboarding.profile.avatar')}</Label>
-          <div className='flex gap-3'>
+          <div className='flex flex-wrap gap-3'>
             {AVATAR_IDS.map((id) => (
               <button
                 aria-label={t('onboarding.profile.avatarOption', {
@@ -272,7 +277,7 @@ function ModeCard({
   title: string;
 }) {
   return (
-    <Card className='gap-6 p-2 transition-shadow hover:shadow-md'>
+    <Card className='workrun-auth-panel gap-6 p-2 transition-shadow hover:shadow-md'>
       <div className='px-4 pt-4'>
         <div className='bg-primary/10 text-primary flex size-10 items-center justify-center rounded-lg'>
           <Icon className='size-5' />

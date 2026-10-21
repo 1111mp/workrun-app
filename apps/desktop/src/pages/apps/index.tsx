@@ -173,7 +173,7 @@ function StatusBadge({ status }: { status: ProcessNodeInstallStatus }) {
 
 function AppListSkeleton() {
   return (
-    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
+    <div className='workrun-library-grid grid gap-4'>
       {Array.from({ length: 3 }, (_, index) => (
         <Card key={index} size='sm'>
           <CardHeader>
@@ -251,18 +251,14 @@ function AppItem({
   return (
     <Card
       size='sm'
-      className={cn(
-        'h-full transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:shadow-md',
-        isToolApp
-          ? 'border-sky-500/35 bg-sky-500/5 hover:border-sky-500/55'
-          : 'border-violet-500/35 bg-violet-500/5 hover:border-violet-500/55',
-      )}
+      className='workrun-library-card h-full'
+      data-library-kind={isToolApp ? 'tool' : 'app'}
     >
-      <CardHeader>
-        <div className='flex items-center gap-2'>
+      <CardHeader className='workrun-library-card-header'>
+        <div className='flex min-w-0 items-center gap-3'>
           <div
             className={cn(
-              'flex size-8 items-center justify-center rounded-lg border',
+              'flex size-8 shrink-0 items-center justify-center rounded-lg border',
               isToolApp
                 ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
                 : 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300',
@@ -270,7 +266,9 @@ function AppItem({
           >
             <BoxIcon className='size-4' />
           </div>
-          <CardTitle>{definition.name}</CardTitle>
+          <CardTitle className='line-clamp-2 min-w-0' title={definition.name}>
+            {definition.name}
+          </CardTitle>
         </div>
         <CardDescription
           className='line-clamp-2 min-h-10'
@@ -297,7 +295,7 @@ function AppItem({
         </CardAction>
       </CardHeader>
       <CardContent className='flex flex-1 flex-col gap-3'>
-        <div className='text-muted-foreground flex items-center gap-2 text-xs'>
+        <div className='text-muted-foreground flex flex-wrap items-center gap-2 text-xs'>
           <BoxIcon />
           <span>v{definition.version}</span>
           <Badge
@@ -952,21 +950,26 @@ function AppsPage() {
   };
 
   return (
-    <div className='size-full overflow-y-auto'>
-      <main className='mx-auto flex w-full flex-col gap-3 px-6 py-3'>
-        <section className='flex min-w-0 flex-wrap items-center gap-2.5'>
-          <div className='mr-1 flex items-baseline gap-2'>
-            <h1 className='text-lg font-semibold tracking-tight'>
+    <div className='workrun-library size-full overflow-y-auto'>
+      <main className='mx-auto flex w-full max-w-400 flex-col gap-5 px-5 py-6 lg:px-8'>
+        <div className='flex flex-col gap-2'>
+          <div className='flex flex-wrap items-baseline gap-3'>
+            <h1 className='text-2xl font-semibold tracking-tight'>
               {t('apps.title')}
             </h1>
-            <span className='text-muted-foreground text-xs whitespace-nowrap'>
+            <span className='text-muted-foreground text-xs'>
               {t('apps.readyCount', {
                 installed: installedCount ?? '—',
                 total: apps.data?.length ?? '—',
               })}
             </span>
           </div>
-          <InputGroup className='order-last w-full sm:order-0 sm:ml-auto sm:w-64'>
+          <p className='text-muted-foreground max-w-2xl text-sm leading-relaxed'>
+            {t('apps.libraryDescription')}
+          </p>
+        </div>
+        <section className='workrun-library-toolbar flex min-w-0 flex-wrap items-center gap-2.5'>
+          <InputGroup className='w-full sm:mr-auto sm:w-64'>
             <InputGroupAddon>
               <SearchIcon />
             </InputGroupAddon>
@@ -1055,7 +1058,7 @@ function AppsPage() {
         ) : null}
 
         {filteredApps?.length ? (
-          <section className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
+          <section className='workrun-library-grid grid gap-4'>
             {filteredApps.map((node) => (
               <AppItem
                 key={node.definition.id}

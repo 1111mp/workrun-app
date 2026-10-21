@@ -416,7 +416,7 @@ function WorkflowRunPanel({
           else onOpenChange(open);
         }}
       >
-        <DrawerContent className='shadow-[-8px_0_24px_-8px_rgb(0_0_0/0.14)] dark:shadow-[-8px_0_24px_-8px_rgb(0_0_0/0.35)]'>
+        <DrawerContent className='workrun-shell workrun-editor-panel shadow-[-8px_0_24px_-8px_rgb(0_0_0/0.14)] dark:shadow-[-8px_0_24px_-8px_rgb(0_0_0/0.35)]'>
           {settings.mode === 'chat' ? (
             <>
               <div className='bg-muted/20 flex items-center justify-between border-b px-4 py-2'>

@@ -116,6 +116,7 @@
     "invalidSource": "此 JSON 无效，请在代码编辑器中修复后继续。"
   },
   "workflows": {
+    "libraryDescription": "将任务沉淀为可复用的工作流。在对话中编排，也可以在画布中精细调整。",
     "actions": "Workflow 操作",
     "delete": "删除",
     "deleteTitle": "删除 Workflow",
@@ -185,6 +186,7 @@
     "clearSearch": "清除搜索"
   },
   "apps": {
+    "libraryDescription": "管理可独立运行的应用与工具，也可将它们组合进工作流。",
     "share": {
       "close": "关闭",
       "savedSettingsHint": "导出使用已保存的设置，修改后请先保存再导出。",
@@ -2032,6 +2034,8 @@
     "notInstalled": "请先在 Workrun 中安装此 App，再通过链接运行。"
   },
   "start": {
+    "appsHint": "浏览可用应用与工具，直接开始任务。",
+    "workflowHint": "运行已有流程，或继续完善你的编排。",
     "home": "首页",
     "newTask": "新任务",
     "personalWorkspace": "个人工作区",
@@ -2126,7 +2130,7 @@
     "selectModel": "选择对话模型",
     "configureModel": "在设置中配置模型服务凭据",
     "browse": "浏览能力",
-    "subtitle": "描述你的目标，Workrun 会选择合适的工作流并执行。",
+    "subtitle": "描述你的目标，Workrun 会调用已有工作流，或为你编排新的流程。",
     "hint": "使用你配置的模型，调用已有工作流完成任务。",
     "fileTask": "处理附件",
     "files": "文件",

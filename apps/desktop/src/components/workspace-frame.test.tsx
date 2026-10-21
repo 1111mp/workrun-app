@@ -12,6 +12,9 @@ vi.mock('@workspace/ui/components', () => ({
   ),
   SidebarTrigger: () => <button>Toggle navigation</button>,
 }));
+vi.mock('@/components/conversation-title', () => ({
+  ConversationTitle: () => <span>start.newTask</span>,
+}));
 vi.mock('@/components/app-sidebar', () => ({
   AppSidebar: () => <nav data-testid='global-navigation' />,
 }));

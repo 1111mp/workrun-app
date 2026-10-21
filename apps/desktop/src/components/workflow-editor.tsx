@@ -14,7 +14,6 @@ import {
   AlertDialogHeader,
   AlertDialogMedia,
   AlertDialogTitle,
-  Badge,
   Button,
   Checkbox,
   Field,
@@ -843,7 +842,7 @@ function WorkflowEditorContent({
   ];
 
   return (
-    <SidebarProvider className='relative flex size-full min-h-0! grow flex-row'>
+    <SidebarProvider className='workrun-shell workrun-editor relative flex size-full min-h-0! grow flex-row'>
       <WorkflowCanvas
         readOnly={readOnly}
         isRunning={workflowRun.isRunning}
@@ -915,22 +914,22 @@ function WorkflowEditorContent({
               >
                 <ArrowLeftIcon />
               </Button>
-              {activeWorkflow && !activeWorkflow.releaseId ? (
-                <Badge variant='secondary'>Draft</Badge>
-              ) : null}
               <SidebarTrigger className='-ml-1' />
               <Separator
                 orientation='vertical'
                 className='my-auto mr-2 data-[orientation=vertical]:h-4'
               />
-              <FieldGroup className='flex-row items-center gap-2'>
+              <FieldGroup
+                className='flex-row items-center gap-2'
+                data-tauri-drag-region={OS_PLATFORM === 'darwin'}
+              >
                 <Field className='w-52'>
                   <FieldLabel className='sr-only' htmlFor='workflow-name'>
                     {t('workflowEditor.name')}
                   </FieldLabel>
                   <Input
                     id='workflow-name'
-                    className='border-none'
+                    className='light:bg-input/30 border-none'
                     value={workflowSettings.name}
                     disabled={readOnly}
                     onChange={(event) =>
@@ -954,7 +953,7 @@ function WorkflowEditorContent({
                   >
                     <SelectTrigger
                       id='workflow-mode'
-                      className='w-full border-none'
+                      className='light:bg-input/30 light:hover:bg-input/50 w-full border-none'
                     >
                       <SelectValue />
                     </SelectTrigger>

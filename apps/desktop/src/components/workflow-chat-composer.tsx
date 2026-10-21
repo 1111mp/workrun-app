@@ -104,6 +104,7 @@ export function WorkflowChatComposer({
       }}
     >
       <InputGroup
+        data-workrun-composer
         className='cursor-text rounded-3xl'
         onClick={(event) => {
           if (

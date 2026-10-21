@@ -366,7 +366,7 @@ function WorkflowCanvas({
   return (
     <>
       {!readOnly ? <WorkflowSidebar onNodeDrop={addPaletteNode} /> : null}
-      <SidebarInset>
+      <SidebarInset className='workrun-surface'>
         {header}
         <div className='flex min-h-0 flex-1'>
           {canvasContent ?? (
@@ -425,7 +425,7 @@ function WorkflowCanvas({
               })}
               <MiniMap />
               <Controls />
-              <Background className='bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_95%_93%/0.5),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_95%_94%/0.24),transparent)] dark:bg-[radial-gradient(ellipse_95%_75%_at_50%_-10%,hsl(214_70%_20%/0.32),transparent),radial-gradient(ellipse_65%_50%_at_0%_100%,hsl(190_70%_18%/0.18),transparent)]' />
+              <Background gap={24} size={1} color='var(--workrun-canvas-dot)' />
               <Panel position='top-left'>
                 <div className='bg-background z-10 flex gap-1 rounded-md border p-1 shadow-sm'>
                   <Button

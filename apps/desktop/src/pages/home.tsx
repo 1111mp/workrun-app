@@ -114,9 +114,9 @@ function HomeLayout() {
               <SidebarMenuButton
                 size='lg'
                 aria-label={displayName || t('navigation.accountMenu')}
-                className='data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground relative h-12! p-0! group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-8!'
+                className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
               >
-                <Avatar className='size-8 shrink-0 rounded-lg'>
+                <Avatar className='size-8 rounded-lg'>
                   <AvatarImage src={avatarUrl ?? ''} alt={displayName ?? ''} />
                   <AvatarFallback className='rounded-lg'>
                     <User />

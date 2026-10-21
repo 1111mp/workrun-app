@@ -33,6 +33,8 @@ function TeamSessionGate({ children }: { children: ReactNode }) {
       }
     },
     queryKey: ['team-user', serverUrl],
+    // A local team server can be reachable even when the browser reports offline.
+    networkMode: 'always',
     retry: false,
     staleTime: 5 * 60 * 1000,
   });
@@ -48,7 +50,7 @@ function TeamSessionGate({ children }: { children: ReactNode }) {
       <div
         aria-busy
         aria-label={t('onboarding.login.checkingSession')}
-        className='flex h-dvh min-h-0 flex-col overflow-hidden'
+        className='workrun-shell flex h-dvh min-h-0 flex-col overflow-hidden'
         role='status'
       >
         <header
@@ -76,7 +78,13 @@ function TeamSessionGate({ children }: { children: ReactNode }) {
   }
 
   if (teamUser.isError || !teamUser.data) {
-    return <Navigate replace to='/login' />;
+    return (
+      <Navigate
+        replace
+        to='/login'
+        state={teamUser.isError ? { sessionUnavailable: true } : undefined}
+      />
+    );
   }
 
   return children;

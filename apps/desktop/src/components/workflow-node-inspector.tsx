@@ -1939,7 +1939,7 @@ function WorkflowNodeInspector({
         }
       }}
     >
-      <DrawerContent className='sm:[--drawer-content-width:32rem]'>
+      <DrawerContent className='workrun-shell workrun-editor-panel sm:[--drawer-content-width:32rem]'>
         <DrawerHeader className='via-background relative overflow-hidden border-b bg-linear-to-br from-sky-500/10 to-violet-500/8 p-5 pr-14'>
           <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(hsl(214_90%_60%/0.14)_1px,transparent_1px)] bg-size-[16px_16px]' />
           <DrawerTitle className='relative text-lg'>

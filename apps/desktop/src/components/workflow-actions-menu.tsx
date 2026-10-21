@@ -68,6 +68,7 @@ export function WorkflowActionsMenu({
               size='icon-sm'
               aria-label={t('workflows.actions')}
               title={t('workflows.actions')}
+              className='border-none'
             />
           }
         >

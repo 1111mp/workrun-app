@@ -25,7 +25,12 @@ import {
   Skeleton,
 } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
-import { RefreshCcwIcon } from 'lucide-react';
+import {
+  ArrowUpRightIcon,
+  BoxIcon,
+  RefreshCcwIcon,
+  WorkflowIcon,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
@@ -322,16 +327,51 @@ function AssistantChat({ scope }: { scope: string }) {
           </div>
         </>
       ) : !session?.messages.length ? (
-        <div className='mx-auto flex w-full max-w-[clamp(48rem,72cqw,76rem)] flex-1 flex-col justify-center gap-6 px-6 pb-10'>
-          <div className='text-center'>
-            <h1 className='text-3xl font-medium tracking-tight sm:text-4xl'>
+        <div className='workrun-start mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center gap-7 overflow-y-auto px-6 py-10'>
+          <div className='flex flex-col items-center text-center'>
+            <div className='workrun-start-mark mb-6' aria-hidden='true'>
+              <WorkflowIcon />
+            </div>
+            <h1 className='text-3xl font-semibold tracking-tight sm:text-4xl'>
               {t('start.title')}
             </h1>
             <p className='text-muted-foreground mt-3 text-sm'>
               {t('assistant.subtitle')}
             </p>
           </div>
-          {renderComposer()}
+          <div className='workrun-start-composer'>{renderComposer()}</div>
+          <div className='grid gap-3 sm:grid-cols-2'>
+            {[
+              {
+                to: '/workflows',
+                icon: WorkflowIcon,
+                title: 'workflows.title',
+                description: 'start.workflowHint',
+              },
+              {
+                to: '/apps',
+                icon: BoxIcon,
+                title: 'apps.title',
+                description: 'start.appsHint',
+              },
+            ].map(({ to, icon: Icon, title, description }) => (
+              <Link
+                key={to}
+                to={to}
+                viewTransition
+                className='workrun-start-link focus-visible:outline-ring flex items-center gap-3 rounded-xl border p-4 focus-visible:outline-2'
+              >
+                <Icon className='text-muted-foreground size-5 shrink-0' />
+                <div className='flex min-w-0 flex-1 flex-col gap-1'>
+                  <span className='text-sm font-medium'>{t(title)}</span>
+                  <span className='text-muted-foreground text-xs leading-relaxed'>
+                    {t(description)}
+                  </span>
+                </div>
+                <ArrowUpRightIcon className='text-muted-foreground size-4 shrink-0' />
+              </Link>
+            ))}
+          </div>
         </div>
       ) : (
         <>
