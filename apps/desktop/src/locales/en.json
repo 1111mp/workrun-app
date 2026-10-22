@@ -2181,5 +2181,53 @@
     "responseFailed": "Response failed",
     "retryResponse": "Retry response",
     "retryConversations": "Retry loading conversations"
+  },
+  "usage": {
+    "refreshHint": "Refreshes every 3 seconds while open · Recorded usage only; older or delayed records may be incomplete.",
+    "accountingHint": "Input and output make up the total. Cached input and reasoning output are already included, not added again. Token counts are not costs.",
+    "shareHint": "Share of recorded total",
+    "breakdown": "Where tokens went",
+    "outputHint": "Generated content, including reported reasoning",
+    "inputHint": "Messages, context and tool results read by the model",
+    "executionHint": "Workflow runs started from this conversation",
+    "conversationHint": "Understanding, planning, authoring and replies",
+    "callCount": "{{count}} calls",
+    "overview": "Usage overview",
+    "recordedTotal": "Recorded total",
+    "title": "Token usage",
+    "description": "See what this conversation used and where the tokens went.",
+    "loading": "Loading usage…",
+    "error": "Could not load usage.",
+    "conversation": "Conversation",
+    "execution": "Workflow runs",
+    "total": "Total",
+    "purposeTotal": "{{tokens}} tokens · {{calls}} calls",
+    "recordingDegraded": "Some usage records could not be saved during this app session. Totals may be incomplete.",
+    "coverage": "{{missing}} calls without usage · {{unfinished}} not completed normally · {{estimated}} estimated. Showing known subtotals.",
+    "calls": "Model calls",
+    "time": "Time",
+    "purpose": "Purpose",
+    "model": "Model",
+    "input": "Input",
+    "output": "Output",
+    "status": "Status",
+    "turn": "Turn {{id}}",
+    "empty": "No recorded model calls. This does not mean zero tokens were used.",
+    "purposes": {
+      "conversation": "Conversation",
+      "intent": "Intent assessment",
+      "planning": "Planning",
+      "authoring": "Authoring",
+      "summary": "Memory summary",
+      "workflow": "Workflow",
+      "unclassified": "Other"
+    },
+    "statuses": {
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "interrupted": "Interrupted",
+      "cancelled": "Cancelled"
+    }
   }
 }

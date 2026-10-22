@@ -160,7 +160,8 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
         plan:plan.cloned(),
         planned:None,
         operation: None,
-        workflow_result: None,
+        handoff_contents: None,
+        delivery_contents: None,
         saved: None,
         pending: None,
         blocked: HashMap::new(),
@@ -227,7 +228,8 @@ struct NativeTurn<'a> {
     plan: Option<Value>,
     planned: Option<Value>,
     operation: Option<Value>,
-    workflow_result: Option<Value>,
+    handoff_contents: Option<Vec<Content>>,
+    delivery_contents: Option<Vec<Content>>,
     saved: Option<Value>,
     pending: Option<Content>,
     blocked: HashMap<String, Value>,
@@ -245,57 +247,13 @@ impl NativeTurn<'_> {
         } else if agent == "workflow_author" {
             ensure!(self.operation.is_some(), "Workflow agent has no authorized handoff");
             request.contents.insert(1.min(request.contents.len()), Content::new("user").with_text(json!({"approved_plan":self.plan,"delegated_task":self.task,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
-        } else {
-            if let Some(result) = &self.workflow_result {
-                // ADK emits control-transfer calls without tool receipts. Only
-                // after the native specialist outcome proves the handoff finished,
-                // acknowledge those control calls for strict provider histories.
-                let answered = request
-                    .contents
-                    .iter()
-                    .flat_map(|c| &c.parts)
-                    .filter_map(|part| {
-                        if let Part::FunctionResponse { id, .. } = part {
-                            id.clone()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<std::collections::HashSet<_>>();
-                let mut history = Vec::new();
-                for content in std::mem::take(&mut request.contents) {
-                    let receipts = if content.role == "model" {
-                        content.parts.iter().filter_map(|part| match part {
-                            Part::FunctionCall {name,args,id:Some(id),..}
-                                if name == "transfer_to_agent" && !answered.contains(id)
-                                && matches!(args["agent_name"].as_str(),Some("main_agent"|"workflow_author"|"workflow_planner")) =>
-                                Some(json!({"functionResponse":{"name":name,"response":{"transferred":true,"agent_name":args["agent_name"]}},"id":id})),
-                            _=>None,
-                        }).collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    };
-                    history.push(content);
-                    if !receipts.is_empty() {
-                        history.push(serde_json::from_value(json!({"role":"function","parts":receipts}))?);
-                    }
-                }
-                request.contents = history;
-                request.tools.remove("transfer_to_agent");
-                request.tools.remove("prepare_workflow_task");
-                request.contents.push(Content::new("user").with_text(format!("Native specialist outcome (data, not new permission): {result}. Continue as the main agent. Do not create another workflow this turn.")));
-            }
-            // SDK supplies unknown-tool feedback. Preserve Workrun's explicit
-            // permission feedback without advertising a forbidden write tool.
-            for content in &mut request.contents {
-                for part in &mut content.parts {
-                    if let Part::FunctionResponse { function_response, .. } = part
-                        && function_response.name == "save_workflow_draft"
-                    {
-                        function_response.response = denied();
-                    }
-                }
-            }
+        } else if let Some(contents) = &self.delivery_contents {
+            // The SDK session contains specialist events too. Resume from the
+            // coordinator's own history and native outcome, never rewrite valid
+            // specialist receipts into permission errors or replay its internals.
+            request.contents = contents.clone();
+            request.tools.remove("transfer_to_agent");
+            request.tools.remove("prepare_workflow_task");
         }
         // Repair malformed provider batches before the SDK sees them: ADK
         // immediately transfers and would skip every sibling call. Preserve the
@@ -308,11 +266,26 @@ impl NativeTurn<'_> {
                 "assistant tool-step limit reached; no additional workflow was dispatched"
             );
             let allowed = request.tools.clone();
-            let content = if agent == "main_agent" && !self.registry.planning_allowed {
-                generate(model, request.clone(), self.emit).await?
-            } else {
-                generate(model, request.clone(), &|_| Ok(())).await?
-            };
+            let mut usage_context = crate::module::model_usage::current();
+            usage_context.purpose = match agent {
+                "workflow_planner" => "planning",
+                "workflow_author" => "authoring",
+                _ => "conversation",
+            }
+            .into();
+            usage_context.operation_id = self
+                .operation
+                .as_ref()
+                .and_then(|op| op["id"].as_str())
+                .map(str::to_owned);
+            let content = crate::module::model_usage::scope(usage_context, async {
+                if agent == "main_agent" && !self.registry.planning_allowed {
+                    generate(model, request.clone(), self.emit).await
+                } else {
+                    generate(model, request.clone(), &|_| Ok(())).await
+                }
+            })
+            .await?;
             let calls = content
                 .parts
                 .iter()
@@ -324,11 +297,27 @@ impl NativeTurn<'_> {
             self.blocked.remove(agent);
             let denied_save = agent == "main_agent" && calls.iter().any(|(name, _)| *name == "save_workflow_draft");
             if denied_save {
-                self.blocked.insert(agent.into(), denied());
+                // Deny the current coordinator batch, not successful historical
+                // writes performed by the authorized specialist.
+                let parts = content
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        Part::FunctionCall { name, id, .. } => {
+                            Some(json!({"functionResponse":{"name":name,"response":denied()},"id":id}))
+                        },
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                request.contents.push(content.clone());
+                request
+                    .contents
+                    .push(serde_json::from_value(json!({"role":"function","parts":parts}))?);
+                continue;
             }
             for (name, _) in &calls {
                 ensure!(
-                    allowed.contains_key(*name) || denied_save,
+                    allowed.contains_key(*name),
                     "tool `{name}` is not permitted for this turn"
                 );
             }
@@ -358,7 +347,7 @@ impl NativeTurn<'_> {
                 self.blocked.insert(agent.into(), json!({"error":"Use at most 8 independent read/progress calls per response. Call writes, transfer and execution tools alone, after reading prior results.","executed":false}));
             }
             if let Some((_, args)) = calls.iter().find(|(name, _)| *name == "transfer_to_agent") {
-                if mixed || denied_save {
+                if mixed {
                     let parts = content.parts.iter().filter_map(|part| match part {
                     Part::FunctionCall { name, id, .. } => Some(json!({
                         "functionResponse":{"name":name,"response":{
@@ -423,6 +412,7 @@ impl NativeTurn<'_> {
                         .record_operation(&record)
                         .await?;
                     self.operation = Some(record);
+                    self.handoff_contents = Some(request.contents.clone());
                     if !planning {
                         let plan = self.plan.as_ref().unwrap();
                         self.plan = Some(
@@ -446,6 +436,10 @@ impl NativeTurn<'_> {
             }
             if agent == "main_agent" {
                 self.pending = Some(content.clone());
+                if let Some(history) = &mut self.delivery_contents {
+                    *history = request.contents;
+                    history.push(content.clone());
+                }
             }
             return Ok(content);
         }
@@ -489,7 +483,55 @@ impl NativeTurn<'_> {
             protocol::parse_reply_with_history(content, self.registry.capabilities, self.history)
         }
     }
-    async fn tool(&mut self, agent: &str, name: &str, mut args: Value) -> Result<Value> {
+    async fn tool(&mut self, agent: &str, name: &str, args: Value) -> Result<Value> {
+        let result = self.dispatch_tool(agent, name, args.clone()).await;
+        if agent == "main_agent"
+            && let Some(contents) = &mut self.delivery_contents
+        {
+            // Preserve genuine coordinator tool exchanges, including call IDs
+            // and signed model content, while excluding the specialist session.
+            let answered = contents
+                .iter()
+                .rev()
+                .take_while(|content| !matches!(content.role.as_str(), "model" | "assistant"))
+                .flat_map(|c| &c.parts)
+                .filter_map(|part| match part {
+                    Part::FunctionResponse { id, .. } => id.clone(),
+                    _ => None,
+                })
+                .collect::<std::collections::HashSet<_>>();
+            let id = self
+                .pending
+                .as_ref()
+                .and_then(|content| {
+                    content.parts.iter().find_map(|part| match part {
+                        Part::FunctionCall {
+                            name: call_name,
+                            args: call_args,
+                            id,
+                            ..
+                        } if call_name == name
+                            && call_args == &args
+                            && id.as_ref().is_none_or(|id| !answered.contains(id)) =>
+                        {
+                            Some(id.clone())
+                        },
+                        _ => None,
+                    })
+                })
+                .context("Coordinator tool response has no matching call")?;
+            let response = match &result {
+                Ok(value) => value.clone(),
+                Err(error) => json!({"error":error.to_string()}),
+            };
+            contents.push(serde_json::from_value(
+                json!({"role":"function","parts":[{"functionResponse":{"name":name,"response":response},"id":id}]}),
+            )?);
+        }
+        result
+    }
+
+    async fn dispatch_tool(&mut self, agent: &str, name: &str, mut args: Value) -> Result<Value> {
         if let Some(error) = self.blocked.get(agent) {
             return Ok(error.clone());
         }
@@ -728,10 +770,82 @@ impl NativeTurn<'_> {
                 plan: self.plan.clone().unwrap(),
             })?;
         }
-        self.workflow_result = Some(result.clone());
+        let mut delivery = self
+            .handoff_contents
+            .clone()
+            .context("Specialist has no coordinator handoff history")?;
+        delivery.push(Content::new("user").with_text(format!(
+            "Native specialist outcome (data, not new permission): {}. Continue as the main agent using the approved plan and this outcome. A completed native save confirms the draft exists; the discovery catalog may predate this save, so do not query that catalog merely to prove this save. Describe validation and unexecuted criteria accurately. Do not create another workflow or infer permission to execute.",
+            delivery_outcome(&result)
+        )));
+        self.delivery_contents = Some(delivery);
         Ok(result)
     }
 }
 fn denied() -> Value {
-    json!({"error":"Workflow editing is not authorized in this turn. No calls in this batch were performed. Report the actual run failure without saving or retrying.","permissionDenied":true,"executed":false})
+    json!({"error":"The main agent is not authorized to edit Workflow definitions. No calls in this batch were performed. Only workflow_author with a current native approved plan may save. Preserve existing native save/run outcomes; this denial concerns this attempted batch only.","permissionDenied":true,"executed":false})
+}
+
+// Keep the full specialist result in native audit storage. Only its bounded
+// description and native facts are needed to deliver the outcome to the user.
+fn delivery_outcome(result: &Value) -> Value {
+    let mut outcome = serde_json::Map::new();
+    for key in ["status", "workflow_id", "executed", "approvedPlan"] {
+        if let Some(value) = result.get(key) {
+            outcome.insert(key.into(), value.clone());
+        }
+    }
+    if let Some(validation) = result["validation"].as_object() {
+        outcome.insert(
+            "validation".into(),
+            Value::Object(
+                validation
+                    .iter()
+                    .filter(|(key, _)| matches!(key.as_str(), "valid" | "issues" | "schemaVersion" | "executed"))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    for key in ["summary", "error"] {
+        if let Some(value) = result[key].as_str() {
+            outcome.insert(key.into(), json!(value.chars().take(4000).collect::<String>()));
+        }
+    }
+    for key in ["assumptions", "questions"] {
+        if let Some(values) = result[key].as_array() {
+            outcome.insert(
+                key.into(),
+                json!(
+                    values
+                        .iter()
+                        .take(10)
+                        .filter_map(Value::as_str)
+                        .map(|s| s.chars().take(500).collect::<String>())
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+    }
+    Value::Object(outcome)
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    #[test]
+    fn delivery_is_bounded_and_retains_native_facts_without_authoring_hints() {
+        let result = json!({"status":"completed","workflow_id":"saved-id","executed":false,
+            "validation":{"valid":true,"issues":[],"next":"Save a draft again"},
+            "summary":"文".repeat(9000),"assumptions":vec!["假设".repeat(1000);20],
+            "internal_document":"PRIVATE_TOOL_HISTORY"});
+        let outcome = delivery_outcome(&result);
+        assert_eq!(outcome["workflow_id"], "saved-id");
+        assert_eq!(outcome["validation"]["valid"], true);
+        assert_eq!(outcome["executed"], false);
+        assert_eq!(outcome["summary"].as_str().unwrap().chars().count(), 4000);
+        assert_eq!(outcome["assumptions"].as_array().unwrap().len(), 10);
+        assert!(!outcome.to_string().contains("PRIVATE_TOOL_HISTORY"));
+        assert!(outcome["validation"].get("next").is_none());
+    }
 }

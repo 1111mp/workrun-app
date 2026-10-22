@@ -45,20 +45,23 @@ pub(super) async fn assess(
     contents.push(Content::new("user").with_text(format!(
         "Return only one JSON object matching this output schema:\n{output_schema}"
     )));
-    let content = generate(
-        model,
-        LlmRequest {
-            model: model.name().into(),
-            contents,
-            tools: HashMap::new(),
-            config: Some(GenerateContentConfig {
-                temperature: Some(0.0),
-                response_schema: Some(output_schema),
-                ..Default::default()
-            }),
-            previous_response_id: None,
-        },
-        &|_| Ok(()),
+    let content = crate::module::model_usage::purpose(
+        "intent",
+        generate(
+            model,
+            LlmRequest {
+                model: model.name().into(),
+                contents,
+                tools: HashMap::new(),
+                config: Some(GenerateContentConfig {
+                    temperature: Some(0.0),
+                    response_schema: Some(output_schema),
+                    ..Default::default()
+                }),
+                previous_response_id: None,
+            },
+            &|_| Ok(()),
+        ),
     )
     .await?;
     if content

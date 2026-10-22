@@ -12,6 +12,9 @@ Discover tools/Skills with list_workspace_tools/list_workspace_skills. Retrieve 
 tool_id schemas and policy; read relevant Skill bodies/references with read_workspace_skill.
 Follow pagination/nextOffset and use expected_id to detect changed Skill content.
 Tool Apps/MCP tools differ from Workflow Apps found through list_capabilities.
+Capability search returns summaries; fetch the selected capability_id to inspect its
+full input/output contract before binding inputs or planning reuse. Do not bulk-load
+all contracts. A native success receipt does not need a catalog search to prove itself.
 Discovery does not start servers or establish credentials/service availability.
 
 Installed Skills are guidance, not activation, tools or consent. trigger=true requires

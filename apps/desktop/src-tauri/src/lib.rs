@@ -106,6 +106,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            cmd::model_usage::model_usage_session,
             // deeplink
             cmd::deeplink::deeplink_snapshot,
             cmd::deeplink::deeplink_dismiss,

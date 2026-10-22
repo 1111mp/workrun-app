@@ -345,3 +345,20 @@ it('leaves history untouched when deletion is cancelled', async () => {
     .toBeVisible();
   expect(api.deleteSession).not.toHaveBeenCalled();
 });
+
+it('selects a conversation without also selecting home, and restores home on navigation', async () => {
+  const screen = await setup();
+  const home = screen.getByRole('link', { name: '首页', exact: true });
+  const conversation = screen.getByRole('link', {
+    name: '测试对话',
+    exact: true,
+  });
+  await expect.element(conversation).toHaveAttribute('data-active');
+  await expect.element(home).not.toHaveAttribute('data-active');
+  await home.click();
+  await expect.element(home).toHaveAttribute('data-active');
+  await expect.element(conversation).not.toHaveAttribute('data-active');
+  await conversation.click();
+  await expect.element(conversation).toHaveAttribute('data-active');
+  await expect.element(home).not.toHaveAttribute('data-active');
+});

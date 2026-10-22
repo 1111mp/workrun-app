@@ -117,6 +117,7 @@ These show configuration syntax, not a required topology or business process.
 
 The examples retain discovery placeholders. Local node-schema, document storage
 and editor round-trip tests do not establish installed dependencies or successful
-model/App execution. After resolving resources, validate_workflow_draft runs the
-native compiler and returns configuration issues for repair. Saving and authorized
-execution remain separate, and task correctness needs actual result evidence.
+model/App execution. After resolving resources, submit to save_workflow_draft:
+it runs the native compiler before writing and returns issues for repair. Use
+validate_workflow_draft separately only for a validation-only review. Saving and
+authorized execution remain separate; task correctness needs actual result evidence.

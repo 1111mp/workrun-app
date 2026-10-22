@@ -34,6 +34,7 @@ pub(super) async fn generate(
     mut request: LlmRequest,
     emit: &(dyn Fn(AssistantStreamEvent) -> Result<()> + Send + Sync),
 ) -> Result<Content> {
+    super::execution_context::project(&mut request.contents);
     // ADK normalizes function schemas, but forwards response_schema verbatim.
     // Apply the same provider adapter to structured intent output (Gemini's
     // response Schema rejects JSON Schema's additionalProperties keyword).
@@ -82,7 +83,8 @@ pub(super) async fn generate(
             }
         })
         .collect();
-    let mut stream = model.generate_content(request, true).await?;
+    let (_, mut stream) =
+        crate::module::model_usage::observe(model, request, true, crate::module::model_usage::current()).await?;
     let mut reply = ReplyStream::new();
     while let Some(response) = stream.next().await {
         let event = response
@@ -205,5 +207,36 @@ mod tests {
                 serde_json::to_value(expected).unwrap()
             );
         }
+    }
+    #[tokio::test]
+    async fn provider_boundary_uses_delivery_views_but_explicit_inspection_keeps_stored_details() {
+        let raw = "internal-process".repeat(3000);
+        let history: Vec<Content> = serde_json::from_value(json!([
+            {"role":"model","parts":[{"name":"execute_capability","args":{},"id":"call-original","thought_signature":"authentic"}]},
+            {"role":"function","parts":[{"functionResponse":{"name":"execute_capability","response":{
+                "runId":"native-run","status":"completed","output":{"answer":42},"result":raw
+            }},"id":"call-original"}]},
+            {"role":"function","parts":[{"functionResponse":{"name":"inspect_execution","response":[{"stored":raw}]},"id":"inspect-call"}]}
+        ])).unwrap();
+        let original = serde_json::to_value(&history).unwrap();
+        let model = crate::module::assistant::tests::ScriptedModel::new(vec![Content::new("model").with_text("done")]);
+        generate(&model, LlmRequest::new("test", history.clone()), &|_| Ok(()))
+            .await
+            .unwrap();
+        let requests = model.requests.lock().unwrap();
+        let sent = serde_json::to_value(&requests[0].contents).unwrap();
+        assert_eq!(sent[0], original[0]);
+        assert_eq!(sent[1]["parts"][0]["id"], "call-original");
+        assert!(
+            sent[1]["parts"][0]["functionResponse"]["response"]
+                .get("result")
+                .is_none()
+        );
+        assert_eq!(
+            sent[1]["parts"][0]["functionResponse"]["response"]["output"]["answer"],
+            42
+        );
+        assert_eq!(sent[2], original[2]);
+        assert_eq!(serde_json::to_value(history).unwrap(), original);
     }
 }

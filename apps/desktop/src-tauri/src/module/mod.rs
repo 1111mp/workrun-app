@@ -5,6 +5,7 @@ pub mod deeplink;
 pub mod evaluation;
 pub mod ipc;
 pub mod mcp_server;
+pub mod model_usage;
 pub mod process_node;
 pub mod python_runtime;
 pub mod run_history;

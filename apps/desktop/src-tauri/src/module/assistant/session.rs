@@ -728,8 +728,25 @@ async fn drive(
             );
             Ok(())
         };
-        let reply = runtime
-            .run_with_discovery(
+        let usage_context = crate::module::model_usage::CallContext {
+            workspace_id: workspace.to_owned(),
+            session_kind: Some("assistant".into()),
+            session_id: session["id"].as_str().map(str::to_owned),
+            turn_id: turn_id.as_str().map(str::to_owned),
+            phase_id: Some(message_id.clone()),
+            model_profile_id: Some(model_id.clone()),
+            provider: Some(
+                serde_json::to_value(&definition.provider)?
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+            ),
+            purpose: "conversation".into(),
+            ..Default::default()
+        };
+        let reply = crate::module::model_usage::scope(
+            usage_context,
+            runtime.run_with_discovery(
                 model.as_ref(),
                 &definition.provider,
                 AssistantRequest {
@@ -750,8 +767,9 @@ async fn drive(
                 },
                 &emit,
                 &catalog,
-            )
-            .await;
+            ),
+        )
+        .await;
         if !session["activities"].is_array() {
             session["activities"] = json!([]);
         }
@@ -962,7 +980,19 @@ pub(super) async fn dispatch(
         json!({"runId":run_id,"targetId":workflow["id"],"targetName":settings["name"],"input":input,"initialState":input,"targetSnapshot":workflow["document"],"dsl":dsl,"threadId":uuid::Uuid::new_v4().to_string(),"releaseId":workflow["releaseId"],"releaseVersion":workflow["version"]}),
     )?;
     ensure_workspace(workspace)?;
-    if let Err(error) = runs.start(request).await {
+    let usage_context = crate::module::model_usage::CallContext {
+        workspace_id: workspace.into(),
+        session_kind: Some("assistant".into()),
+        session_id: session["id"].as_str().map(str::to_owned),
+        turn_id: session["messages"]
+            .as_array()
+            .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
+            .and_then(|m| m["id"].as_str())
+            .map(str::to_owned),
+        purpose: "workflow".into(),
+        ..Default::default()
+    };
+    if let Err(error) = crate::module::model_usage::scope(usage_context, runs.start(request)).await {
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_records WHERE id=? AND workspace_id=?)")
             .bind(&run_id)
             .bind(workspace)

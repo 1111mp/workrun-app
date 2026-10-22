@@ -579,7 +579,7 @@ async fn empty_confirmation_does_not_block_save_only_then_explicit_execution() {
 }
 
 #[tokio::test]
-async fn explicit_specialist_return_preserves_transfer_receipt_after_saving() {
+async fn explicit_specialist_return_delivers_native_outcome_without_replaying_transfer() {
     let store = DraftStore::new();
     let user = Content::new("user").with_text("创建草稿，不要运行");
     super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
@@ -633,6 +633,166 @@ async fn explicit_specialist_return_preserves_transfer_receipt_after_saving() {
         Part::FunctionResponse {id:Some(id),..} if id=="return-to-main")
         })
         .count();
-    assert_eq!(calls, 1);
-    assert_eq!(receipts, 1);
+    assert_eq!(calls, 0);
+    assert_eq!(receipts, 0);
+    let serialized = serde_json::to_string(contents).unwrap();
+    assert!(serialized.contains("Native specialist outcome"));
+    assert!(serialized.contains("completed"));
+    assert!(!serialized.contains("permissionDenied"));
+}
+
+#[tokio::test]
+async fn author_internals_are_isolated_but_coordinator_reads_and_signatures_survive() {
+    let store = DraftStore::new();
+    let user = Content::new("user").with_text("创建草稿，不要运行");
+    super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
+    let signed_read = |id: &str| {
+        let mut content = super::tests::call("list_capabilities", json!({}));
+        if let Part::FunctionCall {
+            id: call_id,
+            thought_signature,
+            ..
+        } = &mut content.parts[0]
+        {
+            *call_id = Some(id.into());
+            *thought_signature = Some("coordinator-signature".into());
+        }
+        content
+    };
+    let mut delivery_reads = signed_read("delivery-read-1");
+    delivery_reads.parts.push(Part::FunctionCall {
+        name: "read_skill".into(),
+        args: json!({"name":"missing-delivery-skill"}),
+        id: Some("delivery-read-error".into()),
+        thought_signature: Some("coordinator-signature".into()),
+    });
+    let model = super::tests::ScriptedModel::new(vec![
+        super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
+        super::tests::call("get_workflow_reference", json!({"topic":"configuration"})),
+        super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
+        Content::new("model")
+            .with_text(json!({"status":"completed","summary":"Saved native draft.","assumptions":[]}).to_string()),
+        delivery_reads,
+        signed_read("delivery-read-2"),
+        Content::new("model").with_text("Saved without execution."),
+    ]);
+    let reply = super::tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::DeepSeek,
+            AssistantRequest {
+                context: protocol::AssistantContext {
+                    session_id: Some(store.session_id.clone()),
+                    ..Default::default()
+                },
+                contents: vec![user.clone()],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    assert!(store.saved.lock().unwrap().is_some());
+    {
+        let requests = model.requests.lock().unwrap();
+        let author_history = serde_json::to_string(&requests[3].contents).unwrap();
+        let delivery = &requests[4].contents;
+        let delivery_text = serde_json::to_string(delivery).unwrap();
+        assert!(author_history.contains("# Native resource configuration"));
+        assert!(author_history.contains("save_workflow_draft"));
+        assert!(!delivery_text.contains("# Native resource configuration"));
+        assert!(!delivery_text.contains("save_workflow_draft"));
+        assert!(!delivery_text.contains("permissionDenied"));
+        assert!(delivery_text.contains("Saved native draft."));
+        assert!(delivery_text.contains("创建草稿，不要运行"));
+        assert!(delivery_text.len() < author_history.len());
+        let final_contents = &requests.last().unwrap().contents;
+        assert!(final_contents.iter().flat_map(|c| &c.parts).any(|part| matches!(part,
+        Part::FunctionResponse { id:Some(id), function_response, .. } if id == "delivery-read-error" && function_response.response.get("error").is_some()
+    )));
+        for id in ["delivery-read-1", "delivery-read-error", "delivery-read-2"] {
+            assert!(final_contents.iter().flat_map(|c| &c.parts).any(|part| matches!(part,
+            Part::FunctionCall{id:Some(call_id),thought_signature:Some(signature),..}
+            if call_id==id && signature=="coordinator-signature")));
+            assert!(final_contents.iter().flat_map(|c| &c.parts).any(|part| matches!(part,
+            Part::FunctionResponse{id:Some(call_id),..} if call_id==id)));
+        }
+    }
+    // The session persists reply.content, not the SDK specialist transcript.
+    // Starting another user turn must preserve that boundary and the user goal.
+    let next = super::tests::ScriptedModel::new(vec![
+        Content::new("model")
+            .with_text(json!({"intent":"conversation","actionQuote":"","summary":"Continue conversation"}).to_string()),
+        Content::new("model").with_text("The saved draft is unchanged."),
+    ]);
+    let next_reply = super::tests::runtime()
+        .run_with_discovery(
+            &next,
+            &ModelProvider::DeepSeek,
+            AssistantRequest {
+                context: protocol::AssistantContext {
+                    session_id: Some(store.session_id.clone()),
+                    ..Default::default()
+                },
+                contents: vec![
+                    user,
+                    reply.content,
+                    Content::new("user").with_text("谢谢，保持草稿，不要运行"),
+                ],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap();
+    assert!(next_reply.call.is_none());
+    for request in next.requests.lock().unwrap().iter() {
+        let history = serde_json::to_string(&request.contents).unwrap();
+        assert!(!history.contains("# Native resource configuration"));
+        assert!(!history.contains("document_json"));
+        assert!(history.contains("Saved without execution."));
+        assert!(history.contains("创建草稿，不要运行"));
+    }
+}
+
+#[tokio::test]
+async fn saved_outcome_does_not_authorize_a_new_coordinator_write() {
+    let store = DraftStore::new();
+    let user = Content::new("user").with_text("创建草稿，不要运行");
+    super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
+    let model = super::tests::ScriptedModel::new(vec![
+        super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
+        super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
+        Content::new("model").with_text(json!({"status":"completed","summary":"Saved.","assumptions":[]}).to_string()),
+        super::tests::call("save_workflow_draft", json!({"document_json":"{}"})),
+        Content::new("model").with_text("The original draft was saved; no additional edits or execution occurred."),
+    ]);
+    let reply = super::tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::DeepSeek,
+            AssistantRequest {
+                context: protocol::AssistantContext {
+                    session_id: Some(store.session_id.clone()),
+                    ..Default::default()
+                },
+                contents: vec![user],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &store,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    assert!(store.saved.lock().unwrap().is_some());
+    let requests = model.requests.lock().unwrap();
+    let history = serde_json::to_string(&requests.last().unwrap().contents).unwrap();
+    assert!(history.contains("permissionDenied"));
+    assert!(history.contains("Native specialist outcome"));
+    assert!(history.contains("completed"));
+    assert!(!requests.last().unwrap().tools.contains_key("save_workflow_draft"));
 }

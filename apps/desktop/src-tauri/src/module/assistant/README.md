@@ -31,6 +31,22 @@ current plan. The author receives the frozen approved plan and its derived task
 contract. The preferred conversation model profile is supplied to both. Completion
 returns control to the parent, which discusses questions or presents actual results.
 
+On completion the host resumes the coordinator from its pre-handoff contents plus
+bounded native outcome facts. Specialist tool calls, reference documents and raw
+workflow JSON remain in the operation journal, not in coordinator delivery prompts.
+Subsequent coordinator tool exchanges keep their original IDs and signatures in that
+scoped delivery history. Permission feedback applies only to a new forbidden
+coordinator batch; an authorized specialist save is never rewritten as a denial.
+A completed native save is sufficient evidence of draft persistence even when the
+capability discovery snapshot predates that save.
+
+Planning node references default to semantic summaries; `detail=full` remains
+available for a material feasibility question. Authors read the full selected node
+contracts once. Normal creation submits a document directly to save_workflow_draft,
+which validates before writing; separate validation is reserved for review-only
+requests. This keeps validation and approval gates intact without forcing duplicate
+full-document generation.
+
 ## Planning and review
 
 New/revised Workflow requests authorize planning first. A proposal describes the goal,
@@ -233,3 +249,60 @@ graph or introducing a new authoring protocol.
 
 See [CAPABILITY_AUDIT.md](CAPABILITY_AUDIT.md) for the maintainer capability inventory,
 confirmed documentation corrections and remaining code-alignment questions.
+
+
+### Context and discovery boundaries
+
+Capability discovery lists return paginated summaries (ID, kind, name, bounded
+description, version and native constraints); capability_id retrieves the original
+full input/output contract. Main, planner and author use the same native catalog.
+Search matching uses the full description before summarizing. Summary descriptions
+are explicitly marked when truncated; they must not be used as binding contracts.
+Legacy list_workflow remains compatible. No native validation/grant is derived
+from model-visible summaries.
+
+Specialist histories remain in native operation audit records, while main delivery
+uses the pre-delegation parent snapshot and bounded native outcome. Durable main
+conversation messages, rather than the SDK's shared specialist history, seed later
+turns. User history and native receipts remain unchanged: indices, exact quotes,
+approval digests and signed call/response pairs must not be silently compressed.
+Large ordinary conversation history and execution receipts still warrant separate
+measured optimization; this change does not introduce a generic lossy compressor.
+
+### Native execution delivery views
+
+At the common assistant model boundary, terminal execute_workflow and
+execute_capability receipts use a smaller request-only view. Nonempty validated
+output replaces the parallel internal state dump. Without a usable output contract,
+recognized complete state retains global values and the final trace entry instead
+of replaying every node and trace. Status, errors, output validation failures,
+artifact references, IDs and signed call/response pairing are preserved. Unknown
+shapes, clipped JSON and compact results stay unchanged when no safe smaller view
+exists. This is deterministic projection, not model-generated summarization.
+
+Durable session receipts, run records and original registry history are untouched;
+message indices, approval digests and result-source binding still use original
+native evidence. Explicit inspect_execution(run_id, detail=full) reads that run's
+stored receipt from this session without dispatch. Default inspection uses delivery
+views and excludes unrelated tool responses. Stored receipt details may already be
+truncated by the pre-existing capture limit; this read does not reconstruct them.
+An explicit full inspection remains visible to the model for that turn. The view
+applies to both intent assessment and conversation generation, including later
+turns and old compatible receipts. It does not rewrite workflow model requests,
+external-tool output semantics, the usage ledger or execution authorization.
+
+Regression checks use arbitrary contracts and state fixtures, not a sales workflow:
+validated output, legacy outputs, failed/cancelled/interrupted runs, unknown/clipped
+payloads, preserved protocol signatures, source immutability and scoped detail
+inspection. Character reduction is not a measured token saving; compare actual
+recorded task totals and outcome quality across multiple task types after rollout.
+
+### Input-source indexing without duplicate message bodies
+
+The coordinator's binding index contains original message positions, chronological
+user ordinals and Unicode-safe previews of at most 80 characters. Complete user
+messages remain in the conversation exactly once instead of being copied again
+into the instruction. Previews explicitly indicate truncation and are navigation
+only: exact quotes and typed values must come from original history. Native binding
+resolution and approval digests still use unchanged complete messages. This is not
+historical summarization or a sliding-window policy; no user constraints are dropped.

@@ -2154,5 +2154,53 @@
     "responseFailed": "回复失败",
     "retryResponse": "重试回复",
     "retryConversations": "重新加载对话"
+  },
+  "usage": {
+    "refreshHint": "打开时每 3 秒刷新 · 仅统计已记录用量，历史或延迟返回的数据可能不完整。",
+    "accountingHint": "输入与输出组成总量。缓存命中已计入输入，推理已计入输出，不会重复相加。Token 数量不等于费用。",
+    "shareHint": "占已记录总量",
+    "breakdown": "用在哪里",
+    "outputHint": "模型生成的内容，包含返回的推理用量",
+    "inputHint": "模型读取的消息、上下文和工具结果",
+    "executionHint": "由本会话发起的工作流运行",
+    "conversationHint": "理解需求、规划、编排和回复",
+    "callCount": "{{count}} 次调用",
+    "overview": "用量概览",
+    "recordedTotal": "已记录总量",
+    "title": "Token 用量",
+    "description": "查看这段会话的消耗，以及 token 主要用在了哪里。",
+    "loading": "正在加载用量…",
+    "error": "用量加载失败。",
+    "conversation": "对话消耗",
+    "execution": "工作流运行",
+    "total": "合计",
+    "purposeTotal": "{{tokens}} token · {{calls}} 次调用",
+    "recordingDegraded": "本次启动期间有用量记录未能保存，统计可能不完整。",
+    "coverage": "{{missing}} 次未返回用量 · {{unfinished}} 次未正常完成 · {{estimated}} 次用量为估算值。当前展示已知小计。",
+    "calls": "模型调用明细",
+    "time": "时间",
+    "purpose": "用途",
+    "model": "模型",
+    "input": "输入",
+    "output": "输出",
+    "status": "状态",
+    "turn": "轮次 {{id}}",
+    "empty": "暂无模型调用记录，不代表没有消耗 token。",
+    "purposes": {
+      "conversation": "对话",
+      "intent": "理解需求",
+      "planning": "规划",
+      "authoring": "编排",
+      "summary": "记忆摘要",
+      "workflow": "工作流运行",
+      "unclassified": "其他"
+    },
+    "statuses": {
+      "running": "进行中",
+      "completed": "已完成",
+      "failed": "失败",
+      "interrupted": "已中断",
+      "cancelled": "已取消"
+    }
   }
 }

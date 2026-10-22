@@ -366,15 +366,8 @@ impl AssistantRuntime {
             decision.reuse_existing && decision.intent == Intent::Execution
         );
         let instruction = format!(
-            "{instruction}\n\nInput source messages (indices count every original conversation message, excluding instructions and discovery exchanges): {}",
-            json!(
-                history
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, message)| message.role == "user")
-                    .map(|(index, message)| json!({"message":index,"text":content_text(message)}))
-                    .collect::<Vec<_>>()
-            )
+            "{instruction}\n\nInput source index (message is the original zero-based conversation index; userOrdinal counts only original user messages chronologically, excluding instructions and discovery exchanges). Previews are navigation aids, not complete binding evidence. Read the full original user message in conversation history for exact quotes and typed values: {}",
+            json!(super::planning_context::input_sources(&history))
         );
         let instruction = format!(
             "{instruction}\n\nAuthorized session artifacts: {}\nCurrent model profile: {}",

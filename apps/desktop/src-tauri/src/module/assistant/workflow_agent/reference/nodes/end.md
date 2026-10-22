@@ -8,7 +8,7 @@ At least one end node is required. End nodes only accept incoming edges; all map
 
 ## Configuration
 
-TypeScript is a readable projection of the node data schema, not executable configuration. Numeric limits, uniqueness, additional-property rules and native semantics remain enforced by validate_workflow_draft. Request topic=node-schema with this node type only when the exact JSON Schema is needed.
+TypeScript is a readable projection of the node data schema, not executable configuration. Numeric limits, uniqueness, additional-property rules and native semantics are validated by save_workflow_draft before writing. Use validate_workflow_draft separately only for a validation-only review. Request topic=node-schema with this node type only when the exact JSON Schema is needed.
 
 ```typescript
 // Generated from JSON Schema. Runtime validation remains authoritative.

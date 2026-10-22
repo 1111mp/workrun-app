@@ -17,6 +17,14 @@ pub struct Contract {
     pub constraints: Value,
 }
 impl Contract {
+    pub fn summary(&self) -> Value {
+        // Discovery is not an execution contract. Fetch by ID before binding
+        // inputs; keep native constraints visible even on the summary path.
+        json!({"id":self.id,"kind":self.kind,"name":self.name,
+            "description":self.description.chars().take(400).collect::<String>(),
+            "descriptionTruncated":self.description.chars().count()>400,
+            "version":self.version,"constraints":self.constraints})
+    }
     pub fn legacy(&self) -> Capability {
         Capability {
             id: self.id.clone(),
@@ -123,6 +131,31 @@ mod tests {
         config::IProcessNode,
         module::process_node::{ProcessNode, ProcessNodeInstallStatus},
     };
+    #[test]
+    fn discovery_summaries_are_bounded_without_changing_exact_contracts() {
+        let contract = Contract {
+            id: "capability-1".into(),
+            kind: "workflow",
+            name: "Analysis".into(),
+            description: "说明".repeat(1000),
+            version: Some("v2".into()),
+            input_schema: json!({"type":"object","properties":{"file":{"type":"string","description":"private full schema"}},"required":["file"]}),
+            output_schema: json!({"type":"object","properties":{"report":{"type":"string"}}}),
+            constraints: json!({"executable":false,"reason":"Install first"}),
+        };
+        let summary = contract.summary();
+        assert_eq!(summary["id"], contract.id);
+        assert_eq!(summary["version"], "v2");
+        assert_eq!(summary["constraints"], contract.constraints);
+        assert_eq!(summary["description"].as_str().unwrap().chars().count(), 400);
+        assert_eq!(summary["descriptionTruncated"], true);
+        assert!(summary.get("inputSchema").is_none());
+        assert!(summary.get("outputSchema").is_none());
+        let exact = serde_json::to_value(&contract).unwrap();
+        assert_eq!(exact["inputSchema"]["required"], json!(["file"]));
+        assert_eq!(exact["outputSchema"], contract.output_schema);
+        assert!(summary.to_string().len() < exact.to_string().len());
+    }
     fn app() -> ProcessNode {
         let definition:IProcessNode=serde_json::from_value(json!({"id":"019b812d-4958-7d37-8a45-47e1e20a4744","name":"Review","description":"Local review","version":"1.0.0","entry":"main.py","inputs":{"amount":{"type":"number"},"locale":{"type":"string","default":"zh","x-workrun-optional":true}},"outputs":{"review":{"type":"boolean"}}})).unwrap();
         ProcessNode {

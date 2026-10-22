@@ -551,7 +551,7 @@ impl super::tools::WorkflowDiscovery for Catalog {
                 .as_array()
                 .context("Invalid workflow catalog")?
                 .iter()
-                .map(Contract::workflow)
+                .map(|entry| Contract::workflow(entry).map(|contract| contract.summary()))
                 .collect::<Result<Vec<_>>>()?;
             return Ok(
                 json!({"items":items,"nextCursor":page["nextCursor"].as_str().filter(|s|!s.is_empty()).unwrap_or("apps:0")}),
@@ -578,7 +578,12 @@ impl super::tools::WorkflowDiscovery for Catalog {
             .unwrap_or(if cursor.is_empty() { "0" } else { cursor })
             .parse()?;
         let next = offset.saturating_add(limit);
-        let items = contracts.iter().skip(offset).take(limit).collect::<Vec<_>>();
+        let items = contracts
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(Contract::summary)
+            .collect::<Vec<_>>();
         Ok(
             json!({"items":items,"nextCursor":(next<contracts.len()).then(||if self.team.is_some(){format!("apps:{next}")}else{next.to_string()})}),
         )

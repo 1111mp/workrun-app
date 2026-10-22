@@ -19,7 +19,7 @@ pub(in crate::module::assistant) fn reference(args: &Value) -> Result<Value> {
     let topic = args["topic"].as_str().unwrap_or("index");
     Ok(match topic {
         "index" => {
-            json!({"schemaVersion":1,"topics":["capabilities","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"],"nodes":contracts::NODE_TYPES.iter().map(|kind|{let c=contracts::node_contract(kind).unwrap();json!({"type":kind,"title":c["title"],"summary":c["summary"],"skill":format!("workflow-node-{kind}")})}).collect::<Vec<_>>(),"next":"read_skill workflow-authoring, then request only relevant node_types"})
+            json!({"schemaVersion":1,"topics":["capabilities","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"],"nodes":contracts::NODE_TYPES.iter().map(|kind|{let c=contracts::node_contract(kind).unwrap();json!({"type":kind,"title":c["title"],"summary":c["summary"],"skill":format!("workflow-node-{kind}")})}).collect::<Vec<_>>(),"next":"Request topic=nodes with explicit node_types for selected nodes. A node response includes its guide; do not reread it through read_skill."})
         },
         "capabilities" => {
             json!({"schemaVersion":1,"guide":crate::module::assistant::resources::read("reference/workrun-capabilities.md")?})
@@ -357,7 +357,7 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
         },
         "save_workflow_draft" => {
             let document = parse_document(args)?;
-            let validation = validate(&document, &config).await?;
+            let mut validation = validate(&document, &config).await?;
             ensure!(
                 validation["valid"] == true,
                 "Workflow must pass validation before saving: {}",
@@ -371,8 +371,11 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
                 document,
             )
             .await?;
+            // The validation-only hint says to save next; that action has now
+            // completed and must not encourage another full-document submission.
+            validation.as_object_mut().unwrap().remove("next");
             Ok(
-                json!({"capability_id":workflow.id,"draft_id":workflow.id,"validation":validation,"published":false,"executed":false}),
+                json!({"capability_id":workflow.id,"draft_id":workflow.id,"validation":validation,"published":false,"executed":false,"next":"Saving is complete. Return the saved identity and pending checks; do not save again or execute."}),
             )
         },
         "list_authoring_resources" => match args["kind"].as_str().unwrap_or("models") {

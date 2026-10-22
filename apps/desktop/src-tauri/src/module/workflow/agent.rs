@@ -378,6 +378,7 @@ struct InstrumentedLlm {
     inner: Arc<dyn Llm>,
     node_id: String,
     model: String,
+    usage_context: crate::module::model_usage::CallContext,
     on_event: Option<Channel<StreamEvent>>,
 }
 
@@ -400,7 +401,9 @@ impl Llm for InstrumentedLlm {
     ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
         let started_at = chrono::Utc::now();
         let started_elapsed = Instant::now();
-        let response_stream = self.inner.generate_content(request, stream).await?;
+        let (call_id, response_stream) =
+            crate::module::model_usage::observe(self.inner.as_ref(), request, stream, self.usage_context.clone())
+                .await?;
         let node_id = self.node_id.clone();
         let model = self.model.clone();
         let on_event = self.on_event.clone();
@@ -421,13 +424,13 @@ impl Llm for InstrumentedLlm {
                                     StreamEvent::custom(
                                         &node_id,
                                         "agent.model_call",
-                                        model_call_telemetry(
+                                        { let mut telemetry = model_call_telemetry(
                                             &response,
                                             &model,
                                             started_at,
                                             ended_at,
                                             started_elapsed.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
-                                        ),
+                                        ); telemetry["modelCallId"] = json!(call_id); telemetry },
                                     ),
                                 );
                             }
@@ -459,7 +462,20 @@ pub(super) fn instrumented_model(
     model_label: &str,
     on_event: Option<Channel<StreamEvent>>,
 ) -> Arc<dyn Llm> {
+    let mut usage_context = crate::module::model_usage::current();
+    usage_context.purpose = "workflow".into();
+    usage_context.node_id = Some(node_id.into());
+    if let Some(profile) = model_catalog()
+        .into_iter()
+        .find(|profile| model_label.starts_with(&format!("{}/", profile.id)))
+    {
+        usage_context.provider = serde_json::to_value(&profile.provider)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned));
+        usage_context.model_profile_id = Some(profile.id);
+    }
     Arc::new(InstrumentedLlm {
+        usage_context,
         inner: model,
         node_id: node_id.to_string(),
         model: model_label.to_string(),

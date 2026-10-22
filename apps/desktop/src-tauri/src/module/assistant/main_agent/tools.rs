@@ -43,10 +43,10 @@ impl ToolRegistry<'_> {
             ),
             (
                 "inspect_execution".into(),
-                json!({"name":"inspect_execution","description":"Read execution receipts already present in this conversation. Never reruns a workflow.","parameters":{"type":"object","properties":{},"additionalProperties":false}}),
+                json!({"name":"inspect_execution","description":"Read execution receipts already present in this conversation. Defaults to delivery summaries. Use run_id to select a run and detail=full for its stored receipt (which may already be truncated). Never reruns or grants execution.","parameters":{"type":"object","properties":{"run_id":{"type":"string"},"detail":{"type":"string","enum":["summary","full"]}},"additionalProperties":false}}),
             ),
         ]);
-        tools.insert("list_capabilities".into(), json!({"name":"list_capabilities","description":"Discover workflow and App contracts: kind, version, inputSchema, outputSchema and execution constraints. Use capability_id for exact lookup. Message binding indices refer to the zero-based original conversation, excluding instructions and tool discovery exchanges.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}));
+        tools.insert("list_capabilities".into(), json!({"name":"list_capabilities","description":"Search workflows and Apps by summary (paginated, without input/output schemas). Use capability_id to retrieve the full exact contract before binding inputs or reusing a capability; summaries are not contracts. Message binding indices refer to the zero-based original conversation, excluding instructions and tool discovery exchanges.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}));
         if self.execution_allowed && self.workflows_enabled {
             tools.insert(EXECUTE_WORKFLOW.into(), execute_declaration());
             tools.insert("execute_capability".into(), json!({"name":"execute_capability","description":"Execute a discovered executable capability through the native workflow executor. Supply one binding per required input. For message sources provide an original conversation message index (counting every role), exact quote and value_json containing the typed value serialized as JSON. For defaults provide only input and source=default. For result sources provide input, source=result, native run_id and JSON pointer into its completed validated output. Do not invent missing scope; ask the user instead.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"bindings":{"type":"array","items":{"type":"object","properties":{"input":{"type":"string","description":"Target input key"},"source":{"type":"string","enum":["message","default","result"]},"message":{"type":"integer","description":"Original user message index"},"quote":{"type":"string","description":"Exact nonempty quote in the referenced user message"},"value_json":{"type":"string","description":"Message source only: JSON serialization of the typed input. Numbers remain numbers; strings must be JSON-quoted; objects/arrays are JSON text."},"run_id":{"type":"string","description":"Result source only: Workrun runId from a completed native receipt"},"pointer":{"type":"string","description":"Result source only: JSON Pointer into receipt output, e.g. /result_key"}},"required":["input","source"],"additionalProperties":false}}},"required":["capability_id","bindings"],"additionalProperties":false}}));
@@ -81,6 +81,13 @@ impl ToolRegistry<'_> {
                     item["kind"] = json!("workflow");
                     item["outputSchema"] = json!({"type":"object"});
                     item["constraints"] = json!({"executable":true,"effects":"unspecified"});
+                    if args.get("capability_id").and_then(Value::as_str).is_none() {
+                        let description = item["description"].as_str().unwrap_or("").to_owned();
+                        item["description"] = json!(description.chars().take(400).collect::<String>());
+                        item["descriptionTruncated"] = json!(description.chars().count() > 400);
+                        item.as_object_mut().unwrap().remove("inputSchema");
+                        item.as_object_mut().unwrap().remove("outputSchema");
+                    }
                 }
                 Ok(page)
             },
@@ -95,14 +102,38 @@ impl ToolRegistry<'_> {
             "read_skill" => {
                 Ok(json!({"content":self.skills.read(args.get("name").and_then(Value::as_str).unwrap_or_default())?}))
             },
-            "inspect_execution" => Ok(self
-                .history
-                .iter()
-                .filter(|content| content.role == "function")
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|content| serde_json::to_value(content).unwrap_or(Value::Null))
-                .collect()),
+            "inspect_execution" => {
+                let full = match args["detail"].as_str() {
+                    None | Some("summary") => false,
+                    Some("full") => true,
+                    _ => bail!("detail must be summary or full"),
+                };
+                let run = args
+                    .get("run_id")
+                    .map(|value| value.as_str().ok_or_else(|| anyhow::anyhow!("run_id must be a string")))
+                    .transpose()?;
+                if full && run.is_none() {
+                    bail!("Select run_id before reading full execution details");
+                }
+                let mut contents = self
+                    .history
+                    .iter()
+                    .filter_map(|content| {
+                        let mut content = content.clone();
+                        content.parts.retain(|part| {
+                            matches!(part,
+                        adk_rust::Part::FunctionResponse {function_response,..}
+                        if matches!(function_response.name.as_str(),"execute_workflow"|"execute_capability")
+                        && run.is_none_or(|run| function_response.response["runId"]==run))
+                        });
+                        (!content.parts.is_empty()).then_some(content)
+                    })
+                    .collect::<Vec<_>>();
+                if !full {
+                    super::super::execution_context::project(&mut contents);
+                }
+                Ok(serde_json::to_value(contents)?)
+            },
             _ => bail!("tool `{name}` is not available for this turn"),
         }
     }
@@ -146,6 +177,49 @@ mod tests {
             assert_eq!(page["items"].as_array().unwrap().len(), size.min(2));
         }
     }
+    #[test]
+    fn execution_details_are_explicit_and_scoped_to_existing_run_receipts() {
+        let raw = "process trace".repeat(2000);
+        let history: Vec<Content> = serde_json::from_value(json!([
+            {"role":"function","parts":[{"functionResponse":{"name":"execute_workflow","response":{"runId":"run-a","status":"completed","output":{"value":7},"result":raw}},"id":"a"}]},
+            {"role":"function","parts":[{"functionResponse":{"name":"execute_capability","response":{"runId":"run-b","status":"failed","error":"failed","result":"partial result"}},"id":"b"}]},
+            {"role":"function","parts":[{"functionResponse":{"name":"other_tool","response":{"runId":"run-a","private":"other"}},"id":"c"}]}
+        ])).unwrap();
+        let skills = SkillCatalog::builtin();
+        let registry = ToolRegistry {
+            capabilities: &[],
+            skills: &skills,
+            history: &history,
+            execution_allowed: false,
+            authoring_allowed: false,
+            planning_allowed: false,
+            workflows_enabled: false,
+            workspace_tools_allowed: false,
+        };
+        let summary = registry.read("inspect_execution", &json!({})).unwrap();
+        assert_eq!(summary.as_array().unwrap().len(), 2);
+        assert!(!summary.to_string().contains("process trace"));
+        assert!(registry.read("inspect_execution", &json!({"detail":"full"})).is_err());
+        assert!(
+            registry
+                .read("inspect_execution", &json!({"detail":"invented"}))
+                .is_err()
+        );
+        let full = registry
+            .read("inspect_execution", &json!({"detail":"full","run_id":"run-a"}))
+            .unwrap();
+        assert_eq!(full.as_array().unwrap().len(), 1);
+        assert_eq!(full[0]["parts"][0]["functionResponse"]["response"]["result"], raw);
+        assert!(!full.to_string().contains("private"));
+        assert_eq!(
+            registry
+                .read("inspect_execution", &json!({"detail":"full","run_id":"not-in-session"}))
+                .unwrap(),
+            json!([])
+        );
+        assert!(serde_json::to_string(&history).unwrap().contains("process trace"));
+    }
+
     #[test]
     fn discovery_supports_pagination_search_and_exact_schema_lookup() {
         let capabilities = catalog(5);
@@ -196,5 +270,48 @@ mod tests {
                 execution_allowed && workflows_enabled
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn paginated_search_uses_summaries_and_exact_lookup_keeps_binding_schema() {
+        let caps = (0..3)
+            .map(|i| Capability {
+                id: format!("workflow-{i}"),
+                name: format!("Task {i}"),
+                description: "描述".repeat(500),
+                parameters: json!({"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}),
+            })
+            .collect::<Vec<_>>();
+        let skills = SkillCatalog::builtin();
+        let registry = ToolRegistry {
+            capabilities: &caps,
+            skills: &skills,
+            history: &[],
+            execution_allowed: false,
+            authoring_allowed: false,
+            planning_allowed: false,
+            workflows_enabled: true,
+            workspace_tools_allowed: false,
+        };
+        let first = registry.read("list_capabilities", &json!({"limit":2})).unwrap();
+        assert_eq!(first["items"].as_array().unwrap().len(), 2);
+        assert_eq!(first["nextCursor"], "2");
+        assert!(first["items"][0].get("inputSchema").is_none());
+        assert_eq!(first["items"][0]["descriptionTruncated"], true);
+        let last = registry
+            .read("list_capabilities", &json!({"limit":2,"cursor":first["nextCursor"]}))
+            .unwrap();
+        assert_eq!(last["items"][0]["id"], "workflow-2");
+        assert!(last["nextCursor"].is_null());
+        let exact = registry
+            .read("list_capabilities", &json!({"capability_id":"workflow-2"}))
+            .unwrap();
+        assert_eq!(exact["items"][0]["inputSchema"], caps[2].parameters);
+        assert_eq!(exact["items"][0]["description"], caps[2].description);
     }
 }

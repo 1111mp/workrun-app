@@ -143,9 +143,10 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                 tooltip={label}
                 aria-label={label}
                 isActive={
-                  pathname === to ||
-                  (to === '/start' && pathname === '/') ||
-                  (to !== '/start' && pathname.startsWith(`${to}/`))
+                  to === '/start'
+                    ? (pathname === '/start' || pathname === '/') &&
+                      !new URLSearchParams(search).get('session')
+                    : pathname === to || pathname.startsWith(`${to}/`)
                 }
                 render={<Link to={to} />}
               >

@@ -50,6 +50,10 @@ impl DBManager {
         migrator.dangerous_set_table_name("_workrun_sqlx_migrations");
         migrator.run(&db_pool).await?;
 
+        // No request from a previous process can still be running after restart.
+        sqlx::query("UPDATE model_calls SET status='interrupted', record_json=json_set(record_json, '$.status', 'interrupted') WHERE status='running'")
+            .execute(&db_pool).await?;
+
         logging!(info, Type::Setup, "Successfully applied database migrations");
 
         self.db_pool

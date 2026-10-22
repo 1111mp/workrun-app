@@ -65,7 +65,12 @@ fn is_active_turn_status(status: Option<&str>) -> bool {
     matches!(status, Some("queued" | "running" | "waiting_for_input"))
 }
 
-async fn summarize(previous_summary: &str, older_messages: &[ConversationMessage]) -> Result<String> {
+async fn summarize(
+    session_id: &str,
+    workspace_id: &str,
+    previous_summary: &str,
+    older_messages: &[ConversationMessage],
+) -> Result<String> {
     let config = BaseConfig::workrun().await.data_arc();
     let model = internal_summary_model(&config)?;
     let llm = create_model(&model, &config)?;
@@ -88,7 +93,22 @@ async fn summarize(previous_summary: &str, older_messages: &[ConversationMessage
         config: None,
         previous_response_id: None,
     };
-    let mut stream = llm.generate_content(request, false).await?;
+    let context = crate::module::model_usage::CallContext {
+        workspace_id: workspace_id.into(),
+        session_kind: Some("workflow_chat".into()),
+        session_id: Some(session_id.into()),
+        purpose: "summary".into(),
+        model_profile_id: Some(model.id.clone()),
+        provider: Some(
+            serde_json::to_value(&model.provider)?
+                .as_str()
+                .unwrap_or_default()
+                .into(),
+        ),
+        ..Default::default()
+    };
+    let (_, mut stream) = crate::module::model_usage::observe(llm.as_ref(), request, false, context).await?;
+    let mut output = String::new();
     while let Some(response) = stream.next().await {
         let response = response?;
         if let Some(Content { parts, .. }) = response.content {
@@ -105,9 +125,12 @@ async fn summarize(previous_summary: &str, older_messages: &[ConversationMessage
                 parsed
                     .as_object()
                     .context("summary model returned a JSON value instead of an object")?;
-                return Ok(text);
+                output = text;
             }
         }
+    }
+    if !output.is_empty() {
+        return Ok(output);
     }
     bail!("summary model returned no text")
 }
@@ -145,10 +168,12 @@ impl ChatSessionStore {
     /// deliberately outside the workflow graph, so compaction never becomes a user turn.
     pub async fn context_for_next_turn(session_id: &str) -> Result<Value> {
         let pool = DBManager::global().pool()?;
-        let session = sqlx::query("SELECT summary, summary_through_sequence FROM chat_sessions WHERE id = ?")
-            .bind(session_id)
-            .fetch_one(&pool)
-            .await?;
+        let session =
+            sqlx::query("SELECT workspace_id, summary, summary_through_sequence FROM chat_sessions WHERE id = ?")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await?;
+        let workspace: String = session.try_get("workspace_id")?;
         let summary: String = session.try_get("summary")?;
         let covered: i64 = session.try_get("summary_through_sequence")?;
         let messages = Self::durable_messages(session_id).await?;
@@ -170,7 +195,7 @@ impl ChatSessionStore {
             summary,
             covered,
             messages,
-            |summary, older| async move { summarize(&summary, &older).await },
+            |summary, older| async move { summarize(session_id, &workspace, &summary, &older).await },
         )
         .await
     }

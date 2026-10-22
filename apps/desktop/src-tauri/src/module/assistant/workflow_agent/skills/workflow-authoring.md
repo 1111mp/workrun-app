@@ -7,9 +7,10 @@ description: Configure, review, validate and save native Workflows from approved
 Follow the authoring role boundaries; use workrun-capabilities for selection guidance.
 
 1. Discover summaries with get_workflow_reference(topic=index). Read format/state
-   and selected node behavior via topic=nodes,node_types=[...] or workflow-node-<type>
-   Skills; CodeAct node details include runtime support. Read configuration, routing,
-   recovery or compensation/execution-recovery only as relevant.
+   and selected contracts via topic=nodes,node_types=[...]. Node responses already
+   include their guides and CodeAct runtime support: do not also read_skill for
+   those same nodes. Read configuration, examples, routing, recovery or
+   compensation/execution-recovery only to resolve a relevant uncertainty.
 2. Resolve real models with list_authoring_resources; discover tools/Skills with
    list_workspace_tools/list_workspace_skills, then retrieve selected tool_id contracts
    and read_workspace_skill bodies/references. Use expected_id and pagination as
@@ -27,9 +28,11 @@ Follow the authoring role boundaries; use workrun-capabilities for selection gui
    computed values through presentation. Keep useful check evidence/failures visible,
    without requiring a fixed output form or topology. Return substantive gaps for
    discussion rather than guessing. Sample answers are not reusable implementations.
-5. Call validate_workflow_draft(document_json=JSON text) and repair every phase/path.
-   Validation checks configuration/compilation, not execution or business correctness.
-   Save one valid definition with save_workflow_draft; report its actual identity,
+5. Submit the definition once with save_workflow_draft(document_json=JSON text).
+   Saving validates configuration/compilation before any write; repair returned
+   issues and retry. Use validate_workflow_draft separately only when a validation-only
+   review is needed. Validation does not prove execution or business correctness.
+   Save one valid definition; report its actual identity,
    assumptions and pending criteria. Respect the operation's creation/revision
    target. If interrupted or out of budget, report unfinished work without claiming
    success or creating duplicates. The parent alone handles authorized execution.

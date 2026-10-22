@@ -1067,3 +1067,30 @@ async fn failed_receipt_denies_draft_repair_but_can_deliver_the_original_failure
     assert!(denial.contains("not authorized"));
     assert!(!requests.last().unwrap().tools.contains_key("save_workflow_draft"));
 }
+
+#[tokio::test]
+async fn long_user_sources_reach_main_once_with_original_binding_indices() {
+    let source = format!("{} tail-evidence-1700", "long-user-context ".repeat(1000));
+    let model = ScriptedModel::new(vec![
+        decision(Intent::Conversation, "", "Discuss the supplied material"),
+        text("Noted."),
+    ]);
+    let history = vec![
+        Content::new("user").with_text(&source),
+        text("Prior reply"),
+        Content::new("user").with_text("Explain further"),
+    ];
+    let original = serde_json::to_value(&history).unwrap();
+    runtime()
+        .run(&model, &ModelProvider::DeepSeek, request(history.clone()), &|_| Ok(()))
+        .await
+        .unwrap();
+    let requests = model.requests.lock().unwrap();
+    let main = requests.last().unwrap();
+    let sent = serde_json::to_string(&main.contents).unwrap();
+    assert_eq!(sent.matches("tail-evidence-1700").count(), 1);
+    assert!(sent.contains("userOrdinal"));
+    assert!(sent.contains("previewTruncated"));
+    assert!(main.contents.iter().any(|c| content_text(c) == source));
+    assert_eq!(serde_json::to_value(history).unwrap(), original);
+}

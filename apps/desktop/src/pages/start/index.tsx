@@ -38,6 +38,7 @@ import { toast } from 'sonner';
 
 import { useEntryWorkspace } from '@/components/app-sidebar';
 import { ArtifactFiles } from '@/components/artifact-files';
+import { SessionUsage } from '@/components/session-usage';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowRunForm } from '@/components/workflow-run-panel';
 import { artifactReferences, type ArtifactRef } from '@/services/artifact';
@@ -270,6 +271,11 @@ function AssistantChat({ scope }: { scope: string }) {
 
   return (
     <div className='@container flex h-full min-h-0 flex-col'>
+      {session && (
+        <div className='flex shrink-0 justify-end px-4'>
+          <SessionUsage kind='assistant' sessionId={session.id} scope={scope} />
+        </div>
+      )}
       {syncError && !restored.isError && (
         <Alert variant='destructive'>
           <AlertTitle>{t('assistant.syncFailed')}</AlertTitle>

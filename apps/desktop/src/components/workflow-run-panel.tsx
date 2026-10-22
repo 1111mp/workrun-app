@@ -49,6 +49,7 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 
 import { ArtifactFiles } from '@/components/artifact-files';
+import { SessionUsage } from '@/components/session-usage';
 import {
   LiveWorkflowTaskOutput,
   WorkflowRunOutput,
@@ -538,6 +539,12 @@ function WorkflowRunPanel({
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                )}
+                {activeChatSessionId && (
+                  <SessionUsage
+                    kind='workflow_chat'
+                    sessionId={activeChatSessionId}
+                  />
                 )}
                 {!readOnly ? (
                   <Button
