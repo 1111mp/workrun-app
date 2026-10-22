@@ -140,7 +140,7 @@ beforeEach(() => {
 function Location() {
   const location = useLocation();
   return (
-    <output>
+    <output data-testid='location' data-location-key={location.key}>
       {location.pathname}
       {location.search}
     </output>
@@ -361,4 +361,21 @@ it('selects a conversation without also selecting home, and restores home on nav
   await conversation.click();
   await expect.element(conversation).toHaveAttribute('data-active');
   await expect.element(home).not.toHaveAttribute('data-active');
+});
+
+it('keeps the current conversation mounted when its sidebar link is clicked again', async () => {
+  const screen = await setup();
+  const location = screen.getByTestId('location');
+  const initialKey = location.element().getAttribute('data-location-key');
+  const conversation = screen.getByRole('link', {
+    name: '测试对话',
+    exact: true,
+  });
+  await expect.element(conversation).toBeVisible();
+  await conversation.click();
+  await conversation.click();
+  await expect
+    .element(location)
+    .toHaveAttribute('data-location-key', initialKey!);
+  await expect.element(location).toHaveTextContent('/start?session=s1');
 });

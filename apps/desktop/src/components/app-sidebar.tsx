@@ -59,6 +59,8 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
   );
   const { t } = useTranslation();
   const { pathname, search, key } = useLocation();
+  const currentSessionId =
+    pathname === '/start' ? new URLSearchParams(search).get('session') : null;
   const { setOpenMobile } = useSidebar();
   const workspace = useEntryWorkspace();
   const mode = useWorkrunStore((state) => state.config?.workspace_mode);
@@ -106,7 +108,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
               className='h-12! p-0! group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-8!'
               tooltip='Workrun'
               aria-label='Workrun'
-              render={<Link to='/settings' />}
+              render={<Link to='/settings' viewTransition />}
             >
               <div className='bg-sidebar-primary text-sidebar-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-lg'>
                 <WorkflowIcon />
@@ -127,7 +129,9 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
             <SidebarMenuButton
               tooltip={t('start.newTask')}
               aria-label={t('start.newTask')}
-              render={<Link to='/start' state={{ reset: key }} />}
+              render={
+                <Link to='/start' state={{ reset: key }} viewTransition />
+              }
             >
               <SquarePen />
               <span>{t('start.newTask')}</span>
@@ -148,7 +152,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                       !new URLSearchParams(search).get('session')
                     : pathname === to || pathname.startsWith(`${to}/`)
                 }
-                render={<Link to={to} />}
+                render={<Link to={to} viewTransition />}
               >
                 <Icon />
                 <span>{label}</span>
@@ -167,14 +171,25 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
               <SidebarMenuItem key={conversation.id}>
                 <SidebarMenuButton
                   title={conversation.title}
-                  isActive={
-                    pathname === '/start' &&
-                    new URLSearchParams(search).get('session') ===
-                      conversation.id
-                  }
+                  isActive={currentSessionId === conversation.id}
                   render={
                     <Link
                       to={`/start?${new URLSearchParams({ session: conversation.id })}`}
+                      viewTransition
+                      onClick={(event) => {
+                        if (
+                          currentSessionId === conversation.id &&
+                          event.button === 0 &&
+                          !event.metaKey &&
+                          !event.ctrlKey &&
+                          !event.shiftKey &&
+                          !event.altKey
+                        ) {
+                          // A new location key would remount the current chat.
+                          event.preventDefault();
+                          setOpenMobile(false);
+                        }
+                      }}
                     />
                   }
                 >
@@ -228,7 +243,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                 <SidebarMenuButton
                   title={run.targetName}
                   isActive={new URLSearchParams(search).get('runId') === run.id}
-                  render={<Link to={runDetailsPath(run)} />}
+                  render={<Link to={runDetailsPath(run)} viewTransition />}
                 >
                   <HistoryIcon />
                   <span>{run.targetName}</span>
@@ -337,7 +352,7 @@ function RecentActions({
         align={isMobile ? 'end' : 'start'}
       >
         <DropdownMenuGroup>
-          <DropdownMenuItem render={<Link to={to} />}>
+          <DropdownMenuItem render={<Link to={to} viewTransition />}>
             <ArrowUpRightIcon />
             {t('sidebar.open')}
           </DropdownMenuItem>

@@ -715,6 +715,7 @@
     }
   },
   "workflowEditor": {
+    "loading": "Loading workflow…",
     "unsavedChanges": {
       "title": "Leave the editor?",
       "description": "This workflow has unsaved changes. Leaving will discard them. You can continue editing and save before leaving.",

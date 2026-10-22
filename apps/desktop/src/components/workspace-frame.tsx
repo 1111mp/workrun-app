@@ -54,9 +54,7 @@ export function WorkspaceFrame({
             >
               <SidebarTrigger />
               <span className='text-muted-foreground truncate text-sm'>
-                {pathname === '/start/library' ? (
-                  t('assistant.browse')
-                ) : pathname === '/start' || pathname === '/' ? (
+                {pathname === '/start' || pathname === '/' ? (
                   <ConversationTitle />
                 ) : pathname.startsWith('/workflows') ? (
                   t('navigation.workflow')

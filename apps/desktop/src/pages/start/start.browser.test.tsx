@@ -1,4 +1,3 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Button, SidebarProvider } from '@workspace/ui/components';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -6,7 +5,6 @@ import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 
 import { WorkflowEditorToolbar } from '@/components/workflow-editor/workflow-editor-toolbar';
-import zh from '@/locales/zh_CN.json';
 
 vi.mock('@/services/assistant', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/assistant')>()),
@@ -79,100 +77,14 @@ vi.mock('@/components/run-event-tracker', () => ({
 }));
 vi.mock('@/lib/constant', () => ({ isTeamMode: () => false }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string) =>
-      key
-        .split('.')
-        .reduce<unknown>(
-          (value, part) => (value as Record<string, unknown>)?.[part],
-          zh,
-        ) ?? key,
-  }),
+  useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 import { ConfirmProvider } from '@/components/confirm-dialog';
 import { WorkspaceFrame } from '@/components/workspace-frame';
 
-import { Component as StartPage } from './library';
-
 beforeEach(() => {
   vi.stubGlobal('OS_PLATFORM', 'darwin');
-});
-
-async function renderEntry() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/start']}>
-        <ConfirmProvider>
-          <WorkspaceFrame accountMenu={<span>个人账户 · 设置</span>}>
-            <StartPage />
-          </WorkspaceFrame>
-        </ConfirmProvider>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
-}
-
-it('renders the inset shell and collapses the navigation without losing the entry', async () => {
-  await page.viewport(1280, 900);
-  const screen = await renderEntry();
-  await expect
-    .element(screen.getByText('发票汇总', { exact: true }))
-    .toBeVisible();
-  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(1280);
-  await screen
-    .getByRole('main')
-    .getByRole('button', { name: 'Toggle Sidebar', exact: true })
-    .click();
-  await expect
-    .element(screen.getByRole('heading', { name: '今天想完成什么？' }))
-    .toBeVisible();
-  await expect
-    .element(screen.getByText('个人工作区', { exact: true }))
-    .not.toBeVisible();
-  await expect
-    .element(screen.getByRole('link', { name: 'Workrun', exact: true }))
-    .toBeVisible();
-  await expect
-    .poll(() => {
-      const frame = document
-        .querySelector('[data-slot="sidebar-wrapper"]')!
-        .getBoundingClientRect();
-      const content = document
-        .querySelector('[data-slot="sidebar-inset"]')!
-        .getBoundingClientRect();
-      // The visible rail includes the gap before the inset, not just the fixed sidebar container.
-      const visibleCenter = (frame.left + content.left) / 2;
-      const buttons = [
-        ...document.querySelectorAll('[data-slot="sidebar-menu-button"]'),
-      ].filter((button) => button.getBoundingClientRect().width > 0);
-      return Math.max(
-        ...buttons.map((button) => {
-          const icon = button.querySelector('svg')!.getBoundingClientRect();
-          return Math.abs(icon.left + icon.width / 2 - visibleCenter);
-        }),
-      );
-    })
-    .toBeLessThanOrEqual(1);
-  await screen
-    .getByRole('main')
-    .getByRole('button', { name: 'Toggle Sidebar', exact: true })
-    .click();
-  await expect
-    .element(screen.getByText('个人工作区', { exact: true }))
-    .toBeVisible();
-});
-
-it('keeps the composer and capability actions usable on a narrow window', async () => {
-  await page.viewport(390, 844);
-  const screen = await renderEntry();
-  await expect
-    .element(screen.getByText('发票汇总', { exact: true }))
-    .toBeVisible();
-  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(390);
 });
 
 it('gives the workflow editor the full viewport without an empty title strip', async () => {

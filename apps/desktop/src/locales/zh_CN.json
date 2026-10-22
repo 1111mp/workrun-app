@@ -703,6 +703,7 @@
     }
   },
   "workflowEditor": {
+    "loading": "正在加载工作流…",
     "unsavedChanges": {
       "title": "离开编辑页面？",
       "description": "工作流有尚未保存的改动。离开后，这些改动将丢失。你可以继续编辑并保存后再离开。",

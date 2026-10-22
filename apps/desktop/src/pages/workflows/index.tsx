@@ -22,8 +22,8 @@ import {
   Spinner,
 } from '@workspace/ui/components';
 import {
-  FilePenLineIcon,
   EyeIcon,
+  FilePenLineIcon,
   GitBranchIcon,
   PlayIcon,
   PlusIcon,
@@ -130,6 +130,7 @@ function WorkflowCard({
                     ? `/workflows/${workflow.id}?catalog=true&run=true`
                     : `/workflows/${workflow.id}?run=true`
                 }
+                viewTransition
               />
             }
           >

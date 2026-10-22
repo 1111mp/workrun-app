@@ -5,13 +5,27 @@ import {
   waitFor,
   type RenderResult,
 } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { expect, it, vi } from 'vitest';
 
 import { inspectRunRecord, listActiveRuns } from '@/services/run-history';
 import { getWorkflow } from '@/services/workflow';
 
 import { Component } from './index';
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+vi.mock('react-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router')>()),
+  useViewTransitionState: () => false,
+}));
+
+const outputStore = vi.hoisted(() => ({
+  setShowRunOutput: vi.fn(),
+  setRunPanelOpen: vi.fn(),
+}));
 
 vi.mock('@xyflow/react', () => ({
   ReactFlowProvider: ({ children }: { children: unknown }) => children,
@@ -46,7 +60,7 @@ vi.mock('@/stores', () => ({
   useWorkrunStore: (select: (state: unknown) => unknown) =>
     select({ config: { workspace_mode: 'personal' } }),
   useWorkflowRunStore: {
-    getState: () => ({ setShowRunOutput: vi.fn(), setRunPanelOpen: vi.fn() }),
+    getState: () => outputStore,
   },
 }));
 vi.mock('@/services/workflow', async (importOriginal) => ({
@@ -224,6 +238,101 @@ it.each(['valid', 'missing', 'mismatch', 'error'] as const)(
       expect(JSON.parse(output.dataset.document!).id).toBe(id);
       expect(getWorkflow).toHaveBeenCalledWith(id);
       expect(listActiveRuns).not.toHaveBeenCalled();
+    } finally {
+      rendered.unmount();
+      client.clear();
+    }
+  },
+);
+
+// Both reads can finish first depending on cache state and native I/O latency.
+it.each(['workflow', 'run'] as const)(
+  'opens history once after the editor is ready when %s loads last',
+  async (delayed) => {
+    vi.clearAllMocks();
+    const workflow = { id: 'weather' } as Awaited<
+      ReturnType<typeof getWorkflow>
+    >;
+    const record = {
+      id: 'old',
+      targetType: 'workflow',
+      targetId: 'weather',
+    } as Awaited<ReturnType<typeof inspectRunRecord>>;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(getWorkflow).mockImplementation(async () => {
+      if (delayed === 'workflow') await gate;
+      return workflow;
+    });
+    vi.mocked(inspectRunRecord).mockImplementation(async () => {
+      if (delayed === 'run') await gate;
+      return record;
+    });
+    function Entry() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button
+            onClick={() =>
+              void navigate('/workflows/weather?runId=old&live=true')
+            }
+          >
+            Open history again
+          </button>
+          <Component />
+        </>
+      );
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const rendered = renderComponent(
+      <QueryClientProvider client={client}>
+        <MemoryRouter
+          initialEntries={['/workflows/weather?runId=old&live=true']}
+        >
+          <Routes>
+            <Route path='/workflows/:id' element={<Entry />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    try {
+      await waitFor(() =>
+        expect(
+          client.getQueryData(
+            delayed === 'workflow'
+              ? ['run-history', 'old']
+              : ['workflows', 'weather', 'draft'],
+          ),
+        ).toBeDefined(),
+      );
+      expect(rendered.container.querySelector('output')).toBeNull();
+      expect(outputStore.setRunPanelOpen).not.toHaveBeenCalled();
+      await act(async () => {
+        release();
+      });
+      await waitFor(() =>
+        expect(rendered.container.querySelector('output')?.textContent).toBe(
+          'old:true',
+        ),
+      );
+      expect(outputStore.setRunPanelOpen).toHaveBeenCalledExactlyOnceWith(true);
+      expect(outputStore.setShowRunOutput).toHaveBeenCalledExactlyOnceWith(
+        true,
+      );
+      await act(async () => {
+        await client.invalidateQueries({ queryKey: ['run-history'] });
+      });
+      expect(outputStore.setRunPanelOpen).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        rendered.getByRole('button', { name: 'Open history again' }).click();
+      });
+      await waitFor(() =>
+        expect(outputStore.setRunPanelOpen).toHaveBeenCalledTimes(2),
+      );
     } finally {
       rendered.unmount();
       client.clear();

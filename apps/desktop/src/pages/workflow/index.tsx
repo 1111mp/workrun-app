@@ -4,11 +4,15 @@ import {
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-  Spinner,
 } from '@workspace/ui/components';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useEffect } from 'react';
-import { useLocation, useParams, useSearchParams } from 'react-router';
+import { useEffect, useRef } from 'react';
+import {
+  useLocation,
+  useParams,
+  useSearchParams,
+  useViewTransitionState,
+} from 'react-router';
 
 import { WorkflowEditor } from '@/components';
 import { runCenterEntries } from '@/services/run-center';
@@ -16,9 +20,13 @@ import { inspectRunRecord, listActiveRuns } from '@/services/run-history';
 import { getPublishedWorkflow, getWorkflow } from '@/services/workflow';
 import { useWorkflowRunStore, useWorkrunStore } from '@/stores';
 
+import { WorkflowPageSkeleton } from './workflow-page-skeleton';
+
 function WorkflowPage() {
   const { id } = useParams();
   const location = useLocation();
+  const transitioning = useViewTransitionState(location.pathname);
+  const mountedWorkflowId = useRef<string | undefined>(undefined);
   const [searchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
   const historyChatSessionId = searchParams.get('chatSessionId');
@@ -67,6 +75,14 @@ function WorkflowPage() {
   });
 
   const displayedWorkflow = workflow.data;
+  const entryLoading =
+    workflow.isLoading || activeRun.isLoading || historicalRun.isLoading;
+  // A portal drawer must not begin sliding inside the route's frozen snapshot.
+  // Preserve an existing editor during outgoing and same-workflow transitions.
+  const deferEditor =
+    transitioning && mountedWorkflowId.current !== displayedWorkflow?.id;
+  const editorReady =
+    !entryLoading && !deferEditor && Boolean(displayedWorkflow);
 
   const outputRunId =
     historicalRun.data?.targetType === 'workflow' &&
@@ -74,21 +90,24 @@ function WorkflowPage() {
       ? historicalRun.data.id
       : undefined;
   useEffect(() => {
-    if (!outputRunId) return;
-    // Selecting the same task again must reopen its existing panel even when
-    // the route and cached record are unchanged. Preserve the editor itself.
+    if (!editorReady) return;
+    mountedWorkflowId.current = displayedWorkflow?.id;
+    if (!outputRunId || transitioning) return;
+    // Reopening a record is intentional navigation; cache refreshes should
+    // preserve the panel's state. Wait until the route snapshot is released.
     const output = useWorkflowRunStore.getState();
     output.setShowRunOutput(true);
     output.setRunPanelOpen(true);
-  }, [outputRunId, location.key]);
+  }, [
+    outputRunId,
+    location.key,
+    editorReady,
+    transitioning,
+    displayedWorkflow?.id,
+  ]);
 
-  if (workflow.isLoading || activeRun.isLoading) {
-    return (
-      <div className='text-muted-foreground flex size-full items-center justify-center gap-2 text-sm'>
-        <Spinner />
-        Loading workflow…
-      </div>
-    );
+  if (entryLoading || deferEditor) {
+    return <WorkflowPageSkeleton />;
   }
 
   if (!displayedWorkflow) {
