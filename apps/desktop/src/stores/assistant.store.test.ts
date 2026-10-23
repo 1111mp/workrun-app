@@ -640,8 +640,22 @@ it('submits workflow confirmation only for the active request and never auto-res
     toolName: 'execute_capability',
     input: { amount: 0 },
     confirmation,
-    workflow: { id: 'workflow', document: { settings: { name: 'Selected' } } },
-  } as NonNullable<AssistantSession['activeCall']>;
+    workflow: {
+      id: 'workflow',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z',
+      document: {
+        nodes: [],
+        edges: [],
+        settings: {
+          name: 'Selected',
+          description: '',
+          mode: 'task',
+          inputSchema: { fields: [] },
+        },
+      },
+    },
+  } satisfies NonNullable<AssistantSession['activeCall']>;
   const waiting: AssistantSession = {
     ...session,
     status: 'awaiting_run_confirmation',
@@ -693,8 +707,22 @@ it('sends a rejected workflow selection as explicit feedback for another assista
     toolName: 'execute_capability',
     input: {},
     confirmation,
-    workflow: { id: 'wrong', document: { settings: { name: 'Wrong' } } },
-  } as NonNullable<AssistantSession['activeCall']>;
+    workflow: {
+      id: 'wrong',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z',
+      document: {
+        nodes: [],
+        edges: [],
+        settings: {
+          name: 'Wrong',
+          description: '',
+          mode: 'task',
+          inputSchema: { fields: [] },
+        },
+      },
+    },
+  } satisfies NonNullable<AssistantSession['activeCall']>;
   store({
     ...session,
     status: 'awaiting_run_confirmation',
