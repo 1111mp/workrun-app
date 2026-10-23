@@ -436,6 +436,7 @@ it.each(['row', 'menu'] as const)(
             .getByRole('button', { name: `${name}的更多操作`, exact: true })
             .click();
           await screen
+            .getByRole('menu', { name: `${name}的更多操作`, exact: true })
             .getByRole('menuitem', { name: '打开', exact: true })
             .click();
         }
