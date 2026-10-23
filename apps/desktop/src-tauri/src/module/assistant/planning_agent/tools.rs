@@ -10,7 +10,7 @@ pub(in crate::module::assistant) fn declarations() -> HashMap<String, Value> {
         json!({"name":"list_authoring_resources","description":"Discover native modelProfileId values. Discover tools and Skills with workspace resource tools.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["models"]},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}),
         json!({"name":"list_capabilities","description":"Search workflows and Apps by summary (paginated, without input/output schemas). Use capability_id to retrieve the full exact contract before binding inputs or reusing a capability; summaries are not contracts.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}),
         json!({"name":"read_artifact","description":"Inspect an authorized task attachment as bounded UTF-8 text to determine its real input structure.","parameters":{"type":"object","properties":{"artifact_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":32000}},"required":["artifact_id"],"additionalProperties":false}}),
-        json!({"name":"read_skill","description":"Read a built-in planning Skill. Does not expose authoring/execution tools.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
+        json!({"name":"read_skill","description":"Read an optional built-in planning Skill. workflow-planning is already supplied in the initial instructions; do not reload it. Does not expose authoring/execution tools.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
         json!({"name":"report_progress","description":"Publish concise observed planning progress for the user, without hidden reasoning.","parameters":{"type":"object","properties":{"summary":{"type":"string","maxLength":600}},"required":["summary"],"additionalProperties":false}}),
     ] {
         tools.insert(declaration["name"].as_str().unwrap().into(), declaration);
@@ -20,7 +20,8 @@ pub(in crate::module::assistant) fn declarations() -> HashMap<String, Value> {
 pub(in crate::module::assistant) fn read(name: &str, args: &Value) -> anyhow::Result<Value> {
     match name {
         "read_skill" => {
-            Ok(json!({"content":super::skills::catalog().read(args["name"].as_str().unwrap_or_default())?}))
+            let name = args["name"].as_str().unwrap_or_default();
+            super::skills::catalog().read_for_model(name)
         },
         "get_workflow_reference" => {
             let reference = crate::module::assistant::workflow_agent::authoring::reference;
@@ -36,13 +37,23 @@ pub(in crate::module::assistant) fn read(name: &str, args: &Value) -> anyhow::Re
                 if let Some(nodes) = value["nodes"].as_array_mut() {
                     for node in nodes {
                         if let Some(guide) = node["guide"].as_str() {
-                            node["guide"] = json!(guide.split("\n## Configuration").next().unwrap_or(guide));
+                            let semantics = guide.split("\n## Configuration").next().unwrap_or(guide);
+                            // The runtime briefing is appended after configuration in the
+                            // author guide. Keep it, so planning needn't reload full schemas
+                            // merely to establish supported language/modules and file access.
+                            let runtime = guide
+                                .find("## Linked runtime language and OS briefing")
+                                .map(|offset| &guide[offset..]);
+                            node["guide"] = json!(match runtime {
+                                Some(runtime) => format!("{semantics}\n\n{runtime}"),
+                                None => semantics.to_owned(),
+                            });
                         }
                     }
                 }
                 value["detail"] = json!("planning_semantics");
                 value["next"] = json!(
-                    "Leave field schemas, examples and exact runtime setup to the author. Request detail=full only for a material feasibility uncertainty."
+                    "Feasibility semantics and any linked runtime briefing are included. Leave field schemas, examples and exact setup to the author; do not reload full configuration merely to inspect runtime support."
                 );
             }
             Ok(value)
@@ -64,6 +75,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mandatory_planning_skill_is_not_duplicated_in_tool_history() {
+        let value = read("read_skill", &json!({"name":"workflow-planning"})).unwrap();
+        assert_eq!(value["alreadyInInstructions"], true);
+        assert!(value.get("content").is_none());
+        assert!(read("read_skill", &json!({"name":"workrun-capabilities"})).unwrap()["content"].is_string());
+    }
+
+    #[test]
     fn planner_reads_semantics_by_default_and_can_explicitly_resolve_full_details() {
         let args = json!({"topic":"nodes","node_types":["codeact_agent","agent"]});
         let summary = read("get_workflow_reference", &args).unwrap();
@@ -75,7 +94,13 @@ mod tests {
         assert!(summary["nodes"][0]["guide"].as_str().unwrap().contains("Monty"));
         assert!(!summary.to_string().contains("export interface"));
         assert!(full.to_string().contains("export interface"));
-        assert!(summary.to_string().len() < full.to_string().len() / 2);
+        assert!(summary.to_string().len() < full.to_string().len());
+        assert!(
+            summary["nodes"][0]["guide"]
+                .as_str()
+                .unwrap()
+                .ends_with(&crate::module::workflow::codeact_agent::codeact_environment_guide())
+        );
         assert!(
             read(
                 "get_workflow_reference",

@@ -23,7 +23,18 @@ export type AssistantMessage = {
   artifacts?: ArtifactRef[];
   feedback?: 'helpful' | 'unhelpful';
 };
+export type AssistantWorkflowConfirmation = {
+  id: string;
+  turnId: string;
+  workflowId: string;
+  name: string;
+  description?: string | null;
+  input: Record<string, unknown>;
+  status: 'waiting' | 'approved' | 'cancelled' | 'superseded' | 'rejected';
+  changed: boolean;
+};
 export type ActiveWorkflowCall = WorkflowCall & {
+  confirmation?: AssistantWorkflowConfirmation;
   workflow: StoredWorkflow;
   runId?: string;
 };
@@ -106,6 +117,7 @@ export type WorkflowPlan = {
   };
 };
 export type AssistantSession = {
+  workflowConfirmations?: AssistantWorkflowConfirmation[];
   pendingTool?: AssistantToolConfirmation | null;
   toolConfirmations?: AssistantToolConfirmation[];
   workflowPlan?: WorkflowPlan | null;
@@ -122,6 +134,7 @@ export type AssistantSession = {
     | 'thinking'
     | 'running'
     | 'needs_input'
+    | 'awaiting_run_confirmation'
     | 'awaiting_feedback'
     | 'error';
   activeCall?: ActiveWorkflowCall;
@@ -154,6 +167,12 @@ export type AssistantTurnAction =
       checkpoint_id: string;
       decision: 'approve' | 'deny';
       text: string;
+    }
+  | {
+      kind: 'runDecision';
+      confirmation_id: string;
+      decision: 'approve' | 'cancel' | 'reselect';
+      text?: string;
     }
   | { kind: 'continue' }
   | { kind: 'inputs'; input: Record<string, unknown> }

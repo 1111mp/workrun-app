@@ -174,3 +174,36 @@ it('keeps historical questions readable without offering stale reply actions', (
     screen.queryByRole('button', { name: 'assistant.plan.answerQuestion' }),
   ).not.toBeInTheDocument();
 });
+
+it('folds a confirmed proposal and keeps the saved workflow accessible', async () => {
+  const user = userEvent.setup();
+  const renderPlan = (status: WorkflowPlan['status']) => (
+    <MemoryRouter>
+      <AssistantWorkflowPlan
+        plan={{
+          ...plan,
+          status,
+          workflowId: status === 'saved' ? 'workflow-id' : undefined,
+        }}
+        busy={status === 'building'}
+        onDecide={vi.fn()}
+        onDiscuss={vi.fn()}
+      />
+    </MemoryRouter>
+  );
+  const screenView = render(renderPlan('ready'));
+  expect(screen.getByText('Check the records')).toBeVisible();
+  screenView.rerender(renderPlan('building'));
+  expect(screen.queryByText('Check the records')).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'assistant.plan.approve' }),
+  ).not.toBeInTheDocument();
+  await user.click(
+    screen.getByRole('button', { name: 'assistant.plan.viewPlan' }),
+  );
+  expect(screen.getByText('Check the records')).toBeVisible();
+  screenView.rerender(renderPlan('saved'));
+  expect(
+    screen.getByRole('link', { name: 'assistant.plan.openWorkflow' }),
+  ).toBeVisible();
+});

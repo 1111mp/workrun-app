@@ -5,6 +5,14 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Required capability inputs missing or empty without explicit empty-value evidence: {fields:?}. Ask the user for these inputs."
+)]
+pub(super) struct InputIssue {
+    pub fields: Vec<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 enum Binding {
@@ -50,6 +58,7 @@ pub(super) fn resolve(schema: &Value, bindings: &Value, history: &[Content]) -> 
         .as_object()
         .context("Capability input properties missing")?;
     let mut values = Map::new();
+    let mut missing = Vec::new();
     for (key, binding) in bindings {
         let field = properties.get(&key).context("Unknown bound input")?;
         let value = match binding {
@@ -75,6 +84,20 @@ pub(super) fn resolve(schema: &Value, bindings: &Value, history: &[Content]) -> 
                     !quote.trim().is_empty() && text.contains(&quote),
                     "Input evidence quote not found"
                 );
+                // An arbitrary matching quote proves provenance, not that an
+                // absent input was supplied. Required empty placeholders require literal
+                // typed evidence; defaults and native result bindings remain valid.
+                let empty = value.is_null()
+                    || value.as_str().is_some_and(|v| v.trim().is_empty())
+                    || value.as_array().is_some_and(Vec::is_empty)
+                    || value.as_object().is_some_and(Map::is_empty);
+                let required = schema["required"]
+                    .as_array()
+                    .is_some_and(|keys| keys.iter().any(|required| required.as_str() == Some(key.as_str())));
+                if empty && required && serde_json::from_str::<Value>(&quote).ok().as_ref() != Some(&value) {
+                    missing.push(key.clone());
+                    continue;
+                }
                 value
             },
             Binding::Default => field.get("default").cloned().context("Input has no declared default")?,
@@ -115,6 +138,20 @@ pub(super) fn resolve(schema: &Value, bindings: &Value, history: &[Content]) -> 
             "Bound input `{key}` does not match its schema"
         );
         values.insert(key, value);
+    }
+    if let Some(required) = schema["required"].as_array() {
+        missing.extend(
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|key| !values.contains_key(*key))
+                .map(str::to_owned),
+        );
+    }
+    missing.sort();
+    missing.dedup();
+    if !missing.is_empty() {
+        return Err(InputIssue { fields: missing }.into());
     }
     let value = Value::Object(values);
     ensure!(
@@ -206,5 +243,91 @@ mod tests {
         failed["parts"][0]["functionResponse"]["response"]["status"] = json!("failed");
         assert!(resolve(&app_schema, &bindings, &[serde_json::from_value(failed).unwrap()]).is_err());
         assert!(resolve(&app_schema, &bindings, &[receipt.clone(), receipt]).is_err());
+    }
+    #[test]
+    fn missing_values_cannot_be_invented_from_a_generic_task_quote() {
+        let history = vec![Content::new("user").with_text("Process the supplied input")];
+        for (field, empty) in [
+            (json!({"type":"string"}), json!("")),
+            (json!({"type":"string"}), json!("  ")),
+            (json!({"type":"array","items":{"type":"string"}}), json!([])),
+            (json!({"type":"object"}), json!({})),
+            (json!({"type":["string","null"]}), Value::Null),
+        ] {
+            let schema = json!({"type":"object","properties":{"input":field},"required":["input"]});
+            let binding = json!({"input":{"source":"message","message":0,
+                "quote":"Process the supplied input","value":empty}});
+            let error = resolve(&schema, &binding, &history).unwrap_err().to_string();
+            assert!(error.contains("input"));
+            assert!(error.contains("Ask the user"));
+            // Literal empty JSON is an intentional value, not missing input.
+            let literal = empty.to_string();
+            let explicit = vec![Content::new("user").with_text(format!("Use this value: {literal}"))];
+            let binding = json!({"input":{"source":"message","message":0,"quote":literal,"value":empty}});
+            assert_eq!(resolve(&schema, &binding, &explicit).unwrap(), json!({"input":empty}));
+        }
+    }
+
+    #[test]
+    fn defaults_native_empty_results_zero_false_and_dates_remain_valid() {
+        for value in [json!([]), json!({}), json!(""), Value::Null] {
+            let schema = json!({"type":"object","properties":{"input":{"default":value}},"required":["input"]});
+            assert_eq!(
+                resolve(&schema, &json!({"input":{"source":"default"}}), &[]).unwrap(),
+                json!({"input":value})
+            );
+            let receipt:Content = serde_json::from_value(json!({"role":"function","parts":[{
+                "functionResponse":{"name":"execute_capability","response":{"runId":"r","status":"completed","output":{"input":value}}}
+            }]})).unwrap();
+            assert_eq!(
+                resolve(
+                    &schema,
+                    &json!({"input":{"source":"result","run_id":"r","pointer":"/input"}}),
+                    &[receipt]
+                )
+                .unwrap(),
+                json!({"input":value})
+            );
+        }
+        for (field, quote, value) in [
+            (json!({"type":"number"}), "0", json!(0)),
+            (json!({"type":"boolean"}), "false", json!(false)),
+            (json!({"type":"string","format":"date"}), "明天", json!("2026-10-24")),
+            (
+                json!({"type":"object","required":["start","end"]}),
+                "本周",
+                json!({"start":"2026-10-19","end":"2026-10-25"}),
+            ),
+        ] {
+            let schema = json!({"type":"object","properties":{"input":field},"required":["input"]});
+            let binding = json!({"input":{"source":"message","message":0,"quote":quote,"value":value}});
+            assert_eq!(
+                resolve(&schema, &binding, &[Content::new("user").with_text(quote)]).unwrap(),
+                json!({"input":value})
+            );
+        }
+    }
+
+    #[test]
+    fn optional_empty_values_do_not_become_new_required_inputs() {
+        let schema = json!({"type":"object","properties":{"amount":{"type":"number"},"note":{"type":"string"}},"required":["amount"]});
+        let binding = json!({"amount":{"source":"message","message":0,"quote":"0","value":0},
+            "note":{"source":"message","message":0,"quote":"清空备注","value":""}});
+        assert_eq!(
+            resolve(&schema, &binding, &[Content::new("user").with_text("金额0，清空备注")]).unwrap(),
+            json!({"amount":0,"note":""})
+        );
+    }
+
+    #[test]
+    fn one_input_issue_collects_all_missing_and_ungrounded_empty_required_fields() {
+        let schema = json!({"type":"object","properties":{"text":{"type":"string"},"files":{"type":"array"},"period":{"type":"string"}},"required":["text","files","period"]});
+        let bindings = json!({"text":{"source":"message","message":0,"quote":"Process input","value":""},
+            "files":{"source":"message","message":0,"quote":"Process input","value":[]}});
+        let error = resolve(&schema, &bindings, &[Content::new("user").with_text("Process input")]).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<InputIssue>().unwrap().fields,
+            vec!["files", "period", "text"]
+        );
     }
 }

@@ -112,10 +112,10 @@ it('gives the workflow editor the full viewport without an empty title strip', a
 
 it.each([
   { open: true, readOnly: false, padding: 0 },
-  { open: false, readOnly: false, padding: 80 },
-  { open: true, readOnly: true, padding: 80 },
+  { open: false, readOnly: false, padding: 0 },
+  { open: true, readOnly: true, padding: 0 },
 ])(
-  'integrates dragging and macOS controls into the toolbar (open=$open, readOnly=$readOnly)',
+  'keeps toolbar dragging independent of sidebar and read-only state (open=$open, readOnly=$readOnly)',
   async ({ open, readOnly, padding }) => {
     await page.viewport(1280, 900);
     const action = vi.fn();
@@ -136,6 +136,8 @@ it.each([
     expect(rect.top).toBe(0);
     expect(rect.height).toBe(56);
     expect(toolbar.hasAttribute('data-tauri-drag-region')).toBe(true);
+    // The surrounding workspace/editor owns window-control spacing. The
+    // toolbar must not duplicate it when the sidebar or access mode changes.
     expect(parseFloat(getComputedStyle(toolbar).paddingLeft)).toBe(padding);
     expect(
       screen

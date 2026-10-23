@@ -388,7 +388,7 @@
       ],
       "expected": {
         "intents": [
-          "execution"
+          "task"
         ],
         "routing": "required",
         "workflowId": "sales-report",
@@ -422,7 +422,7 @@
       ],
       "expected": {
         "intents": [
-          "execution"
+          "task"
         ],
         "routing": "required",
         "workflowId": "sales-report",
@@ -446,7 +446,7 @@
       ],
       "expected": {
         "intents": [
-          "execution"
+          "task"
         ],
         "routing": "required",
         "workflowId": "sales-report",
@@ -519,7 +519,7 @@
       ],
       "expected": {
         "intents": [
-          "execution"
+          "task"
         ],
         "routing": "required",
         "workflowId": "expense-review",
@@ -620,8 +620,7 @@
       ],
       "expected": {
         "intents": [
-          "execution",
-          "clarification"
+          "task"
         ],
         "routing": "clarify",
         "workflowId": "sales-report"
@@ -642,8 +641,7 @@
       ],
       "expected": {
         "intents": [
-          "execution",
-          "clarification"
+          "task"
         ],
         "routing": "clarify",
         "workflowId": "invoice-summary"
@@ -722,8 +720,7 @@
       ],
       "expected": {
         "intents": [
-          "execution",
-          "clarification"
+          "task"
         ],
         "routing": "none"
       }
@@ -743,8 +740,7 @@
       ],
       "expected": {
         "intents": [
-          "execution",
-          "clarification"
+          "task"
         ],
         "routing": "none"
       }
@@ -764,7 +760,7 @@
       ],
       "expected": {
         "intents": [
-          "execution"
+          "task"
         ],
         "routing": "required",
         "workflowId": "expense-review",
@@ -799,7 +795,7 @@
       ],
       "expected": {
         "intents": [
-          "execution"
+          "task"
         ],
         "routing": "required",
         "workflowId": "sales-report",

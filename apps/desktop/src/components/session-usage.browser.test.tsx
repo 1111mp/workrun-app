@@ -97,7 +97,7 @@ for (const [theme, width] of [
       </QueryClientProvider>,
     );
     await page.getByRole('button', { name: 'Token 用量' }).click();
-    await expect.element(page.getByText('已记录总量')).toBeVisible();
+    await expect.element(page.getByText(zh.usage.recordedTotal)).toBeVisible();
     await expect
       .element(page.getByText('75,000', { exact: true }))
       .toBeVisible();

@@ -15,7 +15,7 @@ pub(in crate::module::assistant) fn declarations() -> HashMap<String, Value> {
         tools.insert("save_workflow_draft".into(),json!({"name":"save_workflow_draft","description":"Submit and save one Workflow working definition. This tool validates node contracts and compilation BEFORE writing; no separate validate_workflow_draft call is needed. Native delegation fixes the creation ID or revision target; the model cannot select another target. Returns draft_id, capability_id and validation. No publication or execution. If validation fails, repair the returned issues and retry this tool. Limits: 256KB JSON,100 nodes,200 edges.","parameters":{"type":"object","properties":{"document_json":{"type":"string"}},"required":["document_json"],"additionalProperties":false}}));
     }
 
-    tools.insert("read_skill".into(), json!({"name":"read_skill","description":"Read an enabled workflow-specialist skill on demand.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}));
+    tools.insert("read_skill".into(), json!({"name":"read_skill","description":"Read an optional workflow-specialist skill on demand. workflow-authoring is already in the instructions; do not reload it.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}));
     tools.insert("report_progress".into(), json!({"name":"report_progress","description":"Report brief observed authoring progress, without private reasoning or claims of execution.","parameters":{"type":"object","properties":{"summary":{"type":"string","maxLength":600}},"required":["summary"],"additionalProperties":false}}));
     tools.insert("list_capabilities".into(), json!({"name":"list_capabilities","description":"Search workflows and Apps by summary (paginated, without input/output schemas). Use capability_id to retrieve the full exact contract before binding inputs or reusing a capability; summaries are not contracts.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}));
     tools.insert("read_artifact".into(), json!({"name":"read_artifact","description":"Inspect an authorized task attachment as bounded UTF-8 text before choosing node configuration.","parameters":{"type":"object","properties":{"artifact_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":32000}},"required":["artifact_id"],"additionalProperties":false}}));
@@ -23,7 +23,7 @@ pub(in crate::module::assistant) fn declarations() -> HashMap<String, Value> {
 }
 pub(in crate::module::assistant) fn read(skills: &SkillCatalog, name: &str, args: &Value) -> Result<Value> {
     match name {
-        "read_skill" => Ok(json!({"content":skills.read(args["name"].as_str().unwrap_or_default())?})),
+        "read_skill" => skills.read_for_model(args["name"].as_str().unwrap_or_default()),
         "get_workflow_reference" => authoring::reference(args),
         "report_progress" => {
             let summary = args["summary"].as_str().unwrap_or_default().trim();

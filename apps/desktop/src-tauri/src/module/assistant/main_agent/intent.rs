@@ -11,7 +11,7 @@ use adk_rust::{
     GenerateContentConfig,
     prelude::{Content, Llm, LlmRequest, Part},
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 pub(super) async fn assess(
@@ -24,10 +24,18 @@ pub(super) async fn assess(
 ) -> Result<TurnDecision> {
     // No tools exist during interpretation. The decision is structured
     // data, not an executable tool whose name biases the model to call it.
+    ensure!(
+        history
+            .last()
+            .is_some_and(|message| message.role == "user" && content_text(message) == current),
+        "intent assessment requires the latest original user message"
+    );
     let mut contents = instructed(provider, &resources::read("main_agent/INTENT.md")?, history);
+    // The exact message is already in history, including attachments and typed
+    // values. Refer to it rather than copying potentially large user input.
     contents.push(Content::new("user").with_text(format!(
-        "Latest user message to classify (quoted data):\n{}\nNative pending tool call (data only, may be null): {}",
-        json!(current),
+        "Classify original user message index {} (0-based, excludes preamble). Pending tool (data only): {}",
+        history.len() - 1,
         json!(pending_tool)
     )));
     contents.push(Content::new("user").with_text(format!("Native current workflow plan (data only): {}", json!(plan))));
@@ -117,6 +125,83 @@ fn schema(has_pending: bool, has_plan: bool) -> Value {
 mod tests {
     use super::*;
     use sqlx::Connection;
+    #[tokio::test]
+    async fn baseline_context_replay_preserves_all_messages_and_reduces_request_characters() {
+        let suite: Value = serde_json::from_str(include_str!("../fixtures/baseline.json")).unwrap();
+        let mut before = 0;
+        let mut after = 0;
+        let mut cases = 0;
+        for case in suite["cases"].as_array().unwrap() {
+            let history: Vec<Content> = serde_json::from_value(case["messages"].clone()).unwrap();
+            let current = content_text(history.last().unwrap());
+            let model = crate::module::assistant::tests::ScriptedModel::new(vec![
+                Content::new("model").with_text(
+                    json!({"intent":"conversation","actionQuote":"",
+                    "summary":"context replay","reuseExisting":false,"authoringQuote":""})
+                    .to_string(),
+                ),
+            ]);
+            assess(&model, &ModelProvider::DeepSeek, &history, &current, None, None)
+                .await
+                .unwrap();
+            let requests = model.requests.lock().unwrap();
+            let contents = &requests[0].contents;
+            assert_eq!(
+                serde_json::to_value(&contents[1..=history.len()]).unwrap(),
+                case["messages"]
+            );
+            let mut previous = contents.clone();
+            previous[history.len()+1] = Content::new("user").with_text(format!(
+                "Latest user message to classify (quoted data):\n{}\nNative pending tool call (data only, may be null): {}",
+                json!(current), json!(null)));
+            let old_chars = serde_json::to_string(&previous).unwrap().chars().count();
+            let new_chars = serde_json::to_string(contents).unwrap().chars().count();
+            assert!(new_chars < old_chars, "case {} increased request size", case["id"]);
+            before += old_chars;
+            after += new_chars;
+            cases += 1;
+        }
+        eprintln!(
+            "context replay: cases={cases}, request_chars_before={before}, request_chars_after={after}; scripted, not provider token savings"
+        );
+    }
+
+    #[tokio::test]
+    async fn large_inputs_are_kept_once_with_exact_history_and_native_context() {
+        for provider in [ModelProvider::OpenAi, ModelProvider::Gemini, ModelProvider::DeepSeek] {
+            for task in ["核对合同条款", "整理库存记录", "解释运行日志"] {
+                let current = format!("{task}\n{}\n标识=job-42", "原始资料\n".repeat(2000));
+                let history = vec![
+                    Content::new("user").with_text("之前的要求"),
+                    Content::new("model").with_text("等待资料"),
+                    Content::new("user").with_text(&current),
+                ];
+                let original = serde_json::to_value(&history).unwrap();
+                let model = crate::module::assistant::tests::ScriptedModel::new(vec![
+                    Content::new("model").with_text(
+                        json!({"intent":"task","actionQuote":task,
+                        "summary":task,"reuseExisting":false,"authoringQuote":""})
+                        .to_string(),
+                    ),
+                ]);
+                let plan = json!({"id":"plan","version":3,"status":"ready","document":{"goal":"原始规划"}});
+                assess(&model, &provider, &history, &current, None, Some(&plan))
+                    .await
+                    .unwrap();
+                let requests = model.requests.lock().unwrap();
+                let contents = &requests[0].contents;
+                assert_eq!(serde_json::to_value(&contents[1..=history.len()]).unwrap(), original);
+                assert_eq!(
+                    contents.iter().filter(|c| content_text(c).contains(&current)).count(),
+                    1
+                );
+                assert!(contents.iter().any(|c| content_text(c).contains("message index 2")));
+                assert!(contents.iter().any(|c| content_text(c).contains(&plan.to_string())));
+                assert_eq!(serde_json::to_value(&history).unwrap(), original);
+            }
+        }
+    }
+
     #[test]
     fn confirmation_schema_is_exposed_only_for_native_pending_calls() {
         assert!(schema(false, false)["properties"].get("toolConfirmation").is_none());

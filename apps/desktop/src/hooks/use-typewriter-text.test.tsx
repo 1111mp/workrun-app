@@ -69,6 +69,20 @@ it('does not replay saved history', () => {
   expect(frames.size).toBe(0);
 });
 
+it('applies corrected snapshots immediately without replaying the answer', () => {
+  const answer = '销售数据分析：总销售额为 3,300。'.repeat(4);
+  const { result, rerender } = renderHook(
+    ({ value, live }) => useTypewriterText(value, live),
+    { initialProps: { value: `读取文件。${answer}`, live: true } },
+  );
+  advance(150);
+  rerender({ value: answer, live: false });
+  expect(result.current).toBe(answer);
+  advance(1);
+  expect(result.current).toBe(answer);
+  expect(frames.size).toBe(0);
+});
+
 it('never reveals half of an emoji or a combining character', () => {
   const emoji = '👨‍👩‍👧‍👦';
   const accented = 'e\u0301';

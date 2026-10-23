@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 pub(super) fn build(model: &str, requests: mpsc::Sender<sdk::Request>, steps: usize) -> Result<Arc<dyn Agent>> {
     let catalog = skills::catalog();
     let mut builder=LlmAgentBuilder::new("workflow_planner")
-        .description("Develop and revise a user-reviewable workflow plan, discover capabilities and identify questions; cannot create or execute workflows")
+        .description("Find a suitable existing workflow first, or propose a new/revised definition when needed; cannot create or execute workflows")
         .instruction(format!("{}\n\n{}",super::resources::read("planning_agent/AGENT.md")?,catalog.read("workflow-planning")?))
         .model(Arc::new(sdk::Model{agent:"workflow_planner".into(),name:model.into(),requests:requests.clone()}))
         .include_contents(IncludeContents::None).max_iterations(steps as u32)

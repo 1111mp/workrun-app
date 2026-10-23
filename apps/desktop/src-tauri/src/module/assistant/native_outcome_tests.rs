@@ -53,7 +53,6 @@ async fn save_fixture(case: &Case) -> Result<(authoring_tests::DraftStore, Value
         &tool_execution::digest(&history)?,
     )?;
     let model = tests::ScriptedModel::new(vec![
-        tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
         tests::call("read_skill", json!({"name":"workrun-capabilities"})),
         tests::call(
             "validate_workflow_draft",

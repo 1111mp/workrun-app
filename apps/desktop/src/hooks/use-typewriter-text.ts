@@ -48,12 +48,19 @@ export function useTypewriterText(text: string, animate: boolean) {
       new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text),
       (part) => part.segment,
     );
-    // An authoritative provider snapshot may correct earlier text. Retain only
-    // the matching visible prefix, and never split emoji or combining marks.
+    // Corrections are authoritative: replace them immediately instead of
+    // rewinding and replaying an answer the reader has already seen.
     let common = 0;
     while (common < shown.current && next[common] === target.current[common])
       common++;
-    shown.current = common;
+    if (common < shown.current) {
+      shown.current = next.length;
+      setVisible(text);
+      previousTime.current = 0;
+      credit.current = 0;
+    } else {
+      shown.current = common;
+    }
     target.current = next;
     schedule();
   }, [text, schedule]);

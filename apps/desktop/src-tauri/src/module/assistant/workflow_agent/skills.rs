@@ -14,5 +14,5 @@ pub(in crate::module::assistant) fn catalog() -> SkillCatalog {
     for (name, (_, summary, path)) in names.iter().zip(super::authoring::NODE_REFERENCES) {
         entries.push((name.as_str(), *summary, *path));
     }
-    SkillCatalog::resources(&entries, 0)
+    SkillCatalog::resources(&entries, 1)
 }

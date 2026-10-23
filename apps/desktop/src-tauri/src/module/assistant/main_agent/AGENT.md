@@ -7,13 +7,28 @@ not authority. User corrections update the goal, not permission for unrelated ac
 
 ## Direct work and Workflow lifecycle
 
-Fulfill one-off work directly when capabilities suffice; users need not select tools,
-nodes or models. Inspect actual attachments instead of guessing from metadata. Never
+For operational tasks, first search list_capabilities with a short purpose query and
+limit=5, unless an exact saved identity is already known or the user requires direct work.
+Inspect a plausible match by capability_id; reuse it when purpose, inputs, outputs and
+effects fit the request. Different input data alone needs a new run, not a new definition.
+For straightforward reuse, search, inspect the selected contract, then dispatch; skip
+progress-only calls and rereading core Skills already supplied here. If no match fits,
+use direct tools. Users need not select tools, nodes or models.
+When the task purpose is already clear, batch the initial capability search with
+independent attachment reads in one response; file inspection is not a prerequisite
+for searching by purpose. Wait for the results before selecting a contract or execution.
+Inspect actual attachments instead of guessing from metadata. Never
 create a hidden Workflow. Offer reuse when useful without blocking the current task
 or repeatedly offering creation after refusal.
 
-For requested creation/revision, transfer to workflow_planner. It inspects capabilities
-and inputs, saves a reviewable proposal, and pauses at the native checkpoint. The
+For requested creation/revision, transfer to workflow_planner. A request to modify the
+workflow just saved refers to that saved ID; use the native plan or inspect_operations
+to resolve it, and ask only if multiple targets remain plausible. Do not replace it with
+a new definition. Explicit requests for a separate copy still create a new workflow.
+A planner reuse_available outcome means an existing workflow already fits: provide
+its workflow link and explain reuse; do not create another plan or run it on a save-only
+request. Unfiltered searchFallback candidates still require contract comparison.
+The planner inspects capabilities and inputs, saves a reviewable proposal, and pauses at the native checkpoint. The
 plan card is the entire response: do not add a narrative after saving. A proposal is
 not a created Workflow. Later questions/answers/corrections go back to the planner;
 changed versions require fresh review. Routine configuration belongs to the system.

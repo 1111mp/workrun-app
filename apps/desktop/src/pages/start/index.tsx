@@ -52,6 +52,7 @@ import { AssistantMessageText } from './assistant-message-text';
 import { AssistantToolConfirmationCard } from './assistant-tool-confirmation';
 import { groupAssistantMessages } from './assistant-turn';
 import { AssistantTurnThinking } from './assistant-turn-activity';
+import { AssistantWorkflowConfirmationCard } from './assistant-workflow-confirmation';
 import { AssistantWorkflowPlan } from './assistant-workflow-plan';
 import { AssistantWorkflowRun } from './assistant-workflow-run';
 
@@ -94,6 +95,9 @@ function AssistantChat({ scope }: { scope: string }) {
   );
   const decideAssistantTool = useAssistantStore(
     (state) => state.decideAssistantTool,
+  );
+  const decideAssistantWorkflow = useAssistantStore(
+    (state) => state.decideAssistantWorkflow,
   );
   const declineAssistantWorkflow = useAssistantStore(
     (state) => state.declineAssistantWorkflow,
@@ -182,6 +186,7 @@ function AssistantChat({ scope }: { scope: string }) {
   }
 
   const groups = groupAssistantMessages(messages, [
+    ...(session?.workflowConfirmations ?? []).map((entry) => entry.turnId),
     ...(session?.workflowPlans ?? []).map((entry) => entry.turnId),
     ...(session?.toolConfirmations ?? []).map((entry) => entry.turnId),
   ]);
@@ -520,6 +525,38 @@ function AssistantChat({ scope }: { scope: string }) {
                                     />
                                   );
                                 })}
+                            {group.role === 'assistant' &&
+                              session.workflowConfirmations
+                                ?.filter(
+                                  (entry) => entry.turnId === group.turnId,
+                                )
+                                .map((confirmation) => (
+                                  <AssistantWorkflowConfirmationCard
+                                    key={confirmation.id}
+                                    confirmation={confirmation}
+                                    active={
+                                      session.status ===
+                                        'awaiting_run_confirmation' &&
+                                      session.activeCall?.confirmation?.id ===
+                                        confirmation.id
+                                    }
+                                    busy={Boolean(busy)}
+                                    onDecide={(decision) =>
+                                      decideAssistantWorkflow(
+                                        session.id,
+                                        confirmation.id,
+                                        decision,
+                                        scope,
+                                        decision === 'reselect'
+                                          ? t(
+                                              'assistant.runConfirmation.reselectMessage',
+                                              { workflow: confirmation.name },
+                                            )
+                                          : undefined,
+                                      )
+                                    }
+                                  />
+                                ))}
                             {group.messages.map((message) => (
                               <div
                                 key={message.id}
@@ -660,50 +697,52 @@ function AssistantChat({ scope }: { scope: string }) {
                       </MessageScrollerItem>
                     ))}
 
-                    {active && !active.runId && (
-                      <MessageScrollerItem
-                        messageId={`call-${active.toolName}`}
-                      >
-                        <Message>
-                          <MessageContent>
-                            <div className='flex flex-wrap items-center gap-2'>
-                              <Badge variant='outline'>
-                                {active.workflow.document.settings.name}
-                              </Badge>
-                              <span className='text-muted-foreground text-xs'>
-                                {t(
-                                  session.status === 'needs_input'
-                                    ? 'assistant.inputsNeeded'
-                                    : 'assistant.preparing',
-                                )}
-                              </span>
-                            </div>
-                            {session.status === 'needs_input' && (
-                              <WorkflowRunForm
-                                key={session.messages.length}
-                                settings={active.workflow.document.settings}
-                                initialInput={active.input}
-                                isRunning={busy}
-                                onClose={() =>
-                                  void declineAssistantWorkflow(
-                                    session.id,
-                                    scope,
-                                  )
-                                }
-                                onRun={(input) =>
-                                  void provideAssistantInputs(
-                                    session.id,
-                                    input,
-                                    scope,
-                                  )
-                                }
-                                layout='dialog'
-                              />
-                            )}
-                          </MessageContent>
-                        </Message>
-                      </MessageScrollerItem>
-                    )}
+                    {active &&
+                      !active.runId &&
+                      session.status !== 'awaiting_run_confirmation' && (
+                        <MessageScrollerItem
+                          messageId={`call-${active.toolName}`}
+                        >
+                          <Message>
+                            <MessageContent>
+                              <div className='flex flex-wrap items-center gap-2'>
+                                <Badge variant='outline'>
+                                  {active.workflow.document.settings.name}
+                                </Badge>
+                                <span className='text-muted-foreground text-xs'>
+                                  {t(
+                                    session.status === 'needs_input'
+                                      ? 'assistant.inputsNeeded'
+                                      : 'assistant.preparing',
+                                  )}
+                                </span>
+                              </div>
+                              {session.status === 'needs_input' && (
+                                <WorkflowRunForm
+                                  key={session.messages.length}
+                                  settings={active.workflow.document.settings}
+                                  initialInput={active.input}
+                                  isRunning={busy}
+                                  onClose={() =>
+                                    void declineAssistantWorkflow(
+                                      session.id,
+                                      scope,
+                                    )
+                                  }
+                                  onRun={(input) =>
+                                    void provideAssistantInputs(
+                                      session.id,
+                                      input,
+                                      scope,
+                                    )
+                                  }
+                                  layout='dialog'
+                                />
+                              )}
+                            </MessageContent>
+                          </Message>
+                        </MessageScrollerItem>
+                      )}
                     {session.error && (
                       <MessageScrollerItem messageId='error'>
                         <Alert variant='destructive'>

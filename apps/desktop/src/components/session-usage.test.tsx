@@ -30,6 +30,41 @@ it('loads on demand, separates execution, and keeps missing usage distinct from 
     recordingDegraded: true,
     conversation: totals,
     byPurpose: [],
+    byTurn: [
+      {
+        turnId: 'latest',
+        startedAt: '2026-10-22T00:01:00Z',
+        endedAt: null,
+        calls: 1,
+        conversationTokens: 7,
+        executionTokens: 0,
+        modelDurationMs: 1,
+        missingUsageCalls: 0,
+        unfinishedCalls: 0,
+      },
+      {
+        turnId: 'old',
+        startedAt: '2026-10-22T00:00:00Z',
+        endedAt: null,
+        calls: 1,
+        conversationTokens: 8,
+        executionTokens: 0,
+        modelDurationMs: 1,
+        missingUsageCalls: 0,
+        unfinishedCalls: 0,
+      },
+      {
+        turnId: null,
+        startedAt: '2026-10-22T00:02:00Z',
+        endedAt: null,
+        calls: 0,
+        conversationTokens: 0,
+        executionTokens: 0,
+        modelDurationMs: 0,
+        missingUsageCalls: 0,
+        unfinishedCalls: 0,
+      },
+    ],
     execution: {
       ...totals,
       calls: 1,
@@ -71,6 +106,7 @@ it('loads on demand, separates execution, and keeps missing usage distinct from 
     expect(getSessionUsage).toHaveBeenCalledWith('assistant', 'session'),
   );
   expect(await screen.findByText('usage.recordedTotal')).toBeTruthy();
+  expect(screen.getByText(/usage.latestTurn/).textContent).toContain('7');
   expect(screen.queryByText('usage.purposes.intent')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'usage.calls' }));
   expect(await screen.findByText('usage.purposes.intent')).toBeTruthy();

@@ -17,7 +17,9 @@ it('shows the latest public summary and expands the bounded activity history', a
       busy
     />,
   );
-  const toggle = page.getByRole('button', { expanded: true });
+  const toggle = page.getByRole('button');
+  await expect.element(page.getByRole('region')).not.toBeInTheDocument();
+  await toggle.click();
   await expect
     .element(
       page
@@ -58,9 +60,41 @@ it('updates the live summary even when a previous summary repeats', async () => 
       busy
     />,
   );
+  await page.getByRole('button', { expanded: false }).click();
   await expect
     .element(
       page.getByRole('region').getByText('Searching', { exact: true }).last(),
     )
     .toBeVisible();
+});
+
+it('bounds long streaming thoughts and folds them when the response completes', async () => {
+  const thought = {
+    id: 'thought',
+    turnId: 'turn',
+    phaseId: 'phase',
+    text: 'Checking the workflow inputs.\n'.repeat(100),
+    durationMs: 1200,
+    complete: false,
+  };
+  const screen = await render(
+    <AssistantTurnActivity summaries={[]} reasoning={[thought]} busy />,
+  );
+  await expect
+    .element(page.getByRole('button'))
+    .toHaveAttribute('aria-expanded', 'false');
+  await page.getByRole('button').click();
+  const region = page.getByRole('region').element();
+  expect(region.getBoundingClientRect().height).toBeLessThanOrEqual(256);
+  expect(region.scrollHeight).toBeGreaterThan(region.clientHeight);
+  await screen.rerender(
+    <AssistantTurnActivity
+      summaries={[]}
+      reasoning={[{ ...thought, complete: true }]}
+      busy={false}
+    />,
+  );
+  await expect
+    .element(page.getByRole('button'))
+    .toHaveAttribute('aria-expanded', 'false');
 });

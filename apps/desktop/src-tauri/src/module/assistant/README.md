@@ -1,6 +1,7 @@
 # Conversational assistant, workflow planner and workflow author
 
-Users describe outcomes in ordinary language. One-off work uses direct capabilities.
+Users describe outcomes in ordinary language. Operational tasks search bounded capability
+summaries and reuse a matching saved workflow, or use direct capabilities when none fits.
 Reusable automation goes through a visible, revisable plan before configuration.
 Business-specific rules belong in user task contracts and test fixtures, never in
 shared instructions or Skills.
@@ -28,7 +29,9 @@ Each user turn starts at the coordinator with durable native conversation histor
 Specialists use IncludeContents::None. The planner receives explicit task data, public
 conversation text (without provider thinking), authorized artifact references and the
 current plan. The author receives the frozen approved plan and its derived task
-contract. The preferred conversation model profile is supplied to both. Completion
+contract. For revisions, native code reads the confirmed target once and supplies its
+current definition to the author, preserving identity without another model round trip.
+The preferred conversation model profile is supplied to both. Completion
 returns control to the parent, which discusses questions or presents actual results.
 
 On completion the host resumes the coordinator from its pre-handoff contents plus
@@ -106,7 +109,7 @@ plan version; the native revision target cannot be replaced by model arguments.
 Validated graphs are saved into the ordinary workspace catalog and use the normal
 editor, node palette, save and run interactions. Saving is not publication or execution.
 A creation-plus-execution grant can dispatch only its newly saved workflow, and only
-after saving succeeded. Reruns resolve the latest saved definition, including editor
+after saving succeeded and the user confirmed execution. Reruns resolve the latest saved definition, including editor
 changes; they do not clone or regenerate it.
 
 The native conversation owner holds credentials, workspace scope, dispatch identity,
@@ -119,6 +122,9 @@ specialists; their internal thinking is not included in the user answer.
 `main_agent/intent.rs` distinguishes conversation, one-off task, planning, authoring,
 execution, status, explanation and clarification. Confirmation schema fields are
 contextual. Empty optional confirmation placeholders do not create authorization.
+Task requests can authorize a matching existing workflow within their scope, never
+creation or edits. Saved-workflow amendments use authoring/planning with the exact
+`document.target_id`; new input data alone uses a new run of the existing ID.
 Missing resources and missing definitions are distinct from permission restrictions.
 The parent must not present internal grant booleans as a user-facing permission error.
 
@@ -194,6 +200,9 @@ Revising a proposal cancels the old thread and opens a new waiting thread.
 The graph resumes after approval and stops at the native `create` effect boundary.
 The existing SDK subagent tree performs the approved authoring operation; native
 operation journals remain responsible for side-effect identity and reconciliation.
+Once the current version is approved for this turn, native routing transfers to
+the author through the same SDK checks and journal without a coordinator model
+call merely to choose that specialist. Planning and execution routing remain separate.
 The host must check the creation checkpoint before handoff. A save/failure receipt
 is fed back into the graph to finish the task. This checkpoints task stages, not
 an arbitrary point inside an LLM token stream or a partially executed SDK session.
@@ -246,10 +255,6 @@ also read `get_workflow_reference(topic=capabilities)`. Node guides and schemas 
 progressive, and installed IDs/contracts come from native discovery. The overview
 describes the existing editor/runtime configuration surface without prescribing a
 graph or introducing a new authoring protocol.
-
-See [CAPABILITY_AUDIT.md](CAPABILITY_AUDIT.md) for the maintainer capability inventory,
-confirmed documentation corrections and remaining code-alignment questions.
-
 
 ### Context and discovery boundaries
 
@@ -306,3 +311,98 @@ into the instruction. Previews explicitly indicate truncation and are navigation
 only: exact quotes and typed values must come from original history. Native binding
 resolution and approval digests still use unchanged complete messages. This is not
 historical summarization or a sliding-window policy; no user constraints are dropped.
+
+### Local evaluation and cost scope
+
+The opt-in `evaluation::live_assistant_evaluation_baseline` uses
+`run_with_discovery` with an isolated fixture catalog, including summary search,
+native fallback and exact contract lookup. It returns execution proposals and
+feeds synthetic success/failure receipts back through the runtime; it does not
+execute business workflows. Ordinary one-off requests expect `task`; explicitly
+requested workflow runs and retries remain `execution`.
+
+Version 2 reports identify `runtimePath: native_discovery`. Each case retains every
+attempted model call, final cumulative usage snapshot, failure status and missing
+usage count. `cost.phases` separates intent, coordinator conversation, planning,
+authoring (creation/revision) and receipt-continuation delivery. Specialist return
+narration remains coordinator conversation. `knownTokens` includes only reported
+usage; `usageComplete: false` means it is not the complete cost. Execution model
+usage is excluded explicitly (`executionIncluded: false`), never inferred as zero.
+Do not compare version 1 legacy-route totals directly with version 2 totals.
+
+Local scripted checks verify discovery/contract binding and terminal delivery
+without redispatch. Existing temporary-workspace lifecycle checks also assert
+phase accounting for reuse planning, creation/repair and same-ID revision. These
+checks validate mechanics, not semantic model quality or actual token savings.
+External model runs remain opt-in and require the applicable external-call scope.
+
+`evaluation::local_cross_task_prompt_comparison` is an opt-in offline check over
+all baseline cases. Set `WORKRUN_ASSISTANT_BASELINE_DIR` to a prompt snapshot and
+optionally `WORKRUN_ASSISTANT_BUDGET_OUTPUT` to a temporary report path. It replaces
+only the intent, main-agent and capability-orchestration instruction texts while
+asserting unchanged history, tools and model configuration. Reports retain resource
+fingerprints and label the scope as prompt text only. They measure serialized
+character counts, excluding other changed resources and historical routing behavior;
+they neither count provider tokens nor establish end-to-end savings.
+
+Missing-input evaluation requires a user-facing clarification without an execution
+proposal; empty arrays and missing placeholders do not count as correct routing.
+The opt-in `lifecycle_tests::live_native_save_cost_comparison` covers confirmed
+creation/revision in temporary directories. `WORKRUN_ASSISTANT_SAVE_CASE` can select
+`confirmed-create` or `confirmed-edit`; `WORKRUN_ASSISTANT_SAVE_REPORT` is required.
+It never executes the saved graphs. Reports retain full saved settings for
+inspection when strict settings equality fails (descriptions can contain changed
+business rules). A settings mismatch needs review, not automatic attribution to
+workflow identity or behavioral loss.
+
+Required inputs bound from user messages cannot use empty placeholders based on a
+generic task quote. Empty strings/whitespace, collections, objects and null require
+an exact typed JSON literal in that evidence quote. This provenance check does not
+change schemas or impose nonempty constraints on optional fields. Declared defaults
+and validated native result bindings retain their original semantics; numeric zero
+and boolean false are values. A rejected proposal returns the input key and a
+clarification hint without dispatching a workflow. This deterministic boundary does
+not prove semantic equivalence of arbitrary nonempty values or guarantee fewer
+model discovery rounds; those still need live multi-task measurement.
+
+Native missing-input errors aggregate absent/ungrounded required fields in one
+`InputIssue`. Once diagnosed, the coordinator stops advertising capability discovery
+for that invocation; direct reads and corrected execution bindings remain available.
+A scoped `input_clarification` operation records only the selected identity, field
+names, goal and original user-message count. A successful correction in the same
+invocation marks that record resolved. This is historical audit evidence, not an
+independent pending task or execution grant.
+
+On the immediately following actionable user turn, the coordinator may reuse that
+record as a candidate hint. It fetches the exact current contract again; deleted
+capabilities produce no hint. Discovery remains available on the new turn, so goal
+changes can select another target. Status turns, old message counts and other
+sessions do not inherit the hint. The mechanism adds no model call, query cache or
+automatic execution. Scripted multi-type tests validate these boundaries, not real
+model behavior or net token savings.
+
+### Native pre-execution confirmation
+
+Every assistant-selected workflow pauses after input validation and before native
+preparation/dispatch. `awaiting_run_confirmation` persists the chosen definition,
+inputs and an opaque confirmation ID, with historical card metadata stored outside
+model conversation contents. Only `runDecision` for that active ID can approve or
+cancel. Continue/reload and model output cannot approve it. Cancellation pairs the
+original tool call with a cancelled receipt and returns idle without a model call.
+
+Approval binds the resolved workflow snapshot and input digest. Before dispatch,
+launch resolves and validates again; a changed snapshot requires a new confirmation
+and marks the old card superseded. Missing inputs use the existing input form first,
+then the same confirmation gate. Interrupted pre-dispatch approvals return to a new
+review on explicit Continue. Existing persisted run IDs remain observation-only.
+The renderer uses the Human Review card layout and retains confirmed/cancelled
+history while disabling stale or in-flight controls.
+
+The secondary execution-card action is selection feedback (`runDecision/reselect`),
+not a silent cancellation. It closes the original signed proposal with a cancelled
+receipt naming the rejected identity, marks its card rejected, and appends the
+localized button feedback as a new user turn. The normal assistant loop then
+reconsiders the earlier request or asks for clarification. The per-turn dispatch
+budget resets for this explicit feedback; no approval is carried to another target.
+Replacement proposals still stop at the native execution confirmation gate. Legacy
+plain cancellation remains supported and returns idle without model continuation.

@@ -2,7 +2,45 @@
 use adk_rust::{Content, Part};
 use serde_json::{Value, json};
 
+/// Reuse complete small-file reads from the session journal for result checking.
+/// This does not create binding evidence or authorize access to another artifact.
+pub(super) fn artifact_evidence(operations: &Value, artifacts: &[crate::module::artifact::ArtifactRef]) -> Vec<Value> {
+    let mut evidence = Vec::new();
+    for record in operations["items"].as_array().into_iter().flatten() {
+        let result = &record["result"];
+        let Some(text) = result["text"].as_str() else { continue };
+        let chars = text.chars().count();
+        if record["kind"] != "direct_tool"
+            || record["name"] != "read_artifact"
+            || record["status"] != "completed"
+            || result["offset"] != 0
+            || result["truncated"] != false
+            || result["total_characters"].as_u64() != Some(chars as u64)
+            || chars > 2000
+        {
+            continue;
+        }
+        let Some(artifact) = artifacts.iter().find(|artifact| {
+            result["artifact"]["id"] == artifact.id && result["artifact"]["version"] == artifact.version
+        }) else {
+            continue;
+        };
+        if evidence
+            .iter()
+            .any(|item: &Value| item["artifact"]["id"] == artifact.id)
+        {
+            continue;
+        }
+        evidence.push(json!({"artifact":artifact,"text":text,"complete":true}));
+        if evidence.len() == 2 {
+            break;
+        }
+    }
+    evidence
+}
+
 pub(super) fn project(contents: &mut [Content]) {
+    deduplicate_reads(contents);
     for part in contents.iter_mut().flat_map(|content| &mut content.parts) {
         if let Part::FunctionResponse { function_response, .. } = part
             && matches!(
@@ -11,6 +49,59 @@ pub(super) fn project(contents: &mut [Content]) {
             )
         {
             summarize(&mut function_response.response);
+        }
+    }
+}
+
+fn deduplicate_reads(contents: &mut [Content]) {
+    let mut seen: Vec<(&str, &Value, &str)> = Vec::new();
+    let mut duplicates = Vec::new();
+    // Keep the latest complete response in this request, not an external cache.
+    // Exact equality includes IDs, versions, pagination and validation metadata.
+    for (message, content) in contents.iter().enumerate().rev() {
+        for (part_index, part) in content.parts.iter().enumerate().rev() {
+            let Part::FunctionResponse {
+                function_response,
+                id: Some(id),
+                ..
+            } = part
+            else {
+                continue;
+            };
+            let name = function_response.name.as_str();
+            let response = &function_response.response;
+            if id.is_empty()
+                || !matches!(
+                    name,
+                    "read_skill"
+                        | "get_workflow_reference"
+                        | "get_workflow_draft"
+                        | "get_workflow_plan"
+                        | "list_capabilities"
+                        | "list_authoring_resources"
+                        | "read_artifact"
+                )
+                || response.get("error").is_some()
+                || response.to_string().len() < 1024
+            {
+                continue;
+            }
+            if let Some((_, _, target)) = seen
+                .iter()
+                .find(|(other_name, other_response, _)| *other_name == name && *other_response == response)
+            {
+                if *target != id.as_str() {
+                    duplicates.push((message, part_index, (*target).to_owned()));
+                }
+            } else {
+                seen.push((name, response, id.as_str()));
+            }
+        }
+    }
+    for (message, part, target) in duplicates {
+        if let Part::FunctionResponse { function_response, .. } = &mut contents[message].parts[part] {
+            function_response.response = json!({"duplicateOfToolCallId":target,
+                "detailHint":"The identical full response is present later in this request under that tool call ID. Use it without rereading."});
         }
     }
 }
@@ -73,6 +164,109 @@ fn summarize(response: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn read_receipt(name: &str, id: &str, response: Value) -> Content {
+        serde_json::from_value(json!({"role":"function","parts":[{
+            "functionResponse":{"name":name,"response":response},"id":id
+        }]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn repeated_large_reads_keep_latest_full_evidence_and_original_call_identity() {
+        for name in [
+            "get_workflow_reference",
+            "get_workflow_plan",
+            "get_workflow_draft",
+            "read_artifact",
+        ] {
+            let result = json!({"id":"resource","version":3,"offset":0,"truncated":false,
+                "content":"完整契约、原始内容与约束。".repeat(500)});
+            let source = vec![
+                read_receipt(name, "first", result.clone()),
+                read_receipt(name, "second", result.clone()),
+                read_receipt(name, "latest", result.clone()),
+            ];
+            let original = serde_json::to_value(&source).unwrap();
+            let mut view = source.clone();
+            project(&mut view);
+            let projected = serde_json::to_value(&view).unwrap();
+            for index in 0..2 {
+                assert_eq!(
+                    projected[index]["parts"][0]["functionResponse"]["response"]["duplicateOfToolCallId"],
+                    "latest"
+                );
+                assert_eq!(projected[index]["parts"][0]["id"], original[index]["parts"][0]["id"]);
+                assert_eq!(projected[index]["parts"][0]["functionResponse"]["name"], name);
+            }
+            assert_eq!(projected[2], original[2]);
+            assert!(projected.to_string().len() * 2 < original.to_string().len());
+            assert_eq!(serde_json::to_value(source).unwrap(), original);
+            project(&mut view);
+            assert_eq!(serde_json::to_value(view).unwrap(), projected);
+        }
+    }
+
+    #[test]
+    fn changed_versions_pages_errors_effects_and_unidentified_reads_stay_intact() {
+        let result = json!({"id":"resource","version":1,"offset":0,"content":"evidence".repeat(500)});
+        let mut source = vec![];
+        for (index, (key, value)) in [("version", json!(2)), ("offset", json!(20)), ("id", json!("other"))]
+            .into_iter()
+            .enumerate()
+        {
+            let mut changed = result.clone();
+            changed[key] = value;
+            source.push(read_receipt("read_artifact", &format!("changed-{index}"), changed));
+        }
+        source.push(read_receipt("read_artifact", "latest", result.clone()));
+        for name in [
+            "save_workflow_draft",
+            "call_workspace_tool",
+            "execute_capability",
+            "unknown_tool",
+        ] {
+            source.push(read_receipt(name, "first", result.clone()));
+            source.push(read_receipt(name, "second", result.clone()));
+        }
+        let error = json!({"error":"validation failed","detail":"detail".repeat(500)});
+        source.push(read_receipt("get_workflow_plan", "error-1", error.clone()));
+        source.push(read_receipt("get_workflow_plan", "error-2", error));
+        source.push(read_receipt("read_artifact", "", result.clone()));
+        source.push(read_receipt("read_artifact", "", result));
+        source.push(read_receipt("read_skill", "small-1", json!({"content":"brief"})));
+        source.push(read_receipt("read_skill", "small-2", json!({"content":"brief"})));
+        let original = serde_json::to_value(&source).unwrap();
+        project(&mut source);
+        assert_eq!(serde_json::to_value(source).unwrap(), original);
+    }
+
+    #[test]
+    fn delivery_evidence_requires_authorized_version_and_complete_small_reads() {
+        let artifact: crate::module::artifact::ArtifactRef = serde_json::from_value(
+            json!({"$type":"artifact","id":"file","version":1,"name":"data.txt","mimeType":"text/plain","size":3}),
+        )
+        .unwrap();
+        let record = json!({"kind":"direct_tool","name":"read_artifact","status":"completed","result":{"artifact":artifact,"text":"abc","offset":0,"total_characters":3,"truncated":false}});
+        let operations = json!({"items":[record.clone(),record.clone()]});
+        let original = operations.clone();
+        assert_eq!(artifact_evidence(&operations, std::slice::from_ref(&artifact)).len(), 1);
+        assert!(artifact_evidence(&operations, &[]).is_empty());
+        for (field, value) in [
+            ("truncated", json!(true)),
+            ("offset", json!(1)),
+            ("total_characters", json!(4)),
+            ("text", json!("a".repeat(2001))),
+        ] {
+            let mut invalid = record.clone();
+            invalid["result"][field] = value;
+            assert!(artifact_evidence(&json!({"items":[invalid]}), std::slice::from_ref(&artifact)).is_empty());
+        }
+        let mut stale = record;
+        stale["result"]["artifact"]["version"] = json!(2);
+        assert!(artifact_evidence(&json!({"items":[stale]}), &[artifact]).is_empty());
+        assert_eq!(operations, original);
+    }
 
     fn receipt(name: &str, response: Value) -> Content {
         serde_json::from_value(json!({"role":"function","parts":[{

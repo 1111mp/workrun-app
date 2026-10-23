@@ -29,6 +29,9 @@ pending. Do not execute merely to establish evidence during authoring.
 Submit one complete document with save_workflow_draft; it validates before writing.
 Repair returned issues and retry only when saving fails. Separate validation is for
 an explicitly requested validation-only review, not a mandatory step before saving.
+For a revision (delegated_task.target_id), existing_workflow supplies the current saved
+document. Apply the approved changes to that document without reloading it; preserve
+unaffected nodes, IDs, edges and settings. Never reconstruct it from the old plan.
 Save one definition per delegation. Creation/revision targets
 are supplied by the native operation; preserve historical snapshots and never create
 a duplicate to recover from interruption. Do not publish or modify other Workflows.

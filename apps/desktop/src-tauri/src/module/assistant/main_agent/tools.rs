@@ -12,7 +12,7 @@ pub(in crate::module::assistant) fn tool_name(_: &str) -> String {
     EXECUTE_WORKFLOW.into()
 }
 fn execute_declaration() -> Value {
-    json!({"name":EXECUTE_WORKFLOW,"description":"Execute an available workflow by ID. Discover its exact inputSchema using list_workflow first. Supply input values matching that schema. The native runtime validates and owns execution, including required inputs and user interactions.","parameters":{"type":"object","properties":{"workflow_id":{"type":"string"},"input":{"type":"object","description":"Values following the selected workflow inputSchema"}},"required":["workflow_id","input"],"additionalProperties":false}})
+    json!({"name":EXECUTE_WORKFLOW,"description":"Request execution of an available workflow by ID. The native host requires user confirmation of the workflow and inputs before dispatch. Discover its exact inputSchema using list_workflow first. Supply input values matching that schema. The native runtime validates and owns execution, including required inputs and user interactions.","parameters":{"type":"object","properties":{"workflow_id":{"type":"string"},"input":{"type":"object","description":"Values following the selected workflow inputSchema"}},"required":["workflow_id","input"],"additionalProperties":false}})
 }
 
 pub(in crate::module::assistant) struct ToolRegistry<'a> {
@@ -39,7 +39,7 @@ impl ToolRegistry<'_> {
             ),
             (
                 "read_skill".into(),
-                json!({"name":"read_skill","description":"Read an enabled main-agent skill. Does not authorize execution.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
+                json!({"name":"read_skill","description":"Read an optional enabled main-agent skill. Core Skills are already in the instructions; do not reload them. Does not authorize execution.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
             ),
             (
                 "inspect_execution".into(),
@@ -49,7 +49,7 @@ impl ToolRegistry<'_> {
         tools.insert("list_capabilities".into(), json!({"name":"list_capabilities","description":"Search workflows and Apps by summary (paginated, without input/output schemas). Use capability_id to retrieve the full exact contract before binding inputs or reusing a capability; summaries are not contracts. Message binding indices refer to the zero-based original conversation, excluding instructions and tool discovery exchanges.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}));
         if self.execution_allowed && self.workflows_enabled {
             tools.insert(EXECUTE_WORKFLOW.into(), execute_declaration());
-            tools.insert("execute_capability".into(), json!({"name":"execute_capability","description":"Execute a discovered executable capability through the native workflow executor. Supply one binding per required input. For message sources provide an original conversation message index (counting every role), exact quote and value_json containing the typed value serialized as JSON. For defaults provide only input and source=default. For result sources provide input, source=result, native run_id and JSON pointer into its completed validated output. Do not invent missing scope; ask the user instead.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"bindings":{"type":"array","items":{"type":"object","properties":{"input":{"type":"string","description":"Target input key"},"source":{"type":"string","enum":["message","default","result"]},"message":{"type":"integer","description":"Original user message index"},"quote":{"type":"string","description":"Exact nonempty quote in the referenced user message"},"value_json":{"type":"string","description":"Message source only: JSON serialization of the typed input. Numbers remain numbers; strings must be JSON-quoted; objects/arrays are JSON text."},"run_id":{"type":"string","description":"Result source only: Workrun runId from a completed native receipt"},"pointer":{"type":"string","description":"Result source only: JSON Pointer into receipt output, e.g. /result_key"}},"required":["input","source"],"additionalProperties":false}}},"required":["capability_id","bindings"],"additionalProperties":false}}));
+            tools.insert("execute_capability".into(), json!({"name":"execute_capability","description":"Request execution of a discovered executable capability through the native workflow executor. The native host requires user confirmation before dispatch; do not claim it has started before a native run receipt. Supply one binding per required input. For message sources provide an original conversation message index (counting every role), exact quote and value_json containing the typed value serialized as JSON. For defaults provide only input and source=default. For result sources provide input, source=result, native run_id and JSON pointer into its completed validated output. Do not invent missing scope; ask the user instead.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"bindings":{"type":"array","items":{"type":"object","properties":{"input":{"type":"string","description":"Target input key"},"source":{"type":"string","enum":["message","default","result"]},"message":{"type":"integer","description":"Original user message index"},"quote":{"type":"string","description":"Exact nonempty quote in the referenced user message"},"value_json":{"type":"string","description":"Message source only: JSON serialization of the typed input. Numbers remain numbers; strings must be JSON-quoted; objects/arrays are JSON text."},"run_id":{"type":"string","description":"Result source only: Workrun runId from a completed native receipt"},"pointer":{"type":"string","description":"Result source only: JSON Pointer into receipt output, e.g. /result_key"}},"required":["input","source"],"additionalProperties":false}}},"required":["capability_id","bindings"],"additionalProperties":false}}));
         }
         tools
     }
@@ -99,9 +99,9 @@ impl ToolRegistry<'_> {
                 Ok(json!({"summary":summary}))
             },
             "list_workflow" => list_page(self.capabilities, args),
-            "read_skill" => {
-                Ok(json!({"content":self.skills.read(args.get("name").and_then(Value::as_str).unwrap_or_default())?}))
-            },
+            "read_skill" => self
+                .skills
+                .read_for_model(args.get("name").and_then(Value::as_str).unwrap_or_default()),
             "inspect_execution" => {
                 let full = match args["detail"].as_str() {
                     None | Some("summary") => false,

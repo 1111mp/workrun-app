@@ -45,6 +45,9 @@ export function SessionUsage({
     refetchInterval: open ? 3000 : false,
   });
   const data = query.data;
+  const latestTurn = data?.byTurn
+    ?.filter((turn) => turn.turnId != null)
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
   const number = (value: number | null | undefined) =>
     value == null ? '—' : value.toLocaleString(i18n?.language);
   const total = data
@@ -64,7 +67,7 @@ export function SessionUsage({
       <DialogTrigger render={<Button variant='ghost' size='sm' />}>
         {t('usage.title')}
       </DialogTrigger>
-      <DialogContent className='max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[1000px]! grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:h-[min(82dvh,760px)] sm:w-[calc(100vw-4rem)]'>
+      <DialogContent className='max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-250! grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:h-[min(82dvh,760px)] sm:w-[calc(100vw-4rem)]'>
         <div className='via-background relative overflow-hidden border-b bg-linear-to-br from-violet-500/12 to-sky-500/10 px-5 pt-5 pb-4 sm:px-6 sm:pt-6'>
           <div className='pointer-events-none absolute -top-12 -right-10 size-36 rounded-full bg-violet-500/10 blur-2xl' />
           <DialogHeader className='relative flex-row items-start gap-3 text-left'>
@@ -151,6 +154,18 @@ export function SessionUsage({
                         {t('usage.callCount', { count: data.calls.length })}
                       </Badge>
                     </div>
+                    {latestTurn && (
+                      <p className='text-muted-foreground text-sm'>
+                        {t('usage.latestTurn')}{' '}
+                        <strong className='text-foreground font-medium tabular-nums'>
+                          {number(
+                            latestTurn.conversationTokens +
+                              latestTurn.executionTokens,
+                          )}
+                        </strong>{' '}
+                        tokens
+                      </p>
+                    )}
                     <dl className='bg-muted/40 grid grid-cols-2 gap-4 rounded-lg border p-4'>
                       {(['conversation', 'execution'] as const).map((key) => (
                         <div key={key} className='flex flex-col gap-1'>
@@ -255,7 +270,7 @@ export function SessionUsage({
                       aria-label={t('usage.calls')}
                       tabIndex={0}
                     >
-                      <table className='w-full min-w-[640px] text-left text-xs'>
+                      <table className='w-full min-w-160 text-left text-xs'>
                         <caption className='sr-only'>
                           {t('usage.calls')}
                         </caption>
@@ -310,7 +325,7 @@ export function SessionUsage({
                                   </div>
                                 )}
                               </td>
-                              <td className='max-w-40 px-2 py-2 break-words'>
+                              <td className='max-w-40 px-2 py-2 wrap-break-word'>
                                 {call.model}
                               </td>
                               <td className='px-2 py-2 text-right tabular-nums'>

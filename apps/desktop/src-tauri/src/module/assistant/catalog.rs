@@ -566,7 +566,11 @@ impl super::tools::WorkflowDiscovery for Catalog {
             vec![]
         };
         contracts.extend(feat::get_process_nodes().await?.iter().map(app_contract));
-        contracts.sort_by(|a, b| a.id.cmp(&b.id));
+        sort_capability_summaries(
+            &mut contracts,
+            &self.workflows,
+            args["query"].as_str().unwrap_or("").is_empty(),
+        );
         let query = args["query"].as_str().unwrap_or("").to_lowercase();
         contracts.retain(|c| {
             format!("{} {} {}", c.id, c.name, c.description)
@@ -634,6 +638,29 @@ impl super::tools::WorkflowDiscovery for Catalog {
         Ok(capability)
     }
 }
+fn sort_capability_summaries(contracts: &mut [super::capability::Contract], workflows: &[Value], unfiltered: bool) {
+    // Recent definitions must not sit behind old UUID-sorted entries on fallback pages.
+    let updated = workflows
+        .iter()
+        .map(|entry| {
+            (
+                entry["id"].as_str().unwrap_or(""),
+                entry["updatedAt"].as_str().unwrap_or(""),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    contracts.sort_by(|a, b| {
+        if unfiltered {
+            updated
+                .get(b.id.as_str())
+                .cmp(&updated.get(a.id.as_str()))
+                .then_with(|| a.id.cmp(&b.id))
+        } else {
+            a.id.cmp(&b.id)
+        }
+    });
+}
+
 fn capability(entry: &Value) -> Option<Capability> {
     let settings = entry.get("document")?.get("settings")?;
     Some(Capability {
@@ -648,6 +675,23 @@ fn capability(entry: &Value) -> Option<Capability> {
 mod tests {
     use super::super::tools::WorkflowDiscovery;
     use super::*;
+    #[test]
+    fn recent_workflows_are_visible_before_old_ids_in_unfiltered_pages() {
+        let workflows = (0..11).map(|i| json!({"id":format!("{i:02}"),"updatedAt":format!("2026-10-{:02}",i+1),"document":{"settings":{"name":format!("任务{i}"),"inputSchema":{"fields":[]}}}})).collect::<Vec<_>>();
+        let mut contracts = workflows
+            .iter()
+            .map(super::super::capability::Contract::workflow)
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        sort_capability_summaries(&mut contracts, &workflows, true);
+        assert_eq!(
+            contracts.iter().take(5).map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["10", "09", "08", "07", "06"]
+        );
+        sort_capability_summaries(&mut contracts, &workflows, false);
+        assert_eq!(contracts[0].id, "00");
+    }
+
     #[tokio::test]
     async fn operation_records_survive_reload_and_remain_session_scoped() {
         let root = tempfile::tempdir().unwrap();
@@ -666,6 +710,13 @@ mod tests {
             root: root.path().into(),
             workspace_id: dirs::active_workspace_id(),
         };
+        let input_record = json!({"id":uuid::Uuid::new_v4().to_string(),"sessionId":"inputs",
+            "kind":"input_clarification","status":"awaiting_input","startedAt":"now",
+            "result":{"capabilityId":"selected","fields":["text","period"],"userMessageCount":2,"goal":"Prior request"}});
+        catalog.record_operation(&input_record).await.unwrap();
+        let restored = reloaded.inspect_operations("inputs").await.unwrap();
+        assert_eq!(restored["items"][0]["kind"], "input_clarification");
+        assert_eq!(restored["items"][0]["result"], input_record["result"]);
         let result = reloaded.inspect_operations("one").await.unwrap();
         assert_eq!(result["items"].as_array().unwrap().len(), 1);
         assert_eq!(result["items"][0]["result"]["workflow_id"], "saved");

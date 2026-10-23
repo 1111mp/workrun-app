@@ -68,8 +68,12 @@ export function AssistantTurnActivity({
   failed?: boolean;
 }) {
   const { t } = useTranslation();
-  // Automatic expansion follows generation until the reader chooses otherwise.
-  const [open, setOpen] = useState<boolean>();
+  // Streaming thoughts must not push the plan or answer out of view.
+  const [expansion, setExpansion] = useState<{
+    busy: boolean;
+    open: boolean;
+  }>();
+  const open = expansion?.busy === busy ? expansion.open : false;
   // Progress reports describe a moment in time, so they stop being a status
   // when the phase ends. Only provider thinking remains available for review.
   const items = busy
@@ -104,11 +108,14 @@ export function AssistantTurnActivity({
   return (
     <Trace className='mb-3' data-testid='assistant-thinking'>
       {hasContent ? (
-        <TraceCollapsible open={open ?? busy} onOpenChange={setOpen}>
+        <TraceCollapsible
+          open={open}
+          onOpenChange={(open) => setExpansion({ busy, open })}
+        >
           <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
           <TraceCollapsibleContent>
             <div
-              className='flex min-w-0 flex-col gap-4'
+              className='flex max-h-64 min-w-0 scrollbar-thin flex-col gap-4 overflow-y-auto overscroll-contain'
               role='region'
               aria-label={t('assistant.thinkingDetails')}
             >

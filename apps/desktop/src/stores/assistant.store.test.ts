@@ -623,3 +623,107 @@ it('sends only frozen tool and checkpoint identities for explicit feedback and r
     },
   });
 });
+
+it('submits workflow confirmation only for the active request and never auto-resumes it', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  const confirmation = {
+    id: 'confirmation',
+    turnId: 'turn',
+    workflowId: 'workflow',
+    name: 'Selected',
+    input: { amount: 0 },
+    status: 'waiting' as const,
+    changed: false,
+  };
+  const activeCall = {
+    workflowId: 'workflow',
+    toolName: 'execute_capability',
+    input: { amount: 0 },
+    confirmation,
+    workflow: { id: 'workflow', document: { settings: { name: 'Selected' } } },
+  } as NonNullable<AssistantSession['activeCall']>;
+  const waiting: AssistantSession = {
+    ...session,
+    status: 'awaiting_run_confirmation',
+    activeCall,
+    workflowConfirmations: [confirmation],
+  };
+  store(waiting);
+  host.turn.mockClear();
+  await resumeAssistant(session.id, scope);
+  expect(host.turn).not.toHaveBeenCalled();
+  await useAssistantStore
+    .getState()
+    .decideAssistantWorkflow(session.id, 'old', 'approve', scope);
+  expect(host.turn).not.toHaveBeenCalled();
+  host.turn.mockImplementationOnce(async () =>
+    store({ ...waiting, status: 'running' }),
+  );
+  await useAssistantStore
+    .getState()
+    .decideAssistantWorkflow(session.id, 'confirmation', 'approve', scope);
+  expect(host.turn).toHaveBeenCalledExactlyOnceWith({
+    sessionId: session.id,
+    action: {
+      kind: 'runDecision',
+      confirmation_id: 'confirmation',
+      decision: 'approve',
+    },
+    teamToken: undefined,
+  });
+  await useAssistantStore
+    .getState()
+    .decideAssistantWorkflow(session.id, 'confirmation', 'approve', scope);
+  expect(host.turn).toHaveBeenCalledOnce();
+});
+
+it('sends a rejected workflow selection as explicit feedback for another assistant turn', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  const confirmation = {
+    id: 'selection',
+    turnId: 'turn',
+    workflowId: 'wrong',
+    name: 'Wrong',
+    input: {},
+    status: 'waiting' as const,
+    changed: false,
+  };
+  const activeCall = {
+    workflowId: 'wrong',
+    toolName: 'execute_capability',
+    input: {},
+    confirmation,
+    workflow: { id: 'wrong', document: { settings: { name: 'Wrong' } } },
+  } as NonNullable<AssistantSession['activeCall']>;
+  store({
+    ...session,
+    status: 'awaiting_run_confirmation',
+    activeCall,
+    workflowConfirmations: [confirmation],
+  });
+  host.turn.mockClear();
+  const feedback = 'Not this workflow. Please reconsider my original request.';
+  host.turn.mockImplementationOnce(async () =>
+    store({ ...session, status: 'thinking' }),
+  );
+  await useAssistantStore
+    .getState()
+    .decideAssistantWorkflow(
+      session.id,
+      'selection',
+      'reselect',
+      scope,
+      feedback,
+    );
+  expect(host.turn).toHaveBeenCalledExactlyOnceWith({
+    sessionId: session.id,
+    action: {
+      kind: 'runDecision',
+      confirmation_id: 'selection',
+      decision: 'reselect',
+      text: feedback,
+    },
+    teamToken: undefined,
+  });
+  expect(current(session.id).status).toBe('thinking');
+});

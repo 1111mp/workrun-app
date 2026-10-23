@@ -69,6 +69,13 @@ type AssistantState = {
     text: string,
     scope: string,
   ) => Promise<void>;
+  decideAssistantWorkflow: (
+    id: string,
+    confirmationId: string,
+    decision: 'approve' | 'cancel' | 'reselect',
+    scope: string,
+    text?: string,
+  ) => Promise<void>;
   decideAssistantTool: (
     id: string,
     confirmation: AssistantToolConfirmation,
@@ -130,6 +137,21 @@ export const useAssistantStore = create<AssistantState>()(
         return;
       await act(id, scope, { kind: 'send', text, attachments });
     },
+    async decideAssistantWorkflow(id, confirmationId, decision, scope, text) {
+      const session = latest(id);
+      if (
+        isAssistantActing(scope, id) ||
+        session.status !== 'awaiting_run_confirmation' ||
+        session.activeCall?.confirmation?.id !== confirmationId
+      )
+        return;
+      await act(id, scope, {
+        kind: 'runDecision',
+        confirmation_id: confirmationId,
+        decision,
+        ...(text ? { text } : {}),
+      });
+    },
     async provideAssistantInputs(
       id: string,
       input: Record<string, unknown>,
@@ -139,6 +161,8 @@ export const useAssistantStore = create<AssistantState>()(
         await act(id, scope, { kind: 'inputs', input });
     },
     async resumeAssistant(id: string, scope: string) {
+      ensureWorkspace(scope);
+      if (latest(id).status === 'awaiting_run_confirmation') return;
       await act(id, scope, { kind: 'continue' });
     },
     async stopAssistant(id: string, scope: string) {

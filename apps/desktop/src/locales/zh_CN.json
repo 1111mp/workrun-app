@@ -2064,6 +2064,25 @@
     "emptyDescription": "创建或导入应用、工作流，准备好后就能在这里使用。"
   },
   "assistant": {
+    "runConfirmation": {
+      "reselect": "不是这个工作流",
+      "rejected": "已反馈",
+      "rejectedDescription": "已反馈选择不符，本次工作流未运行。",
+      "reselectMessage": "“{{workflow}}”不是我想运行的工作流。请结合我之前的需求重新判断并选择合适的工作流；如果无法确定，请先问我。选好后仍需让我确认，不要直接运行。",
+      "approvedDescription": "你已确认执行此工作流。",
+      "cancelledDescription": "本次执行已取消，工作流未运行。",
+      "supersededDescription": "工作流或输入已更新，请在最新卡片中确认。",
+      "title": "工作流执行确认",
+      "description": "请确认这是你要执行的工作流。确认后才会开始运行。",
+      "waiting": "待确认",
+      "approved": "已确认",
+      "cancelled": "已取消",
+      "superseded": "已更新",
+      "changed": "工作流或输入已更新，请核对后重新确认。",
+      "inputs": "查看本次输入",
+      "approve": "确认执行",
+      "cancel": "取消运行"
+    },
     "syncFailed": "对话同步失败，请重新连接",
     "stop": "停止回答",
     "toolConfirmation": {
@@ -2080,6 +2099,8 @@
       "failed": "工具确认失败，请重新查看当前请求。"
     },
     "plan": {
+      "viewPlan": "查看完整方案",
+      "hidePlan": "收起方案",
       "revisionTarget": "此方案将修改现有工作流",
       "title": "工作流规划",
       "version": "版本 {{version}}",
@@ -2167,7 +2188,8 @@
     "conversationHint": "理解需求、规划、编排和回复",
     "callCount": "{{count}} 次调用",
     "overview": "用量概览",
-    "recordedTotal": "已记录总量",
+    "recordedTotal": "会话累计（已记录）",
+    "latestTurn": "最近一轮",
     "title": "Token 用量",
     "description": "查看这段会话的消耗，以及 token 主要用在了哪里。",
     "loading": "正在加载用量…",

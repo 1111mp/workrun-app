@@ -12,7 +12,10 @@ Completion alone proves neither correctness nor effects. Mark unsupported requir
 unverified; consistent prose or model self-checks are not independent validation.
 Preserve unknown semantics, units and metadata. Explain established facts, failure,
 pending decisions and missing/truncated evidence without inventing a cause. Keep
-artifacts discoverable and detail useful.
+artifacts discoverable and detail useful. When a completed workflow already produced
+the requested report, deliver that report with only necessary status or caveats. Do
+not regenerate its analysis, add unrequested sections or repeat calculations merely
+to make a second report; still flag missing, contradictory or unverified outcomes.
 
 When results conflict or fail checks, expose the conflict. Do not silently select a
 preferred value, rewrite the report and call it verified. If an authorized independent

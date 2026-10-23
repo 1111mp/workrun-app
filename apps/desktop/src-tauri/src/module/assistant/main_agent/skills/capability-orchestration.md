@@ -3,8 +3,9 @@ name: capability-orchestration
 description: Match goals to available capabilities and reusable assets.
 ---
 Start from the outcome. Compare purpose, input/output contracts, limits and effects;
-a similar name or prior use is insufficient. Use direct tools for one-off work and
-an existing Workflow when the user authorizes that approach. Do not assume every
+a similar name or prior use is insufficient. For operational tasks, prefer a matching saved Workflow within the requested scope;
+the task request supplies execution intent without requiring the user to name its implementation.
+Use direct tools when no match fits or the user requests them. Reuse never grants edits. Do not assume every
 App is directly callable. Read workrun-capabilities when native boundaries matter;
 node configuration belongs to the specialists.
 

@@ -77,4 +77,43 @@ impl SkillCatalog {
             .collect::<Result<Vec<_>>>()?
             .join("\n\n"))
     }
+
+    pub fn read_for_model(&self, name: &str) -> Result<Value> {
+        // Mandatory bodies are already present on every request. Returning them
+        // again grows every subsequent tool round without adding information.
+        if self
+            .documents
+            .iter()
+            .take(self.mandatory_count)
+            .any(|(id, _, _)| id == name)
+        {
+            return Ok(json!({"alreadyInInstructions":true,"name":name}));
+        }
+        Ok(json!({"content":self.read(name)?}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn main_and_author_keep_required_instructions_without_duplicate_tool_bodies() {
+        let main = super::super::main_agent::skills::MainSkills::builtin();
+        let author = super::super::workflow_agent::skills::catalog();
+        for catalog in [&*main, &author] {
+            let instructions = catalog.mandatory_instructions().unwrap();
+            for (index, (name, _, _)) in catalog.documents.iter().enumerate() {
+                let body = catalog.read(name).unwrap();
+                let response = catalog.read_for_model(name).unwrap();
+                if index < catalog.mandatory_count {
+                    assert!(instructions.contains(&body));
+                    assert_eq!(response["alreadyInInstructions"], true);
+                    assert!(response.get("content").is_none());
+                    assert!(response.to_string().len() < body.len());
+                } else {
+                    assert_eq!(response["content"], body);
+                }
+            }
+            assert!(catalog.read_for_model("not-enabled").is_err());
+        }
+    }
 }

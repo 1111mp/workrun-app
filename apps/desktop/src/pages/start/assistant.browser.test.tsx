@@ -993,6 +993,7 @@ it('right-aligns user bubbles and folds phase summaries when thinking ends', asy
   useAssistantStore.setState({
     sessions: { [session.id]: { ...session, status: 'thinking' } },
   });
+  await page.getByRole('button', { name: '正在思考' }).click();
   await expect
     .element(page.getByText('正在校验订单参数', { exact: true }))
     .toBeVisible();
@@ -1027,6 +1028,7 @@ it('right-aligns user bubbles and folds phase summaries when thinking ends', asy
   await expect
     .element(page.getByText('正在查找工作流', { exact: true }))
     .not.toBeInTheDocument();
+  await page.getByRole('button', { name: '正在思考' }).click();
   await expect
     .element(page.getByText('正在整理执行结果', { exact: true }))
     .toBeVisible();
@@ -1055,7 +1057,8 @@ it('streams reasoning through Trace, collapses for the answer and preserves read
   );
   await expect
     .element(page.getByRole('button', { name: '正在思考' }))
-    .toHaveAttribute('aria-expanded', 'true');
+    .toHaveAttribute('aria-expanded', 'false');
+  await page.getByRole('button', { name: '正在思考' }).click();
   await expect.element(page.getByText(thought.text)).toBeVisible();
   await screen.rerender(
     <AssistantTurnActivity
@@ -1082,7 +1085,7 @@ it('streams reasoning through Trace, collapses for the answer and preserves read
     <AssistantTurnActivity summaries={[]} reasoning={[thought]} busy />,
   );
   const thinking = page.getByRole('button', { name: '正在思考' });
-  await thinking.click();
+  await expect.element(thinking).toHaveAttribute('aria-expanded', 'false');
   await screen.rerender(
     <AssistantTurnActivity
       summaries={['正在校验']}
@@ -1109,7 +1112,6 @@ it('removes stale preparation reports after completion even if the reader expand
     <AssistantTurnActivity summaries={summaries} busy />,
   );
   const trigger = page.getByRole('button', { name: '正在思考' });
-  await trigger.click();
   await trigger.click();
   await expect.element(trigger).toHaveAttribute('aria-expanded', 'true');
   await screen.rerender(
@@ -1430,5 +1432,60 @@ it('shows only the plan card at the pause and a native notice for an unconfirmed
     screen.getByText('Review this proposal', { exact: true }).elements(),
   ).toHaveLength(1);
   expect(host.reply).not.toHaveBeenCalled();
+  expect(host.start).not.toHaveBeenCalled();
+});
+
+it('restores the chosen workflow confirmation in its conversation turn without starting a run', async () => {
+  const confirmation = {
+    id: 'confirm',
+    turnId: 'request',
+    workflowId: 'report',
+    name: '文档整理流程',
+    description: '核对输入并整理文档。',
+    input: { document: 'selected-document' },
+    status: 'waiting',
+    changed: false,
+  };
+  host.saved.set('confirm-run', {
+    id: 'confirm-run',
+    title: '执行确认',
+    modelId: 'model',
+    status: 'awaiting_run_confirmation',
+    steps: 1,
+    messages: [
+      {
+        id: 'request',
+        role: 'user',
+        text: '整理这份文档',
+        content: { role: 'user', parts: [{ text: '整理这份文档' }] },
+      },
+    ],
+    activeCall: {
+      workflowId: 'report',
+      toolName: 'execute_capability',
+      input: confirmation.input,
+      confirmation,
+      workflow: {
+        id: 'report',
+        document: { settings: { name: confirmation.name } },
+      },
+    },
+    workflowConfirmations: [confirmation],
+  });
+  await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter initialEntries={['/start?session=confirm-run']}>
+        <StartPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect.element(page.getByText('文档整理流程')).toBeVisible();
+  await expect
+    .element(page.getByRole('button', { name: '确认执行' }))
+    .toBeVisible();
+  await expect
+    .element(page.getByRole('button', { name: '不是这个工作流', exact: true }))
+    .toBeVisible();
+  expect(host.commands).not.toContain('assistant_turn_start');
   expect(host.start).not.toHaveBeenCalled();
 });

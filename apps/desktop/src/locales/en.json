@@ -2091,6 +2091,25 @@
     "emptyDescription": "Create or import an app or workflow. It will appear here when ready."
   },
   "assistant": {
+    "runConfirmation": {
+      "reselect": "Not this workflow",
+      "rejected": "Feedback sent",
+      "rejectedDescription": "You rejected this selection. This workflow was not run.",
+      "reselectMessage": "“{{workflow}}” is not the workflow I want to run. Reconsider my earlier request and select a suitable workflow; ask me if you need clarification. Let me confirm the new selection before running it.",
+      "approvedDescription": "You confirmed execution of this workflow.",
+      "cancelledDescription": "Execution was cancelled. The workflow was not run.",
+      "supersededDescription": "The workflow or inputs changed. Use the latest confirmation card.",
+      "title": "Confirm workflow execution",
+      "description": "Check that this is the workflow you want. It will run only after confirmation.",
+      "waiting": "Awaiting confirmation",
+      "approved": "Confirmed",
+      "cancelled": "Cancelled",
+      "superseded": "Updated",
+      "changed": "The workflow or inputs changed. Review and confirm again.",
+      "inputs": "View run inputs",
+      "approve": "Confirm and run",
+      "cancel": "Cancel run"
+    },
     "syncFailed": "Conversation sync failed. Reconnect to restore updates.",
     "stop": "Stop response",
     "toolConfirmation": {
@@ -2107,6 +2126,8 @@
       "failed": "Tool confirmation failed. Review the current request."
     },
     "plan": {
+      "viewPlan": "View full plan",
+      "hidePlan": "Collapse plan",
       "revisionTarget": "This plan updates an existing workflow",
       "title": "Workflow plan",
       "version": "Version {{version}}",
@@ -2194,7 +2215,8 @@
     "conversationHint": "Understanding, planning, authoring and replies",
     "callCount": "{{count}} calls",
     "overview": "Usage overview",
-    "recordedTotal": "Recorded total",
+    "recordedTotal": "Recorded session total",
+    "latestTurn": "Latest turn",
     "title": "Token usage",
     "description": "See what this conversation used and where the tokens went.",
     "loading": "Loading usage…",

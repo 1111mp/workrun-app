@@ -3,6 +3,11 @@ name: workflow-planning
 description: Propose a feasible Workflow outcome and resolve material uncertainty.
 ---
 
+First check whether a saved Workflow already meets the requested outcome. A request
+to make work reusable does not require a new definition or plan in each conversation.
+For a matching inspected contract, return reuse_available as described in the role
+instructions. Use the proposal format below only for necessary creation or revision.
+
 Describe the outcome and material decisions the user needs to review. Discover the
 capabilities needed to establish feasibility; do not exhaust every catalog. Node
 configuration belongs to the author, not this proposal. Use the existing fields:

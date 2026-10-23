@@ -47,7 +47,7 @@ pub(super) fn validate_request(args: &Value) -> Result<()> {
 }
 
 pub(super) fn initial_task(goal: &str) -> Value {
-    json!({"goal":goal,"expected_outputs":["A saved reusable Workflow implementing the requested outcome"],"acceptance_criteria":["Native validation passes and unresolved task assumptions are identified"],"assumptions":[]})
+    json!({"goal":goal,"expected_outputs":["An existing Workflow meeting the requested outcome, or a reviewable proposal only when creation/revision is needed"],"acceptance_criteria":["Compare existing capability contracts before proposing a new definition; preserve the requested scope"],"assumptions":[]})
 }
 
 pub(super) fn build(
@@ -59,7 +59,7 @@ pub(super) fn build(
     let instruction = format!(
         "{}\n\n{}\n\nSkills: {}",
         super::resources::read("workflow_agent/AGENT.md")?,
-        catalog.read("workflow-authoring")?,
+        catalog.mandatory_instructions()?,
         catalog.summaries()
     );
     let mut builder = LlmAgentBuilder::new("workflow_author")

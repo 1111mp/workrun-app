@@ -163,7 +163,9 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
         handoff_contents: None,
         delivery_contents: None,
         saved: None,
+        revision_source: None,
         pending: None,
+        input_issue: None,
         blocked: HashMap::new(),
         steps: HashMap::new(),
         max_steps,
@@ -187,8 +189,28 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
                     if agent == "main_agent" && matches!(name.as_str(), "execute_capability" | "execute_workflow")
                         && !state.blocked.contains_key(&agent) {
                         match state.propose(&name, &args).await {
-                            Ok(mut reply) => { reply.artifacts = state.produced; return Ok(reply); },
-                            Err(error) => { let _ = response.send(Ok(json!({"error":error.to_string(),"executed":false}))); },
+                            Ok(mut reply) => {
+                                if let Some(record) = &mut state.input_issue {
+                                    record["status"] = json!("resolved");
+                                    if let Some(discovery) = state.discovery { discovery.record_operation(record).await?; }
+                                }
+                                reply.artifacts = state.produced; return Ok(reply);
+                            },
+                            Err(error) => {
+                                if let Some(issue) = error.downcast_ref::<super::bindings::InputIssue>() {
+                                    let id = args[if name == "execute_capability" {"capability_id"} else {"workflow_id"}].clone();
+                                    let record_id = state.input_issue.as_ref().and_then(|r|r["id"].as_str()).map(str::to_owned)
+                                        .unwrap_or_else(||uuid::Uuid::new_v4().to_string());
+                                    let record = json!({"id":record_id,"kind":"input_clarification","name":"collect_inputs",
+                                        "sessionId":context.session_id,"turnKey":tool_turn,"startedAt":chrono::Utc::now().to_rfc3339(),
+                                        "status":"awaiting_input","result":{"capabilityId":id,"fields":issue.fields,"goal":goal,
+                                            "userMessageCount":history.iter().filter(|c|c.role == "user").count()}});
+                                    if let Some(discovery) = discovery { discovery.record_operation(&record).await?; }
+                                    state.input_issue = Some(record);
+                                }
+                                let _ = response.send(Ok(json!({"error":error.to_string(),"executed":false,
+                                    "inputContext":state.input_issue.as_ref().map(|r|&r["result"])})));
+                            },
                         }
                     } else {
                         let result = state.tool(&agent, &name, args).await;
@@ -231,7 +253,9 @@ struct NativeTurn<'a> {
     handoff_contents: Option<Vec<Content>>,
     delivery_contents: Option<Vec<Content>>,
     saved: Option<Value>,
+    revision_source: Option<Value>,
     pending: Option<Content>,
+    input_issue: Option<Value>,
     blocked: HashMap<String, Value>,
     steps: HashMap<String, usize>,
     max_steps: usize,
@@ -246,7 +270,19 @@ impl NativeTurn<'_> {
             request.contents.insert(1.min(request.contents.len()),Content::new("user").with_text(json!({"task":self.task,"current_plan":self.plan,"conversation":conversation,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
         } else if agent == "workflow_author" {
             ensure!(self.operation.is_some(), "Workflow agent has no authorized handoff");
-            request.contents.insert(1.min(request.contents.len()), Content::new("user").with_text(json!({"approved_plan":self.plan,"delegated_task":self.task,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
+            // Load a revision's current definition once, without a discovery LLM round trip.
+            // The confirmed target, rather than model arguments, owns the write identity.
+            if self.revision_source.is_none()
+                && let Some(id) = self.task["target_id"].as_str()
+            {
+                self.revision_source = Some(
+                    self.discovery
+                        .context("Native discovery unavailable")?
+                        .authoring("get_workflow_draft", &json!({"draft_id":id}))
+                        .await?,
+                );
+            }
+            request.contents.insert(1.min(request.contents.len()), Content::new("user").with_text(json!({"approved_plan":self.plan,"delegated_task":self.task,"existing_workflow":self.revision_source,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
         } else if let Some(contents) = &self.delivery_contents {
             // The SDK session contains specialist events too. Resume from the
             // coordinator's own history and native outcome, never rewrite valid
@@ -254,6 +290,13 @@ impl NativeTurn<'_> {
             request.contents = contents.clone();
             request.tools.remove("transfer_to_agent");
             request.tools.remove("prepare_workflow_task");
+        }
+        if agent == "main_agent" && self.input_issue.is_some() {
+            // The native contract is already selected; another catalog search
+            // cannot supply absent business inputs. Direct reads and corrected
+            // bindings remain available, and a new user turn resets this gate.
+            request.tools.remove("list_capabilities");
+            request.tools.remove("list_workflow");
         }
         // Repair malformed provider batches before the SDK sees them: ADK
         // immediately transfers and would skip every sibling call. Preserve the
@@ -278,14 +321,38 @@ impl NativeTurn<'_> {
                 .as_ref()
                 .and_then(|op| op["id"].as_str())
                 .map(str::to_owned);
-            let content = crate::module::model_usage::scope(usage_context, async {
-                if agent == "main_agent" && !self.registry.planning_allowed {
-                    generate(model, request.clone(), self.emit).await
-                } else {
-                    generate(model, request.clone(), &|_| Ok(())).await
+            let native_author_handoff = agent == "main_agent"
+                && self.operation.is_none()
+                && self.registry.authoring_allowed
+                && self.registry.workflows_enabled
+                && self
+                    .plan
+                    .as_ref()
+                    .is_some_and(|plan| plan["status"] == "approved" && plan["approvedTurnKey"] == self.tool_turn)
+                && request.tools.contains_key("transfer_to_agent");
+            let content = if native_author_handoff {
+                // The version-bound native approval already determines this route.
+                // Keep the normal SDK transfer and all checks/journaling below,
+                // without asking a model to choose the only authorized specialist.
+                Content {
+                    role: "model".into(),
+                    parts: vec![Part::FunctionCall {
+                        name: "transfer_to_agent".into(),
+                        args: json!({"agent_name":"workflow_author"}),
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        thought_signature: None,
+                    }],
                 }
-            })
-            .await?;
+            } else {
+                crate::module::model_usage::scope(usage_context, async {
+                    if agent == "main_agent" && !self.registry.planning_allowed {
+                        super::model::generate_answer(model, request.clone(), self.emit).await
+                    } else {
+                        generate(model, request.clone(), &|_| Ok(())).await
+                    }
+                })
+                .await?
+            };
             let calls = content
                 .parts
                 .iter()
@@ -595,7 +662,7 @@ impl NativeTurn<'_> {
                         .await
                 },
                 "read_artifact" => discovery.direct(name, &args, &self.artifacts).await,
-                "list_capabilities" => discovery.list_capabilities(&args).await,
+                "list_capabilities" => super::tools::discover_capabilities(discovery, &args).await,
                 name if super::workspace_resources::contains(name) => discovery.workspace_resource(name, &args).await,
                 _ => discovery.authoring(name, &args).await,
             };
@@ -700,7 +767,7 @@ impl NativeTurn<'_> {
                     .await
             },
             "list_capabilities" => match self.discovery {
-                Some(discovery) => discovery.list_capabilities(&args).await,
+                Some(discovery) => super::tools::discover_capabilities(discovery, &args).await,
                 None => self.registry.read(name, &args),
             },
             "list_workflow" => match self.discovery {
@@ -727,6 +794,22 @@ impl NativeTurn<'_> {
         let result = if agent == "workflow_planner" {
             if let Some(plan) = &self.planned {
                 json!({"status":plan["status"],"plan":plan,"summary":plan["document"]["summary"],"questions":plan["document"]["questions"],"executed":false})
+            } else if error.is_none()
+                && parsed["status"] == "reuse_available"
+                && parsed["capability_id"]
+                    .as_str()
+                    .is_some_and(|id| !id.starts_with("app:"))
+                && record["calls"].as_array().is_some_and(|calls| {
+                    calls.iter().any(|call| {
+                        call["name"] == "list_capabilities"
+                            && call["args"]["capability_id"] == parsed["capability_id"]
+                            && call["result"]["items"]
+                                .as_array()
+                                .is_some_and(|items| items.iter().any(|item| item["id"] == parsed["capability_id"]))
+                    })
+                })
+            {
+                json!({"status":"reuse_available","capability_id":parsed["capability_id"],"summary":parsed["summary"],"executed":false})
             } else if error.is_none()
                 && parsed["status"] == "needs_clarification"
                 && parsed["questions"].as_array().is_some_and(|q| !q.is_empty())
@@ -790,7 +873,7 @@ fn denied() -> Value {
 // description and native facts are needed to deliver the outcome to the user.
 fn delivery_outcome(result: &Value) -> Value {
     let mut outcome = serde_json::Map::new();
-    for key in ["status", "workflow_id", "executed", "approvedPlan"] {
+    for key in ["status", "workflow_id", "capability_id", "executed", "approvedPlan"] {
         if let Some(value) = result.get(key) {
             outcome.insert(key.into(), value.clone());
         }

@@ -74,3 +74,6 @@ mod multi_agent_tests;
 
 #[cfg(test)]
 mod planning_tests;
+
+#[cfg(test)]
+mod lifecycle_tests;

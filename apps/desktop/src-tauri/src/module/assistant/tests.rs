@@ -770,12 +770,19 @@ async fn direct_conversation_does_not_fetch_workflow_catalog_or_prepare_executio
 
 #[tokio::test]
 async fn public_progress_is_a_separate_event_and_not_final_answer_text() {
+    let mut progress = call(
+        "report_progress",
+        json!({"summary":"I will compare the available approaches."}),
+    );
+    progress.parts.insert(
+        0,
+        Part::Text {
+            text: "I'll start by reading the attached data file.".into(),
+        },
+    );
     let model = ScriptedModel::new(vec![
         decision(Intent::Conversation, "", "Help with planning"),
-        call(
-            "report_progress",
-            json!({"summary":"I will compare the available approaches."}),
-        ),
+        progress,
         text("Here is the proposed plan."),
     ]);
     let events = std::sync::Mutex::new(Vec::new());
@@ -793,6 +800,21 @@ async fn public_progress_is_a_separate_event_and_not_final_answer_text() {
         .unwrap();
     assert!(reply.call.is_none());
     assert_eq!(reply.text, "Here is the proposed plan.");
+    let displayed = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            super::AssistantStreamEvent::TextDelta { text } | super::AssistantStreamEvent::TextReplace { text } => {
+                Some(text.clone())
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(displayed, vec![reply.text.clone()]);
+    assert!(events.lock().unwrap().iter().any(|event| matches!(event,
+        super::AssistantStreamEvent::Activity { summary } if summary == "I'll start by reading the attached data file."
+    )));
     assert!(events.lock().unwrap().iter().any(|event| matches!(event,
         super::AssistantStreamEvent::Activity { summary } if summary == "I will compare the available approaches."
     )));
@@ -917,14 +939,25 @@ async fn batched_general_skills_preserve_ids_and_signatures() {
         assert_eq!(result.parts.len(), 3);
         let wire = serde_json::to_value(&result).unwrap().to_string();
         for expected in [
-            "Understand goals",
-            "proportionate",
-            "evidence-based",
+            "conversation",
+            "task-planning",
+            "result-delivery",
             "batch-0",
             "batch-1",
             "batch-2",
         ] {
             assert!(wire.contains(expected), "missing {expected}");
+        }
+        for part in &result.parts {
+            let Part::FunctionResponse { function_response, .. } = part else {
+                panic!("expected tool response")
+            };
+            assert_eq!(function_response.response["alreadyInInstructions"], true);
+            assert!(function_response.response.get("content").is_none());
+        }
+        let instructions = model::content_text(&messages[0]);
+        for name in ["conversation", "task-planning", "result-delivery"] {
+            assert!(instructions.contains(&runtime().skills.read(name).unwrap()));
         }
     }
 }
@@ -1093,4 +1126,411 @@ async fn long_user_sources_reach_main_once_with_original_binding_indices() {
     assert!(sent.contains("previewTruncated"));
     assert!(main.contents.iter().any(|c| content_text(c) == source));
     assert_eq!(serde_json::to_value(history).unwrap(), original);
+}
+
+#[tokio::test]
+async fn ordinary_tasks_reuse_discovered_workflows_across_domains_without_authoring() {
+    for (purpose, input_key, value) in [
+        ("Summarize documents", "text", "meeting notes"),
+        ("Check inventory", "sku", "A-17"),
+        ("Transform records", "format", "JSON"),
+    ] {
+        let id = uuid::Uuid::new_v4().to_string();
+        let message = format!("{purpose}: {value}");
+        let model = ScriptedModel::new(vec![
+            decision(Intent::Task, purpose, purpose),
+            call("list_capabilities", json!({"query":purpose,"limit":5})),
+            call("list_capabilities", json!({"capability_id":id})),
+            call(
+                "execute_capability",
+                json!({"capability_id":id,"bindings":[{"input":input_key,"source":"message","message":0,"quote":value,"value_json":json!(value).to_string()}]}),
+            ),
+        ]);
+        let reply = runtime().run(&model, &ModelProvider::Gemini, AssistantRequest {
+            context: Default::default(),
+            contents: vec![Content::new("user").with_text(&message)],
+            capabilities: vec![Capability { id:id.clone(),name:purpose.into(),description:purpose.into(),parameters:json!({"type":"object","properties":{input_key:{"type":"string"}},"required":[input_key]}) }],
+        }, &|_| Ok(())).await.unwrap();
+        let call = reply.call.unwrap();
+        assert_eq!(call.workflow_id, id);
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4); // intent + search + contract + dispatch
+        for request in requests.iter().skip(1) {
+            assert!(!request.tools.contains_key("save_workflow_draft"));
+            assert!(!request.tools.contains_key("transfer_to_agent"));
+        }
+    }
+}
+
+#[test]
+fn task_execution_still_requires_current_action_evidence_and_never_grants_edits() {
+    let decision = TurnDecision {
+        intent: Intent::Task,
+        action_quote: "Check inventory".into(),
+        summary: "Check inventory".into(),
+        reuse_existing: false,
+        authoring_quote: String::new(),
+        plan_feedback: None,
+        tool_confirmation: None,
+    };
+    assert!(decision.allows_execution("Check inventory for A-17"));
+    assert!(!decision.allows_execution("Explain the previous result"));
+    assert!(!decision.allows_authoring("Check inventory for A-17"));
+    for intent in [
+        Intent::Conversation,
+        Intent::Status,
+        Intent::Explanation,
+        Intent::Planning,
+        Intent::Authoring,
+    ] {
+        assert!(
+            !TurnDecision {
+                intent,
+                action_quote: decision.action_quote.clone(),
+                summary: decision.summary.clone(),
+                reuse_existing: false,
+                authoring_quote: String::new(),
+                plan_feedback: None,
+                tool_confirmation: None
+            }
+            .allows_execution("Check inventory")
+        );
+    }
+}
+
+#[tokio::test]
+async fn delivery_receives_complete_authorized_source_without_replaying_discovery() {
+    struct EvidenceDiscovery(Value);
+    #[async_trait::async_trait]
+    impl tools::WorkflowDiscovery for EvidenceDiscovery {
+        async fn list(&self, _: &Value) -> Result<Value> {
+            bail!("No rediscovery needed")
+        }
+        async fn describe(&self, _: &str) -> Result<Capability> {
+            bail!("No execution needed")
+        }
+        async fn inspect_operations(&self, session: &str) -> Result<Value> {
+            assert_eq!(session, "delivery-session");
+            Ok(self.0.clone())
+        }
+    }
+    let artifact: crate::module::artifact::ArtifactRef = serde_json::from_value(
+        json!({"$type":"artifact","id":"source","version":1,"name":"records.csv","mimeType":"text/plain","size":8}),
+    )
+    .unwrap();
+    let discovery = EvidenceDiscovery(
+        json!({"items":[{"kind":"direct_tool","name":"read_artifact","status":"completed","result":{"artifact":artifact,"text":"x,y\n1,2\n","offset":0,"total_characters":8,"truncated":false}}]}),
+    );
+    let receipt: Content = serde_json::from_value(json!({"role":"function","parts":[{"functionResponse":{"name":"execute_capability","response":{"runId":"run","status":"completed","output":{"report":"Completed report"},"result":"{}"}},"id":"call-43"}]})).unwrap();
+    let history = vec![
+        Content::new("user").with_text("Analyze the attached file"),
+        call("execute_capability", json!({"capability_id":"known","bindings":[]})),
+        receipt,
+    ];
+    let original = serde_json::to_value(&history).unwrap();
+    let model = ScriptedModel::new(vec![text("Completed report")]);
+    let reply = runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: protocol::AssistantContext {
+                    session_id: Some("delivery-session".into()),
+                    artifacts: vec![artifact],
+                    ..Default::default()
+                },
+                contents: history.clone(),
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &discovery,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].contents.iter().any(
+            |c| content_text(c).contains("Previously read complete input files") && content_text(c).contains("1,2")
+        )
+    );
+    assert_eq!(serde_json::to_value(history).unwrap(), original);
+}
+
+struct InputDiscovery {
+    field: Mutex<Value>,
+    records: Mutex<Vec<Value>>,
+    lists: std::sync::atomic::AtomicUsize,
+}
+#[async_trait::async_trait]
+impl tools::WorkflowDiscovery for InputDiscovery {
+    async fn list(&self, _: &Value) -> Result<Value> {
+        self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(json!({"items":[{"id":"processor","kind":"workflow","name":"Input processor"}],"nextCursor":null}))
+    }
+    async fn describe(&self, id: &str) -> Result<Capability> {
+        anyhow::ensure!(matches!(id, "processor" | "other"), "Unexpected selected capability");
+        anyhow::ensure!(
+            id != "processor" || !self.field.lock().unwrap().is_null(),
+            "Capability deleted"
+        );
+        let field = if id == "other" {
+            json!({"type":"number"})
+        } else {
+            self.field.lock().unwrap().clone()
+        };
+        Ok(Capability {
+            id: id.into(),
+            name: "Input processor".into(),
+            description: "Process a supplied input".into(),
+            parameters: json!({"type":"object","properties":{"input":field},"required":["input"]}),
+        })
+    }
+    async fn record_operation(&self, record: &Value) -> Result<()> {
+        let mut records = self.records.lock().unwrap();
+        records.retain(|r| r["id"] != record["id"]);
+        records.insert(0, record.clone());
+        Ok(())
+    }
+    async fn inspect_operations(&self, session: &str) -> Result<Value> {
+        Ok(
+            json!({"items":self.records.lock().unwrap().iter().filter(|r|r["sessionId"] == session).cloned().collect::<Vec<_>>()}),
+        )
+    }
+}
+impl InputDiscovery {
+    fn new(field: Value) -> Self {
+        Self {
+            field: Mutex::new(field),
+            records: Mutex::new(vec![]),
+            lists: 0.into(),
+        }
+    }
+}
+fn input_context() -> protocol::AssistantContext {
+    protocol::AssistantContext {
+        session_id: Some("input-session".into()),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn missing_input_proposals_are_denied_and_completed_inputs_reuse_the_selected_contract() {
+    for (field, empty, supplied) in [
+        (
+            json!({"type":"array","items":{"type":"string"}}),
+            json!([]),
+            json!(["uploaded-reference"]),
+        ),
+        (json!({"type":"string"}), json!(""), json!("document text")),
+        (json!({"type":["number","null"]}), Value::Null, json!(0)),
+        (
+            json!({"type":"object","required":["start","end"]}),
+            json!({}),
+            json!({"start":"2026-10-01","end":"2026-10-31"}),
+        ),
+    ] {
+        let discovery = InputDiscovery::new(field);
+        let model = ScriptedModel::new(vec![
+            decision(Intent::Task, "Process input", "Process input"),
+            call("list_capabilities", json!({})),
+            call(
+                "execute_capability",
+                json!({"capability_id":"processor","bindings":[
+                    {"input":"input","source":"message","message":0,"quote":"Process input","value_json":empty.to_string()}
+                ]}),
+            ),
+            text("Please provide input for the selected processor workflow."),
+        ]);
+        let history = vec![Content::new("user").with_text("Process input")];
+        let reply = runtime()
+            .run_with_discovery(
+                &model,
+                &ModelProvider::Gemini,
+                AssistantRequest {
+                    context: input_context(),
+                    contents: history.clone(),
+                    capabilities: vec![],
+                },
+                &|_| Ok(()),
+                &discovery,
+            )
+            .await
+            .unwrap();
+        assert!(reply.call.is_none());
+        assert!(!reply.text.is_empty());
+        assert_eq!(model.requests.lock().unwrap().len(), 4);
+        let error_history = serde_json::to_string(&model.requests.lock().unwrap().last().unwrap().contents).unwrap();
+        assert!(error_history.contains("empty without explicit empty-value evidence"));
+        assert!(
+            !model
+                .requests
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .tools
+                .contains_key("list_capabilities")
+        );
+        assert_eq!(
+            discovery.records.lock().unwrap()[0]["result"]["fields"],
+            json!(["input"])
+        );
+        let quote = supplied.to_string();
+        let followup = ScriptedModel::new(vec![
+            decision(Intent::Task, &quote, "Use supplied input"),
+            call(
+                "execute_capability",
+                json!({"capability_id":"processor","bindings":[
+                    {"input":"input","source":"message","message":2,"quote":quote,"value_json":supplied.to_string()}
+                ]}),
+            ),
+        ]);
+        let mut history = history;
+        history.push(reply.content);
+        history.push(Content::new("user").with_text(&quote));
+        let completed = runtime()
+            .run_with_discovery(
+                &followup,
+                &ModelProvider::Gemini,
+                AssistantRequest {
+                    context: input_context(),
+                    contents: history,
+                    capabilities: vec![],
+                },
+                &|_| Ok(()),
+                &discovery,
+            )
+            .await
+            .unwrap();
+        let call = completed.call.unwrap();
+        assert_eq!(call.workflow_id, "processor");
+        assert_eq!(call.input, json!({"input":supplied}));
+        assert_eq!(discovery.lists.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(followup.requests.lock().unwrap().len(), 2);
+        let followup_context = content_text(&followup.requests.lock().unwrap()[1].contents[0]);
+        assert!(followup_context.contains("Previous input clarification"));
+        assert!(followup_context.contains("processor"));
+    }
+}
+
+#[tokio::test]
+async fn clarification_hints_refresh_contracts_allow_new_targets_and_expire() {
+    for scenario in ["updated", "changed", "deleted", "stale", "status"] {
+        let discovery = InputDiscovery::new(if scenario == "deleted" {
+            Value::Null
+        } else {
+            json!({"type":"number"})
+        });
+        discovery
+            .records
+            .lock()
+            .unwrap()
+            .push(json!({"id":uuid::Uuid::new_v4().to_string(),
+            "sessionId":"input-session","kind":"input_clarification","status":"awaiting_input",
+            "result":{"capabilityId":"processor","fields":["oldField"],"goal":"Earlier goal",
+                "userMessageCount":if scenario == "stale" {0} else {1}}}));
+        let target = if scenario == "updated" { "processor" } else { "other" };
+        let message = if scenario == "updated" {
+            "Use 7"
+        } else {
+            "Switch to other for 7"
+        };
+        let mut responses = vec![decision(
+            if scenario == "status" {
+                Intent::Status
+            } else {
+                Intent::Task
+            },
+            if scenario == "status" { "" } else { message },
+            "Current request",
+        )];
+        if scenario == "status" {
+            responses.push(text("Waiting for input."));
+        } else {
+            if target == "other" {
+                responses.push(call("list_capabilities", json!({})));
+            }
+            responses.push(call(
+                "execute_capability",
+                json!({"capability_id":target,"bindings":[
+                {"input":"input","source":"message","message":2,"quote":"7","value_json":"7"}]}),
+            ));
+        }
+        let model = ScriptedModel::new(responses);
+        let reply = runtime()
+            .run_with_discovery(
+                &model,
+                &ModelProvider::Gemini,
+                AssistantRequest {
+                    context: input_context(),
+                    contents: vec![
+                        Content::new("user").with_text("Earlier goal"),
+                        text("Please supply input."),
+                        Content::new("user").with_text(message),
+                    ],
+                    capabilities: vec![],
+                },
+                &|_| Ok(()),
+                &discovery,
+            )
+            .await
+            .unwrap();
+        if scenario == "status" {
+            assert!(reply.call.is_none());
+        } else {
+            assert_eq!(reply.call.unwrap().workflow_id, target);
+        }
+        let requests = model.requests.lock().unwrap();
+        let instruction = content_text(&requests[1].contents[0]);
+        assert_eq!(
+            instruction.contains("Previous input clarification"),
+            matches!(scenario, "updated" | "changed")
+        );
+        assert!(requests[1].tools.contains_key("list_capabilities"));
+        if scenario == "updated" {
+            assert!(instruction.contains("\"inputSchema\""));
+            assert!(instruction.contains("\"number\""));
+        }
+    }
+}
+
+#[tokio::test]
+async fn corrected_binding_in_the_same_turn_resolves_the_clarification_record() {
+    let discovery = InputDiscovery::new(json!({"type":["number","null"]}));
+    let model = ScriptedModel::new(vec![
+        decision(Intent::Task, "Process input 0", "Process input"),
+        call(
+            "execute_capability",
+            json!({"capability_id":"processor","bindings":[
+            {"input":"input","source":"message","message":0,"quote":"Process input","value_json":"null"}]}),
+        ),
+        call(
+            "execute_capability",
+            json!({"capability_id":"processor","bindings":[
+            {"input":"input","source":"message","message":0,"quote":"0","value_json":"0"}]}),
+        ),
+    ]);
+    let reply = runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: input_context(),
+                contents: vec![Content::new("user").with_text("Process input 0")],
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &discovery,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.call.unwrap().input, json!({"input":0}));
+    assert_eq!(discovery.records.lock().unwrap().len(), 1);
+    assert_eq!(discovery.records.lock().unwrap()[0]["status"], "resolved");
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(!requests[2].tools.contains_key("list_capabilities"));
+    assert!(requests[2].tools.contains_key("execute_capability"));
 }

@@ -123,10 +123,9 @@ impl Llm for AuthorModel {
         "scripted-author"
     }
     async fn generate_content(&self, request: LlmRequest, _: bool) -> adk_rust::Result<adk_rust::LlmResponseStream> {
-        let step = self.step.fetch_add(1, Ordering::SeqCst);
+        let step = self.step.fetch_add(1, Ordering::SeqCst) + 1;
         let mut document = document();
         let (name,args)=match step {
-            0=>("transfer_to_agent",json!({"agent_name":"workflow_author"})),
             1=>("read_skill",json!({"name":"workflow-authoring"})),
             2=>("get_workflow_reference",json!({"topic":"nodes","node_types":["start","if_else","end"]})),
             3=>{document["edges"][1]["sourceHandle"]=json!("invalid");("validate_workflow_draft",json!({"document_json":document.to_string()}))},
@@ -284,10 +283,11 @@ async fn run_generated_graph(model: &dyn Llm, store: &DraftStore, input: &str) -
 #[tokio::test]
 async fn generated_workflow_is_repaired_saved_and_executed_from_base_nodes() {
     let store = Arc::new(DraftStore::new());
-    let model = AuthorModel {
+    let scripted = Arc::new(AuthorModel {
         step: 0.into(),
         store: store.clone(),
-    };
+    });
+    let model = super::evaluation::ProbeModel::new(scripted.clone(), Duration::ZERO);
     let report = run_generated_graph(
         &model,
         &store,
@@ -295,9 +295,17 @@ async fn generated_workflow_is_repaired_saved_and_executed_from_base_nodes() {
     )
     .await
     .unwrap();
+    let cost = model.costs_since(0);
+    assert_eq!(cost["phases"]["authoring"]["callCount"], 6);
+    assert_eq!(cost["phases"]["intent"]["callCount"], 1);
+    assert_eq!(cost["phases"]["conversation"]["callCount"], 3);
+    // This fixture executes a deterministic graph with no model nodes. Model
+    // execution usage is still excluded; do not report an unmeasured zero cost.
+    assert_eq!(cost["executionIncluded"], false);
+    assert_eq!(cost["missingUsageCalls"], 10);
     assert_eq!(store.rejected.load(Ordering::SeqCst), 1);
     assert_eq!(report["status"], "passed");
-    assert_eq!(model.step.load(Ordering::SeqCst), 11);
+    assert_eq!(scripted.step.load(Ordering::SeqCst), 10);
 }
 
 #[tokio::test]
@@ -309,7 +317,6 @@ async fn authoring_intent_can_save_but_cannot_dispatch() {
         &[Content::new("user").with_text("创建草稿，不要运行")],
     );
     let model = super::tests::ScriptedModel::new(vec![
-        super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
         super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
         Content::new("model").with_text(json!({"status":"completed","summary":"已保存","assumptions":[]}).to_string()),
         Content::new("model").with_text("草稿已保存，未执行。"),
@@ -332,6 +339,19 @@ async fn authoring_intent_can_save_but_cannot_dispatch() {
         .await
         .unwrap();
     assert!(reply.call.is_none());
+    {
+        let requests = model.requests.lock().unwrap();
+        // Save, specialist outcome, delivery: no coordinator routing call.
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].tools.contains_key("save_workflow_draft"));
+        assert!(!requests[0].tools.contains_key("execute_capability"));
+        assert!(
+            requests[0]
+                .contents
+                .iter()
+                .any(|content| model::content_text(content).contains("approved_plan"))
+        );
+    }
     assert_eq!(
         store.saved.lock().unwrap().as_ref().unwrap()["validation"]["valid"],
         true
@@ -518,7 +538,6 @@ async fn empty_confirmation_does_not_block_save_only_then_explicit_execution() {
     let placeholder = json!({"id":"","decision":"approve","quote":""});
     super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
     let author = super::tests::ScriptedModel::new(vec![
-        super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
         super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
         Content::new("model")
             .with_text(json!({"status":"completed","summary":"流程已保存","assumptions":[]}).to_string()),
@@ -591,7 +610,6 @@ async fn explicit_specialist_return_delivers_native_outcome_without_replaying_tr
         content
     };
     let model = super::tests::ScriptedModel::new(vec![
-        named_call("workflow_author", "enter-author"),
         super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
         named_call("main_agent", "return-to-main"),
         Content::new("model").with_text("Saved without execution."),
@@ -667,7 +685,6 @@ async fn author_internals_are_isolated_but_coordinator_reads_and_signatures_surv
         thought_signature: Some("coordinator-signature".into()),
     });
     let model = super::tests::ScriptedModel::new(vec![
-        super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
         super::tests::call("get_workflow_reference", json!({"topic":"configuration"})),
         super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
         Content::new("model")
@@ -697,8 +714,8 @@ async fn author_internals_are_isolated_but_coordinator_reads_and_signatures_surv
     assert!(store.saved.lock().unwrap().is_some());
     {
         let requests = model.requests.lock().unwrap();
-        let author_history = serde_json::to_string(&requests[3].contents).unwrap();
-        let delivery = &requests[4].contents;
+        let author_history = serde_json::to_string(&requests[2].contents).unwrap();
+        let delivery = &requests[3].contents;
         let delivery_text = serde_json::to_string(delivery).unwrap();
         assert!(author_history.contains("# Native resource configuration"));
         assert!(author_history.contains("save_workflow_draft"));
@@ -764,7 +781,6 @@ async fn saved_outcome_does_not_authorize_a_new_coordinator_write() {
     let user = Content::new("user").with_text("创建草稿，不要运行");
     super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
     let model = super::tests::ScriptedModel::new(vec![
-        super::tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
         super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
         Content::new("model").with_text(json!({"status":"completed","summary":"Saved.","assumptions":[]}).to_string()),
         super::tests::call("save_workflow_draft", json!({"document_json":"{}"})),

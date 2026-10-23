@@ -16,6 +16,34 @@ pub(super) fn content_text(content: &Content) -> String {
         .collect()
 }
 
+/// Tool-round narration is progress, not a prefix of the eventual answer.
+pub(super) async fn generate_answer(
+    model: &dyn Llm,
+    request: LlmRequest,
+    emit: &(dyn Fn(AssistantStreamEvent) -> Result<()> + Send + Sync),
+) -> Result<Content> {
+    // A function call can arrive after text, so classify the complete response
+    // before exposing its text. Thinking and explicit progress remain live.
+    let content = generate(model, request, &|event| match event {
+        AssistantStreamEvent::TextDelta { .. } | AssistantStreamEvent::TextReplace { .. } => Ok(()),
+        event => emit(event),
+    })
+    .await?;
+    let text = content_text(&content);
+    if !text.trim().is_empty() {
+        if content
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::FunctionCall { .. }))
+        {
+            emit(AssistantStreamEvent::Activity { summary: text })?;
+        } else {
+            emit(AssistantStreamEvent::TextReplace { text })?;
+        }
+    }
+    Ok(content)
+}
+
 pub(super) fn instructed(provider: &ModelProvider, instruction: &str, history: &[Content]) -> Vec<Content> {
     // ADK 2.3 Gemini ignores role=system entirely. Its own LlmAgent uses a user
     // preamble. Keep that compatibility at this boundary, not in saved history.
@@ -111,6 +139,43 @@ pub(super) async fn generate(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn duplicate_read_views_survive_wire_splitting_without_changing_calls() {
+        let calls = Content {
+            role: "model".into(),
+            parts: ["read-1", "read-2"]
+                .map(|id| Part::FunctionCall {
+                    name: "get_workflow_reference".into(),
+                    args: json!({"topic":"state"}),
+                    id: Some(id.into()),
+                    thought_signature: Some("provider-signature".into()),
+                })
+                .to_vec(),
+        };
+        let result = json!({"content":"state contract".repeat(500)});
+        let replies: Content = serde_json::from_value(json!({"role":"function","parts":[
+            {"functionResponse":{"name":"get_workflow_reference","response":result},"id":"read-1"},
+            {"functionResponse":{"name":"get_workflow_reference","response":result},"id":"read-2"}
+        ]}))
+        .unwrap();
+        let model = crate::module::assistant::tests::ScriptedModel::new(vec![Content::new("model").with_text("ok")]);
+        generate(&model, LlmRequest::new("test", vec![calls.clone(), replies]), &|_| {
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let requests = model.requests.lock().unwrap();
+        let wire = serde_json::to_value(&requests[0].contents).unwrap();
+        assert_eq!(wire[0], serde_json::to_value(calls).unwrap());
+        assert_eq!(wire[1]["parts"][0]["id"], "read-1");
+        assert_eq!(
+            wire[1]["parts"][0]["functionResponse"]["response"]["duplicateOfToolCallId"],
+            "read-2"
+        );
+        assert_eq!(wire[2]["parts"][0]["id"], "read-2");
+        assert_eq!(wire[2]["parts"][0]["functionResponse"]["response"], result);
+    }
 
     #[tokio::test]
     async fn replayed_stream_fragments_preserve_markdown_whitespace_and_tool_boundaries() {

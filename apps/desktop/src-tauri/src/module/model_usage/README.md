@@ -86,3 +86,16 @@ for related work and record actual task outcomes separately from model status.
 Compare representative ordinary chat, long history, planning, creation, revision,
 tool failure, cancellation and result delivery. Include quality and authorization
 checks alongside tokens/calls/latency; a single workflow is not a product benchmark.
+
+The opt-in assistant evaluation report includes per-case wall time and per-call
+request character counts, configuration hash, status and observed provider usage.
+Missing usage remains null; cumulative streaming snapshots replace earlier values.
+Its routing/delivery fixtures do not execute workflows, so `executionIncluded=false`
+prevents treating those costs as end-to-end task costs. Lifecycle execution costs
+still come from the native ledger. Scripted tests verify accounting and context
+preservation, not model quality or measured provider savings.
+
+Assistant request projection keeps the latest full copy of identical large native
+read results and replaces earlier copies with their tool-call reference. Comparison
+includes all response metadata; writes, execution receipts and errors are excluded.
+This affects only model-facing copies, not stored history or binding evidence.

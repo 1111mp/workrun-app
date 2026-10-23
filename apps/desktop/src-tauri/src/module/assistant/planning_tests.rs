@@ -59,7 +59,7 @@ pub(super) async fn operate(
             vec![],
         )?;
         tasks.suspend(&plan).await?;
-        if let Some(old) = old {
+        if let Some(old) = old.filter(|p| matches!(p.status.as_str(), "ready" | "needs_clarification")) {
             tasks.decide(&old, false).await?;
         }
         return tasks.decorate(&plan).await;
@@ -209,7 +209,6 @@ async fn planning_clarification_revision_native_approval_and_creation_are_separa
     // Native button approval starts configuration directly; no intent model can
     // reinterpret it as execution or revoke it with an unrelated nullable field.
     let author = tests::ScriptedModel::new(vec![
-        tests::call("transfer_to_agent", json!({"agent_name":"workflow_author"})),
         tests::call(
             "save_workflow_draft",
             json!({"document_json":graph["document"].to_string()}),
@@ -322,7 +321,7 @@ async fn natural_acceptance_binds_the_current_plan_version_and_creates_without_e
         .save(sid, "prior", 0, Document::parse(&proposal).unwrap(), vec![])
         .unwrap();
     let graph: Value = serde_json::from_str(include_str!("fixtures/expense-review.workflow.json")).unwrap();
-    let model=tests::ScriptedModel::new(vec![Content::new("model").with_text(json!({"intent":"authoring","actionQuote":"按这个方案创建","authoringQuote":"按这个方案创建","summary":"创建确定的流程","planFeedback":{"id":plan.id,"version":plan.version,"decision":"approve","quote":"按这个方案创建"}}).to_string()),tests::call("transfer_to_agent",json!({"agent_name":"workflow_author"})),tests::call("save_workflow_draft",json!({"document_json":graph["document"].to_string()})),finish("completed"),Content::new("model").with_text("已保存，未运行。")]);
+    let model=tests::ScriptedModel::new(vec![Content::new("model").with_text(json!({"intent":"authoring","actionQuote":"按这个方案创建","authoringQuote":"按这个方案创建","summary":"创建确定的流程","planFeedback":{"id":plan.id,"version":plan.version,"decision":"approve","quote":"按这个方案创建"}}).to_string()),tests::call("save_workflow_draft",json!({"document_json":graph["document"].to_string()})),finish("completed"),Content::new("model").with_text("已保存，未运行。")]);
     let reply = tests::runtime()
         .run_with_discovery(
             &model,
@@ -339,6 +338,13 @@ async fn natural_acceptance_binds_the_current_plan_version_and_creates_without_e
         .unwrap();
     assert!(reply.call.is_none());
     assert_eq!(store.current(sid).unwrap().unwrap().status, "saved");
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4); // Intent, save, specialist outcome, delivery.
+        assert!(requests[0].config.as_ref().unwrap().response_schema.is_some());
+        assert!(requests[1].tools.contains_key("save_workflow_draft"));
+        assert!(!requests[1].tools.contains_key("execute_capability"));
+    }
     let replay = tests::ScriptedModel::new(vec![
         Content::new("model").with_text("已从保存记录恢复结果，没有再次创建。"),
     ]);
@@ -433,7 +439,7 @@ async fn explicit_plan_acceptance_and_separate_run_request_can_propose_only_the_
             request: LlmRequest,
             stream: bool,
         ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
-            if self.step.fetch_add(1, Ordering::SeqCst) == 4 {
+            if self.step.fetch_add(1, Ordering::SeqCst) == 3 {
                 let saved = self.workspace.saved.lock().unwrap().clone().unwrap();
                 let content = tests::call(
                     "execute_capability",
@@ -455,7 +461,7 @@ async fn explicit_plan_acceptance_and_separate_run_request_can_propose_only_the_
     let graph: Value = serde_json::from_str(include_str!("fixtures/expense-review.workflow.json")).unwrap();
     let model=Combined{workspace:&workspace,step:AtomicUsize::new(0),script:tests::ScriptedModel::new(vec![
         Content::new("model").with_text(json!({"intent":"execution","actionQuote":"运行","authoringQuote":"确认方案并创建","summary":"创建确认的流程并运行","planFeedback":{"id":plan.id,"version":1,"decision":"approve","quote":"确认方案并创建"}}).to_string()),
-        tests::call("transfer_to_agent",json!({"agent_name":"workflow_author"})),tests::call("save_workflow_draft",json!({"document_json":graph["document"].to_string()})),finish("completed")])};
+        tests::call("save_workflow_draft",json!({"document_json":graph["document"].to_string()})),finish("completed")])};
     let reply = tests::runtime()
         .run_with_discovery(
             &model,

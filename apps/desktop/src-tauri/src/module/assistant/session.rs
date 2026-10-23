@@ -296,6 +296,12 @@ pub enum TurnAction {
         decision: String,
         text: String,
     },
+    RunDecision {
+        confirmation_id: String,
+        decision: String,
+        #[serde(default)]
+        text: Option<String>,
+    },
     Continue,
     Inputs {
         input: Value,
@@ -477,12 +483,39 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
             session["pendingToolDecision"] = json!({"operationId":operation_id,"interactionId":interaction_id,"checkpointId":checkpoint_id,"decision":decision,"turnKey":turn,"tool":pending["tool"],"arguments":pending["arguments"]});
             session["status"] = json!("thinking");
         },
+        TurnAction::RunDecision {
+            confirmation_id,
+            decision,
+            text,
+        } => {
+            if decision == "reselect" {
+                restart_workflow_selection(
+                    &mut session,
+                    &confirmation_id,
+                    text.as_deref().context("Feedback text missing")?,
+                )?;
+            } else {
+                input = decide_workflow_run(&mut session, &confirmation_id, &decision)?;
+                drive_needed = input.is_some();
+            }
+        },
         TurnAction::Continue => {
-            if session["status"] == "awaiting_feedback" {
+            if matches!(
+                session["status"].as_str(),
+                Some("awaiting_feedback" | "awaiting_run_confirmation")
+            ) {
                 // A delivery retry is not a user decision and cannot release a gate.
                 drive_needed = false;
             } else if session["activeCall"].is_object() && !session["activeCall"]["runId"].is_string() {
-                session["status"] = json!("needs_input");
+                if session["activeCall"]["confirmation"].is_object() {
+                    update_run_confirmation(&mut session, "superseded")?;
+                    session["activeCall"].as_object_mut().unwrap().remove("confirmation");
+                    let values = session["activeCall"]["input"].clone();
+                    require_run_confirmation(&mut session, &values)?;
+                    drive_needed = false;
+                } else {
+                    session["status"] = json!("needs_input");
+                }
             } else {
                 session["status"] = json!(if session["activeCall"]["runId"].is_string() {
                     "running"
@@ -607,7 +640,10 @@ async fn drive(
     partial: &Mutex<Option<(String, String)>>,
 ) -> Result<()> {
     ensure_workspace(workspace)?;
-    if session["status"] == "needs_input" {
+    if matches!(
+        session["status"].as_str(),
+        Some("needs_input" | "awaiting_run_confirmation")
+    ) {
         return Ok(());
     }
     if session["pendingToolDecision"].is_object() {
@@ -915,9 +951,112 @@ async fn launch(
     {
         bail!("Workflow execution is disabled for this assistant");
     }
+    if !require_run_confirmation(session, &input)? {
+        commit(pool, workspace, session).await?;
+        return Ok(false);
+    }
     let dsl = catalog.prepare(&workflow).await?;
     dispatch(pool, workspace, session, input, dsl, &NativeRuns).await?;
     Ok(true)
+}
+
+fn run_snapshot(session: &Value, input: &Value) -> Result<String> {
+    // Bind approval to the exact resolved definition and values, not its name.
+    super::tool_execution::digest(&json!({"workflow":session["activeCall"]["workflow"],"input":input}))
+}
+
+fn update_run_confirmation(session: &mut Value, status: &str) -> Result<()> {
+    let id = session["activeCall"]["confirmation"]["id"].clone();
+    session["activeCall"]["confirmation"]["status"] = json!(status);
+    if let Some(history) = session["workflowConfirmations"].as_array_mut()
+        && let Some(entry) = history.iter_mut().find(|entry| entry["id"] == id)
+    {
+        entry["status"] = json!(status);
+    }
+    Ok(())
+}
+
+fn require_run_confirmation(session: &mut Value, input: &Value) -> Result<bool> {
+    session["activeCall"]["input"] = input.clone();
+    let snapshot = run_snapshot(session, input)?;
+    let prior = &session["activeCall"]["confirmation"];
+    if prior["status"] == "approved" && prior["snapshotHash"] == snapshot {
+        return Ok(true);
+    }
+    if prior["status"] != "waiting" || prior["snapshotHash"] != snapshot {
+        let changed = prior.is_object();
+        if changed {
+            update_run_confirmation(session, "superseded")?;
+        }
+        let call = &session["activeCall"];
+        let turn = session["messages"]
+            .as_array()
+            .and_then(|messages| messages.iter().rev().find(|message| message["role"] == "user"))
+            .map(|m| m["id"].clone());
+        let confirmation = json!({"id":uuid::Uuid::new_v4().to_string(),"turnId":turn,
+            "workflowId":call["workflowId"],"name":call["workflow"]["document"]["settings"]["name"],
+            "description":call["workflow"]["document"]["settings"]["description"],
+            "input":input,"status":"waiting","snapshotHash":snapshot,"changed":changed});
+        session["activeCall"]["confirmation"] = confirmation.clone();
+        if !session["workflowConfirmations"].is_array() {
+            session["workflowConfirmations"] = json!([]);
+        }
+        session["workflowConfirmations"]
+            .as_array_mut()
+            .unwrap()
+            .push(confirmation);
+    }
+    session["status"] = json!("awaiting_run_confirmation");
+    Ok(false)
+}
+
+fn decide_workflow_run(session: &mut Value, id: &str, decision: &str) -> Result<Option<Value>> {
+    anyhow::ensure!(
+        matches!(decision, "approve" | "cancel" | "reselect"),
+        "Invalid workflow decision"
+    );
+    anyhow::ensure!(
+        session["status"] == "awaiting_run_confirmation"
+            && !session["activeCall"]["runId"].is_string()
+            && session["activeCall"]["confirmation"]["id"] == id
+            && session["activeCall"]["confirmation"]["status"] == "waiting",
+        "Workflow confirmation changed; reload the request"
+    );
+    if decision != "approve" {
+        let reselect = decision == "reselect";
+        update_run_confirmation(session, if reselect { "rejected" } else { "cancelled" })?;
+        let target = session["activeCall"]["workflowId"].clone();
+        append_result(
+            session,
+            json!({"status":"cancelled","reason":if reselect {"User rejected this workflow selection; reconsider the original request"} else {"User cancelled workflow execution before dispatch"},"rejectedWorkflowId":if reselect {target} else {Value::Null}}),
+            "cancelled",
+        )?;
+        session["status"] = json!("idle");
+        return Ok(None);
+    }
+    update_run_confirmation(session, "approved")?;
+    session["status"] = json!("thinking");
+    Ok(Some(session["activeCall"]["input"].clone()))
+}
+
+fn restart_workflow_selection(session: &mut Value, id: &str, text: &str) -> Result<()> {
+    anyhow::ensure!(
+        !text.trim().is_empty() && text.len() <= 1000,
+        "Invalid workflow selection feedback"
+    );
+    // Finish the rejected signed call before starting a genuine user-feedback
+    // turn. It grants no approval to any replacement workflow.
+    decide_workflow_run(session, id, "reselect")?;
+    session["messages"]
+        .as_array_mut()
+        .context("messages missing")?
+        .push(json!({
+            "id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,
+            "content":{"role":"user","parts":[{"text":text}]}
+        }));
+    session["steps"] = json!(0);
+    session["status"] = json!("thinking");
+    Ok(())
 }
 
 pub(super) struct RunObservation {
@@ -1092,6 +1231,110 @@ fn append_result(session: &mut Value, response: Value, text: &str) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn workflow_run_confirmation_survives_reload_and_continue_cannot_dispatch() {
+        let (pool, mut session, runs) = dispatch_fixture(false).await;
+        assert!(!require_run_confirmation(&mut session, &json!({"period":"week"})).unwrap());
+        assert_eq!(session["status"], "awaiting_run_confirmation");
+        commit(&pool, "personal", &session).await.unwrap();
+        let mut restored = get(&pool, "personal", session["id"].as_str().unwrap()).await.unwrap();
+        assert_eq!(
+            restored["activeCall"]["confirmation"],
+            session["activeCall"]["confirmation"]
+        );
+        // Drive also guards the gate, even if a caller supplies input directly.
+        drive(
+            &pool,
+            "personal",
+            &mut restored,
+            None,
+            Some(json!({"period":"week"})),
+            &Mutex::new(None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.starts.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let id = restored["activeCall"]["confirmation"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let input = decide_workflow_run(&mut restored, &id, "approve").unwrap().unwrap();
+        assert!(decide_workflow_run(&mut restored, &id, "approve").is_err());
+        assert!(require_run_confirmation(&mut restored, &input).unwrap());
+        assert_eq!(restored["workflowConfirmations"][0]["status"], "approved");
+        runs.complete.store(true, std::sync::atomic::Ordering::SeqCst);
+        dispatch(&pool, "personal", &mut restored, input, json!({}), runs.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(runs.starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn workflow_run_confirmation_cancels_without_execution_or_another_model_call() {
+        let mut session = json!({"messages":[],"activeCall":{"workflowId":"selected","toolName":"execute_capability","callId":"call", "workflow":{"id":"selected","document":{"settings":{"name":"Selected"}}}}});
+        require_run_confirmation(&mut session, &json!({"value":0})).unwrap();
+        let id = session["activeCall"]["confirmation"]["id"].as_str().unwrap().to_owned();
+        assert!(decide_workflow_run(&mut session, "stale", "approve").is_err());
+        assert!(decide_workflow_run(&mut session, &id, "cancel").unwrap().is_none());
+        assert_eq!(session["status"], "idle");
+        assert!(session["activeCall"].is_null());
+        assert_eq!(session["workflowConfirmations"][0]["status"], "cancelled");
+        assert_eq!(
+            session["messages"][0]["content"]["parts"][0]["functionResponse"]["response"]["status"],
+            "cancelled"
+        );
+        assert!(decide_workflow_run(&mut session, &id, "approve").is_err());
+    }
+
+    #[test]
+    fn rejecting_selection_records_feedback_as_a_new_turn_and_requires_confirmation_again() {
+        let mut session = json!({"steps":1,"messages":[{"id":"user","role":"user","text":"Process my document","content":{"role":"user","parts":[{"text":"Process my document"}]}}],
+            "activeCall":{"workflowId":"wrong","toolName":"execute_capability","callId":"original", "workflow":{"id":"wrong","document":{"settings":{"name":"Wrong workflow"}}}}});
+        require_run_confirmation(&mut session, &json!({})).unwrap();
+        let id = session["activeCall"]["confirmation"]["id"].as_str().unwrap().to_owned();
+        let feedback = "This is not the workflow I want. Reconsider the original request and ask if needed.";
+        assert!(restart_workflow_selection(&mut session, &id, "").is_err());
+        assert!(restart_workflow_selection(&mut session, "stale", feedback).is_err());
+        restart_workflow_selection(&mut session, &id, feedback).unwrap();
+        assert!(session["activeCall"].is_null());
+        assert_eq!(session["status"], "thinking");
+        assert_eq!(session["steps"], 0);
+        assert_eq!(session["workflowConfirmations"][0]["status"], "rejected");
+        let receipt = &session["messages"][1]["content"]["parts"][0];
+        assert_eq!(receipt["id"], "original");
+        assert_eq!(receipt["functionResponse"]["response"]["rejectedWorkflowId"], "wrong");
+        assert_eq!(session["messages"][2]["role"], "user");
+        assert_eq!(session["messages"][2]["content"]["parts"][0]["text"], feedback);
+        assert!(restart_workflow_selection(&mut session, &id, feedback).is_err());
+        assert_eq!(session["messages"].as_array().unwrap().len(), 3);
+        session["activeCall"] = json!({"workflowId":"replacement","workflow":{"id":"replacement","document":{"settings":{"name":"Replacement"}}}});
+        assert!(!require_run_confirmation(&mut session, &json!({})).unwrap());
+        assert_ne!(session["activeCall"]["confirmation"]["id"], id);
+        assert_eq!(session["status"], "awaiting_run_confirmation");
+        assert!(decide_workflow_run(&mut session, &id, "approve").is_err());
+    }
+
+    #[test]
+    fn changed_workflow_or_input_requires_a_new_version_bound_confirmation() {
+        for change in ["workflow", "input"] {
+            let mut session = json!({"messages":[],"activeCall":{"workflowId":"selected","workflow":{"id":"selected","document":{"settings":{"name":"Selected"}}}}});
+            let input = json!({"amount":0});
+            require_run_confirmation(&mut session, &input).unwrap();
+            let id = session["activeCall"]["confirmation"]["id"].as_str().unwrap().to_owned();
+            decide_workflow_run(&mut session, &id, "approve").unwrap();
+            let input = if change == "input" { json!({"amount":10}) } else { input };
+            if change == "workflow" {
+                session["activeCall"]["workflow"]["document"]["settings"]["name"] = json!("Updated");
+            }
+            assert!(!require_run_confirmation(&mut session, &input).unwrap());
+            assert_ne!(session["activeCall"]["confirmation"]["id"], id);
+            assert_eq!(session["workflowConfirmations"][0]["status"], "superseded");
+            assert_eq!(session["activeCall"]["confirmation"]["changed"], true);
+            assert_eq!(session["activeCall"]["confirmation"]["input"], input);
+            assert!(decide_workflow_run(&mut session, &id, "approve").is_err());
+        }
+    }
+
     #[tokio::test]
     async fn stopping_between_run_identity_and_queue_creation_does_not_leave_a_pending_call() {
         let pool = pool().await;

@@ -74,6 +74,24 @@ pub trait WorkflowDiscovery: Send + Sync {
     }
 }
 
+/// A literal miss is not evidence that no reusable capability exists (notably
+/// across languages). Supply a small unfiltered page in the same tool response.
+pub(super) async fn discover_capabilities(discovery: &dyn WorkflowDiscovery, args: &Value) -> Result<Value> {
+    let result = discovery.list_capabilities(args).await?;
+    if args["capability_id"].is_string()
+        || args["query"].as_str().unwrap_or("").trim().is_empty()
+        || args["cursor"].as_str().is_some_and(|cursor| !cursor.is_empty())
+        || !result["items"].as_array().is_some_and(Vec::is_empty)
+    {
+        return Ok(result);
+    }
+    let mut fallback = discovery
+        .list_capabilities(&json!({"limit":args["limit"].as_u64().unwrap_or(5).clamp(1,5)}))
+        .await?;
+    fallback["searchFallback"] = json!({"query":args["query"],"reason":"No literal matches. These are unfiltered recent summaries, not semantic matches. Compare purpose and fetch the selected exact contract before reuse or new planning. For further pages omit query and use nextCursor."});
+    Ok(fallback)
+}
+
 pub(in crate::module::assistant) const EXECUTE_WORKFLOW: &str = "execute_workflow";
 
 pub(in crate::module::assistant) fn list_page(capabilities: &[Capability], args: &Value) -> Result<Value> {
@@ -103,4 +121,55 @@ pub(in crate::module::assistant) fn list_page(capabilities: &[Capability], args:
         .collect::<Vec<_>>();
     let next = offset.saturating_add(items.len());
     Ok(json!({"items":items,"nextCursor":(next < filtered.len()).then(||next.to_string())}))
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+    use std::sync::Mutex;
+    struct Search {
+        calls: Mutex<Vec<Value>>,
+    }
+    #[async_trait::async_trait]
+    impl WorkflowDiscovery for Search {
+        async fn list(&self, args: &Value) -> Result<Value> {
+            self.calls.lock().unwrap().push(args.clone());
+            if args["query"].is_string() || args["capability_id"].is_string() {
+                return Ok(json!({"items":[],"nextCursor":null}));
+            }
+            Ok(json!({"items":[{"id":"existing","name":"已有的文档整理流程"}],"nextCursor":"5"}))
+        }
+        async fn describe(&self, _: &str) -> Result<Capability> {
+            bail!("unused")
+        }
+    }
+    #[tokio::test]
+    async fn literal_misses_return_bounded_candidates_without_another_model_turn() {
+        let search = Search {
+            calls: Mutex::new(vec![]),
+        };
+        let result = discover_capabilities(&search, &json!({"query":"document organization workflow","limit":50}))
+            .await
+            .unwrap();
+        assert_eq!(result["items"][0]["id"], "existing");
+        assert_eq!(result["searchFallback"]["query"], "document organization workflow");
+        assert_eq!(result["nextCursor"], "5");
+        let calls = search.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1], json!({"limit":5}));
+    }
+    #[tokio::test]
+    async fn exact_lookup_and_later_pages_never_substitute_unrelated_candidates() {
+        for args in [
+            json!({"capability_id":"gone"}),
+            json!({"query":"missing","cursor":"5"}),
+            json!({"limit":5}),
+        ] {
+            let search = Search {
+                calls: Mutex::new(vec![]),
+            };
+            discover_capabilities(&search, &args).await.unwrap();
+            assert_eq!(search.calls.lock().unwrap().len(), 1);
+        }
+    }
 }

@@ -145,6 +145,7 @@ Read it as:
     files = json.loads(Path("/artifacts/manifest.json").read_text())
     text = Path(files[0]["path"]).read_text()
 For multiple files, match entry["reference"]["id"] to the input ArtifactRef ID. Never guess paths or read an artifact directory as a file.
+For a known input contract and bounded read-only processing, prefer one script that looks up the manifest, reads the selected files, validates the actual content, and computes final_result. Inspect inside that program instead of spending separate model turns only to print the manifest and raw file. Use observation when its result is genuinely needed to choose the next operation; keep required tool confirmations, validation and error handling.
 Monty supports only the modules listed in its language briefing. Passing bound dictionary methods as callbacks is unsupported (e.g. max(mapping, key=mapping.get)); use an explicit function or loop.
 The last Python expression must be {"type":"final_result","value":{...named output fields...}}. Return computed values, not a claim that global state was written. Workrun maps this object to node-private state; the configured state.globalKeys publishes selected fields. Do not call imaginary state tools or repeat computation just to publish.
 Write deliverable files under /outputs with pathlib.Path; successful regular files are exported as artifacts. Do not invent ArtifactRef objects, host paths or dependencies. Use configured tools for unsupported document/media processing."#;

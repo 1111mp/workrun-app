@@ -436,11 +436,9 @@ mod tests {
                 crate::module::assistant::resources::read(guide).unwrap()
             );
         }
-        assert!(
-            !skills
-                .mandatory_instructions()
-                .unwrap()
-                .contains("# Workflow authoring")
+        assert_eq!(
+            skills.mandatory_instructions().unwrap(),
+            skills.read("workflow-authoring").unwrap()
         );
     }
     #[test]

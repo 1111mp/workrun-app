@@ -65,34 +65,132 @@ struct CaseResult {
     answer: Option<String>,
     error: Option<String>,
     infrastructure_error: bool,
+    cost: Value,
 }
 
 fn baseline() -> Baseline {
     serde_json::from_str(include_str!("fixtures/baseline.json")).expect("invalid main-agent baseline")
 }
-fn grade(case: &Case, intent: Option<Intent>, reply: &AssistantReply, capabilities: &[tools::Capability]) -> Checks {
+
+// Use the production discovery boundary with an isolated catalog. The adapter
+// exposes contracts only; it cannot run workflows or touch the user's workspace.
+struct Catalog<'a>(&'a [tools::Capability]);
+#[async_trait::async_trait]
+impl tools::WorkflowDiscovery for Catalog<'_> {
+    async fn list(&self, args: &Value) -> Result<Value> {
+        tools::list_page(self.0, args)
+    }
+    async fn list_capabilities(&self, args: &Value) -> Result<Value> {
+        main_agent::tools::ToolRegistry {
+            capabilities: self.0,
+            skills: &SkillCatalog::builtin(),
+            history: &[],
+            execution_allowed: false,
+            authoring_allowed: false,
+            planning_allowed: false,
+            workflows_enabled: true,
+            workspace_tools_allowed: false,
+        }
+        .read("list_capabilities", args)
+    }
+    async fn describe(&self, id: &str) -> Result<tools::Capability> {
+        self.0
+            .iter()
+            .find(|cap| cap.id == id)
+            .cloned()
+            .context("Unknown evaluation capability")
+    }
+}
+
+#[tokio::test]
+async fn case_costs_preserve_calls_and_unknown_usage_without_claiming_execution() {
+    let suite = baseline();
+    let case = suite.cases.iter().find(|case| case.id == "greeting").unwrap();
+    let model = ProbeModel::new(
+        Arc::new(tests::ScriptedModel::new(vec![
+            Content::new("model").with_text(
+                json!({"intent":"conversation","actionQuote":"",
+            "summary":"问候","reuseExisting":false,"authoringQuote":""})
+                .to_string(),
+            ),
+            Content::new("model").with_text("你好"),
+        ])),
+        Duration::ZERO,
+    );
+    let result = evaluate_case(&tests::runtime(), &model, case, &suite.capabilities).await;
+    assert!(result.checks.passed());
+    assert_eq!(result.cost["calls"].as_array().unwrap().len(), 2);
+    assert_eq!(result.cost["calls"][0]["phase"], "intent");
+    assert_eq!(result.cost["calls"][1]["phase"], "conversation");
+    for call in result.cost["calls"].as_array().unwrap() {
+        assert!(call["contentsChars"].as_u64().unwrap() > 0);
+        assert!(call["usage"].is_null());
+        assert!(!call.to_string().contains("问候"));
+    }
+    assert_eq!(result.cost["executionIncluded"], false);
+    assert!(report(&[result], 1, "test")["cases"][0]["cost"].is_object());
+}
+
+struct CostFixture(bool);
+#[async_trait::async_trait]
+impl Llm for CostFixture {
+    fn name(&self) -> &str {
+        "cost-fixture"
+    }
+    async fn generate_content(&self, _: LlmRequest, _: bool) -> adk_rust::Result<LlmResponseStream> {
+        if self.0 {
+            return Err(adk_rust::AdkError::agent("connection failed"));
+        }
+        let chunks = [3, 5].map(|output| {
+            Ok(adk_rust::LlmResponse {
+                usage_metadata: Some(adk_rust::UsageMetadata {
+                    prompt_token_count: 7,
+                    candidates_token_count: output,
+                    total_token_count: 7 + output,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        });
+        Ok(Box::pin(futures::stream::iter(chunks)))
+    }
+}
+
+#[tokio::test]
+async fn cost_probe_keeps_failed_calls_and_replaces_cumulative_snapshots_before_yield() {
+    let model = ProbeModel::new(Arc::new(CostFixture(false)), Duration::ZERO);
+    let mut stream = model
+        .generate_content(LlmRequest::new("test", vec![]), true)
+        .await
+        .unwrap();
+    stream.next().await.unwrap().unwrap();
+    assert_eq!(model.calls.lock().unwrap()[0]["usage"]["totalTokens"], 10);
+    stream.next().await.unwrap().unwrap();
+    assert_eq!(model.calls.lock().unwrap()[0]["usage"]["totalTokens"], 12);
+    drop(stream);
+    assert_eq!(model.calls.lock().unwrap().len(), 1);
+    assert_eq!(model.calls.lock().unwrap()[0]["status"], "started");
+
+    let failed = ProbeModel::new(Arc::new(CostFixture(true)), Duration::ZERO);
+    assert!(
+        failed
+            .generate_content(LlmRequest::new("test", vec![]), true)
+            .await
+            .is_err()
+    );
+    let calls = failed.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["status"], "dispatch_failed");
+    assert!(calls[0]["usage"].is_null());
+}
+fn grade(case: &Case, intent: Option<Intent>, reply: &AssistantReply) -> Checks {
     let workflow_id = reply.call.as_ref().map(|call| call.workflow_id.as_str());
     let routing = match case.expected.routing {
         Routing::None => reply.call.is_none(),
         Routing::Required => workflow_id == case.expected.workflow_id.as_deref() && reply.call.is_some(),
-        Routing::Clarify => match &reply.call {
-            None => !reply.text.trim().is_empty(),
-            Some(call) => {
-                workflow_id == case.expected.workflow_id.as_deref()
-                    && capabilities
-                        .iter()
-                        .find(|cap| cap.id == call.workflow_id)
-                        .is_some_and(|cap| {
-                            cap.parameters["required"].as_array().is_some_and(|keys| {
-                                keys.iter().any(|key| {
-                                    call.input.get(key.as_str().unwrap_or_default()).is_none_or(|value| {
-                                        value.is_null() || value == "" || value.as_array().is_some_and(Vec::is_empty)
-                                    })
-                                })
-                            })
-                        })
-            },
-        },
+        // Missing business input must produce a user-facing clarification,
+        // not an executable proposal carrying missing or empty placeholders.
+        Routing::Clarify => reply.call.is_none() && !reply.text.trim().is_empty(),
     };
     Checks {
         intent: Some(intent.is_some_and(|intent| case.expected.intents.contains(&intent))),
@@ -112,12 +210,56 @@ fn grade(case: &Case, intent: Option<Intent>, reply: &AssistantReply, capabiliti
 
 pub(super) struct ProbeModel {
     inner: Arc<dyn Llm>,
+    usage: Arc<Mutex<Vec<Value>>>,
     intents: Arc<Mutex<Vec<Intent>>>,
     tool_names: Arc<Mutex<Vec<String>>>,
     last_request: tokio::sync::Mutex<Option<tokio::time::Instant>>,
     interval: Duration,
+    calls: Arc<Mutex<Vec<Value>>>,
+    delivery: std::sync::atomic::AtomicBool,
 }
 impl ProbeModel {
+    pub(super) fn costs_since(&self, first: usize) -> Value {
+        let calls = self.calls.lock().unwrap()[first..].to_vec();
+        let mut phases = serde_json::Map::new();
+        for phase in [
+            "intent",
+            "conversation",
+            "planning",
+            "authoring",
+            "delivery",
+            "unclassified",
+        ] {
+            let selected = calls.iter().filter(|call| call["phase"] == phase).collect::<Vec<_>>();
+            if selected.is_empty() {
+                continue;
+            }
+            let missing = selected.iter().filter(|call| call["usage"].is_null()).count();
+            let mut totals = json!({});
+            for key in ["inputTokens", "outputTokens", "totalTokens"] {
+                totals[key] = json!(
+                    selected
+                        .iter()
+                        .filter_map(|call| call["usage"][key].as_u64())
+                        .sum::<u64>()
+                );
+            }
+            phases.insert(
+                phase.into(),
+                json!({"callCount":selected.len(),
+                "missingUsageCalls":missing,"usageComplete":missing == 0,"knownTokens":totals}),
+            );
+        }
+        json!({"callCount":calls.len(),
+            "missingUsageCalls":calls.iter().filter(|call|call["usage"].is_null()).count(),
+            "phases":phases,"calls":calls,"executionIncluded":false})
+    }
+    pub(super) fn set_delivery(&self, delivery: bool) {
+        self.delivery.store(delivery, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub(super) fn usage(&self) -> Vec<Value> {
+        self.usage.lock().unwrap().clone()
+    }
     pub(super) fn called_tools(&self) -> Vec<String> {
         self.tool_names.lock().unwrap().clone()
     }
@@ -127,10 +269,13 @@ impl ProbeModel {
     pub(super) fn new(inner: Arc<dyn Llm>, interval: Duration) -> Self {
         Self {
             inner,
+            usage: Arc::new(Mutex::new(vec![])),
             intents: Arc::new(Mutex::new(vec![])),
             tool_names: Arc::new(Mutex::new(vec![])),
             last_request: tokio::sync::Mutex::new(None),
             interval,
+            calls: Arc::new(Mutex::new(vec![])),
+            delivery: false.into(),
         }
     }
 }
@@ -155,12 +300,50 @@ impl Llm for ProbeModel {
         }
         *previous = Some(tokio::time::Instant::now());
         drop(previous);
-        let mut source = self.inner.generate_content(request, stream).await?;
+        let purpose = crate::module::model_usage::current().purpose;
+        let phase = if is_intent {
+            "intent"
+        } else if matches!(purpose.as_str(), "planning" | "authoring") {
+            purpose.as_str()
+        } else if self.delivery.load(std::sync::atomic::Ordering::Relaxed) {
+            "delivery"
+        } else if purpose == "conversation" {
+            "conversation"
+        } else {
+            "unclassified"
+        };
+        let call_index = {
+            let mut calls = self.calls.lock().unwrap();
+            let index = calls.len();
+            calls.push(json!({"phase":phase,
+                "contentsChars":serde_json::to_string(&request.contents).unwrap().chars().count(),
+                "toolsChars":serde_json::to_string(&request.tools).unwrap().chars().count(),
+                "configHash":tool_execution::digest(&request.config).unwrap(),
+                "status":"started","usage":null}));
+            index
+        };
+        let mut source = match self.inner.generate_content(request, stream).await {
+            Ok(source) => source,
+            Err(error) => {
+                self.calls.lock().unwrap()[call_index]["status"] = json!("dispatch_failed");
+                return Err(error);
+            },
+        };
+        let calls = self.calls.clone();
+        let usage = self.usage.clone();
         let intents = self.intents.clone();
         let tool_names = self.tool_names.clone();
         Ok(Box::pin(async_stream::stream! {
             let mut probe = ReplyStream::new();
+            let mut last_usage = None;
             while let Some(response) = source.next().await {
+                if let Ok(response) = &response && let Some(value) = &response.usage_metadata {
+                    // Streamed usage is cumulative; count only the final snapshot per request.
+                    last_usage = Some(json!({"inputTokens":value.prompt_token_count,"outputTokens":value.candidates_token_count,"totalTokens":value.total_token_count}));
+                    // Store before yielding: a caller can stop at a tool call.
+                    calls.lock().unwrap()[call_index]["usage"] = last_usage.clone().unwrap();
+                }
+                if response.is_err() { calls.lock().unwrap()[call_index]["status"] = json!("stream_error"); }
                 if let Ok(response)=&response && let Some(content)=&response.content {
                     for part in &content.parts {if let Part::FunctionCall{name,..}=part {tool_names.lock().unwrap().push(name.clone());}}
                 }
@@ -169,6 +352,10 @@ impl Llm for ProbeModel {
                 }
                 yield response;
             }
+            if let Some(value) = last_usage { usage.lock().unwrap().push(value); }
+            let mut records = calls.lock().unwrap();
+            if records[call_index]["status"] == "started" { records[call_index]["status"] = json!("finished"); }
+            drop(records);
             if is_intent && let Ok(reply) = probe.finish(&[])
                 && let Ok(decision) = serde_json::from_str::<TurnDecision>(&reply.text) {
                 intents.lock().unwrap().push(decision.intent);
@@ -228,17 +415,22 @@ async fn evaluate_case(
     case: &Case,
     capabilities: &[tools::Capability],
 ) -> CaseResult {
+    model.set_delivery(false);
+    let discovery = Catalog(capabilities);
+    let first_call = model.calls.lock().unwrap().len();
+    let started = std::time::Instant::now();
     let first_intent = model.intents.lock().unwrap().len();
     let reply = runtime
-        .run(
+        .run_with_discovery(
             model,
             &ModelProvider::Gemini,
             AssistantRequest {
                 context: Default::default(),
                 contents: case.messages.clone(),
-                capabilities: capabilities.to_vec(),
+                capabilities: vec![],
             },
             &|_| Ok(()),
+            &discovery,
         )
         .await;
     let intent = model.intents.lock().unwrap().get(first_intent).copied();
@@ -252,6 +444,7 @@ async fn evaluate_case(
         answer: None,
         error: None,
         infrastructure_error: false,
+        cost: Value::Null,
     };
     match reply {
         Err(error) => {
@@ -265,7 +458,7 @@ async fn evaluate_case(
             result.error = Some(kind);
         },
         Ok(reply) => {
-            result.checks = grade(case, intent, &reply, capabilities);
+            result.checks = grade(case, intent, &reply);
             result.workflow_id = reply.call.as_ref().map(|call| call.workflow_id.clone());
             result.input = reply.call.as_ref().map(|call| call.input.clone());
             result.answer = Some(reply.text.clone());
@@ -279,16 +472,18 @@ async fn evaluate_case(
                         }]}))
                         .unwrap(),
                     );
+                    model.set_delivery(true);
                     match runtime
-                        .run(
+                        .run_with_discovery(
                             model,
                             &ModelProvider::Gemini,
                             AssistantRequest {
                                 context: Default::default(),
                                 contents,
-                                capabilities: capabilities.to_vec(),
+                                capabilities: vec![],
                             },
                             &|_| Ok(()),
+                            &discovery,
                         )
                         .await
                     {
@@ -317,6 +512,9 @@ async fn evaluate_case(
             }
         },
     }
+    result.cost = model.costs_since(first_call);
+    result.cost["wallTimeMs"] = json!(started.elapsed().as_millis());
+    model.set_delivery(false);
     result
 }
 
@@ -347,7 +545,7 @@ fn report(results: &[CaseResult], selected: usize, model: &str) -> Value {
         .iter()
         .filter(|result| result.error.is_none() && result.checks.passed())
         .count();
-    json!({"version":1,"createdAt":chrono::Utc::now().to_rfc3339(),"model":model,"selected":selected,"attempted":results.len(),"completed":results.iter().filter(|result|!result.infrastructure_error).count(),"passed":passed,"providerErrors":results.iter().filter(|result| result.infrastructure_error).count(),"status":if !complete {"incomplete"} else if passed == selected {"passed"} else {"failed"},"complete":complete,"metrics":metrics,"cases":results})
+    json!({"version":2,"runtimePath":"native_discovery","executionIncluded":false,"createdAt":chrono::Utc::now().to_rfc3339(),"model":model,"selected":selected,"attempted":results.len(),"completed":results.iter().filter(|result|!result.infrastructure_error).count(),"passed":passed,"providerErrors":results.iter().filter(|result| result.infrastructure_error).count(),"status":if !complete {"incomplete"} else if passed == selected {"passed"} else {"failed"},"complete":complete,"metrics":metrics,"cases":results})
 }
 
 #[test]
@@ -394,19 +592,9 @@ fn grader_separates_intent_routing_arguments_and_incomplete_runs() {
             input_sources: None,
         }),
     };
-    let correct = grade(
-        case,
-        Some(Intent::Execution),
-        &reply("sales-report", "this_week"),
-        &suite.capabilities,
-    );
+    let correct = grade(case, Some(Intent::Task), &reply("sales-report", "this_week"));
     assert!(correct.passed());
-    let incorrect = grade(
-        case,
-        Some(Intent::Conversation),
-        &reply("invoice-summary", "last_week"),
-        &suite.capabilities,
-    );
+    let incorrect = grade(case, Some(Intent::Conversation), &reply("invoice-summary", "last_week"));
     assert_eq!(
         (incorrect.intent, incorrect.routing, incorrect.arguments),
         (Some(false), Some(false), Some(false))
@@ -487,7 +675,7 @@ fn evaluation_probe_preserves_provider_schema_adaptation() {
 }
 
 #[test]
-fn grader_distinguishes_missing_inputs_from_invented_values() {
+fn grader_requires_clarification_instead_of_dispatching_missing_or_invented_inputs() {
     let suite = baseline();
     let case = suite.cases.iter().find(|case| case.id == "missing-period").unwrap();
     let reply = |input| AssistantReply {
@@ -503,18 +691,17 @@ fn grader_distinguishes_missing_inputs_from_invented_values() {
             input_sources: None,
         }),
     };
+    let mut clarified = reply(json!({}));
+    clarified.call = None;
+    clarified.text = "请提供报表周期。".into();
+    assert!(grade(case, Some(Intent::Task), &clarified).passed());
+    let files = suite.cases.iter().find(|c| c.id == "missing-files").unwrap();
+    let mut empty_files = reply(json!({"files":[]}));
+    empty_files.call.as_mut().unwrap().workflow_id = "invoice-summary".into();
+    assert_eq!(grade(files, Some(Intent::Task), &empty_files).routing, Some(false));
+    assert_eq!(grade(case, Some(Intent::Task), &reply(json!({}))).routing, Some(false));
     assert_eq!(
-        grade(case, Some(Intent::Execution), &reply(json!({})), &suite.capabilities).routing,
-        Some(true)
-    );
-    assert_eq!(
-        grade(
-            case,
-            Some(Intent::Execution),
-            &reply(json!({"period":"this_week"})),
-            &suite.capabilities
-        )
-        .routing,
+        grade(case, Some(Intent::Task), &reply(json!({"period":"this_week"}))).routing,
         Some(false)
     );
 }
@@ -531,6 +718,7 @@ fn reports_keep_provider_errors_out_of_semantic_scores_and_redact_urls() {
         answer: None,
         error: Some("rate_limited".into()),
         infrastructure_error: true,
+        cost: Value::Null,
     };
     let result = report(&[error], 2, "test");
     assert_eq!(result["status"], "incomplete");
@@ -551,4 +739,216 @@ fn reports_keep_provider_errors_out_of_semantic_scores_and_redact_urls() {
         )),
         "runtime_rejection_unavailable_tool"
     );
+}
+
+#[tokio::test]
+async fn native_evaluation_discovers_exact_contract_and_delivers_success_and_failure_without_rerun() {
+    let suite = baseline();
+    for id in ["receipt-delivery", "failed-receipt"] {
+        let case = suite.cases.iter().find(|case| case.id == id).unwrap();
+        let (input, quote, value) = if id == "receipt-delivery" {
+            ("amount", "1500", "1500")
+        } else {
+            ("period", "本周", "\"this_week\"")
+        };
+        let target = case.expected.workflow_id.as_ref().unwrap();
+        let scripted = Arc::new(tests::ScriptedModel::new(vec![
+            Content::new("model").with_text(
+                json!({"intent":"task",
+                "actionQuote":content_text(case.messages.last().unwrap()),
+                "summary":"完成当前任务","reuseExisting":false,"authoringQuote":""})
+                .to_string(),
+            ),
+            tests::call("list_capabilities", json!({"query":"unmatched literal query"})),
+            tests::call("list_capabilities", json!({"capability_id":target})),
+            tests::call(
+                "execute_capability",
+                json!({"capability_id":target,
+                "bindings":[{"input":input,"source":"message","message":0,"quote":quote,"value_json":value}]}),
+            ),
+            Content::new("model").with_text(if id == "receipt-delivery" {
+                "需要人工审核。"
+            } else {
+                "执行失败：销售数据不可用。"
+            }),
+        ]));
+        let model = ProbeModel::new(scripted.clone(), Duration::ZERO);
+        let result = evaluate_case(&tests::runtime(), &model, case, &suite.capabilities).await;
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert!(
+            result.checks.passed(),
+            "{}",
+            serde_json::to_string(&result.checks).unwrap()
+        );
+        assert_eq!(result.cost["phases"]["intent"]["callCount"], 1);
+        assert_eq!(result.cost["phases"]["conversation"]["callCount"], 3);
+        assert_eq!(result.cost["phases"]["delivery"]["callCount"], 1);
+        assert_eq!(
+            model
+                .called_tools()
+                .iter()
+                .filter(|name| *name == "execute_capability")
+                .count(),
+            1
+        );
+        let requests = scripted.requests.lock().unwrap();
+        // These tools were removed by the old no-discovery evaluator entry.
+        assert!(requests[1].tools.contains_key("inspect_operations"));
+        assert!(
+            requests[2]
+                .contents
+                .iter()
+                .any(|c| content_text(c).contains("searchFallback")
+                    || serde_json::to_string(c).unwrap().contains("searchFallback"))
+        );
+        assert!(
+            requests[3]
+                .contents
+                .iter()
+                .any(|c| serde_json::to_string(c).unwrap().contains("inputSchema"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn phase_costs_keep_known_usage_and_failed_unknown_calls_separate() {
+    let model = ProbeModel::new(Arc::new(CostFixture(false)), Duration::ZERO);
+    for phase in ["planning", "authoring", "conversation"] {
+        crate::module::model_usage::purpose(phase, async {
+            let mut stream = model
+                .generate_content(LlmRequest::new("test", vec![]), true)
+                .await
+                .unwrap();
+            while stream.next().await.is_some() {}
+        })
+        .await;
+    }
+    model.set_delivery(true);
+    let mut stream = model
+        .generate_content(LlmRequest::new("test", vec![]), true)
+        .await
+        .unwrap();
+    while stream.next().await.is_some() {}
+    for phase in ["planning", "authoring", "conversation", "delivery"] {
+        let cost = model.costs_since(0);
+        assert_eq!(cost["phases"][phase]["knownTokens"]["totalTokens"], 12);
+        assert_eq!(cost["phases"][phase]["usageComplete"], true);
+    }
+    let failed = ProbeModel::new(Arc::new(CostFixture(true)), Duration::ZERO);
+    assert!(
+        failed
+            .generate_content(LlmRequest::new("test", vec![]), true)
+            .await
+            .is_err()
+    );
+    let cost = failed.costs_since(0);
+    assert_eq!(cost["phases"]["unclassified"]["usageComplete"], false);
+    assert_eq!(cost["missingUsageCalls"], 1);
+    assert_eq!(cost["calls"][0]["status"], "dispatch_failed");
+    assert_eq!(cost["executionIncluded"], false);
+    assert_eq!(model.costs_since(3)["callCount"], 1);
+}
+
+/// Controlled prompt-text comparison only: historical runtime behavior and
+/// provider tokenization cannot be reconstructed from instruction snapshots.
+#[tokio::test]
+#[ignore = "requires explicit earlier prompt resources; local only, no provider calls"]
+async fn local_cross_task_prompt_comparison() {
+    let root = std::path::PathBuf::from(
+        std::env::var_os("WORKRUN_ASSISTANT_BASELINE_DIR").expect("Explicit baseline required"),
+    );
+    let paths = [
+        "main_agent/INTENT.md",
+        "main_agent/AGENT.md",
+        "main_agent/skills/capability-orchestration.md",
+    ];
+    let replacements = paths
+        .iter()
+        .map(|path| {
+            (
+                resources::read(path).unwrap(),
+                std::fs::read_to_string(root.join(path)).expect("Incomplete prompt baseline"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let suite = baseline();
+    let mut cases = vec![];
+    for case in &suite.cases {
+        let intent = case.expected.intents[0];
+        let quote = content_text(case.messages.last().unwrap());
+        let scripted = tests::ScriptedModel::new(vec![
+            Content::new("model").with_text(
+                json!({"intent":intent,
+                "actionQuote":if matches!(intent, Intent::Task | Intent::Execution) { &quote } else { "" },
+                "summary":"本地请求体积检查","reuseExisting":intent == Intent::Execution,
+                "authoringQuote":""})
+                .to_string(),
+            ),
+            Content::new("model").with_text("Local probe complete."),
+        ]);
+        tests::runtime()
+            .run_with_discovery(
+                &scripted,
+                &ModelProvider::Gemini,
+                AssistantRequest {
+                    context: Default::default(),
+                    contents: case.messages.clone(),
+                    capabilities: vec![],
+                },
+                &|_| Ok(()),
+                &Catalog(&suite.capabilities),
+            )
+            .await
+            .unwrap();
+        let requests = scripted.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "{}", case.id);
+        let mut phases = vec![];
+        for (index, request) in requests.iter().enumerate() {
+            let after = json!({"contents":request.contents,"tools":request.tools,"config":request.config});
+            let mut before = after.clone();
+            let mut replaced = 0;
+            // Replace only the instruction preamble, never a matching phrase in
+            // user messages, signed calls or receipts. All other inputs stay fixed.
+            for part in before["contents"][0]["parts"].as_array_mut().unwrap() {
+                if let Some(text) = part["text"].as_str() {
+                    let mut text = text.to_owned();
+                    for (current, prior) in &replacements {
+                        if text.contains(current) {
+                            replaced += 1;
+                            text = text.replace(current, prior);
+                        }
+                    }
+                    part["text"] = json!(text);
+                }
+            }
+            assert!(replaced > 0, "No instructions replaced for {} request {index}", case.id);
+            assert_eq!(before["tools"], after["tools"]);
+            assert_eq!(before["config"], after["config"]);
+            assert_eq!(
+                &before["contents"].as_array().unwrap()[1..],
+                &after["contents"].as_array().unwrap()[1..]
+            );
+            phases.push(json!({"phase":if index == 0 {"intent"} else {"conversation"},
+                "replacedResources":replaced,"beforeChars":before.to_string().chars().count(),
+                "afterChars":after.to_string().chars().count()}));
+        }
+        cases.push(json!({"id":case.id,"category":case.category,"requests":phases}));
+    }
+    let fingerprints = paths
+        .iter()
+        .zip(&replacements)
+        .map(|(path, (current, prior))| {
+            json!({"path":path,"beforeHash":tool_execution::digest(prior).unwrap(),
+            "afterHash":tool_execution::digest(current).unwrap()})
+        })
+        .collect::<Vec<_>>();
+    let report = json!({"scope":"prompt_text_only","provider":"gemini","resources":fingerprints,
+        "baselineDirectory":root,"caseCount":cases.len(),"cases":cases,
+        "providerCalls":0,"tokenSavingsMeasured":false,"runtimeBehaviorCompared":false,
+        "unchangedResourcesNotCompared":true});
+    let path = std::env::var_os("WORKRUN_ASSISTANT_BUDGET_OUTPUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("workrun-cross-task-prompt-comparison.json"));
+    std::fs::write(&path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    eprintln!("Local prompt comparison: {}", path.display());
 }
