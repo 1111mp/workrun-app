@@ -170,7 +170,13 @@ function AssistantChat({ scope }: { scope: string }) {
 
   // A run keeps its presentation identity when the pending call becomes a
   // durable tool receipt, preserving expansion and the inner scroll position.
-  if (session?.activeCall?.runId) {
+  if (
+    session?.activeCall?.runId &&
+    !messages.some(
+      (message) =>
+        message.role === 'tool' && message.runId === session.activeCall?.runId,
+    )
+  ) {
     messages.push({
       id: `workflow-run-${session.activeCall.runId}`,
       role: 'tool',
@@ -397,6 +403,10 @@ function AssistantChat({ scope }: { scope: string }) {
                       <MessageScrollerItem
                         key={group.id}
                         messageId={group.id}
+                        // A turn contains live animations and expanding cards.
+                        // Skipping its layout can replace its height with a stale
+                        // estimate and restart animations as it re-enters view.
+                        className='[content-visibility:visible]'
                         scrollAnchor={group.role === 'user'}
                       >
                         <Message

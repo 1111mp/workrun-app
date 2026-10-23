@@ -22,6 +22,8 @@ import { Link, useLocation } from 'react-router';
 
 import type { WorkflowPlan } from '@/services/assistant';
 
+import { AssistantPlanOutcome } from './assistant-plan-outcome';
+
 export function AssistantWorkflowPlan({
   plan,
   busy,
@@ -210,9 +212,7 @@ export function AssistantWorkflowPlan({
         </CollapsibleContent>
         <CardFooter className='flex-wrap gap-2'>
           {plan.outcome?.summary && (
-            <p className='w-full' role='status'>
-              {plan.outcome.summary}
-            </p>
+            <AssistantPlanOutcome summary={plan.outcome.summary} />
           )}
           {editable && active && (
             <>

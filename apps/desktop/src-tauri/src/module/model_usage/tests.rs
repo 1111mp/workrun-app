@@ -477,3 +477,100 @@ async fn turn_totals_separate_execution_and_keep_unattributed_and_failed_calls()
         48
     );
 }
+
+#[tokio::test]
+async fn response_timings_reuse_the_original_call_and_usage() {
+    let pool = database().await;
+    let writer = Writer::new(pool.clone());
+    let model = Model(vec![chunk(10, 2, true), chunk(10, 5, false)]);
+    let (_, mut stream) = observe_with_writer(
+        &model,
+        LlmRequest::new("test", vec![]),
+        true,
+        context(),
+        Some(writer.clone()),
+    )
+    .await
+    .unwrap();
+    while stream.next().await.is_some() {}
+    let result = snapshot(&pool, &writer, "personal", "assistant", "session")
+        .await
+        .unwrap();
+    let calls = result["calls"].as_array().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(result["conversation"]["totalTokens"], 15);
+    let call = &calls[0];
+    assert_eq!(call["streaming"], true);
+    let dispatch = call["dispatchDurationMs"].as_i64().unwrap();
+    let first = call["firstResponseMs"].as_i64().unwrap();
+    let total = call["durationMs"].as_i64().unwrap();
+    assert!(dispatch <= first && first <= total);
+}
+
+#[tokio::test]
+async fn fingerprints_compare_origins_and_detect_request_changes_without_changing_requests() {
+    use std::sync::{Arc, Mutex};
+    struct Capture(Arc<Mutex<Vec<(Value, bool)>>>);
+    #[async_trait::async_trait]
+    impl Llm for Capture {
+        fn name(&self) -> &str {
+            "test"
+        }
+        async fn generate_content(&self, request: LlmRequest, streaming: bool) -> adk_rust::Result<LlmResponseStream> {
+            let value = json!({"request": request, "tools": request.tools});
+            self.0.lock().unwrap().push((value, streaming));
+            Ok(Box::pin(futures::stream::iter([Ok(chunk(10, 5, false))])))
+        }
+    }
+    let pool = database().await;
+    let writer = Writer::new(pool.clone());
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let model = Capture(captured.clone());
+    let base = LlmRequest::new("test", vec![Content::new("user").with_text("private-input-AB")]);
+    let mut inputs = vec![base.clone(), base.clone(), base.clone(), base.clone(), base.clone()];
+    inputs.push(base.clone());
+    inputs[5].config = Some(adk_rust::GenerateContentConfig {
+        temperature: Some(0.2),
+        ..Default::default()
+    });
+    inputs[2].contents = vec![Content::new("user").with_text("private-input-CD")];
+    inputs[4]
+        .tools
+        .insert("lookup".into(), json!({"name":"lookup","parameters":{"type":"object"}}));
+    let mut hashes = Vec::new();
+    for (index, request) in inputs.into_iter().enumerate() {
+        let expected = json!({"request": &request, "tools": &request.tools});
+        let mut origin = context();
+        if index == 1 {
+            origin.session_kind = None;
+            origin.session_id = None;
+        }
+        let streaming = index == 3;
+        let (id, mut responses) = observe_with_writer(&model, request, streaming, origin, Some(writer.clone()))
+            .await
+            .unwrap();
+        while responses.next().await.is_some() {}
+        assert!(writer.flush(std::time::Duration::from_secs(2)).await);
+        assert_eq!(captured.lock().unwrap()[index], (expected, streaming));
+        let text: String = sqlx::query_scalar("SELECT record_json FROM model_calls WHERE id=?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!text.contains("private-input"));
+        let record: Value = serde_json::from_str(&text).unwrap();
+        hashes.push(record["requestHash"].as_str().unwrap().to_string());
+    }
+    assert_eq!(
+        hashes[0], hashes[1],
+        "diagnostic conversation origin does not change provider requests"
+    );
+    for index in 2..6 {
+        assert_ne!(hashes[0], hashes[index]);
+    }
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        6,
+        "exactly one provider call per invocation"
+    );
+}

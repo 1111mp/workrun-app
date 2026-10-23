@@ -2100,6 +2100,8 @@
       "failed": "工具确认失败，请重新查看当前请求。"
     },
     "plan": {
+      "viewOutcome": "查看创建详情",
+      "hideOutcome": "收起创建详情",
       "viewPlan": "查看完整方案",
       "hidePlan": "收起方案",
       "revisionTarget": "此方案将修改现有工作流",
@@ -2146,6 +2148,13 @@
     "progressThinking": "正在思考",
     "progressSummary": "处理摘要",
     "runLoadFailed": "暂时无法加载执行进展",
+    "runProgress": "已完成 {{completed}} 步 · {{running}} 步执行中",
+    "runElapsed": "已用时 {{seconds}}s",
+    "runPhase": {
+      "waitingForModel": "等待模型响应",
+      "receivingModel": "正在接收模型输出",
+      "processingResult": "正在处理结果"
+    },
     "runSteps": "{{completed}} / {{count}} 个步骤",
     "runTimeline": "工作流执行进展",
     "noRunSteps": "暂时没有节点执行记录。",

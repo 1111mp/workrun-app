@@ -257,3 +257,49 @@ it.each(['saved', 'revision'] as const)(
     );
   },
 );
+
+it('renders saved outcomes as Markdown', () => {
+  view({
+    ...plan,
+    status: 'saved',
+    outcome: {
+      summary:
+        '### 创建结果\n\n已保存，**未执行**。\n\n- 输入：`sales_csv`\n- 待验证：实际运行结果',
+    },
+  });
+  const status = screen.getByRole('status');
+  expect(status.querySelector('h3')).toHaveTextContent('创建结果');
+  expect(status.querySelector('strong')).toHaveTextContent('未执行');
+  expect(status.querySelector('code')).toHaveTextContent('sales_csv');
+  expect(status.querySelectorAll('li')).toHaveLength(2);
+});
+
+it('keeps legacy plain-text outcomes readable', () => {
+  view({
+    ...plan,
+    status: 'saved',
+    outcome: { summary: '已保存工作流草稿。未运行任何节点。' },
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    '已保存工作流草稿。未运行任何节点。',
+  );
+});
+
+it('folds historical dense receipts and separates sentences without changing configuration text', async () => {
+  const summary = `已保存工作流草稿 abc-123。结构：start → codeact_agent → agent → end。计算节点：通过 /artifacts/manifest.json 读取 sales.csv，settings.outputSchema 声明 report，state.globalKeys=["report"]，平均单价 12.50。${'配置约定保持完整，缺列时 status=blocked，数值字段置 null；'.repeat(12)}节点契约通过校验；未运行任何节点。`;
+  const user = userEvent.setup();
+  view({ ...plan, status: 'saved', outcome: { summary } });
+  expect(screen.queryByTestId('plan-outcome-details')).not.toBeInTheDocument();
+  await user.click(
+    screen.getByRole('button', { name: 'assistant.plan.viewOutcome' }),
+  );
+  const details = screen.getByTestId('plan-outcome-details');
+  expect(details.querySelectorAll('p').length).toBeGreaterThan(3);
+  expect(details.textContent).toBe(summary);
+  expect(details).toHaveTextContent('/artifacts/manifest.json');
+  expect(details).toHaveTextContent('12.50');
+  await user.click(
+    screen.getByRole('button', { name: 'assistant.plan.hideOutcome' }),
+  );
+  expect(screen.queryByTestId('plan-outcome-details')).not.toBeInTheDocument();
+});

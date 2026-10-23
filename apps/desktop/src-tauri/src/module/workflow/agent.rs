@@ -401,6 +401,16 @@ impl Llm for InstrumentedLlm {
     ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
         let started_at = chrono::Utc::now();
         let started_elapsed = Instant::now();
+        if let Some(on_event) = &self.on_event {
+            send_guarded_event(
+                on_event,
+                StreamEvent::custom(
+                    &self.node_id,
+                    "agent.model_started",
+                    json!({"startedAt": started_at.to_rfc3339()}),
+                ),
+            );
+        }
         let (call_id, response_stream) =
             crate::module::model_usage::observe(self.inner.as_ref(), request, stream, self.usage_context.clone())
                 .await?;
@@ -410,9 +420,20 @@ impl Llm for InstrumentedLlm {
         Ok(Box::pin(async_stream::stream! {
             tokio::pin!(response_stream);
             let mut emitted_model_call = false;
+            let mut first_response_ms = None;
             while let Some(response) = response_stream.next().await {
                 match response {
                     Ok(response) => {
+                        if first_response_ms.is_none() && response.content.as_ref().is_some_and(|c| !c.parts.is_empty()) {
+                            let elapsed_ms = started_elapsed.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                            first_response_ms = Some(elapsed_ms);
+                            if let Some(on_event) = &on_event {
+                                // One transition per request, never an event per token.
+                                send_guarded_event(on_event, StreamEvent::custom(
+                                    &node_id, "agent.model_responding", json!({"firstResponseMs": elapsed_ms}),
+                                ));
+                            }
+                        }
                         // A tool-call response finishes this model request but
                         // keeps the Agent turn open. `partial`, not
                         // `turn_complete`, marks the final provider chunk.
@@ -430,7 +451,7 @@ impl Llm for InstrumentedLlm {
                                             started_at,
                                             ended_at,
                                             started_elapsed.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
-                                        ); telemetry["modelCallId"] = json!(call_id); telemetry },
+                                        ); telemetry["modelCallId"] = json!(call_id); telemetry["firstResponseMs"] = json!(first_response_ms); telemetry },
                                     ),
                                 );
                             }
@@ -1040,12 +1061,18 @@ mod usage_snapshot_tests {
     use futures::{StreamExt, stream};
 
     #[tokio::test]
-    async fn model_custom_headers_reach_openai_and_anthropic_requests() {
+    async fn model_provider_options_reach_requests() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for provider in [ModelProvider::OpenAi, ModelProvider::Anthropic] {
+        for (provider, include_thoughts) in [
+            (ModelProvider::OpenAi, false),
+            (ModelProvider::Anthropic, false),
+            (ModelProvider::DeepSeek, false),
+            (ModelProvider::DeepSeek, true),
+        ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let anthropic = provider == ModelProvider::Anthropic;
+            let deepseek = provider == ModelProvider::DeepSeek;
             let server = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = Vec::new();
@@ -1080,16 +1107,20 @@ mod usage_snapshot_tests {
                 provider: provider.clone(),
                 base_url: Some(format!("http://{address}/v1")),
                 api_key: Some("test-key".into()),
-                headers: vec![crate::config::ProviderHeader {
-                    name: "X-Tenant-ID".into(),
-                    value: "team-test".into(),
-                }],
+                headers: if deepseek {
+                    vec![]
+                } else {
+                    vec![crate::config::ProviderHeader {
+                        name: "X-Tenant-ID".into(),
+                        value: "team-test".into(),
+                    }]
+                },
             };
             let config = IWorkrun {
                 provider_credentials: vec![credential],
                 ..Default::default()
             };
-            let model = create_model(
+            let model = create_model_with_thinking(
                 &ModelDefinition {
                     id: "test".into(),
                     name: "test".into(),
@@ -1097,6 +1128,7 @@ mod usage_snapshot_tests {
                     model: "test-model".into(),
                 },
                 &config,
+                include_thoughts,
             )
             .unwrap();
             let request = adk_rust::LlmRequest::new("test-model", vec![Content::new("user").with_text("hello")]);
@@ -1104,7 +1136,16 @@ mod usage_snapshot_tests {
             let response = responses.next().await.unwrap().unwrap();
             assert_eq!(response.content.unwrap().parts[0].text(), Some("ok"));
             let request = server.await.unwrap().to_lowercase();
-            assert!(request.contains("x-tenant-id: team-test\r\n"));
+            if deepseek {
+                let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+                assert!(body.get("thinking").is_none_or(Value::is_null));
+                assert!(body.get("reasoning_effort").is_none_or(Value::is_null));
+                assert_eq!(body["model"], "test-model");
+                assert_eq!(body["stream"], false);
+                assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+            } else {
+                assert!(request.contains("x-tenant-id: team-test\r\n"));
+            }
             if anthropic {
                 assert!(request.contains("x-api-key: test-key\r\n"));
             } else {
@@ -1345,10 +1386,11 @@ mod usage_snapshot_tests {
 
         assert!(model_response_is_final(&response));
         let emitted = emitted.lock().expect("test event list is available");
-        assert_eq!(emitted.len(), 1);
-        assert_eq!(emitted[0]["event_type"], "agent.model_call");
-        assert_eq!(emitted[0]["data"]["model"], "gemini-test");
-        assert!(emitted[0]["data"]["durationMs"].is_i64());
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(emitted[0]["event_type"], "agent.model_started");
+        assert_eq!(emitted[1]["event_type"], "agent.model_call");
+        assert_eq!(emitted[1]["data"]["model"], "gemini-test");
+        assert!(emitted[1]["data"]["durationMs"].is_i64());
     }
 }
 

@@ -41,6 +41,13 @@ Return ONLY JSON:
 - {"status":"needs_clarification","summary":"specific impact/blocker","questions":["..."]} before saving when user discussion is needed.
 - {"status":"failed","summary":"specific blocker"} when implementation cannot proceed.
 
+The summary is displayed directly in the plan card. Write it in the user's language
+as concise Markdown with short paragraphs or bullets, grouped into creation result,
+key configuration, and pending verification when relevant. Use inline code for IDs,
+node types, and configuration keys. Explain material decisions and unverified criteria;
+do not dump the full implementation, schema, or repeat the complete plan in one dense
+paragraph. Keep JSON valid by encoding Markdown line breaks as \n inside summary.
+
 Use report_progress for public updates, not private reasoning. The SDK records the
 outcome and returns control to main_agent; do not invoke the parent or its tools.
 

@@ -98,3 +98,23 @@ it('bounds long streaming thoughts and folds them when the response completes', 
     .element(page.getByRole('button'))
     .toHaveAttribute('aria-expanded', 'false');
 });
+
+it('keeps the running title mounted when the first details arrive', async () => {
+  const screen = await render(<AssistantTurnActivity summaries={[]} busy />);
+  const title = document.querySelector('[data-slot=trace-title]');
+  await screen.rerender(
+    <AssistantTurnActivity summaries={['Checking inputs']} busy />,
+  );
+  expect(document.querySelector('[data-slot=trace-title]')).toBe(title);
+  await page.getByRole('button').click();
+  await screen.rerender(
+    <AssistantTurnActivity
+      summaries={['Checking inputs', 'Preparing workflow']}
+      busy
+    />,
+  );
+  expect(document.querySelector('[data-slot=trace-title]')).toBe(title);
+  await expect
+    .element(page.getByRole('button'))
+    .toHaveAttribute('aria-expanded', 'true');
+});

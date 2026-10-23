@@ -15,6 +15,11 @@ export type ModelCall = {
   id: string;
   model: string;
   startedAt: string;
+  durationMs?: number;
+  streaming?: boolean;
+  requestHash?: string;
+  dispatchDurationMs?: number;
+  firstResponseMs?: number;
   status: string;
   responseKind?: 'content' | 'tool_call';
   requestedTools?: string[];

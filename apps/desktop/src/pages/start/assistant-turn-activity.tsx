@@ -107,44 +107,41 @@ export function AssistantTurnActivity({
   );
   return (
     <Trace className='mb-3' data-testid='assistant-thinking'>
-      {hasContent ? (
-        <TraceCollapsible
-          open={open}
-          onOpenChange={(open) => setExpansion({ busy, open })}
-        >
-          <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
-          <TraceCollapsibleContent>
-            <div
-              className='flex max-h-64 min-w-0 scrollbar-thin flex-col gap-4 overflow-y-auto overscroll-contain'
-              role='region'
-              aria-label={t('assistant.thinkingDetails')}
-            >
-              {thoughts.map((item) => (
-                <p key={item.id} className='wrap-anywhere whitespace-pre-wrap'>
-                  {item.text}
+      <TraceCollapsible
+        open={open}
+        onOpenChange={(open) => setExpansion({ busy, open })}
+      >
+        {/* Keep the title mounted when the first detail chunk arrives so its
+            running animation does not restart on the structural handoff. */}
+        <TraceCollapsibleTrigger disabled={!hasContent}>
+          {line}
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent>
+          <div
+            className='flex max-h-64 min-w-0 scrollbar-thin flex-col gap-4 overflow-y-auto overscroll-contain'
+            role='region'
+            aria-label={t('assistant.thinkingDetails')}
+          >
+            {thoughts.map((item) => (
+              <p key={item.id} className='wrap-anywhere whitespace-pre-wrap'>
+                {item.text}
+              </p>
+            ))}
+            {items.length > 0 && (
+              <div className='flex flex-col gap-2'>
+                <p className='text-xs font-medium'>
+                  {t('assistant.progressSummary')}
                 </p>
-              ))}
-              {items.length > 0 && (
-                <div className='flex flex-col gap-2'>
-                  <p className='text-xs font-medium'>
-                    {t('assistant.progressSummary')}
+                {items.map((text, index) => (
+                  <p key={index} className='wrap-anywhere whitespace-pre-wrap'>
+                    {text}
                   </p>
-                  {items.map((text, index) => (
-                    <p
-                      key={index}
-                      className='wrap-anywhere whitespace-pre-wrap'
-                    >
-                      {text}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </div>
-          </TraceCollapsibleContent>
-        </TraceCollapsible>
-      ) : (
-        line
-      )}
+                ))}
+              </div>
+            )}
+          </div>
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
     </Trace>
   );
 }

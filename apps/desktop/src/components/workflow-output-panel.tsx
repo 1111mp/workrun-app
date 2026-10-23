@@ -1906,7 +1906,6 @@ function LiveWorkflowTaskOutput({
     !animateResponses ||
     !terminal ||
     responseIds.every((id) => presentedResponses.has(id));
-  const presentationStatus = presentationComplete ? status : 'running';
   const onResponsePresentationComplete = useCallback(
     (executionId: string, responseIndex: number) => {
       const id = `${executionId}:${responseIndex}`;
@@ -1925,7 +1924,8 @@ function LiveWorkflowTaskOutput({
     [startedAt],
   );
   const run: WorkflowRunView = {
-    status: presentationStatus,
+    // Execution is authoritative even while local text is still animating.
+    status,
     startedAt,
     endedAt,
     durationMs,
@@ -1939,7 +1939,7 @@ function LiveWorkflowTaskOutput({
     execution: [],
     turnsById: {},
   };
-  const isRunning = presentationStatus === 'running';
+  const isRunning = status === 'running';
   const duration = durationLabel(run);
   const displayNodeName = (nodeId: string) =>
     nodeDisplayName(run, workflowNodes, nodeId);

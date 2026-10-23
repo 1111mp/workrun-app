@@ -29,6 +29,10 @@ it('keeps the proposal readable at desktop and narrow widths and exposes details
     version: 2,
     status: 'needs_clarification',
     dependencyIssues: [],
+    outcome: {
+      summary:
+        '### 创建结果\n\n已保存，**未执行**。\n\n- 输入：`sales_csv`\n- 待验证：实际运行结果',
+    },
     document: {
       goal: '把资料整理过程变成可复用工作流',
       summary: '先核对资料，再处理内容，最后检查结果并输出。',
@@ -70,6 +74,12 @@ it('keeps the proposal readable at desktop and narrow widths and exposes details
     await expect
       .element(screen.getByRole('button', { name: '确认方案并创建' }))
       .toBeDisabled();
+    await expect
+      .element(screen.getByRole('heading', { name: '创建结果' }))
+      .toBeVisible();
+    const outcome = screen.getByRole('status').element();
+    expect(outcome.querySelectorAll('li')).toHaveLength(2);
+    expect(outcome.querySelector('code')?.textContent).toBe('sales_csv');
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
   }
   await screen.getByRole('button', { name: '回答此问题' }).click();
@@ -81,4 +91,29 @@ it('keeps the proposal readable at desktop and narrow widths and exposes details
     )
     .toBeVisible();
   expect(decide).not.toHaveBeenCalled();
+});
+
+it('keeps legacy creation receipts compact and readable on desktop and narrow screens', async () => {
+  const { AssistantPlanOutcome } = await import('./assistant-plan-outcome');
+  const summary = `已保存工作流草稿 4b542b45-2e80-1857-c8c5-b75e817c3714。结构：start → codeact_agent「固定口径指标计算」→ agent「撰写中文分析报告」→ end。计算节点：通过 /artifacts/manifest.json 读取 sales.csv，settings.outputSchema 声明 report，state.globalKeys=["report"]。${'固定口径计算销售额、订单数和平均客单价；缺失必需列时 status=blocked，数值字段置 null。'.repeat(10)}节点契约通过原生校验；未运行任何节点。`;
+  const screen = await render(
+    <main className='p-6'>
+      <AssistantPlanOutcome summary={summary} />
+    </main>,
+  );
+  for (const width of [1280, 390]) {
+    await page.viewport(width, 900);
+    const preview = screen.getByText(summary, { exact: true }).element();
+    expect(preview.getBoundingClientRect().height).toBeLessThanOrEqual(84);
+    await screen.getByRole('button', { name: '查看创建详情' }).click();
+    const details = screen.getByTestId('plan-outcome-details').element();
+    expect(details.textContent).toBe(summary);
+    expect(details.querySelectorAll('p').length).toBeGreaterThan(10);
+    expect(getComputedStyle(details).maxWidth).not.toBe('none');
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
+    await screen.getByRole('button', { name: '收起创建详情' }).click();
+    await expect
+      .element(screen.getByTestId('plan-outcome-details'))
+      .not.toBeInTheDocument();
+  }
 });

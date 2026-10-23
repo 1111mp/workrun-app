@@ -162,6 +162,12 @@ async fn observe_with_writer(
         serde_json::to_vec(&json!({"instruction":instruction,"config":request.config,"tools":request.tools}))
             .unwrap_or_default(),
     ));
+    // Hash only the SDK request and transport mode, excluding diagnostic origin.
+    // This detects content/config changes without retaining prompts or file data;
+    // it is not a fingerprint of adapter-generated HTTP headers or parameters.
+    let mut fingerprint = json!({"request": &request, "tools": &request.tools, "streaming": stream});
+    fingerprint.sort_all_objects();
+    let request_hash = hex::encode(Sha256::digest(serde_json::to_vec(&fingerprint).unwrap_or_default()));
     // Attribute repeated context to tools without retaining arguments or bodies.
     let mut tool_results = std::collections::BTreeMap::<String, (usize, usize)>::new();
     for part in request.contents.iter().flat_map(|c| &c.parts) {
@@ -183,9 +189,10 @@ async fn observe_with_writer(
         record: json!({
             "id": id, "context": context, "model": model.name(), "source": "provider",
             "startedAt": chrono::Utc::now().to_rfc3339(), "status": "running", "usage": null,
+            "streaming": stream,
             "requestSize": {"contentsChars": contents_chars, "toolsChars": tools_chars, "messages": request.contents.len(), "systemChars": chars_for("system"), "toolResponseChars": chars_for("function") + chars_for("tool"),
                 "largestToolResults":largest_tool_results,"toolResultKinds":tool_results.len()},
-            "configHash": config_hash,
+            "configHash": config_hash, "requestHash": request_hash,
         }),
         elapsed: Instant::now(),
         finished: false,
@@ -193,7 +200,12 @@ async fn observe_with_writer(
     // Enqueue synchronously, but never await the database on the model path.
     call.enqueue();
     let source = match model.generate_content(request, stream).await {
-        Ok(source) => source,
+        Ok(source) => {
+            // Adapter readiness is not time to first token; non-streaming
+            // adapters may have already waited for the complete response here.
+            call.record["dispatchDurationMs"] = json!(call.elapsed.elapsed().as_millis().min(i64::MAX as u128) as i64);
+            source
+        },
         Err(error) => {
             call.record["failureKind"] = json!("dispatch");
             call.finish("failed");
@@ -209,6 +221,9 @@ async fn observe_with_writer(
             while let Some(response) = source.next().await {
                 match &response {
                     Ok(response) => {
+                        if call.record.get("firstResponseMs").is_none() && response.content.as_ref().is_some_and(|c| !c.parts.is_empty()) {
+                            call.record["firstResponseMs"] = json!(call.elapsed.elapsed().as_millis().min(i64::MAX as u128) as i64);
+                        }
                         if let Some(value) = &response.usage_metadata { call.record["usage"] = usage(value); }
                         if let Some(reason) = &response.finish_reason {
                             call.record["finishReason"] = json!(reason);

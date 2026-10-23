@@ -99,3 +99,15 @@ Assistant request projection keeps the latest full copy of identical large nativ
 read results and replaces earlier copies with their tool-call reference. Comparison
 includes all response metadata; writes, execution receipts and errors are excluded.
 This affects only model-facing copies, not stored history or binding evidence.
+
+Call records also retain `streaming`, `dispatchDurationMs` (adapter readiness), and
+`firstResponseMs` (first non-empty SDK content). These are local measurements of
+the same request, not additional provider calls. Adapter readiness and SDK content
+are not necessarily the provider's first-token time, especially for non-streaming
+adapters. Only the start and final usage snapshots are persisted, never token bodies.
+
+`requestHash` is a canonical hash of the SDK request, its tool declarations and
+transport mode. Diagnostic origin is excluded, so identical requests from different
+entry points compare equally. It includes input identifiers as supplied; equal-size
+requests can still differ. It does not cover adapter-generated HTTP parameters,
+headers, or historical provider defaults, and cannot retroactively identify old calls.

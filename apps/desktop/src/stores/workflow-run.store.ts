@@ -154,6 +154,18 @@ export function replayWorkflowRunProjection(
   return projection;
 }
 
+// Live timing freezes on the terminal event, independently of text animation.
+// History replay has no event timestamps here and must not invent durations.
+function finishLiveTiming(projection: WorkflowRunProjection) {
+  if (projection.endedAt !== undefined) return;
+  projection.endedAt = Date.now();
+  if (projection.startedAt !== undefined)
+    projection.durationMs = Math.max(
+      0,
+      projection.endedAt - projection.startedAt,
+    );
+}
+
 type WorkflowRunStore = {
   lastRunInput?: Record<string, unknown>;
   runPanelOpen: boolean;
@@ -291,13 +303,18 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
       set((state) => {
         state.projection.status = 'running';
         state.projection.endedAt = undefined;
+        state.projection.durationMs = undefined;
         state.projection.error = undefined;
         state.projection.finalState = undefined;
       }),
     applyRunEvents: (events, context) =>
       set((state) => {
-        for (const event of events)
+        for (const event of events) {
+          const wasRunning = state.projection.status === 'running';
           reduceWorkflowRunEvent(state.projection, event, context, state);
+          if (wasRunning && state.projection.status !== 'running')
+            finishLiveTiming(state.projection);
+        }
       }),
     projectFailedRun: (message) =>
       set((state) => {
@@ -311,6 +328,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
                 ?.turnId
             : undefined,
         );
+        finishLiveTiming(state.projection);
         state.runningNodeId = null;
       }),
     clearRunningNode: () =>

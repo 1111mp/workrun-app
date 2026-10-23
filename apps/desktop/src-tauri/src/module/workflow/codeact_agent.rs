@@ -66,6 +66,8 @@ pub(super) async fn add_codeact_agent_node(
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("codeact_agent node `{id}` references unknown model `{profile_id}`"))?;
     let label = format!("{}/{}", model.id, model.model);
+    // Forward the SDK's requested transport mode for every provider. Progress
+    // instrumentation must not change generation policy or usage accounting.
     let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
     let tool_calls = Arc::new(AtomicU32::new(0));
     let tool_trace = Arc::new(Mutex::new(Vec::new()));
@@ -736,8 +738,9 @@ Path("/outputs/final.txt").write_text(Path("/outputs/draft.txt").read_text() + r
         async fn generate_content(
             &self,
             request: adk_rust::LlmRequest,
-            _: bool,
+            streaming: bool,
         ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            assert!(!streaming, "preserve the SDK's non-streaming request for CodeAct");
             assert!(
                 serde_json::to_string(&request)
                     .unwrap()
@@ -774,9 +777,22 @@ Path("/outputs/report.txt").write_text(text + " processed")
             },
         );
         let workspace = Arc::new(workspace);
+        let emitted = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let received = Arc::clone(&emitted);
+        let on_event = Channel::new(move |payload| {
+            if let tauri::ipc::InvokeResponseBody::Json(payload) = payload {
+                received.lock().unwrap().push(serde_json::from_str(&payload).unwrap());
+            }
+            Ok(())
+        });
         let agent = CodeActAgent::builder()
             .name("codeact")
-            .model(Arc::new(FileGeneratingModel))
+            .model(instrumented_model(
+                Arc::new(FileGeneratingModel),
+                "codeact",
+                "test",
+                Some(on_event),
+            ))
             .runtime(runtime(&workspace))
             .max_iterations(1)
             .build()
@@ -803,6 +819,16 @@ Path("/outputs/report.txt").write_text(text + " processed")
         for event in events {
             event.unwrap();
         }
+        let progress = emitted.lock().unwrap();
+        assert_eq!(
+            progress
+                .iter()
+                .map(|event| event["event_type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["agent.model_started", "agent.model_responding", "agent.model_call"]
+        );
+        assert!(progress[2]["data"]["firstResponseMs"].is_i64());
+        drop(progress);
         drop(node);
         let state = state.lock().unwrap();
         let downstream = state.agent_input("consumer").unwrap();

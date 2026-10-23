@@ -755,3 +755,65 @@ it('sends a rejected workflow selection as explicit feedback for another assista
   });
   expect(current(session.id).status).toBe('thinking');
 });
+
+it('keeps phase and plan order when late streaming updates revise an earlier entry', async () => {
+  const session = await createAssistantSession('model', 'Work', scope);
+  store({ ...session, status: 'thinking' });
+  const thought = (id: string, text: string) => ({
+    id,
+    turnId: 'user',
+    phaseId: id,
+    text,
+    durationMs: 1,
+    complete: false,
+  });
+  for (const reasoning of [
+    thought('first', 'First phase'),
+    thought('second', 'Second phase'),
+    thought('first', 'First phase final chunk'),
+  ]) {
+    stream(session.id, {
+      sessionId: session.id,
+      messageId: 'answer',
+      event: { type: 'reasoning' },
+      reasoning,
+    });
+  }
+  expect(current(session.id).reasoning?.map((item) => item.phaseId)).toEqual([
+    'first',
+    'second',
+  ]);
+  expect(current(session.id).reasoning?.[0]?.text).toBe(
+    'First phase final chunk',
+  );
+  const plan = (version: number, status: string) => ({
+    id: 'plan',
+    sessionId: session.id,
+    version,
+    status,
+    dependencyIssues: [],
+    document: {
+      goal: 'Report',
+      summary: 'Report',
+      inputs: [],
+      outputs: [],
+      steps: [],
+      constraints: [],
+      assumptions: [],
+      questions: [],
+      acceptance_criteria: [],
+    },
+  });
+  for (const value of [plan(1, 'ready'), plan(2, 'ready'), plan(1, 'saved')]) {
+    stream(session.id, {
+      sessionId: session.id,
+      turnId: 'user',
+      messageId: 'answer',
+      event: { type: 'workflow_plan', plan: value },
+    });
+  }
+  expect(
+    current(session.id).workflowPlans?.map((entry) => entry.plan.version),
+  ).toEqual([1, 2]);
+  expect(current(session.id).workflowPlans?.[0]?.plan.status).toBe('saved');
+});

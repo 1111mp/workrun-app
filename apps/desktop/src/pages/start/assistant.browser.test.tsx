@@ -1400,6 +1400,27 @@ it('shows only the plan card at the pause and a native notice for an unconfirmed
       screen.getByRole('button', { name: '确认方案并创建', exact: true }),
     )
     .toBeEnabled();
+  const item = document.querySelector<HTMLElement>(
+    '[data-message-id="reply-user1"]',
+  )!;
+  expect(getComputedStyle(item).contentVisibility).toBe('visible');
+  for (let index = 0; index < 3; index++) {
+    await screen.getByRole('button', { name: '收起方案', exact: true }).click();
+    await screen
+      .getByRole('button', { name: '查看完整方案', exact: true })
+      .click();
+    await screen.getByRole('button', { name: '查看节点选择与配置' }).click();
+    // Native snapshots arrive during planning; they must retain the card DOM
+    // and both expansion states rather than replay the interaction.
+    host.saved.set(session.id, structuredClone(session));
+    await expect
+      .element(screen.getByText('Reusable task', { exact: true }))
+      .toBeVisible();
+    expect(document.querySelector('[data-message-id="reply-user1"]')).toBe(
+      item,
+    );
+    await screen.getByRole('button', { name: '查看节点选择与配置' }).click();
+  }
   const updated = {
     ...session,
     messages: [
@@ -1581,4 +1602,130 @@ it('restores the reading position when returning from a workflow', async () => {
         )?.scrollTop,
     )
     .toBeCloseTo(760, 0);
+  // Reading older content must stay put while new snapshots grow the final
+  // reply; restoration runs on return, not on every subsequent state change.
+  for (let index = 0; index < 12; index++) {
+    const current = useAssistantStore.getState().sessions['long-history']!;
+    host.saved.set(current.id, {
+      ...structuredClone(current),
+      messages: current.messages.map((message, messageIndex) =>
+        messageIndex === current.messages.length - 1
+          ? { ...message, text: `${message.text}\n\n新增输出 ${index}` }
+          : message,
+      ),
+    });
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    expect(
+      document.querySelector<HTMLElement>(
+        '[data-slot="message-scroller-viewport"]',
+      )!.scrollTop,
+    ).toBeCloseTo(760, 0);
+  }
+});
+
+it('keeps one live workflow and a continuous spinner across snapshots and the receipt handoff', async () => {
+  await page.viewport(1280, 900);
+  host.inspect.mockResolvedValue({
+    id: 'run',
+    status: 'running',
+    events: [],
+    spans: [],
+  });
+  const session = {
+    id: 'live-stability',
+    title: 'Live workflow',
+    modelId: 'model',
+    status: 'running',
+    steps: 0,
+    messages: [
+      {
+        id: 'request',
+        role: 'user',
+        text: '生成报告',
+        content: { role: 'user', parts: [{ text: '生成报告' }] },
+      },
+    ],
+    activeCall: {
+      runId: 'run',
+      workflow: { document: { settings: { name: '报告生成' } } },
+    },
+  };
+  host.saved.set(session.id, session);
+  const screen = await render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter initialEntries={[`/start?session=${session.id}`]}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .element(screen.getByTestId('assistant-workflow-run'))
+    .toBeVisible();
+  await screen
+    .getByTestId('assistant-workflow-run')
+    .getByRole('button', { expanded: false })
+    .click();
+  const card = screen.getByTestId('assistant-workflow-run').element();
+  const spinner = card.querySelector('[data-slot=spinner]')!;
+  const rotation = spinner.getAnimations()[0]!;
+  await expect.poll(() => rotation.startTime).not.toBeNull();
+  const startedAt = rotation.startTime;
+  const viewport = document.querySelector(
+    '[data-slot=message-scroller-viewport]',
+  )!;
+  for (let index = 0; index < 20; index++) {
+    host.saved.set(session.id, { ...structuredClone(session), steps: index });
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    expect(screen.getByTestId('assistant-workflow-run').element()).toBe(card);
+    expect(card.querySelector('[data-slot=spinner]')).toBe(spinner);
+    expect(spinner.getAnimations()[0]).toBe(rotation);
+    expect(rotation.startTime).toBe(startedAt);
+    expect(
+      document.querySelector('[data-slot=message-scroller-viewport]'),
+    ).toBe(viewport);
+    await expect
+      .element(screen.getByTestId('workflow-run-timeline'))
+      .toBeVisible();
+  }
+  const receipt = {
+    id: 'receipt',
+    role: 'tool',
+    runId: 'run',
+    workflowName: '报告生成',
+    text: 'running',
+    content: { role: 'function', parts: [] },
+  };
+  // Native snapshots can expose the persisted receipt before clearing activeCall.
+  host.saved.set(session.id, {
+    ...session,
+    messages: [...session.messages, receipt],
+  });
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  expect(screen.getByTestId('assistant-workflow-run').elements()).toHaveLength(
+    1,
+  );
+  expect(screen.getByTestId('assistant-workflow-run').element()).toBe(card);
+  host.saved.set(session.id, {
+    ...session,
+    activeCall: null,
+    messages: [...session.messages, receipt],
+  });
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  expect(card.querySelector('[data-slot=spinner]')).toBe(spinner);
+  expect(spinner.getAnimations()[0]).toBe(rotation);
+  expect(rotation.startTime).toBe(startedAt);
+  expect(Number(rotation.currentTime)).toBeGreaterThan(0);
+  await expect
+    .element(screen.getByTestId('workflow-run-timeline'))
+    .toBeVisible();
 });

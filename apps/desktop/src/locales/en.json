@@ -2127,6 +2127,8 @@
       "failed": "Tool confirmation failed. Review the current request."
     },
     "plan": {
+      "viewOutcome": "View creation details",
+      "hideOutcome": "Collapse creation details",
       "viewPlan": "View full plan",
       "hidePlan": "Collapse plan",
       "revisionTarget": "This plan updates an existing workflow",
@@ -2173,6 +2175,13 @@
     "progressThinking": "Thinking",
     "progressSummary": "Approach summary",
     "runLoadFailed": "Unable to load execution progress",
+    "runProgress": "{{completed}} steps completed · {{running}} running",
+    "runElapsed": "Elapsed {{seconds}}s",
+    "runPhase": {
+      "waitingForModel": "Waiting for model",
+      "receivingModel": "Receiving model output",
+      "processingResult": "Processing result"
+    },
     "runSteps": "{{completed}} / {{count}} steps",
     "runTimeline": "Workflow execution progress",
     "noRunSteps": "No execution steps were recorded.",

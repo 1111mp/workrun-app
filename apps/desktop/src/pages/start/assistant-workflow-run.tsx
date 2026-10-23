@@ -15,7 +15,7 @@ import {
   CircleAlertIcon,
   CircleXIcon,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -45,6 +45,40 @@ function StatusIcon({ status }: { status: string }) {
     return <CircleAlertIcon />;
   if (status === 'cancelled') return <CircleXIcon />;
   return <CheckCircle2Icon />;
+}
+
+// Tick only this text: the growing execution history is not replayed each second.
+function RunElapsed({
+  startedAt,
+  endedAt,
+  durationMs,
+  running,
+}: {
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  running: boolean;
+}) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running, startedAt]);
+  const elapsed =
+    !running && durationMs !== undefined
+      ? durationMs
+      : (endedAt && !running ? Date.parse(endedAt) : now) -
+        Date.parse(startedAt);
+  if (!Number.isFinite(elapsed)) return null;
+  return (
+    <span className='shrink-0 tabular-nums' data-testid='workflow-run-elapsed'>
+      {t('assistant.runElapsed', {
+        seconds: Math.max(0, elapsed / 1000).toFixed(1),
+      })}
+    </span>
+  );
 }
 
 export function AssistantWorkflowRun({
@@ -117,9 +151,27 @@ export function AssistantWorkflowRun({
     view?.execution.findLast((entry) => entry.nodeId === view.activeNodeId) ??
     view?.execution.at(-1);
   const currentName = latest ? nodeName(latest.nodeId) : undefined;
+  const activeNodeId = view?.activeNodeId;
+  const phase = useMemo(() => {
+    if (!record || !activeNodeId || status !== 'running') return undefined;
+    // A loop may visit the same node again. Ignore the previous visit's stage.
+    const start = record.events.findLastIndex(({ event }) => {
+      const value = event as WorkflowRunEvent;
+      return value.type === 'node_start' && value.node === activeNodeId;
+    });
+    for (let index = record.events.length - 1; index > start; index--) {
+      const value = record.events[index]!.event as WorkflowRunEvent;
+      if (value.type !== 'custom' || value.node !== activeNodeId) continue;
+      if (value.event_type === 'agent.model_call') return 'processingResult';
+      if (value.event_type === 'agent.model_responding')
+        return 'receivingModel';
+      if (value.event_type === 'agent.model_started') return 'waitingForModel';
+    }
+    return undefined;
+  }, [record, activeNodeId, status]);
   const summary = query.isError
     ? t('assistant.runLoadFailed')
-    : `${t(`runs.runStatus.${status}`, { defaultValue: status })}${currentName ? ` · ${currentName}` : ''}`;
+    : `${t(`runs.runStatus.${status}`, { defaultValue: status })}${currentName ? ` · ${currentName}` : ''}${phase ? ` · ${t(`assistant.runPhase.${phase}`)}` : ''}`;
   const completed =
     view?.execution.filter((entry) => entry.status === 'completed').length ?? 0;
 
@@ -156,15 +208,23 @@ export function AssistantWorkflowRun({
           </span>
           <span className='text-muted-foreground hidden shrink-0 text-xs sm:block'>
             {view?.execution.length
-              ? t('assistant.runSteps', {
+              ? t('assistant.runProgress', {
                   completed,
-                  count: view.execution.length,
+                  running: view.execution.filter(
+                    (entry) => entry.status === 'running',
+                  ).length,
                 })
               : ''}
-            {record?.durationMs !== undefined
-              ? ` · ${(record.durationMs / 1000).toFixed(1)}s`
-              : ''}
           </span>
+          {record && (
+            <RunElapsed
+              startedAt={record.startedAt}
+              endedAt={record.endedAt}
+              durationMs={record.durationMs}
+              running={status === 'running' || status === 'queued'}
+            />
+          )}
+
           <ChevronDownIcon
             className={cn(
               'shrink-0 transition-transform motion-reduce:transition-none',

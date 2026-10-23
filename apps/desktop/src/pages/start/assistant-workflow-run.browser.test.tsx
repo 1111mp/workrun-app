@@ -141,6 +141,11 @@ it('shows the latest node while collapsed, streams full node receipts inline, an
     .element(screen.getByText('正在检查订单 43 的取消条件。', { exact: true }))
     .toBeVisible();
 
+  const spinner = document.querySelector('[data-slot=spinner]')!;
+  const rotation = spinner.getAnimations()[0];
+  expect(rotation).toBeDefined();
+  const startedAt = rotation.startTime;
+
   host.record.events = [
     ...(host.record.events as unknown[]),
     event(2, { type: 'node_end', node: 'risk', step: 1, duration_ms: 120 }),
@@ -165,6 +170,12 @@ it('shows the latest node while collapsed, streams full node receipts inline, an
       screen.getByText('订单 43 已取消，正在确认结果。', { exact: true }),
     )
     .toBeVisible();
+
+  // Event refreshes must update the receipt without remounting its spinner
+  // or restarting the CSS animation at the beginning of every chunk.
+  expect(document.querySelector('[data-slot=spinner]')).toBe(spinner);
+  expect(spinner.getAnimations()[0]).toBe(rotation);
+  expect(rotation.startTime).toBe(startedAt);
 
   host.record.status = 'completed';
   host.record.durationMs = 480;
@@ -262,4 +273,90 @@ it('lets long execution output grow naturally with the conversation', async () =
   expect(getComputedStyle(timeline.element()).maxHeight).toBe('none');
   expect(getComputedStyle(timeline.element()).overflowY).toBe('visible');
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(390);
+});
+
+it('shows real model stages and elapsed time without polling or restarting the spinner', async () => {
+  await page.viewport(1280, 900);
+  host.record.startedAt = new Date(Date.now() - 5000).toISOString();
+  host.record.events = [
+    event(0, { type: 'node_start', node: 'risk', step: 0 }),
+    event(1, {
+      type: 'custom',
+      node: 'risk',
+      event_type: 'agent.model_started',
+      data: {},
+    }),
+  ];
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const queryKey = ['run-history', 'assistant-inline', 'personal', 'order-43'];
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <AssistantWorkflowRun
+        runId='order-43'
+        status='running'
+        scope='personal'
+      />
+    </QueryClientProvider>,
+  );
+  await expect
+    .poll(
+      () => screen.getByTestId('workflow-run-summary').element().textContent,
+    )
+    .toContain('等待模型响应');
+  await expect
+    .element(screen.getByText('已完成 0 步 · 1 步执行中'))
+    .toBeVisible();
+  const elapsed = screen.getByTestId('workflow-run-elapsed').element();
+  const before = elapsed.textContent;
+  const updatedAt = client.getQueryState(queryKey)!.dataUpdatedAt;
+  const spinner = document.querySelector('[data-slot=spinner]')!;
+  const rotation = spinner.getAnimations()[0];
+  await expect
+    .poll(() => elapsed.textContent, { timeout: 3000 })
+    .not.toBe(before);
+  expect(client.getQueryState(queryKey)!.dataUpdatedAt).toBe(updatedAt);
+  expect(document.querySelector('[data-slot=spinner]')).toBe(spinner);
+  expect(spinner.getAnimations()[0]).toBe(rotation);
+  const push = (sequence: number, value: unknown) => {
+    host.record.events = [
+      ...(host.record.events as unknown[]),
+      event(sequence, value),
+    ];
+    client.setQueryData(queryKey, structuredClone(host.record));
+  };
+  push(2, {
+    type: 'custom',
+    node: 'risk',
+    event_type: 'agent.model_responding',
+    data: {},
+  });
+  await expect
+    .poll(
+      () => screen.getByTestId('workflow-run-summary').element().textContent,
+    )
+    .toContain('正在接收模型输出');
+  push(3, {
+    type: 'custom',
+    node: 'risk',
+    event_type: 'agent.model_call',
+    data: {},
+  });
+  await expect
+    .poll(
+      () => screen.getByTestId('workflow-run-summary').element().textContent,
+    )
+    .toContain('正在处理结果');
+  // A loop entering the same node must not retain the previous model phase.
+  push(4, { type: 'node_end', node: 'risk', step: 0, duration_ms: 100 });
+  push(5, { type: 'node_start', node: 'risk', step: 1 });
+  await expect
+    .poll(
+      () => screen.getByTestId('workflow-run-summary').element().textContent,
+    )
+    .not.toContain('正在处理结果');
+  await expect
+    .element(screen.getByText('已完成 1 步 · 1 步执行中'))
+    .toBeVisible();
 });

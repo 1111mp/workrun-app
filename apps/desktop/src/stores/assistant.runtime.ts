@@ -90,26 +90,31 @@ function applyStream(
     if (event.type === 'workflow_plan') {
       session.workflowPlan = event.plan;
       if (payload.turnId) {
-        session.workflowPlans = (session.workflowPlans ?? []).filter(
+        session.workflowPlans ??= [];
+        const index = session.workflowPlans.findIndex(
           (entry) =>
-            entry.turnId !== payload.turnId ||
-            entry.plan.id !== event.plan.id ||
-            entry.plan.version !== event.plan.version,
+            entry.turnId === payload.turnId &&
+            entry.plan.id === event.plan.id &&
+            entry.plan.version === event.plan.version,
         );
-        session.workflowPlans.push({
-          turnId: payload.turnId,
-          plan: event.plan,
-        });
+        const entry = { turnId: payload.turnId, plan: event.plan };
+        // Updates retain their position so older cards cannot become the latest
+        // card or move beneath a newer version during streaming reconciliation.
+        if (index < 0) session.workflowPlans.push(entry);
+        else session.workflowPlans[index] = entry;
       }
       return;
     }
     if (event.type === 'reasoning') {
       const thought = payload.reasoning;
       if (thought) {
-        session.reasoning = (session.reasoning ?? []).filter(
-          (item) => item.id !== thought.id,
+        session.reasoning ??= [];
+        const index = session.reasoning.findIndex(
+          (item) => item.id === thought.id,
         );
-        session.reasoning.push(thought);
+        // Phases are displayed in first-seen order, including late final chunks.
+        if (index < 0) session.reasoning.push(thought);
+        else session.reasoning[index] = thought;
       }
       return;
     }
