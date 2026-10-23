@@ -66,7 +66,12 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useSearchParams } from 'react-router';
+import {
+  Link,
+  useLocation,
+  useSearchParams,
+  useViewTransitionState,
+} from 'react-router';
 import { toast } from 'sonner';
 
 import {
@@ -276,7 +281,8 @@ function AppItem({
         >
           {definition.description || t('apps.noDescription')}
         </CardDescription>
-        <CardAction className='flex flex-col items-end gap-2'>
+        {/* Keep transient run/preparation badges in one row so they cannot move the list. */}
+        <CardAction className='flex h-5 w-full min-w-0 flex-row items-center gap-2'>
           <StatusBadge status={node.installStatus} />
           {run?.isRunning ? (
             <Badge variant='outline'>
@@ -285,11 +291,13 @@ function AppItem({
             </Badge>
           ) : null}
           {preparationSummary ? (
-            <Badge variant='secondary'>
+            <Badge variant='secondary' className='min-w-0 shrink'>
               <CheckCircle2Icon data-icon='inline-start' />
-              {t(`apps.preparation.${preparationSummary.outcome}`, {
-                version: preparationSummary.version,
-              })}
+              <span className='truncate'>
+                {t(`apps.preparation.${preparationSummary.outcome}`, {
+                  version: preparationSummary.version,
+                })}
+              </span>
             </Badge>
           ) : null}
         </CardAction>
@@ -650,6 +658,8 @@ function AppHistoryDrawer({
 }
 
 function AppsPage() {
+  const location = useLocation();
+  const transitioning = useViewTransitionState(location.pathname);
   const [searchParams, setSearchParams] = useSearchParams();
   const externalRunId = searchParams.get('runId');
   // Recover output emitted before navigation; native events refresh later changes.
@@ -672,6 +682,14 @@ function AppsPage() {
     Record<string, AppPreparationSummary>
   >({});
   const [outputOpen, setOutputOpen] = useState<boolean>(false);
+  const hasExternalAppRun = Boolean(externalAppRun);
+  useEffect(() => {
+    if (!externalRunId || !hasExternalAppRun || transitioning) return;
+    // Start the portal animation after the route's frozen snapshot is released.
+    // Record refreshes must not reopen a panel the user has already closed.
+    const frame = requestAnimationFrame(() => setOutputOpen(true));
+    return () => cancelAnimationFrame(frame);
+  }, [externalRunId, hasExternalAppRun, location.key, transitioning]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [historyNode, setHistoryNode] = useState<ProcessNode>();
   const [historyOpen, setHistoryOpen] = useState<boolean>(false);
@@ -1107,7 +1125,7 @@ function AppsPage() {
         ) : null}
       </main>
       <AppRunOutputPanel
-        open={Boolean(externalAppRun) || outputOpen}
+        open={outputOpen}
         run={externalAppRun ?? selectedRun}
         onOpenChange={(open) => {
           setOutputOpen(open);

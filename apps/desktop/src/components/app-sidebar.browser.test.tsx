@@ -4,7 +4,13 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '@workspace/ui/components';
-import { MemoryRouter, useLocation } from 'react-router';
+import {
+  MemoryRouter,
+  Outlet,
+  RouterProvider,
+  createMemoryRouter,
+  useLocation,
+} from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { page, userEvent } from 'vitest/browser';
@@ -379,3 +385,71 @@ it('keeps the current conversation mounted when its sidebar link is clicked agai
     .toHaveAttribute('data-location-key', initialKey!);
   await expect.element(location).toHaveTextContent('/start?session=s1');
 });
+
+it.each(['row', 'menu'] as const)(
+  'opens same-page App history without replaying the page transition (%s)',
+  async (entry) => {
+    await page.viewport(1280, 900);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const router = createMemoryRouter(
+      [
+        {
+          element: (
+            <ConfirmProvider>
+              <SidebarProvider>
+                <AppSidebar accountMenu={null} />
+                <SidebarInset>
+                  <Outlet />
+                  <Location />
+                </SidebarInset>
+              </SidebarProvider>
+            </ConfirmProvider>
+          ),
+          children: [
+            {
+              path: '/apps',
+              element: <main data-testid='apps-surface'>App library</main>,
+            },
+          ],
+        },
+      ],
+      { initialEntries: ['/apps'] },
+    );
+    const transition = vi.spyOn(document, 'startViewTransition');
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    try {
+      const surface = screen.getByTestId('apps-surface').element();
+      for (const [name, id] of [
+        ['已完成任务', 'r1'],
+        ['运行中任务', 'r2'],
+      ] as const) {
+        if (entry === 'row')
+          await screen.getByRole('link', { name, exact: true }).click();
+        else {
+          await screen
+            .getByRole('button', { name: `${name}的更多操作`, exact: true })
+            .click();
+          await screen
+            .getByRole('menuitem', { name: '打开', exact: true })
+            .click();
+        }
+        await expect
+          .poll(() => document.querySelector('output')?.textContent)
+          .toBe(`/apps?runId=${id}`);
+        expect(screen.getByTestId('apps-surface').element()).toBe(surface);
+        expect(transition).not.toHaveBeenCalled();
+      }
+    } finally {
+      transition.mockRestore();
+      await screen.unmount();
+      router.dispose();
+      client.clear();
+    }
+  },
+);

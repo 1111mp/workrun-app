@@ -36,7 +36,6 @@ import {
   Textarea,
 } from '@workspace/ui/components';
 import {
-  ArrowLeftIcon,
   BeakerIcon,
   HistoryIcon,
   SaveIcon,
@@ -45,7 +44,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -107,6 +106,7 @@ import {
 import { useWorkflowRun } from './workflow-editor/use-workflow-run';
 import { useWorkflowRunRecord } from './workflow-editor/use-workflow-run-record';
 import { useWorkflowRunSnapshot } from './workflow-editor/use-workflow-run-snapshot';
+import { WorkflowBackButton } from './workflow-editor/workflow-back-button';
 import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
 import { WorkflowEditorToolbar } from './workflow-editor/workflow-editor-toolbar';
 
@@ -222,6 +222,7 @@ function WorkflowEditorContent({
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
   const [draftId] = useState(() => crypto.randomUUID());
   const workflowStore = useWorkflowStoreApi();
   const nodes = useStore(workflowStore, (state) => state.nodes);
@@ -905,15 +906,7 @@ function WorkflowEditorContent({
               data-tauri-drag-region={OS_PLATFORM !== 'win32'}
               className='flex flex-1 items-center gap-2 px-4'
             >
-              <Button
-                variant='ghost'
-                size='icon-sm'
-                aria-label={t('workflowEditor.backToWorkflows')}
-                nativeButton={false}
-                render={<Link to='/workflows' />}
-              >
-                <ArrowLeftIcon />
-              </Button>
+              <WorkflowBackButton />
               <SidebarTrigger className='-ml-1' />
               <Separator
                 orientation='vertical'

@@ -3,6 +3,8 @@ title: Build your first workflow
 description: Build and verify a Process → Agent → branch flow, from customer feedback to human approval.
 ---
 
+You can also describe your goal on the start page, review a plan, and generate an editable workflow. See [Build workflows through conversation](/guides/conversational-workflows/). Plan approval and execution confirmation are separate steps.
+
 This tutorial extends the Agent from the [quickstart](/getting-started/quickstart/) with deterministic data preparation, structured output, conditional routing, and human review. You will build an explainable customer-feedback routing flow: low-priority feedback ends automatically; high-priority feedback waits for a person to decide.
 
 ```text

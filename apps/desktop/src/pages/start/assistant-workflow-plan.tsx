@@ -18,7 +18,7 @@ import {
 import { ChevronDownIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 
 import type { WorkflowPlan } from '@/services/assistant';
 
@@ -36,6 +36,13 @@ export function AssistantWorkflowPlan({
   onDiscuss: (question?: string) => void;
 }) {
   const { t } = useTranslation();
+  const location = useLocation();
+  const navigationState =
+    location.pathname === '/start'
+      ? {
+          assistantReturnTo: `${location.pathname}${location.search}${location.hash}`,
+        }
+      : undefined;
   const doc = plan.document;
   const compact =
     ['approved', 'building', 'saved', 'cancelled'].includes(plan.status) ||
@@ -135,6 +142,7 @@ export function AssistantWorkflowPlan({
               <Link
                 className='underline'
                 to={`/workflows/${encodeURIComponent(doc.target_id)}`}
+                state={navigationState}
               >
                 {t('assistant.plan.revisionTarget')}
               </Link>
@@ -238,6 +246,7 @@ export function AssistantWorkflowPlan({
               render={
                 <Link
                   to={`/workflows/${encodeURIComponent(plan.workflowId)}`}
+                  state={navigationState}
                 />
               }
             >

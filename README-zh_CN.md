@@ -13,18 +13,29 @@ Workrun 面向想把一次性的 AI 对话沉淀为可复用自动化能力的�
 项目仍在快速迭代。本文概述当前能力；具体操作和使用边界请参阅官方文档。
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/525a19ce-a28b-4671-8e31-0f3ba5539069" width="24%" alt="Workrun workflow list" />
-  <img src="https://github.com/user-attachments/assets/baedb261-5990-41d4-8565-dc81131f6a13" width="24%" alt="Workrun workflow editor" />
-  <img src="https://github.com/user-attachments/assets/7c5afcf0-8ab2-4ada-9226-ceff3a4d633c" width="24%" alt="Workrun run output" />
-  <img src="https://github.com/user-attachments/assets/800103bb-85a8-4e8e-bf94-52a544233e01" width="24%" alt="Workrun app editor" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/start-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/start-light.png" />
+    <img src="apps/docs/public/media/homepage/start-light.png" width="24%" alt="Workrun 首页" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflows-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflows-light.png" />
+    <img src="apps/docs/public/media/homepage/workflows-light.png" width="24%" alt="Workrun 工作流列表" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/apps-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/apps-light.png" />
+    <img src="apps/docs/public/media/homepage/apps-light.png" width="24%" alt="Workrun 应用列表" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflow-editor-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflow-editor-light.png" />
+    <img src="apps/docs/public/media/homepage/workflow-editor-light.png" width="24%" alt="Workrun 工作流详情与画布" />
+  </picture>
 </p>
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/948c92ec-306b-4a14-9328-3b60f02c5846" width="24%" alt="Workrun workflow list" />
-  <img src="https://github.com/user-attachments/assets/db940f4d-c75d-40c6-b42d-48b22c800666" width="24%" alt="Workrun workflow editor" />
-  <img src="https://github.com/user-attachments/assets/4ea37888-4f7e-4393-85b8-f945be61e282" width="24%" alt="Workrun run output" />
-  <img src="https://github.com/user-attachments/assets/f1a946e2-0c5f-4259-95a3-07b9e04b1765" width="24%" alt="Workrun app editor" />
-</p>
+**用对话搭建工作流。** 告诉 Workrun 你想完成什么，它会帮你梳理步骤、选择所需能力，并将方案生成可重复运行的工作流。你可以通过对话不断调整，也可以打开画布编辑细节；已有合适的工作流时，还能直接让它帮你找到并运行。了解[如何通过对话编排工作流](https://workrun-docs.pages.dev/zh-cn/guides/conversational-workflows/)。
 
 ## 你可以用 Workrun 做什么
 

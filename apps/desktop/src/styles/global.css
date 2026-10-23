@@ -84,6 +84,12 @@
   --workrun-shadow: 0 8px 30px oklch(0.08 0.02 265 / 16%);
 }
 
+/* Keep loading placeholders visible against the pale workflow canvas,
+   including the dim phase of their pulse. Scope the token to this loading view. */
+.light .workrun-workflow-skeleton {
+  --muted: color-mix(in oklch, var(--foreground) 14%, var(--background));
+}
+
 /* Share the theme palette while keeping the sidebar inset layout intact. */
 .workrun-shell {
   background-color: var(--workrun-surface);

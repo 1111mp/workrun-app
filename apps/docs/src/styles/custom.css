@@ -149,7 +149,6 @@
 }
 
 .workrun-hero-preview {
-  --workflow-editor-shot: url('/media/homepage/workflow-editor-dark.png');
   position: relative;
   margin: 0.75rem 0 3.5rem;
   overflow: hidden;
@@ -203,8 +202,7 @@
   white-space: nowrap;
 }
 
-.hero-preview-bar,
-.hero-preview-caption {
+.hero-preview-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -220,8 +218,7 @@
   color: #dce4fa;
 }
 
-.hero-preview-brand,
-.hero-preview-state {
+.hero-preview-brand {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
@@ -232,80 +229,6 @@
   border: 1px solid #a78bfa;
   border-radius: 2px;
   transform: rotate(45deg);
-}
-.hero-preview-state {
-  color: #80dcb0;
-}
-.hero-preview-state b {
-  width: 0.42rem;
-  height: 0.42rem;
-  border-radius: 50%;
-  background: #37d98c;
-  box-shadow: 0 0 0.7rem #37d98c;
-}
-
-.hero-preview-shot {
-  position: relative;
-  min-height: clamp(18rem, 41vw, 38rem);
-  background-color: #0a111b;
-  background-image:
-    linear-gradient(
-      105deg,
-      rgb(7 12 23 / 56%) 2%,
-      rgb(7 12 23 / 8%) 55%,
-      rgb(16 9 40 / 26%) 100%
-    ),
-    var(--workflow-editor-shot),
-    radial-gradient(rgb(153 171 213 / 30%) 0.75px, transparent 0.75px);
-  background-position: center, center, center;
-  background-size:
-    cover,
-    cover,
-    14px 14px;
-}
-
-.hero-preview-shot::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(180deg, transparent 65%, rgb(5 8 17 / 65%) 100%);
-}
-
-.hero-preview-copy {
-  position: absolute;
-  z-index: 1;
-  left: clamp(1rem, 4vw, 3rem);
-  top: clamp(1rem, 4vw, 3rem);
-  max-width: 23rem;
-  text-shadow: 0 2px 14px rgb(0 0 0 / 70%);
-}
-.hero-preview-copy span {
-  display: block;
-  margin-bottom: 0.45rem;
-  font-family: var(--sl-font-mono);
-  font-size: 0.63rem;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  color: #b9a7ff;
-}
-.hero-preview-copy strong {
-  font-size: clamp(1.2rem, 2.4vw, 2rem);
-  line-height: 1.24;
-  color: #f5f6ff;
-}
-
-.hero-preview-caption {
-  position: absolute;
-  z-index: 1;
-  left: clamp(1rem, 4vw, 3rem);
-  right: clamp(1rem, 4vw, 3rem);
-  bottom: 1.15rem;
-  color: #e9edff;
-}
-.hero-preview-caption span:last-child {
-  color: #aeb8d4;
-  font-size: 0.55rem;
 }
 .hero-preview-note {
   margin: 0;
@@ -318,7 +241,6 @@
 /* The product surface should match the reader's chosen documentation theme,
  * not merely invert a dark screenshot with a filter. */
 :root[data-theme='light'] .workrun-hero-preview {
-  --workflow-editor-shot: url('/media/homepage/workflow-editor-light.png');
   border-color: #c7c9f4;
   background:
     radial-gradient(circle at 86% 4%, rgb(126 99 229 / 20%), transparent 29rem),
@@ -354,40 +276,6 @@
 }
 :root[data-theme='light'] .hero-preview-brand i {
   border-color: #7055d6;
-}
-:root[data-theme='light'] .hero-preview-shot {
-  background-color: #eef1f7;
-  background-image:
-    linear-gradient(
-      105deg,
-      rgb(248 250 255 / 67%) 2%,
-      rgb(248 250 255 / 10%) 55%,
-      rgb(245 241 255 / 28%) 100%
-    ),
-    var(--workflow-editor-shot),
-    radial-gradient(rgb(85 100 150 / 20%) 0.75px, transparent 0.75px);
-}
-:root[data-theme='light'] .hero-preview-shot::after {
-  background: linear-gradient(
-    180deg,
-    transparent 65%,
-    rgb(245 247 255 / 72%) 100%
-  );
-}
-:root[data-theme='light'] .hero-preview-copy {
-  text-shadow: 0 1px 12px rgb(255 255 255 / 76%);
-}
-:root[data-theme='light'] .hero-preview-copy span {
-  color: #6046bd;
-}
-:root[data-theme='light'] .hero-preview-copy strong {
-  color: #1c2137;
-}
-:root[data-theme='light'] .hero-preview-caption {
-  color: #242a45;
-}
-:root[data-theme='light'] .hero-preview-caption span:last-child {
-  color: #59617d;
 }
 :root[data-theme='light'] .hero-preview-note {
   border-top-color: rgb(80 79 150 / 16%);

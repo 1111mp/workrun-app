@@ -3,6 +3,8 @@ title: Configure model access
 description: Add provider credentials in Settings and choose a built-in model in an Agent.
 ---
 
+You can also describe your goal on the start page, review a plan, and generate an editable workflow. See [Build workflows through conversation](/guides/conversational-workflows/). Plan approval and execution confirmation are separate steps.
+
 Workrun includes a model catalog. Agent and CodeAct Agent nodes select from it, so you do not create model profiles or repeat model IDs in every workflow.
 
 ## Add provider credentials

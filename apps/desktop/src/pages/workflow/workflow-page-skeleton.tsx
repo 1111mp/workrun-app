@@ -8,7 +8,7 @@ export function WorkflowPageSkeleton() {
       role='status'
       aria-label={t('workflowEditor.loading')}
       aria-busy='true'
-      className='workrun-shell flex size-full min-h-0 overflow-hidden'
+      className='workrun-shell workrun-workflow-skeleton flex size-full min-h-0 overflow-hidden'
     >
       <div
         aria-hidden='true'

@@ -766,6 +766,7 @@
       "working": "处理中…",
       "test": "测试连接"
     },
+    "backToConversation": "返回对话",
     "backToWorkflows": "返回工作流列表",
     "name": "工作流名称",
     "runMode": "运行模式",

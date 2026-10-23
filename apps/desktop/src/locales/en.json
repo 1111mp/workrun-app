@@ -778,6 +778,7 @@
       "working": "Working…",
       "test": "Test connection"
     },
+    "backToConversation": "Back to conversation",
     "backToWorkflows": "Back to workflows",
     "name": "Workflow name",
     "runMode": "Run mode",

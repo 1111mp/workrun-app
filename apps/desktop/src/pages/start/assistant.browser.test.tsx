@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 
+import { WorkflowBackButton } from '@/components/workflow-editor/workflow-back-button';
 import zh from '@/locales/zh_CN.json';
 
 const host = vi.hoisted(() => {
@@ -1488,4 +1489,96 @@ it('restores the chosen workflow confirmation in its conversation turn without s
     .toBeVisible();
   expect(host.commands).not.toContain('assistant_turn_start');
   expect(host.start).not.toHaveBeenCalled();
+});
+
+it('restores the reading position when returning from a workflow', async () => {
+  await page.viewport(1280, 900);
+  const messages = Array.from({ length: 4 }, (_, index) => [
+    {
+      id: `user-${index}`,
+      role: 'user',
+      text: `问题 ${index}`,
+      content: { role: 'user', parts: [{ text: `问题 ${index}` }] },
+    },
+    {
+      id: `answer-${index}`,
+      role: 'assistant',
+      text: Array.from({ length: 60 }, (_, line) => `分析第 ${line} 行。`).join(
+        '\n\n',
+      ),
+      content: {
+        role: 'model',
+        parts: [
+          {
+            text: Array.from(
+              { length: 60 },
+              (_, line) => `分析第 ${line} 行。`,
+            ).join('\n\n'),
+          },
+        ],
+      },
+    },
+  ]).flat();
+  host.saved.set('long-history', {
+    id: 'long-history',
+    title: '长对话',
+    modelId: 'model',
+    status: 'idle',
+    steps: 0,
+    messages,
+  });
+  await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter initialEntries={['/start?session=long-history']}>
+        <Routes>
+          <Route
+            path='/start'
+            element={
+              <>
+                <div className='h-dvh'>
+                  <StartPage />
+                </div>
+                <Link
+                  style={{ position: 'fixed', top: 0 }}
+                  to='/workflows/report'
+                  state={{ assistantReturnTo: '/start?session=long-history' }}
+                >
+                  Open workflow
+                </Link>
+              </>
+            }
+          />
+          <Route path='/workflows/:id' element={<WorkflowBackButton />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .poll(
+      () =>
+        document.querySelector<HTMLElement>(
+          '[data-slot="message-scroller-viewport"]',
+        )?.scrollTop ?? 0,
+    )
+    .toBeGreaterThan(1000);
+  const originalViewport = document.querySelector<HTMLElement>(
+    '[data-slot="message-scroller-viewport"]',
+  )!;
+  originalViewport.dispatchEvent(
+    new WheelEvent('wheel', { bubbles: true, deltaY: -100 }),
+  );
+  originalViewport.scrollTop = 760;
+  originalViewport.dispatchEvent(new Event('scroll', { bubbles: true }));
+  await page.getByRole('link', { name: 'Open workflow' }).click();
+  await page
+    .getByRole('button', { name: zh.workflowEditor.backToConversation })
+    .click();
+  await expect
+    .poll(
+      () =>
+        document.querySelector<HTMLElement>(
+          '[data-slot="message-scroller-viewport"]',
+        )?.scrollTop,
+    )
+    .toBeCloseTo(760, 0);
 });

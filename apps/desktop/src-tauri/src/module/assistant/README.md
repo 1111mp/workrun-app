@@ -163,6 +163,16 @@ catalog or write tools. Node details remain English progressive resources genera
 from node contracts. Manuals live outside the executable in Tauri resources. Development
 and release use the same generated layout; build.rs rejects missing/stale resources.
 
+## User documentation
+
+The official guide is maintained in English and Simplified Chinese:
+
+- [Build workflows through conversation](../../../../../docs/src/content/docs/guides/conversational-workflows.md)
+- [通过对话编排工作流](../../../../../docs/src/content/docs/zh-cn/guides/conversational-workflows.md)
+
+Keep user-facing instructions aligned with the native plan, execution and tool
+confirmation gates.
+
 ## Validation
 
 ```sh

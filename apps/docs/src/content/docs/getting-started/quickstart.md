@@ -3,6 +3,8 @@ title: 5-minute quickstart
 description: Add an API key, then create and run your first Start → Agent → End workflow.
 ---
 
+You can also describe your goal on the start page, review a plan, and generate an editable workflow. See [Build workflows through conversation](/guides/conversational-workflows/). Plan approval and execution confirmation are separate steps.
+
 In this tutorial, you will create a minimal workflow that accepts customer feedback and has an Agent suggest a next step. You only need to configure one provider API key: Workrun already provides the model catalog and workflow run modes.
 
 ```text
@@ -56,12 +58,12 @@ The recording creates the workflow (including the default Start), adds and conne
 
 Workflow entry inputs are not configured on the Start node. Select **More settings** in the editor toolbar, then add this field under **Run inputs**:
 
-| Field | Value |
-| --- | --- |
-| Label | `Customer feedback` |
-| Key | `feedback` |
-| Type | `Multiline text` |
-| Required | On |
+| Field     | Value                                     |
+| --------- | ----------------------------------------- |
+| Label     | `Customer feedback`                       |
+| Key       | `feedback`                                |
+| Type      | `Multiline text`                          |
+| Required  | On                                        |
 | Help text | `Enter the customer feedback to analyze.` |
 
 Save the workflow. The key is supplied to the workflow on each run and can be referenced by the Agent instruction. Its actual value belongs only to that run; it is not saved into the workflow definition.

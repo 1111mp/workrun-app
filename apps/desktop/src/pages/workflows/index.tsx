@@ -163,7 +163,7 @@ function WorkflowCard({
 
 function WorkflowListSkeleton() {
   return (
-    <div className='workrun-library-grid grid gap-4'>
+    <div className='workrun-library-grid workrun-workflow-skeleton grid gap-4'>
       {Array.from({ length: 3 }, (_, index) => (
         <Card key={index} size='sm'>
           <CardHeader>

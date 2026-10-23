@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { expect, it, vi } from 'vitest';
 
 import type { WorkflowPlan } from '@/services/assistant';
@@ -207,3 +207,53 @@ it('folds a confirmed proposal and keeps the saved workflow accessible', async (
     screen.getByRole('link', { name: 'assistant.plan.openWorkflow' }),
   ).toBeVisible();
 });
+
+function Destination() {
+  const location = useLocation();
+  return <div data-testid='origin'>{location.state?.assistantReturnTo}</div>;
+}
+it.each(['saved', 'revision'] as const)(
+  'preserves the source conversation for the %s workflow link',
+  async (kind) => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/start?session=sales']}>
+        <Routes>
+          <Route
+            path='/start'
+            element={
+              <AssistantWorkflowPlan
+                plan={
+                  kind === 'saved'
+                    ? { ...plan, status: 'saved', workflowId: 'workflow-id' }
+                    : {
+                        ...plan,
+                        document: {
+                          ...plan.document,
+                          target_id: 'workflow-id',
+                        },
+                      }
+                }
+                busy={false}
+                onDecide={() => {}}
+                onDiscuss={() => {}}
+              />
+            }
+          />
+          <Route path='/workflows/:id' element={<Destination />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await user.click(
+      screen.getByRole('link', {
+        name:
+          kind === 'saved'
+            ? 'assistant.plan.openWorkflow'
+            : 'assistant.plan.revisionTarget',
+      }),
+    );
+    expect(screen.getByTestId('origin')).toHaveTextContent(
+      '/start?session=sales',
+    );
+  },
+);

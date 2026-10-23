@@ -243,7 +243,15 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                 <SidebarMenuButton
                   title={run.targetName}
                   isActive={new URLSearchParams(search).get('runId') === run.id}
-                  render={<Link to={runDetailsPath(run)} viewTransition />}
+                  render={
+                    <Link
+                      to={runDetailsPath(run)}
+                      // Selecting another App run only changes the drawer, not the page.
+                      viewTransition={
+                        run.targetType !== 'app' || pathname !== '/apps'
+                      }
+                    />
+                  }
                 >
                   <HistoryIcon />
                   <span>{run.targetName}</span>
@@ -253,6 +261,9 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                   id={run.id}
                   name={run.targetName}
                   to={runDetailsPath(run)}
+                  viewTransition={
+                    run.targetType !== 'app' || pathname !== '/apps'
+                  }
                   canDelete={['completed', 'failed', 'cancelled'].includes(
                     run.status,
                   )}
@@ -278,12 +289,14 @@ function RecentActions({
   id,
   name,
   to,
+  viewTransition = true,
   canDelete = true,
 }: {
   kind: 'conversation' | 'run';
   id: string;
   name: string;
   to: string;
+  viewTransition?: boolean;
   canDelete?: boolean;
 }) {
   const { t } = useTranslation();
@@ -352,7 +365,9 @@ function RecentActions({
         align={isMobile ? 'end' : 'start'}
       >
         <DropdownMenuGroup>
-          <DropdownMenuItem render={<Link to={to} viewTransition />}>
+          <DropdownMenuItem
+            render={<Link to={to} viewTransition={viewTransition} />}
+          >
             <ArrowUpRightIcon />
             {t('sidebar.open')}
           </DropdownMenuItem>

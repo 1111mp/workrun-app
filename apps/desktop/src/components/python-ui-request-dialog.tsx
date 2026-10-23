@@ -10,10 +10,12 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogTitle,
   Spinner,
 } from '@workspace/ui/components';
 import ajvErrors from 'ajv-errors';
+import { ClipboardListIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -110,41 +112,55 @@ function PythonUiRequestDialog() {
 
   return (
     <AlertDialog open={true}>
-      <AlertDialogContent data-python-ui-request='' className='max-w-lg!'>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {request.title ?? 'Input required'}
-          </AlertDialogTitle>
-          {request.description ? (
-            <AlertDialogDescription>
-              {request.description}
-            </AlertDialogDescription>
-          ) : null}
-        </AlertDialogHeader>
-        <Form
-          id={formId}
-          noHtml5Validate
-          key={request.requestId}
-          liveValidate={shouldLiveValidate ? 'onChange' : false}
-          schema={request.schema}
-          uiSchema={
-            isSchema(request.uiSchema) ? (request.uiSchema as UiSchema) : {}
-          }
-          validator={validator}
-          formContext={{
-            selectPath: async ({ directory }: { directory: boolean }) => {
-              const path = await open({ directory, multiple: false });
-              return typeof path === 'string' ? path : null;
-            },
-          }}
-          disabled={responding}
-          showErrorList={false}
-          onError={() => setLiveValidationRequestId(request.requestId)}
-          onSubmit={({ formData }) => void respond(formData ?? {})}
-        >
-          <></>
-        </Form>
-        <AlertDialogFooter>
+      <AlertDialogContent
+        data-python-ui-request=''
+        className='flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg! flex-col gap-0 overflow-hidden p-0'
+      >
+        <div className='via-background relative shrink-0 overflow-hidden border-b bg-linear-to-br from-violet-500/12 to-sky-500/10 px-5 pt-5 pb-4 sm:px-6 sm:pt-6'>
+          <div className='absolute -top-12 -right-10 size-36 rounded-full bg-violet-500/10 blur-2xl' />
+          <AlertDialogHeader className='relative grid-cols-[auto_minmax(0,1fr)] grid-rows-1 place-items-start gap-x-3 text-left has-data-[slot=alert-dialog-media]:grid-rows-1'>
+            <AlertDialogMedia className='mb-0 size-10 rounded-xl border border-violet-500/20 bg-violet-500/10 text-violet-700 shadow-sm dark:text-violet-300'>
+              <ClipboardListIcon className='size-5' />
+            </AlertDialogMedia>
+            <div className='flex min-w-0 flex-col gap-1.5 wrap-break-word'>
+              <AlertDialogTitle className='text-lg font-semibold tracking-tight'>
+                {request.title ?? 'Input required'}
+              </AlertDialogTitle>
+              {request.description ? (
+                <AlertDialogDescription className='text-sm leading-5'>
+                  {request.description}
+                </AlertDialogDescription>
+              ) : null}
+            </div>
+          </AlertDialogHeader>
+        </div>
+        {/* Keep actions visible while schema-driven content scrolls independently. */}
+        <div className='min-h-0 overflow-y-auto px-5 py-5 sm:px-6'>
+          <Form
+            id={formId}
+            noHtml5Validate
+            key={request.requestId}
+            liveValidate={shouldLiveValidate ? 'onChange' : false}
+            schema={request.schema}
+            uiSchema={
+              isSchema(request.uiSchema) ? (request.uiSchema as UiSchema) : {}
+            }
+            validator={validator}
+            formContext={{
+              selectPath: async ({ directory }: { directory: boolean }) => {
+                const path = await open({ directory, multiple: false });
+                return typeof path === 'string' ? path : null;
+              },
+            }}
+            disabled={responding}
+            showErrorList={false}
+            onError={() => setLiveValidationRequestId(request.requestId)}
+            onSubmit={({ formData }) => void respond(formData ?? {})}
+          >
+            <></>
+          </Form>
+        </div>
+        <AlertDialogFooter className='mx-0 mb-0 shrink-0 px-5 py-4 sm:px-6'>
           <AlertDialogCancel
             disabled={responding}
             onClick={() => void respond(null)}

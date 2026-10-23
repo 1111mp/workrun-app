@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { MemoryRouter } from 'react-router';
+import { RouterProvider, createMemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 import {
@@ -132,9 +132,9 @@ async function mount() {
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
-        <AppsPage />
-      </MemoryRouter>
+      <RouterProvider
+        router={createMemoryRouter([{ path: '*', Component: AppsPage }])}
+      />
     </QueryClientProvider>,
   );
   await screen.findByText('Report');

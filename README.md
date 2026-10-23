@@ -13,18 +13,29 @@ Start with a standalone Python app for data processing, file operations, or syst
 Workrun is evolving rapidly. This README summarizes current capabilities; see the official documentation for detailed instructions and limitations.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/525a19ce-a28b-4671-8e31-0f3ba5539069" width="24%" alt="Workrun workflow list" />
-  <img src="https://github.com/user-attachments/assets/baedb261-5990-41d4-8565-dc81131f6a13" width="24%" alt="Workrun workflow editor" />
-  <img src="https://github.com/user-attachments/assets/7c5afcf0-8ab2-4ada-9226-ceff3a4d633c" width="24%" alt="Workrun run output" />
-  <img src="https://github.com/user-attachments/assets/800103bb-85a8-4e8e-bf94-52a544233e01" width="24%" alt="Workrun app editor" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/start-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/start-light.png" />
+    <img src="apps/docs/public/media/homepage/start-light.png" width="24%" alt="Workrun start page" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflows-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflows-light.png" />
+    <img src="apps/docs/public/media/homepage/workflows-light.png" width="24%" alt="Workrun workflow list" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/apps-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/apps-light.png" />
+    <img src="apps/docs/public/media/homepage/apps-light.png" width="24%" alt="Workrun app list" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflow-editor-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflow-editor-light.png" />
+    <img src="apps/docs/public/media/homepage/workflow-editor-light.png" width="24%" alt="Workrun workflow editor" />
+  </picture>
 </p>
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/948c92ec-306b-4a14-9328-3b60f02c5846" width="24%" alt="Workrun workflow list" />
-  <img src="https://github.com/user-attachments/assets/db940f4d-c75d-40c6-b42d-48b22c800666" width="24%" alt="Workrun workflow editor" />
-  <img src="https://github.com/user-attachments/assets/4ea37888-4f7e-4393-85b8-f945be61e282" width="24%" alt="Workrun run output" />
-  <img src="https://github.com/user-attachments/assets/f1a946e2-0c5f-4259-95a3-07b9e04b1765" width="24%" alt="Workrun app editor" />
-</p>
+Describe a goal in the start-page conversation, review a versioned plan, and generate or revise an editable workflow. Execution requires a separate workflow-and-input confirmation. See [Build workflows through conversation](https://workrun-docs.pages.dev/guides/conversational-workflows/).
 
 ## What you can do with Workrun
 

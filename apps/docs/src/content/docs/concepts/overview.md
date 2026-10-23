@@ -3,6 +3,8 @@ title: How Workrun works
 description: See how Workrun organizes model reasoning, code, tools, and human decisions into automation that can run, resume, and be verified.
 ---
 
+You can also describe your goal on the start page, review a plan, and generate an editable workflow. See [Build workflows through conversation](/guides/conversational-workflows/). Plan approval and execution confirmation are separate steps.
+
 Workrun is a local-first workspace for AI automation. It is not only about asking a model another question: it turns a useful AI collaboration into a workflow a team can run again, inspect, and improve.
 
 ```text

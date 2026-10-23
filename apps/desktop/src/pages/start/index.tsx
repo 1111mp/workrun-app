@@ -15,7 +15,6 @@ import {
   MessageScrollerContent,
   MessageScrollerItem,
   MessageScrollerProvider,
-  MessageScrollerViewport,
   Select,
   SelectContent,
   SelectGroup,
@@ -55,6 +54,7 @@ import { AssistantTurnThinking } from './assistant-turn-activity';
 import { AssistantWorkflowConfirmationCard } from './assistant-workflow-confirmation';
 import { AssistantWorkflowPlan } from './assistant-workflow-plan';
 import { AssistantWorkflowRun } from './assistant-workflow-run';
+import { ConversationScrollViewport } from './conversation-scroll-viewport';
 
 function StartPage() {
   const loadAssistantSession = useAssistantStore(
@@ -389,7 +389,9 @@ function AssistantChat({ scope }: { scope: string }) {
           <div className='min-h-0 flex-1'>
             <MessageScrollerProvider autoScroll>
               <MessageScroller>
-                <MessageScrollerViewport>
+                <ConversationScrollViewport
+                  positionKey={`${scope}:${id ?? 'new'}`}
+                >
                   <MessageScrollerContent className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] px-6 py-5'>
                     {groups.map((group) => (
                       <MessageScrollerItem
@@ -754,7 +756,7 @@ function AssistantChat({ scope }: { scope: string }) {
                       </MessageScrollerItem>
                     )}
                   </MessageScrollerContent>
-                </MessageScrollerViewport>
+                </ConversationScrollViewport>
                 <MessageScrollerButton />
               </MessageScroller>
             </MessageScrollerProvider>
