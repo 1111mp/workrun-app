@@ -55,35 +55,19 @@ static SECRET_ASSIGNMENT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 pub(super) fn input_guardrails() -> GuardrailSet {
     GuardrailSet::new()
         .with(ContentFilter::max_length(50_000))
-        .with(PiiRedactor::with_types(&[
-            PiiType::Email,
-            PiiType::Phone,
-            PiiType::Ssn,
-            PiiType::CreditCard,
-            PiiType::IpAddress,
-        ]))
-        .with(ChinaPiiRedactor)
+        .with(NumericAwarePiiRedactor)
         .with(SecretBlocker)
 }
 
 pub(super) fn output_guardrails() -> GuardrailSet {
-    GuardrailSet::new()
-        .with(PiiRedactor::with_types(&[
-            PiiType::Email,
-            PiiType::Phone,
-            PiiType::Ssn,
-            PiiType::CreditCard,
-            PiiType::IpAddress,
-        ]))
-        .with(ChinaPiiRedactor)
-        .with(SecretRedactor)
+    GuardrailSet::new().with(NumericAwarePiiRedactor).with(SecretRedactor)
 }
 
 pub(super) fn tool_guardrails() -> ToolGuardrailSet {
     ToolGuardrailSet::new().with(SecretToolGuardrail)
 }
 
-pub(super) fn ensure_tool_args_safe(args: &Value) -> adk_rust::Result<()> {
+pub(crate) fn ensure_tool_args_safe(args: &Value) -> adk_rust::Result<()> {
     if contains_secret_json(args) {
         return Err(adk_rust::AdkError::tool(
             "Tool arguments contain credentials or authentication secrets",
@@ -92,7 +76,7 @@ pub(super) fn ensure_tool_args_safe(args: &Value) -> adk_rust::Result<()> {
     Ok(())
 }
 
-pub(super) fn ensure_tool_args_resolved(args: &Value) -> adk_rust::Result<()> {
+pub(crate) fn ensure_tool_args_resolved(args: &Value) -> adk_rust::Result<()> {
     if let Some(path) = redacted_argument_path(args, "") {
         return Err(adk_rust::AdkError::tool(format!(
             "Tool argument `{path}` is still redacted; grant raw State access or configure a State Binding"
@@ -101,13 +85,12 @@ pub(super) fn ensure_tool_args_resolved(args: &Value) -> adk_rust::Result<()> {
     Ok(())
 }
 
-pub(super) fn redact_text(text: &str) -> String {
-    let (text, _) = PII_REDACTOR.redact(text);
-    let text = redact_china_pii(&text);
+pub(crate) fn redact_text(text: &str) -> String {
+    let text = redact_pii(text);
     redact_secrets(&text)
 }
 
-pub(super) fn redact_json(value: &Value) -> Value {
+pub(crate) fn redact_json(value: &Value) -> Value {
     let mut value = value.clone();
     redact_json_in_place(&mut value);
     value
@@ -343,6 +326,39 @@ fn redact_secrets(text: &str) -> String {
         .into_owned()
 }
 
+// Decimal/scientific values are numeric tokens, not independent identifiers in
+// their fractional digits. Keep IP addresses and dotted phone numbers outside
+// this exemption by requiring a complete numeric token with no adjacent dot.
+static DECIMAL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-?[0-9]+(?:\.[0-9]+(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)").expect("decimal pattern is valid")
+});
+
+fn redact_pii(text: &str) -> String {
+    let redact = |part: &str| {
+        let (part, _) = PII_REDACTOR.redact(part);
+        redact_china_pii(&part)
+    };
+    let mut output = String::new();
+    let mut cursor = 0;
+    for number in DECIMAL_PATTERN.find_iter(text) {
+        let is_boundary =
+            |character: char| !character.is_ascii_alphanumeric() && !matches!(character, '.' | '_' | '@' | '+' | '-');
+        if text[..number.start()]
+            .chars()
+            .next_back()
+            .is_some_and(|c| !is_boundary(c))
+            || text[number.end()..].chars().next().is_some_and(|c| !is_boundary(c))
+        {
+            continue;
+        }
+        output.push_str(&redact(&text[cursor..number.start()]));
+        output.push_str(number.as_str());
+        cursor = number.end();
+    }
+    output.push_str(&redact(&text[cursor..]));
+    output
+}
+
 fn redact_china_pii(text: &str) -> String {
     let text = CHINA_ID_PATTERN.replace_all(text, CHINA_ID_REDACTION).into_owned();
     CHINA_PHONE_PATTERN
@@ -378,16 +394,16 @@ fn transform_content(content: &Content, transform: impl Fn(&str) -> String, reas
     }
 }
 
-struct ChinaPiiRedactor;
+struct NumericAwarePiiRedactor;
 
 #[async_trait::async_trait]
-impl Guardrail for ChinaPiiRedactor {
+impl Guardrail for NumericAwarePiiRedactor {
     fn name(&self) -> &str {
-        "workrun_china_pii_redactor"
+        "workrun_pii_redactor"
     }
 
     async fn validate(&self, content: &Content) -> GuardrailResult {
-        transform_content(content, redact_china_pii, "Redacted Chinese PII")
+        transform_content(content, redact_pii, "Redacted PII")
     }
 
     fn run_parallel(&self) -> bool {
@@ -478,6 +494,30 @@ mod tests {
         assert!(!redacted.contains("192.168.1.10"));
         assert!(!redacted.contains("abcdefghijklmnop"));
         assert!(redacted.contains(SECRET_REDACTION));
+    }
+
+    #[tokio::test]
+    async fn preserves_numeric_tokens_through_both_guardrail_sets() {
+        // These values exercise card/ID-length fractional digits in unrelated
+        // measurements, including JSON encoded inside a string output.
+        let value = json!({"measurement": 0.1234567890123456,
+            "payload": "{\"coefficient\":0.3939393939393939,\"offset\":-0.1380013800012345}",
+            "scientific": "1.11010519491231002e-20"});
+        let text = serde_json::to_string(&value).unwrap();
+        assert_eq!(redact_text(&text), text);
+        assert_eq!(redact_json(&value), value);
+        for guardrails in [input_guardrails(), output_guardrails()] {
+            let result = GuardrailExecutor::run(&guardrails, &Content::new("model").with_text(&text))
+                .await
+                .unwrap();
+            assert!(result.passed);
+            assert!(result.transformed_content.is_none());
+        }
+        let private = "4111111111111111 11010519491231002X 13800138000 192.168.1.10 555.123.4567";
+        let protected = redact_text(private);
+        for identifier in private.split_whitespace() {
+            assert!(!protected.contains(identifier));
+        }
     }
 
     #[test]

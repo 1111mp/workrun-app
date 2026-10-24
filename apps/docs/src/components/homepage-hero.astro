@@ -1,75 +1,108 @@
 ---
-// CSS switches between the two exported product screenshots with the documentation theme.
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 const isEnglish = Astro.currentLocale === 'en';
+// Render real captures only when both themes are supplied. Adding the pair and
+// rebuilding replaces the example without shipping broken image requests.
+const hasScreenshots = ['light', 'dark'].every((theme) =>
+  existsSync(resolve('public/media/homepage', `start-${theme}.png`)),
+);
 const copy = isEnglish
   ? {
-      workspace: 'Workrun / Apps + Workflows',
-      saved: 'Saved',
-      headline: 'Start with code. Compose when the work grows.',
-      workflow: 'Order cancellation: risk routing and regression evaluation',
-      note: 'Workflow editor in action: Apps, agents, conditional routing, and human review collaborate on one canvas.',
+      workspace: 'Workrun / Conversation',
+      mode: 'From goal to workflow',
+      preview: 'Workrun start page',
+      example: 'A task you could start with',
+      prompt: 'Build a customer-feedback workflow. Classify each message, suggest a response, and send high-priority feedback for human review.',
+      sequence: ['Describe your goal', 'Refine the plan', 'Create your workflow'],
+      note: 'Start with a conversation. Keep refining it in chat or open the generated workflow on the canvas.',
       signals: [
-        {
-          label: 'Python Apps',
-          detail: 'Independent local uv projects',
-        },
-        {
-          label: 'Local-first',
-          detail: 'Your workspace stays on your machine',
-        },
-        {
-          label: 'Evaluation-ready',
-          detail: 'Validate changes before publishing',
-        },
+        { label: 'Describe', detail: 'Your goal, in your own words' },
+        { label: 'Compose', detail: 'Steps and capabilities brought together' },
+        { label: 'Reuse', detail: 'An editable workflow you can run again' },
       ],
     }
   : {
-      workspace: 'Workrun / App + 工作流',
-      saved: '已保存',
-      headline: '先用代码完成，再把协作编排起来。',
-      workflow: '订单取消：风险路由与回归评测',
-      note: '工作流编辑器实拍：App、Agent、条件路由与人工审核在同一画布中协作。',
+      workspace: 'Workrun / 对话',
+      mode: '从目标到工作流',
+      preview: 'Workrun 开始页',
+      example: '试着从这样的需求开始',
+      prompt: '帮我搭建一个客户反馈处理流程：自动分类、生成回复建议，高优先级的反馈交给人工审核。',
+      sequence: ['说出目标', '一起完善方案', '生成可复用工作流'],
+      note: '从对话开始，在对话中继续调整，也能随时打开画布编辑生成的工作流。',
       signals: [
-        { label: 'Python App', detail: '独立的本地 uv 项目' },
-        { label: '本地优先', detail: '工作区与凭据保留在你的设备上' },
-        { label: '评测就绪', detail: '发布前验证每一次改动' },
+        { label: '描述目标', detail: '用自然语言说清你想完成什么' },
+        { label: '自主编排', detail: '梳理步骤，组合所需能力' },
+        { label: '持续复用', detail: '生成可编辑、可重复运行的工作流' },
       ],
     };
 ---
 
-<section class='workrun-hero-preview' aria-label='Workrun 工作流编辑器产品预览'>
-  <ul
-    class='hero-signal-rail'
-    aria-label={isEnglish ? 'Workrun capabilities' : 'Workrun 能力'}
-  >
-    {
-      copy.signals.map((signal) => (
-        <li>
-          <>
-            <strong>{signal.label}</strong>
-            <span>{signal.detail}</span>
-          </>
-        </li>
-      ))
-    }
+<section class='workrun-hero-preview' aria-label={copy.preview}>
+  <ul class='hero-signal-rail' aria-label={isEnglish ? 'Workrun capabilities' : 'Workrun 能力'}>
+    {copy.signals.map((signal) => (
+      <li><strong>{signal.label}</strong><span>{signal.detail}</span></li>
+    ))}
   </ul>
   <div class='hero-preview-bar'>
     <span class='hero-preview-brand'><i></i> {copy.workspace}</span>
-    <span class='hero-preview-state'><b></b> {copy.saved}</span>
+    <span>{copy.mode}</span>
   </div>
-  <div
-    class='hero-preview-shot'
-    role='img'
-    aria-label='Workrun 工作流编辑器：订单取消风险路由与回归评测'
-  >
-    <div class='hero-preview-copy'>
-      <span>REAL PRODUCT SURFACE</span>
-      <strong>{copy.headline}</strong>
+  {hasScreenshots ? (
+    <div class='start-preview-images'>
+      <img class='start-preview-light' src='/media/homepage/start-light.png' alt={copy.preview} fetchpriority='high' decoding='async' />
+      <img class='start-preview-dark' src='/media/homepage/start-dark.png' alt={copy.preview} fetchpriority='high' decoding='async' />
     </div>
-    <div class='hero-preview-caption'>
-      <span>{copy.workflow}</span>
-      <span>CANVAS · RUN HISTORY · EVALUATION</span>
+  ) : (
+    <div class='start-preview-example'>
+      <p class='start-example-label'>{copy.example}</p>
+      <blockquote>{copy.prompt}</blockquote>
+      <ol>{copy.sequence.map((step) => <li>{step}</li>)}</ol>
     </div>
-  </div>
+  )}
   <p class='hero-preview-note'>{copy.note}</p>
 </section>
+
+<style>
+  .start-preview-images img {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 0;
+  }
+  .start-preview-images .start-preview-light { display: none; }
+  :global(:root[data-theme='light']) .start-preview-images .start-preview-dark { display: none; }
+  :global(:root[data-theme='light']) .start-preview-images .start-preview-light { display: block; }
+  .start-preview-example {
+    padding: clamp(1.5rem, 5vw, 4.5rem);
+    color: #f5f6ff;
+  }
+  .start-example-label {
+    margin: 0 0 1.2rem;
+    font-size: 0.8rem;
+    color: #b9a7ff;
+  }
+  .start-preview-example blockquote {
+    max-width: 44rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    font-size: clamp(1.25rem, 3vw, 2.2rem);
+    font-weight: 500;
+    line-height: 1.6;
+  }
+  .start-preview-example ol {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem 2rem;
+    margin: 2rem 0 0;
+    padding-left: 1.2rem;
+    font-size: 0.85rem;
+    color: #aeb8d4;
+  }
+  .start-preview-example li { padding-left: 0.2rem; }
+  :global(:root[data-theme='light']) .start-preview-example { color: #1c2137; }
+  :global(:root[data-theme='light']) .start-example-label { color: #6046bd; }
+  :global(:root[data-theme='light']) .start-preview-example ol { color: #56607e; }
+</style>

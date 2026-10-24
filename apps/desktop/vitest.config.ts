@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import tailwindcss from '@tailwindcss/vite';
@@ -14,6 +15,18 @@ export default defineConfig({
     alias: { '@': resolve(import.meta.dirname, './src') },
   },
   test: {
+    reporters: [
+      'default',
+      {
+        async onTestRunStart() {
+          // Keep only this run's diagnostic attachments, including in watch mode.
+          await rm(resolve(import.meta.dirname, '.vitest/attachments'), {
+            recursive: true,
+            force: true,
+          });
+        },
+      },
+    ],
     projects: [
       {
         extends: true,

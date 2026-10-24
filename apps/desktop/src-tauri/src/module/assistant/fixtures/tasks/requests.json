@@ -1,0 +1,57 @@
+[
+  {
+    "id": "file-aggregation",
+    "request": "分析附件中的测量记录，计算 value 总和、记录数和按 group 分类的合计。不推断缺失的单位。",
+    "workflowRequest": "以后要重复做，整理成流程，先不要运行。工作流接收 records_file 文件输入，对外输出 total（数值）、record_count（数值）、groups_json（按组汇总的 JSON 文本）、unit（文本；未提供时为空字符串）。",
+    "runs": [
+      {
+        "attachments": {
+          "records_file": "measurements-a.json"
+        },
+        "input": {}
+      },
+      {
+        "attachments": {
+          "records_file": "measurements-b.json"
+        },
+        "input": {}
+      }
+    ]
+  },
+  {
+    "id": "stable-deduplication",
+    "request": "将这些标识去除首尾空格、移除空项、按首次出现顺序去重，大小写敏感： [\" A \",\"B\",\"A\",\"\", \"b\"]。",
+    "workflowRequest": "以后要重复做，整理成流程，先不要运行。输入 items_json 是字符串数组的 JSON 文本，对外输出 result_json（处理后数组的 JSON 文本）和 count（数值），保持相同规则。",
+    "runs": [
+      {
+        "input": {
+          "items_json": "[\" A \",\"B\",\"A\",\"\", \"b\"]"
+        }
+      },
+      {
+        "input": {
+          "items_json": "[\" 中 \",\"中\",\"文\", \"  \"]"
+        }
+      }
+    ]
+  },
+  {
+    "id": "text-formatting",
+    "request": "把标题“ Workrun ”和正文“ 第一次测试 ”整理成 Markdown：标题为一级标题，空一行后是正文，两者仅移除首尾空格，末尾保留一个换行。",
+    "workflowRequest": "以后要重复做，整理成流程，先不要运行。输入 title 和 body，对外输出 markdown（文本），保持上述排版规则，不改写正文。",
+    "runs": [
+      {
+        "input": {
+          "title": " Workrun ",
+          "body": " 第一次测试 "
+        }
+      },
+      {
+        "input": {
+          "title": " 第二次 ",
+          "body": "保留 A & B"
+        }
+      }
+    ]
+  }
+]

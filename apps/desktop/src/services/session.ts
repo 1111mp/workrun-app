@@ -20,6 +20,8 @@ function normalizeServerUrl(value: string) {
 async function getTeamUser(serverUrl: string): Promise<TeamUser | null> {
   const response = await tauriFetchImpl(`${serverUrl}/api/v1/users/me`, {
     credentials: 'include',
+    // Bound session checks so an unresponsive server cannot block entry forever.
+    signal: AbortSignal.timeout(10_000),
   });
   if (response.status === 401) return null;
   if (!response.ok) throw new Error('Unable to fetch current user');

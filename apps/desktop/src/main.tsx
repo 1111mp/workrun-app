@@ -6,7 +6,7 @@ import './styles/global.css';
 
 import App from '@/app';
 import { applyTheme } from '@/lib/utils';
-import { getAppInitialData } from '@/services/init';
+import { getStartupData } from '@/services/init';
 import { checkForStartupUpdate } from '@/services/updater';
 
 void (async () => {
@@ -15,7 +15,7 @@ void (async () => {
     await import('@wdio/tauri-plugin');
   }
 
-  const [config, sysTheme] = await getAppInitialData();
+  const [config, sysTheme] = await getStartupData();
   // Set the theme in advance to prevent flickering.
   applyTheme(config.theme !== 'system' ? config.theme : sysTheme, false);
 

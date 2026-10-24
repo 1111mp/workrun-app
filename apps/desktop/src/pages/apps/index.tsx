@@ -66,7 +66,12 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useSearchParams } from 'react-router';
+import {
+  Link,
+  useLocation,
+  useSearchParams,
+  useViewTransitionState,
+} from 'react-router';
 import { toast } from 'sonner';
 
 import {
@@ -173,7 +178,7 @@ function StatusBadge({ status }: { status: ProcessNodeInstallStatus }) {
 
 function AppListSkeleton() {
   return (
-    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
+    <div className='workrun-library-grid grid gap-4'>
       {Array.from({ length: 3 }, (_, index) => (
         <Card key={index} size='sm'>
           <CardHeader>
@@ -251,18 +256,14 @@ function AppItem({
   return (
     <Card
       size='sm'
-      className={cn(
-        'h-full transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:shadow-md',
-        isToolApp
-          ? 'border-sky-500/35 bg-sky-500/5 hover:border-sky-500/55'
-          : 'border-violet-500/35 bg-violet-500/5 hover:border-violet-500/55',
-      )}
+      className='workrun-library-card h-full'
+      data-library-kind={isToolApp ? 'tool' : 'app'}
     >
-      <CardHeader>
-        <div className='flex items-center gap-2'>
+      <CardHeader className='workrun-library-card-header'>
+        <div className='flex min-w-0 items-center gap-3'>
           <div
             className={cn(
-              'flex size-8 items-center justify-center rounded-lg border',
+              'flex size-8 shrink-0 items-center justify-center rounded-lg border',
               isToolApp
                 ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
                 : 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300',
@@ -270,7 +271,9 @@ function AppItem({
           >
             <BoxIcon className='size-4' />
           </div>
-          <CardTitle>{definition.name}</CardTitle>
+          <CardTitle className='line-clamp-2 min-w-0' title={definition.name}>
+            {definition.name}
+          </CardTitle>
         </div>
         <CardDescription
           className='line-clamp-2 min-h-10'
@@ -278,7 +281,8 @@ function AppItem({
         >
           {definition.description || t('apps.noDescription')}
         </CardDescription>
-        <CardAction className='flex flex-col items-end gap-2'>
+        {/* Keep transient run/preparation badges in one row so they cannot move the list. */}
+        <CardAction className='flex h-5 w-full min-w-0 flex-row items-center gap-2'>
           <StatusBadge status={node.installStatus} />
           {run?.isRunning ? (
             <Badge variant='outline'>
@@ -287,17 +291,19 @@ function AppItem({
             </Badge>
           ) : null}
           {preparationSummary ? (
-            <Badge variant='secondary'>
+            <Badge variant='secondary' className='min-w-0 shrink'>
               <CheckCircle2Icon data-icon='inline-start' />
-              {t(`apps.preparation.${preparationSummary.outcome}`, {
-                version: preparationSummary.version,
-              })}
+              <span className='truncate'>
+                {t(`apps.preparation.${preparationSummary.outcome}`, {
+                  version: preparationSummary.version,
+                })}
+              </span>
             </Badge>
           ) : null}
         </CardAction>
       </CardHeader>
       <CardContent className='flex flex-1 flex-col gap-3'>
-        <div className='text-muted-foreground flex items-center gap-2 text-xs'>
+        <div className='text-muted-foreground flex flex-wrap items-center gap-2 text-xs'>
           <BoxIcon />
           <span>v{definition.version}</span>
           <Badge
@@ -652,21 +658,15 @@ function AppHistoryDrawer({
 }
 
 function AppsPage() {
+  const location = useLocation();
+  const transitioning = useViewTransitionState(location.pathname);
   const [searchParams, setSearchParams] = useSearchParams();
   const externalRunId = searchParams.get('runId');
-  // Recover output already emitted before navigation and keep the drawer current
-  // until the native run reaches a terminal status.
+  // Recover output emitted before navigation; native events refresh later changes.
   const externalRun = useQuery({
     queryKey: ['run-history', externalRunId],
     queryFn: () => inspectRunRecord(externalRunId!),
     enabled: Boolean(externalRunId),
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return !status ||
-        ['queued', 'running', 'waiting_for_input'].includes(status)
-        ? 500
-        : false;
-    },
   });
   const externalAppRun =
     externalRun.data?.targetType === 'app'
@@ -682,6 +682,14 @@ function AppsPage() {
     Record<string, AppPreparationSummary>
   >({});
   const [outputOpen, setOutputOpen] = useState<boolean>(false);
+  const hasExternalAppRun = Boolean(externalAppRun);
+  useEffect(() => {
+    if (!externalRunId || !hasExternalAppRun || transitioning) return;
+    // Start the portal animation after the route's frozen snapshot is released.
+    // Record refreshes must not reopen a panel the user has already closed.
+    const frame = requestAnimationFrame(() => setOutputOpen(true));
+    return () => cancelAnimationFrame(frame);
+  }, [externalRunId, hasExternalAppRun, location.key, transitioning]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [historyNode, setHistoryNode] = useState<ProcessNode>();
   const [historyOpen, setHistoryOpen] = useState<boolean>(false);
@@ -691,6 +699,7 @@ function AppsPage() {
   const pendingOutput = useRef<Record<string, ProcessNodeOutput>>({});
   const frames = useRef<Record<string, number | undefined>>({});
   const unlistenRuns = useRef<Record<string, () => void>>({});
+  const mounted = useRef(false);
   const preparationSummaryTimers = useRef<Record<string, number | undefined>>(
     {},
   );
@@ -708,8 +717,10 @@ function AppsPage() {
 
   const { t } = useTranslation();
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       Object.values(frames.current).forEach((frame) => {
         if (frame !== undefined) cancelAnimationFrame(frame);
       });
@@ -717,9 +728,11 @@ function AppsPage() {
       Object.values(preparationSummaryTimers.current).forEach((timer) => {
         if (timer !== undefined) window.clearTimeout(timer);
       });
-    },
-    [],
-  );
+      frames.current = {};
+      preparationSummaryTimers.current = {};
+      unlistenRuns.current = {};
+    };
+  }, []);
 
   const receiveOutput = (runId: string, chunk: ProcessNodeOutputChunk) => {
     const output = pendingOutput.current[runId] ?? { stdout: '', stderr: '' };
@@ -804,6 +817,7 @@ function AppsPage() {
       }
     }
 
+    if (!mounted.current) return;
     const runId = crypto.randomUUID();
     pendingOutput.current[runId] = { stdout: '', stderr: '' };
     setRuns((current) => ({
@@ -817,40 +831,45 @@ function AppsPage() {
       },
     }));
     try {
-      unlistenRuns.current[runId] = await subscribeProcessNodeRun(
-        runId,
-        (event) => {
-          if (event.type === 'output') receiveOutput(runId, event);
-          else if (event.type === 'app_done') {
-            setRuns((current) => ({
-              ...current,
-              [runId]: {
-                ...current[runId],
-                execution: event.execution,
-                isRunning: false,
-              },
-            }));
-            unlistenRuns.current[runId]?.();
-            delete unlistenRuns.current[runId];
-          } else if (event.type === 'app_cancelled') {
-            setRuns((current) => ({
-              ...current,
-              [runId]: { ...current[runId], cancelled: true, isRunning: false },
-            }));
-            unlistenRuns.current[runId]?.();
-            delete unlistenRuns.current[runId];
-          } else if (event.type === 'error') {
-            setRuns((current) => ({
-              ...current,
-              [runId]: {
-                ...current[runId],
-                error: event.message,
-                isRunning: false,
-              },
-            }));
-          }
-        },
-      );
+      const stop = await subscribeProcessNodeRun(runId, (event) => {
+        if (!mounted.current) return;
+        if (event.type === 'output') receiveOutput(runId, event);
+        else if (event.type === 'app_done') {
+          setRuns((current) => ({
+            ...current,
+            [runId]: {
+              ...current[runId],
+              execution: event.execution,
+              isRunning: false,
+            },
+          }));
+          unlistenRuns.current[runId]?.();
+          delete unlistenRuns.current[runId];
+        } else if (event.type === 'app_cancelled') {
+          setRuns((current) => ({
+            ...current,
+            [runId]: { ...current[runId], cancelled: true, isRunning: false },
+          }));
+          unlistenRuns.current[runId]?.();
+          delete unlistenRuns.current[runId];
+        } else if (event.type === 'error') {
+          setRuns((current) => ({
+            ...current,
+            [runId]: {
+              ...current[runId],
+              error: event.message,
+              isRunning: false,
+            },
+          }));
+          unlistenRuns.current[runId]?.();
+          delete unlistenRuns.current[runId];
+        }
+      });
+      if (!mounted.current) {
+        stop();
+        return;
+      }
+      unlistenRuns.current[runId] = stop;
       await startBackgroundProcessNodeRun({
         runId,
         targetId: runnableNode.definition.id,
@@ -949,21 +968,26 @@ function AppsPage() {
   };
 
   return (
-    <div className='size-full overflow-y-auto'>
-      <main className='mx-auto flex w-full flex-col gap-3 px-6 py-3'>
-        <section className='flex min-w-0 flex-wrap items-center gap-2.5'>
-          <div className='mr-1 flex items-baseline gap-2'>
-            <h1 className='text-lg font-semibold tracking-tight'>
+    <div className='workrun-library size-full overflow-y-auto'>
+      <main className='mx-auto flex w-full max-w-400 flex-col gap-5 px-5 py-6 lg:px-8'>
+        <div className='flex flex-col gap-2'>
+          <div className='flex flex-wrap items-baseline gap-3'>
+            <h1 className='text-2xl font-semibold tracking-tight'>
               {t('apps.title')}
             </h1>
-            <span className='text-muted-foreground text-xs whitespace-nowrap'>
+            <span className='text-muted-foreground text-xs'>
               {t('apps.readyCount', {
                 installed: installedCount ?? '—',
                 total: apps.data?.length ?? '—',
               })}
             </span>
           </div>
-          <InputGroup className='order-last w-full sm:order-0 sm:ml-auto sm:w-64'>
+          <p className='text-muted-foreground max-w-2xl text-sm leading-relaxed'>
+            {t('apps.libraryDescription')}
+          </p>
+        </div>
+        <section className='workrun-library-toolbar flex min-w-0 flex-wrap items-center gap-2.5'>
+          <InputGroup className='w-full sm:mr-auto sm:w-64'>
             <InputGroupAddon>
               <SearchIcon />
             </InputGroupAddon>
@@ -1052,7 +1076,7 @@ function AppsPage() {
         ) : null}
 
         {filteredApps?.length ? (
-          <section className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
+          <section className='workrun-library-grid grid gap-4'>
             {filteredApps.map((node) => (
               <AppItem
                 key={node.definition.id}
@@ -1101,7 +1125,7 @@ function AppsPage() {
         ) : null}
       </main>
       <AppRunOutputPanel
-        open={Boolean(externalAppRun) || outputOpen}
+        open={outputOpen}
         run={externalAppRun ?? selectedRun}
         onOpenChange={(open) => {
           setOutputOpen(open);

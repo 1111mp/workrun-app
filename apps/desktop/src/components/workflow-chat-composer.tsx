@@ -11,8 +11,14 @@ import {
   InputGroupTextarea,
   Spinner,
 } from '@workspace/ui/components';
-import { ArrowUpIcon, PaperclipIcon, PlusIcon } from 'lucide-react';
-import { useEffect, useRef, useState, type SubmitEvent } from 'react';
+import { ArrowUpIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type SubmitEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -31,7 +37,15 @@ export function WorkflowChatComposer({
   onMessageChange,
   disabled,
   onSubmit,
+  toolbarActions,
+  responding = false,
+  stopping = false,
+  onStop,
 }: {
+  responding?: boolean;
+  stopping?: boolean;
+  onStop?: () => void;
+  toolbarActions?: ReactNode;
   fileInputs: WorkflowInput[];
   filesForInput: (key: string) => unknown;
   onFileChange: (
@@ -85,11 +99,25 @@ export function WorkflowChatComposer({
     <form
       className='w-full'
       onSubmit={(event) => {
-        if (disabled || busy.current) event.preventDefault();
+        if (disabled || responding || busy.current) event.preventDefault();
         else onSubmit(event);
       }}
     >
-      <InputGroup className='rounded-3xl'>
+      <InputGroup
+        data-workrun-composer
+        className='cursor-text rounded-3xl'
+        onClick={(event) => {
+          if (
+            disabled ||
+            picking ||
+            (event.target as HTMLElement).closest(
+              'button, a, input, textarea, [role="combobox"]',
+            )
+          )
+            return;
+          event.currentTarget.querySelector('textarea')?.focus();
+        }}
+      >
         {attachedFields.length > 0 && (
           <InputGroupAddon
             align='block-start'
@@ -117,7 +145,8 @@ export function WorkflowChatComposer({
           </InputGroupAddon>
         )}
         <InputGroupTextarea
-          className='max-h-52 min-h-20 px-4 pt-3'
+          rows={1}
+          className='max-h-52 min-h-0 cursor-text overflow-y-auto px-4 py-3 leading-6 disabled:cursor-not-allowed'
           aria-label={t('workflowEditor.output.message')}
           disabled={disabled || picking}
           placeholder={t('workflowEditor.output.messagePlaceholder')}
@@ -137,7 +166,7 @@ export function WorkflowChatComposer({
         />
         <InputGroupAddon
           align='block-end'
-          className='justify-between px-3 pb-3'
+          className='justify-between px-3 pb-2'
         >
           <div className='flex min-w-0 items-center gap-3'>
             {fileInputs.length > 0 && (
@@ -182,16 +211,42 @@ export function WorkflowChatComposer({
               {t('workflowEditor.output.sendHint')}
             </InputGroupText>
           </div>
-          <InputGroupButton
-            className='rounded-full'
-            disabled={disabled || picking || !message.trim()}
-            size='icon-sm'
-            type='submit'
-            variant='default'
-            aria-label={t('workflowEditor.output.send')}
-          >
-            <ArrowUpIcon />
-          </InputGroupButton>
+          <div className='flex min-w-0 items-center gap-2'>
+            {toolbarActions}
+            <InputGroupButton
+              className='rounded-full'
+              disabled={
+                responding
+                  ? stopping || !onStop
+                  : disabled || picking || !message.trim()
+              }
+              size='icon-sm'
+              type={responding ? 'button' : 'submit'}
+              onClick={
+                responding
+                  ? (event) => {
+                      // Stopping may immediately turn this control back into Submit.
+                      event.preventDefault();
+                      onStop?.();
+                    }
+                  : undefined
+              }
+              variant='default'
+              aria-label={t(
+                responding ? 'assistant.stop' : 'workflowEditor.output.send',
+              )}
+            >
+              {responding ? (
+                stopping ? (
+                  <Spinner />
+                ) : (
+                  <SquareIcon className='size-3 fill-current' />
+                )
+              ) : (
+                <ArrowUpIcon />
+              )}
+            </InputGroupButton>
+          </div>
         </InputGroupAddon>
       </InputGroup>
     </form>

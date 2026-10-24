@@ -2,39 +2,63 @@
 
 **English** | [简体中文](README-zh_CN.md)
 
-> A local-first AI automation workbench: run Python apps independently, or build visual workflows with agents, apps, MCP tools, and human review, then schedule, evaluate, and publish them.
+> A local-first AI automation workbench. Start with a conversation and turn a task into an editable, reusable workflow.
 
-Workrun helps developers and teams turn one-off AI conversations into reusable automation. It brings user input, model reasoning, deterministic code, external tools, and human approval into executable workflows. Build on a visual canvas or maintain a complete local Python project, then inspect results, traces, and quality after each run.
+Describe a task, generate a workflow, then refine agents, Python apps, MCP tools, and human review on a visual canvas. You can also run Python apps independently, connect them to workflows, and improve them through run history, evaluations, and versioned releases.
 
-Start with a standalone Python app for data processing, file operations, or system integration, then connect it to a workflow as a Process node or an agent tool. Personal mode requires no login. Team mode uses a self-hosted Workrun Server to share assets and published versions, while execution stays on the desktop.
+**Personal mode needs no login; workflows and Python apps execute on your desktop.** Teams can connect a self-hosted Workrun Server to share assets and published versions.
 
-**[Documentation](https://workrun-docs.pages.dev/) · [中文文档](https://workrun-docs.pages.dev/zh-cn/) · [Download](https://github.com/1111mp/workrun-app/releases/latest) · [5-minute quickstart](https://workrun-docs.pages.dev/getting-started/quickstart/)**
-
-Workrun is evolving rapidly. This README summarizes current capabilities; see the official documentation for detailed instructions and limitations.
+**[Download](https://github.com/1111mp/workrun-app/releases/latest) · [Documentation](https://workrun-docs.pages.dev/) · [5-minute quickstart](https://workrun-docs.pages.dev/getting-started/quickstart/) · [Build through conversation](https://workrun-docs.pages.dev/guides/conversational-workflows/)**
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/525a19ce-a28b-4671-8e31-0f3ba5539069" width="24%" alt="Workrun workflow list" />
-  <img src="https://github.com/user-attachments/assets/baedb261-5990-41d4-8565-dc81131f6a13" width="24%" alt="Workrun workflow editor" />
-  <img src="https://github.com/user-attachments/assets/7c5afcf0-8ab2-4ada-9226-ceff3a4d633c" width="24%" alt="Workrun run output" />
-  <img src="https://github.com/user-attachments/assets/800103bb-85a8-4e8e-bf94-52a544233e01" width="24%" alt="Workrun app editor" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/start-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/start-light.png" />
+    <img src="apps/docs/public/media/homepage/start-light.png" width="49%" alt="Workrun start page" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflows-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflows-light.png" />
+    <img src="apps/docs/public/media/homepage/workflows-light.png" width="49%" alt="Workrun workflow list" />
+  </picture>
 </p>
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/948c92ec-306b-4a14-9328-3b60f02c5846" width="24%" alt="Workrun workflow list" />
-  <img src="https://github.com/user-attachments/assets/db940f4d-c75d-40c6-b42d-48b22c800666" width="24%" alt="Workrun workflow editor" />
-  <img src="https://github.com/user-attachments/assets/4ea37888-4f7e-4393-85b8-f945be61e282" width="24%" alt="Workrun run output" />
-  <img src="https://github.com/user-attachments/assets/f1a946e2-0c5f-4259-95a3-07b9e04b1765" width="24%" alt="Workrun app editor" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/apps-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/apps-light.png" />
+    <img src="apps/docs/public/media/homepage/apps-light.png" width="49%" alt="Workrun app list" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflow-editor-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflow-editor-light.png" />
+    <img src="apps/docs/public/media/homepage/workflow-editor-light.png" width="49%" alt="Workrun workflow editor" />
+  </picture>
 </p>
 
-## What you can do with Workrun
+## Why Workrun
 
-- Run Python projects directly from Apps, using forms, input collection, and confirmation dialogs for local tasks.
-- Compose agents, Python apps, MCP tools, conditional branches, and human decisions into visual workflows.
-- Schedule apps and workflows with timezone-aware Cron, and inspect upcoming triggers and run history.
-- Manage editable Python projects as workflow Process nodes or Tool Apps that agents call on demand.
-- Inspect node status, model output, tool calls, script logs, and OpenTelemetry traces; retry failed runs from checkpoints.
-- Run regression evaluations, compare version results, and enforce release quality gates.
-- Publish versioned workflows and apps through the team service. Published workflows pin their Team App dependencies for reproducibility.
+| Need                                | How Workrun helps                                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Turn a one-off task into automation | Analyze a task in conversation, review a plan, and generate a workflow—or build directly on the canvas |
+| Combine models with code            | Use agents for reasoning, Python apps for deterministic processing, and MCP for external tools         |
+| Keep people involved                | Add review, questions, and tool approval; resume from checkpoints after human nodes complete           |
+| Inspect and improve results         | Review node output, tool calls, logs, and traces; compare versions with evaluation cases               |
+| Repeat and share your work          | Schedule apps and workflows, and publish team assets with pinned dependency versions                   |
+
+## From conversation to workflow
+
+```text
+“Help me analyze this sales data.”
+          ↓
+“Turn this into a reusable workflow, but don't run it yet.”
+          ↓
+Review plan → Approve and save → Inspect or edit on the canvas
+          ↓
+“Run it now.” → Confirm the workflow and inputs → Inspect results
+```
+
+Plan approval saves the workflow; a separate execution confirmation starts the run. Follow the [sales-analysis walkthrough](https://workrun-docs.pages.dev/guides/conversational-workflows/) for a complete example.
 
 ## Quick start
 
@@ -47,16 +71,20 @@ On first launch, choose a personal or team workspace. In personal mode, complete
 - **Start with an app:** create a local Python project in Apps, edit its code, and run it directly. See the [Python app guide](https://workrun-docs.pages.dev/guides/python-apps/).
 - **Start with a workflow:** configure a provider API key in **Settings → Models** (an endpoint for Ollama), connect `Start → Agent → End`, choose the corresponding model for the agent, and define inputs in **More settings → Run inputs** before running. See the [quickstart](https://workrun-docs.pages.dev/getting-started/quickstart/).
 
-### Run from source: prerequisites
+## Local development
+
+### Prerequisites
 
 - Node.js 24+
-- pnpm 12 (pinned to `pnpm@12.6.0` in this repository)
+- pnpm 12 (pinned to `pnpm@12.11.2` in this repository)
 - Rust toolchain and the Tauri build dependencies for your platform
 - Network access for Python app development so `uv` can download Python and dependencies; release packages include a `uv` sidecar
 
 ### Start desktop development
 
 ```bash
+git clone https://github.com/1111mp/workrun-app.git
+cd workrun-app
 pnpm install
 pnpm app:dev
 ```
@@ -88,92 +116,33 @@ Team service environment variables are defined in [apps/server/.env.example](app
 
 ## Core capabilities
 
-### 1. Workflows: from canvas to resumable execution
+- **Visual workflows:** task and conversation modes with agents, CodeAct agents, remote agents, Python processes, branches, human nodes, and subworkflows. Graphs and input/output schemas are validated before execution.
+- **Agents and models:** Gemini, OpenAI and compatible APIs, Anthropic, DeepSeek, Groq, and Ollama. Configure structured output, tool limits, timeouts, and local skills using the `SKILL.md` format.
+- **Python apps:** complete local `uv` projects that run independently, as Process nodes, or as agent-callable Tool Apps. The SDK provides result reporting, forms, input collection, and confirmation dialogs.
+- **MCP and remote agents:** local `stdio` and remote Streamable HTTP MCP servers, with Bearer Token, OAuth, and tool approval support. Connect remote agents through A2A.
+- **Run inspection and recovery:** node status, model messages, tool calls, script logs, and OpenTelemetry traces. Resume after human nodes and recover application-interrupted runs when checkpoint and journal checks allow.
+- **Evaluations and publishing:** batch evaluation cases, version comparisons, and release quality gates. Published team workflows pin immutable Team App releases.
+- **Schedules and external invocation:** timezone-aware Cron for apps and workflows, plus `workrun://` links to open or request runs. Run links require user confirmation.
+- **State and credential protection:** per-node access to private output, sensitive fields, encrypted checkpoints, PII redaction, and tool argument guardrails. Provider and MCP credentials are encrypted locally.
 
-Workflows support task and conversation modes. The canvas provides `Start`, `End`, `Agent`, `CodeAct Agent`, `Remote Agent`, `Process`, `If/Else`, `Switch`, `Human Review`, `Ask User Question`, `Subworkflow`, `Terminate`, and `Group` nodes. `Group` is for layout only.
+### Current limitations
 
-- Graph structure, branches, and input/output JSON Schemas are validated before compilation into a Rust execution graph.
-- `Subworkflow` propagates context and pause/resume information while preventing self-references, cycles, and excessive nesting. `Terminate` can end the entire run.
-- Human review and questions persist execution state in local SQLite checkpoints. After the user responds, execution resumes from the pause point without rerunning completed nodes.
-- Failed background runs can be retried from checkpoints, currently requiring exactly one pending node. Run records retain the execution plan, final state, and key events.
+- Local Python apps **are not sandboxed**; run trusted code only. CodeAct agents use a separate restricted Python runtime.
+- Schedules run only while the desktop app is open, do not replay missed triggers, and skip triggers while the same target is busy. Workflows with human review or question nodes cannot be scheduled.
+- Evaluations do not yet support Process, CodeAct Agent, or Remote Agent nodes, including through subworkflows. Human nodes require manual handling.
+- Failed or stopped runs require **Run again**, which creates a new task. Only application-interrupted runs can recover their original checkpoint after checkpoint and operation-journal validation.
+- The team service manages identity, shared assets, and releases; execution stays on each member's desktop. Personal and team workspaces are independent.
 
-```text
-Start → Data preparation (Process) → Agent → Human Review → If/Else → End
-                                      │           │
-                                      │           └─ Resume from checkpoint after review
-                                      └─ Tool App / MCP tool calls
-```
+## Guides
 
-### 2. Agents, tools, and models
-
-- Configure an agent's name, role, instructions, built-in model, structured output, tool call limits, and timeout. Results can be written to a designated state field for downstream nodes and branches.
-- Supports Gemini, OpenAI and compatible APIs, Anthropic, DeepSeek, Groq, and Ollama.
-- Local skills support the Agent Skills `SKILL.md` format, with progressive loading of instructions and restrictions on available tools.
-- `CodeAct Agent` writes and executes code in a restricted Python runtime, with controls for iterations, tool calls, duration, memory, directory mounts, environment variables, and system clock access.
-- `Remote Agent` integrates a remote agent as a workflow node through the A2A (Agent-to-Agent) protocol.
-- Tools can come from local Tool Apps or MCP servers. Calls can require human approval; rejections are returned to the agent so it can adjust its approach.
-
-### 3. Python apps: keep the code as a project
-
-Apps run independently from the Apps page, without a workflow. They can also be scheduled or connected to workflows. Each app is an editable local `uv` Python project with its own `pyproject.toml`, lockfile, virtual environment, and entry script. The desktop manages environments, synchronizes dependencies, and displays stdout/stderr while keeping business logic in your project files.
-
-| Type               | Role                                                                               | Use cases                                                         |
-| ------------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| App / Process Node | Run independently, or read authorized workflow state and return structured results | Data processing, system integration, deterministic business rules |
-| Tool App           | Called by an agent with JSON Schema parameters                                     | Queries, calculations, file or service operations                 |
-
-- Process apps return results through `workrun_sdk.process.result(...)`.
-- The Python SDK also provides `form()`, `collect()`, and `confirm()` APIs to request forms or confirmation from the desktop over token-protected local IPC.
-- Local apps are not sandboxed: run trusted code and review projects according to their actual permissions.
-
-### 4. MCP servers: connect existing tools
-
-Register local `stdio` or remote Streamable HTTP MCP servers, test connections, start or stop them, reconnect, and inspect discovered tools. Remote servers support no authentication, Bearer Tokens, and OAuth; credentials are stored encrypted locally. Agents can select tools from enabled servers, subject to timeouts, call limits, approval, and run tracing.
-
-### 5. State, security, and observability
-
-- Nodes have isolated state namespaces. Only explicitly published fields are shared, and read access is granted per node.
-- Inputs and node outputs can be marked sensitive. Raw checkpoint state is encrypted, while models, tools, and the UI receive redacted views by default.
-- Built-in input, output, and tool guardrails enforce length limits, redact common PII including mainland Chinese mobile numbers and national ID numbers, and block credentials or authentication secrets from tool arguments.
-- The run panel streams node status, model messages, tool inputs and outputs, script logs, and traces. Configure an OTLP/gRPC collector to export diagnostic traces to an external observability system.
-
-### 6. Evaluations, regression checks, and release quality
-
-The workflow editor includes an Evaluation lab for validating workflow changes:
-
-- Create, import, reorder, archive, and restore evaluation cases; run them in batches and inspect individual results and failure reasons.
-- Compare case verdicts and scoring criteria across two versions to identify new failures, regressions, and fixes. Failed cases can be retried individually.
-- Configure quality gates that require evaluation conditions before publishing. When needed, record a manual waiver with a reason for auditing.
-- Evaluations retain the corresponding workflow snapshot, keeping draft changes distinct from published-version results.
-
-Evaluation execution currently does not support workflows containing Process, CodeAct Agent, or Remote Agent nodes, including references through subworkflows. Human nodes require manual handling. Validate complete flows with normal runs and run history. See [evaluations, regression checks, and quality gates](https://workrun-docs.pages.dev/quality/evaluations/).
-
-### 7. Scheduled runs
-
-- Apps and workflows support persistent, timezone-aware five-field Cron schedules. Preview upcoming triggers and edit, pause, or resume schedules.
-- Schedules execute only while the Workrun desktop application is open. Missed triggers are not replayed after downtime. A trigger is skipped when the same target is already queued, running, or waiting for input, preventing overlapping execution.
-- Local workflows use their latest saved definitions; team workflows pin published versions. Workflows containing Human Review or Ask User Question nodes cannot be saved as scheduled tasks.
-
-See the [scheduled runs guide](https://workrun-docs.pages.dev/guides/scheduled-runs/).
-
-### 8. Team workspaces and versioned assets
-
-Personal and team workspaces are independent; switching modes does not automatically share personal assets. The desktop connects to a self-hosted NestJS team service with authentication. The service manages identity, shared assets, and published versions, while workflows and Python apps still execute on each member's desktop. Members can browse and run published workflows and publish semantically versioned workflows and apps. Publishing validates references and pins immutable Team App releases to the workflow version. At runtime, the desktop installs isolated copies of those releases so historical runs and regression results remain reproducible.
-
-### 9. Open and run through deep links
-
-Use **External invocation** on a saved App or Workflow to copy an open link or a run link. Workflow run links can include a URL-encoded JSON input object. Workrun waits for startup and login, then asks for confirmation and any missing inputs before submitting the run to its normal execution manager.
-
-```text
-workrun://v1/apps/{appId}
-workrun://v1/apps/{appId}/run
-workrun://v1/workflows/{workflowId}
-workrun://v1/workflows/{workflowId}/run?input=%7B%22message%22%3A%22hello%22%7D&requestId=example-1
-```
-
-Links resolve IDs in the current workspace. Apps and workflow dependencies must already be available; links do not install them. App input parameters, automatic execution, and result callbacks are outside this first version. Keep secrets and large files out of URLs; links are limited to 32 KB.
-
-`requestId` is optional. Reusing it with the same target and original input opens the existing run, including after restarting Workrun. Reusing it with different parameters reports a conflict. Without it, each new click can create a new run. Pending confirmations survive webview reloads, but are discarded when the desktop process exits. System protocol registration should be tested with an installed build, particularly on macOS.
+| Topic                           | Documentation                                                                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canvas, nodes, and state        | [Build a workflow](https://workrun-docs.pages.dev/guides/build-a-workflow/) · [Workflows and state](https://workrun-docs.pages.dev/concepts/workflows-and-state/) |
+| Python projects and interaction | [Python apps](https://workrun-docs.pages.dev/guides/python-apps/) · [Python SDK](packages/python-sdk/README.md)                                                   |
+| Tools and human decisions       | [Connect MCP](https://workrun-docs.pages.dev/guides/connect-an-mcp-server/) · [Human review and resume](https://workrun-docs.pages.dev/guides/human-in-the-loop/) |
+| Run quality                     | [Runs and traces](https://workrun-docs.pages.dev/quality/runs-and-traces/) · [Evaluations and quality gates](https://workrun-docs.pages.dev/quality/evaluations/) |
+| Automation triggers             | [Scheduled runs](https://workrun-docs.pages.dev/guides/scheduled-runs/) · [Deep links](https://workrun-docs.pages.dev/guides/deeplinks/)                          |
+| Team sharing                    | [Publishing and deployment](https://workrun-docs.pages.dev/team/publishing/)                                                                                      |
 
 ## Architecture
 

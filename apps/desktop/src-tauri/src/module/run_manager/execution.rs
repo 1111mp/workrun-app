@@ -4,11 +4,12 @@ use super::*;
 use tracing::Instrument as _;
 
 pub(super) async fn execute_claimed_run(run_id: &str) {
+    let workspace = crate::utils::dirs::active_workspace_id();
     let result = async {
         let record = RunHistoryStore::inspect(run_id).await?;
         match record.summary.target_type.as_str() {
             "app" => execute_claimed_app(run_id, &record.summary.target_id).await,
-            "workflow" => execute_claimed_workflow(run_id, &record.summary.target_id, record.runtime).await,
+            "workflow" => execute_claimed_workflow(run_id, &record.summary.target_id, record.runtime, &workspace).await,
             target_type => bail!("unsupported queued run target type: {target_type}"),
         }
     }
@@ -35,7 +36,7 @@ async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
     result
 }
 
-async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, mut runtime: Value) -> Result<()> {
+async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, mut runtime: Value, workspace: &str) -> Result<()> {
     if runtime.get("restoredQueue").and_then(Value::as_bool) == Some(true) {
         if let Err(error) = super::workflow::validate_restored_queue(run_id, &runtime).await {
             // Validation is not a failed execution and must not trigger cleanup
@@ -98,14 +99,37 @@ async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, mut runtime: 
         workrun.workflow.version = %workflow_version,
         workrun.thread.id = %session.thread_id,
     );
-    let result = execute_workflow(
-        run_id,
-        session,
-        resume,
-        tool_confirmation,
-        evaluation_profile,
-        chat_session_id,
-        cancellation,
+    // Attribution is diagnostic: malformed/stale origin data must not stop a run.
+    let mut usage_context = runtime
+        .get("usageOrigin")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<crate::module::model_usage::CallContext>(value).ok())
+        .filter(|origin| origin.workspace_id == workspace)
+        .unwrap_or(crate::module::model_usage::CallContext {
+            workspace_id: workspace.into(),
+            session_kind: chat_session_id.as_ref().map(|_| "workflow_chat".into()),
+            session_id: chat_session_id.clone(),
+            purpose: "workflow".into(),
+            ..Default::default()
+        });
+    usage_context.run_id = Some(run_id.into());
+    usage_context.purpose = "workflow".into();
+    usage_context.workflow_path = vec![workflow_id.into()];
+    {
+        use sha2::{Digest, Sha256};
+        usage_context.recipe_hash = Some(hex::encode(Sha256::digest(runtime["dsl"].to_string().as_bytes())));
+    }
+    let result = crate::module::model_usage::scope(
+        usage_context,
+        execute_workflow(
+            run_id,
+            session,
+            resume,
+            tool_confirmation,
+            evaluation_profile,
+            chat_session_id,
+            cancellation,
+        ),
     )
     .instrument(run_span)
     .await;

@@ -23,9 +23,6 @@ vi.mock('@/components/remote-tasks', () => ({ RemoteTasksPanel: () => null }));
 vi.mock('@/components/workflow-chat-composer', () => ({
   WorkflowChatComposer: () => null,
 }));
-vi.mock('@/components/workflow-code-block', () => ({
-  WorkflowCodeBlock: () => null,
-}));
 vi.mock('@/components/workflow-recovery-notice', () => ({
   WorkflowRecoveryNotice: () => null,
 }));
@@ -329,5 +326,103 @@ it('renders Agent chunks in the Web panel while the node is still running', asyn
     store.resetRunView();
     vi.unstubAllGlobals();
     host.remove();
+  }
+});
+
+it('shows completed execution and fixed duration while local typing frames are still pending', async () => {
+  const store = useWorkflowRunStore.getState();
+  const requestFrame = vi.fn(() => 1);
+  vi.stubGlobal('requestAnimationFrame', requestFrame);
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const host = document.createElement('div');
+  let rendered: Pick<RenderResult, 'rerender' | 'unmount'> | undefined;
+  const nodes = [recording.nodes[0]] as Node[];
+  try {
+    vi.setSystemTime(new Date('2026-10-23T10:00:00Z'));
+    store.resetRunView();
+    store.startWorkflowRun('run-1', {}, 'task');
+    rendered = renderComponent(
+      <LiveWorkflowTaskOutput
+        workflowNodes={nodes}
+        onRunAgain={vi.fn()}
+        onClose={vi.fn()}
+      />,
+      { container: host },
+    );
+    vi.setSystemTime(new Date('2026-10-23T10:00:27.800Z'));
+    await act(async () =>
+      store.applyRunEvents(
+        [
+          {
+            runId: 'run-1',
+            sequence: 0,
+            event: { type: 'node_start', node: nodes[0]!.id, step: 0 },
+          },
+          {
+            runId: 'run-1',
+            sequence: 1,
+            event: {
+              type: 'custom',
+              node: nodes[0]!.id,
+              event_type: 'workflow.node_result',
+              data: {
+                nodeId: nodes[0]!.id,
+                type: 'agent',
+                messages: [
+                  {
+                    role: 'assistant',
+                    content:
+                      'A long answer that is still being revealed. '.repeat(
+                        100,
+                      ),
+                  },
+                ],
+              },
+            },
+          },
+          {
+            runId: 'run-1',
+            sequence: 2,
+            event: {
+              type: 'node_end',
+              node: nodes[0]!.id,
+              step: 0,
+              duration_ms: 27800,
+            },
+          },
+          {
+            runId: 'run-1',
+            sequence: 3,
+            event: {
+              type: 'done',
+              total_steps: 1,
+              state: { global: {}, nodes: {}, workflow: {} },
+            },
+          },
+        ],
+        { mode: 'task', nodes },
+      ),
+    );
+    expect(requestFrame).toHaveBeenCalled();
+    const header = host.querySelector('[data-component="DrawerDescription"]')!;
+    expect(header.textContent).toContain(
+      'workflowEditor.output.status.completed',
+    );
+    expect(header.textContent).toContain('27.8s');
+    vi.setSystemTime(new Date('2026-10-23T10:01:01.200Z'));
+    rendered!.rerender(
+      <LiveWorkflowTaskOutput
+        workflowNodes={nodes}
+        onRunAgain={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(header.textContent).toContain('27.8s');
+    expect(header.textContent).not.toContain('61.2s');
+  } finally {
+    rendered?.unmount();
+    store.resetRunView();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   }
 });

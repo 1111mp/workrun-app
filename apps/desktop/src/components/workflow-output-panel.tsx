@@ -48,7 +48,6 @@ import {
   TerminalIcon,
 } from 'lucide-react';
 import {
-  Children,
   Fragment,
   memo,
   type ReactNode,
@@ -59,11 +58,11 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import Markdown from 'react-markdown';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { ArtifactFiles } from '@/components/artifact-files';
+import { MessageMarkdown } from '@/components/message-markdown';
 import { RemoteTasksPanel } from '@/components/remote-tasks';
 import {
   WorkflowActionCards,
@@ -71,7 +70,6 @@ import {
   useWorkflowActions,
 } from '@/components/workflow-actions';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
-import { WorkflowCodeBlock } from '@/components/workflow-code-block';
 import { WorkflowRecoveryNotice } from '@/components/workflow-recovery-notice';
 import { artifactReferences } from '@/services/artifact';
 import type { RunSpan } from '@/services/run-history';
@@ -983,6 +981,27 @@ function TraceResultContent({
   );
 }
 
+/** Reuse the same node receipts in the assistant's inline execution timeline. */
+export function WorkflowExecutionDetails({
+  entry,
+  spans = [],
+}: {
+  entry: WorkflowRunExecution;
+  spans?: RunSpan[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <ExecutionOutput
+        label={t('workflowEditor.output.processOutput')}
+        log={processLog(entry)}
+      />
+      <TraceResult entry={entry} spans={spans} />
+      <CleanupMessages entry={entry} />
+    </>
+  );
+}
+
 function executionStatusIcon(status: WorkflowRunExecution['status']) {
   if (status === 'running') return <Spinner />;
   if (status === 'failed') return <CircleAlertIcon />;
@@ -990,82 +1009,13 @@ function executionStatusIcon(status: WorkflowRunExecution['status']) {
   return <CheckCircle2Icon />;
 }
 
-function codeText(children: ReactNode) {
-  return Children.toArray(children)
-    .map((child) => {
-      if (typeof child === 'string') return child;
-      if (typeof child === 'number') return child.toString();
-      return '';
-    })
-    .join('')
-    .replace(/\n$/, '');
-}
-
-const markdownComponents = {
-  a: ({ children, ...props }: React.ComponentProps<'a'>) => (
-    <a
-      {...props}
-      className='text-primary underline underline-offset-3'
-      target='_blank'
-      rel='noreferrer'
-    >
-      {children}
-    </a>
-  ),
-  blockquote: ({ children }: { children?: ReactNode }) => (
-    <blockquote className='text-muted-foreground border-border border-l pl-3'>
-      {children}
-    </blockquote>
-  ),
-  code: ({
-    children,
-    className,
-  }: {
-    children?: ReactNode;
-    className?: string;
-  }) =>
-    className ? (
-      <WorkflowCodeBlock className={className} code={codeText(children)} />
-    ) : (
-      <code className='bg-muted rounded px-1 py-0.5'>{children}</code>
-    ),
-  h1: ({ children }: { children?: ReactNode }) => (
-    <h1 className='text-base font-semibold'>{children}</h1>
-  ),
-  h2: ({ children }: { children?: ReactNode }) => (
-    <h2 className='text-sm font-semibold'>{children}</h2>
-  ),
-  li: ({ children }: { children?: ReactNode }) => (
-    <li className='leading-6'>{children}</li>
-  ),
-  ol: ({ children }: { children?: ReactNode }) => (
-    <ol className='list-decimal pl-5'>{children}</ol>
-  ),
-  p: ({ children }: { children?: ReactNode }) => (
-    <p className='leading-6'>{children}</p>
-  ),
-  pre: ({ children }: { children?: ReactNode }) => (
-    <pre className='bg-background border-border overflow-x-auto rounded-md border p-3'>
-      {children}
-    </pre>
-  ),
-  ul: ({ children }: { children?: ReactNode }) => (
-    <ul className='list-disc pl-5'>{children}</ul>
-  ),
-};
-
 function MarkdownContent({
   content,
-  isStreaming = false,
 }: {
   content: string;
   isStreaming?: boolean;
 }) {
-  if (isStreaming) {
-    return <p className='leading-6 whitespace-pre-wrap'>{content}</p>;
-  }
-
-  return <Markdown components={markdownComponents}>{content}</Markdown>;
+  return <MessageMarkdown content={content} />;
 }
 
 /**
@@ -1956,7 +1906,6 @@ function LiveWorkflowTaskOutput({
     !animateResponses ||
     !terminal ||
     responseIds.every((id) => presentedResponses.has(id));
-  const presentationStatus = presentationComplete ? status : 'running';
   const onResponsePresentationComplete = useCallback(
     (executionId: string, responseIndex: number) => {
       const id = `${executionId}:${responseIndex}`;
@@ -1975,7 +1924,8 @@ function LiveWorkflowTaskOutput({
     [startedAt],
   );
   const run: WorkflowRunView = {
-    status: presentationStatus,
+    // Execution is authoritative even while local text is still animating.
+    status,
     startedAt,
     endedAt,
     durationMs,
@@ -1989,7 +1939,7 @@ function LiveWorkflowTaskOutput({
     execution: [],
     turnsById: {},
   };
-  const isRunning = presentationStatus === 'running';
+  const isRunning = status === 'running';
   const duration = durationLabel(run);
   const displayNodeName = (nodeId: string) =>
     nodeDisplayName(run, workflowNodes, nodeId);

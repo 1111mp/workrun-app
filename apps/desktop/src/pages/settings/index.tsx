@@ -7,7 +7,7 @@ import { useEffect, useEffectEvent } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
-import { useConfirm } from '@/components';
+import { useConfirm } from '@/lib/confirm-context';
 import { applyPendingTheme } from '@/lib/utils';
 import { restartApp } from '@/services/cmd';
 import { useWorkrunStore } from '@/stores';

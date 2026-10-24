@@ -26,12 +26,16 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{
-    Emitter,
-    ipc::{Channel, InvokeResponseBody},
-};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::{Notify, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
+
+static STATUS_CHANGES: std::sync::LazyLock<tokio::sync::broadcast::Sender<String>> =
+    std::sync::LazyLock::new(|| tokio::sync::broadcast::channel(256).0);
+
+pub(crate) fn run_status_changes() -> tokio::sync::broadcast::Receiver<String> {
+    STATUS_CHANGES.subscribe()
+}
 
 const MAX_CONCURRENT_TOP_LEVEL_RUNS: usize = 4;
 const MAX_CONCURRENT_TOP_LEVEL_APP_RUNS: usize = 2;
@@ -473,4 +477,4 @@ pub use workflow::{
 #[cfg(test)]
 mod tests;
 
-pub(crate) use events::emit_cleanup_event;
+pub(crate) use events::{emit_cleanup_event, emit_on_main_thread};

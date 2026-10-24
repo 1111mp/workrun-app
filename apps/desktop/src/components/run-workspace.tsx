@@ -1,4 +1,4 @@
-import { listen } from '@tauri-apps/api/event';
+import { useQuery } from '@tanstack/react-query';
 import {
   Badge,
   Button,
@@ -10,7 +10,7 @@ import {
 } from '@workspace/ui/components';
 import type { Node } from '@xyflow/react';
 import { PinIcon, XIcon } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -22,10 +22,9 @@ import { WorkflowRunOutput } from '@/components/workflow-output-panel';
 import {
   inspectRunRecord,
   replayRun,
-  type RunRecord,
   type RunStatus,
 } from '@/services/run-history';
-import { type WorkflowRunEvent } from '@/services/workflow';
+import type { WorkflowRunEvent } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 import {
   replayWorkflowRunProjection,
@@ -71,13 +70,17 @@ function RunWorkspace() {
     focusRun,
     closeRun,
     togglePinned,
-    noteEvent,
     setOpen,
   } = useRunWorkspaceStore();
   const activeTab = tabs.find((tab) => tab.id === activeRunId);
-  const [record, setRecord] = useState<RunRecord>();
-  // Keep the previous response while a new tab loads, but never render it for
-  // a different run. This avoids a synchronous effect update just to clear UI.
+  // Share the detail query with pages. The global run listener invalidates it,
+  // and closing the drawer disables background reads.
+  const { data: record } = useQuery({
+    queryKey: ['run-history', activeRunId],
+    queryFn: () => inspectRunRecord(activeRunId!),
+    enabled: Boolean(activeRunId && open),
+    refetchOnMount: 'always',
+  });
   const activeRecord = record?.id === activeRunId ? record : undefined;
   const workflowRun = useMemo(() => {
     if (activeTab?.targetType !== 'workflow' || !activeRecord) return;
@@ -140,45 +143,6 @@ function RunWorkspace() {
       },
     };
   }, [activeRecord, activeTab?.targetType]);
-
-  useEffect(() => {
-    if (!activeRunId || !open) return;
-    let cancelled = false;
-    void inspectRunRecord(activeRunId).then((next) => {
-      if (!cancelled) setRecord(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeRunId, open]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    let unlistenStatusChange: (() => void) | undefined;
-    const refreshActiveRun = (runId: string) => {
-      if (runId !== useRunWorkspaceStore.getState().activeRunId) return;
-      void inspectRunRecord(runId).then(setRecord);
-    };
-    void listen<{ runId: string }>('run-event', ({ payload }) => {
-      noteEvent(payload.runId);
-      refreshActiveRun(payload.runId);
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
-    void listen<{ runId: string }>('run-status-changed', ({ payload }) => {
-      refreshActiveRun(payload.runId);
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlistenStatusChange = stop;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-      unlistenStatusChange?.();
-    };
-  }, [noteEvent]);
 
   if (activeTab?.targetType === 'app') {
     // Wait for the saved output before mounting the drawer so Vaul can measure

@@ -1,0 +1,27 @@
+{
+  "id": "expense-review",
+  "document": {
+    "settings": {
+      "name": "Local expense review acceptance",
+      "description": "Read-only local rule: expenses of at least 1000 require manual review. No files, payments, apps, or network operations.",
+      "mode": "task",
+      "inputSchema": {"fields": [{"id": "amount", "key": "amount", "label": "Amount", "type": "number", "required": true}]},
+      "outputSchema": {"fields": [{"key":"amount","type":"number","required":true}]}
+    },
+    "nodes": [
+      {"id": "start", "type": "start", "position": {"x": 0, "y": 0}, "data": {}},
+      {"id": "review-rule", "type": "if_else", "position": {"x": 260, "y": 0}, "data": {
+        "conditions": {
+          "true": {"label": "Manual review required", "condition": "amount >= 1000"},
+          "false": {"label": "Manual review not required", "condition": "amount < 1000"}
+        }
+      }},
+      {"id": "end", "type": "end", "position": {"x": 520, "y": 0}, "data": {}}
+    ],
+    "edges": [
+      {"id": "entry", "source": "start", "target": "review-rule"},
+      {"id": "review", "source": "review-rule", "target": "end", "sourceHandle": "true"},
+      {"id": "pass", "source": "review-rule", "target": "end", "sourceHandle": "false"}
+    ]
+  }
+}

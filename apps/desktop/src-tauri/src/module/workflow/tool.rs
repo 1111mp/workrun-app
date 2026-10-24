@@ -461,6 +461,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn configuration_examples_bind_discovered_tool_arguments_and_private_state() {
+        let examples: Vec<Value> = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources/assistant/workflow_agent/reference/configuration-examples.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let example = examples.iter().find(|example| example["node_type"] == "agent").unwrap();
+        let producer: WorkflowNode = serde_json::from_value(example["document"]["nodes"][1].clone()).unwrap();
+        let ids = vec!["DISCOVER_TOOL_ID".to_string()];
+        let bindings = tool_state_bindings(&producer, &ids).unwrap();
+        let definition = tool_with_schema(
+            &ids[0],
+            json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}),
+        );
+        validate_tool_state_binding_schemas(&producer, &[definition], &bindings).unwrap();
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({"source_text":"actual input"})).unwrap();
+        let config = node_state_config(&producer, &HashSet::from(["transform".into(), "present".into()])).unwrap();
+        bridge.configure_node(&producer.id, node_state_policy(&config));
+        bridge
+            .apply_node_update(
+                &producer.id,
+                NodeStateUpdate::new().set("result", json!("actual result")),
+                &config.global_keys,
+            )
+            .unwrap();
+        assert_eq!(bridge.agent_input("present").unwrap()["result"], "actual result");
+        assert!(bridge.agent_input("unrelated").unwrap().get("result").is_none());
+        assert!(bridge.public_output().get("result").is_none());
+        let resolved = bridge
+            .tool_args("transform", &json!({"text":"proposed value"}), &bindings[&ids[0]])
+            .unwrap();
+        assert_eq!(resolved["text"], "actual input");
+        bridge
+            .initialize_global(json!({"result":"competing global value"}))
+            .unwrap();
+        assert!(
+            matches!(bridge.agent_input("present"), Err(crate::module::state::StateError::InputKeyConflict {key, ..}) if key == "result")
+        );
+    }
+
     struct UploadTool {
         uploads: Arc<AtomicU32>,
         fail: bool,

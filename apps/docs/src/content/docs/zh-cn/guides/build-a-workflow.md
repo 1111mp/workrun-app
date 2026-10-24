@@ -3,6 +3,8 @@ title: 构建第一个工作流
 description: 从客户反馈输入到人工审批，搭建一条可运行、可验证的 Process → Agent → 分支流程。
 ---
 
+也可以在开始页描述目标，让助手先提出方案，确认后生成可编辑工作流。详见[通过对话编排工作流](/zh-cn/guides/conversational-workflows/)。方案确认与执行确认相互独立。
+
 本教程在[快速开始](/zh-cn/getting-started/quickstart/)的 Agent 基础上，加上确定性数据处理、结构化输出、条件分支和人工审核。完成后，你会得到一条可解释的「客户反馈分流」流程：低优先级反馈自动结束，高优先级反馈等待人工决定。
 
 ```text
@@ -55,11 +57,11 @@ if __name__ == "__main__":
     main()
 ```
 
-保存后，在 App 页面单独运行一次，确认结果中有 `normalized_feedback`。Process App 的项目结构、依赖和调试方式见[使用 Python App](/zh-cn/guides/python-apps/)。
+保存 App 并安装依赖。此示例从工作流 stdin 读取 `feedback`，请在第 5 步通过工作流传入非空反馈后验证；独立运行 App 不会自动提供工作流输入。Process App 的项目结构、依赖和调试方式见[使用 Python App](/zh-cn/guides/python-apps/)。
 
 ## 3. 在画布搭建并配置节点
 
-新建一个**任务**工作流；画布已有 Start 和 End。依次添加 **Process**、**Agent**、**If/Else** 和 **Human Review**，按本文开头的图连接。选中 Process，在 **应用连接** 中选择刚创建的「规范化反馈」App。
+继续使用快速开始中的任务工作流，保留 `feedback` 运行输入、Start、Agent 和 End。添加 **Process**、**If/Else** 和 **Human Review**，按本文开头的图重新连接。如果另建工作流，初始画布只有 Start：请添加其余节点，并在 **更多设置 → 运行输入** 定义必填的多行文本字段 `feedback`。选中 Process，在 **应用连接** 中选择刚创建的「规范化反馈」App。
 
 然后在 Process 的 **发布到全局状态 → 已发布的输出键** 填入：
 

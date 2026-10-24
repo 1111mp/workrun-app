@@ -1,0 +1,322 @@
+[
+  {
+    "id": "numeric-boundary",
+    "request": "Create a reusable numeric-boundary workflow according to the agreed rules. Do not run it.",
+    "document": {
+      "settings": {
+        "name": "numeric-boundary",
+        "mode": "task",
+        "inputSchema": {
+          "fields": [
+            {
+              "key": "reading",
+              "type": "number",
+              "required": true
+            }
+          ]
+        },
+        "outputSchema": {
+          "fields": [
+            {
+              "key": "reading",
+              "type": "number",
+              "required": true
+            }
+          ]
+        }
+      },
+      "nodes": [
+        {
+          "id": "start",
+          "type": "start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "data": {}
+        },
+        {
+          "id": "decision",
+          "type": "if_else",
+          "position": {
+            "x": 250,
+            "y": 0
+          },
+          "data": {
+            "conditions": {
+              "true": {
+                "condition": "reading >= 10"
+              },
+              "false": {
+                "condition": "reading < 10"
+              }
+            }
+          }
+        },
+        {
+          "id": "end",
+          "type": "end",
+          "position": {
+            "x": 500,
+            "y": 0
+          },
+          "data": {}
+        }
+      ],
+      "edges": [
+        {
+          "id": "entry",
+          "source": "start",
+          "target": "decision"
+        },
+        {
+          "id": "route-0",
+          "source": "decision",
+          "target": "end",
+          "sourceHandle": "true"
+        },
+        {
+          "id": "route-1",
+          "source": "decision",
+          "target": "end",
+          "sourceHandle": "false"
+        }
+      ]
+    },
+    "runs": [
+      {
+        "input": {
+          "reading": 9
+        },
+        "expectedRoute": "false"
+      },
+      {
+        "input": {
+          "reading": 10
+        },
+        "expectedRoute": "true"
+      },
+      {
+        "input": {
+          "reading": 14
+        },
+        "expectedRoute": "true"
+      }
+    ]
+  },
+  {
+    "id": "text-routing",
+    "request": "Create a reusable text-routing workflow according to the agreed rules. Do not run it.",
+    "document": {
+      "settings": {
+        "name": "text-routing",
+        "mode": "task",
+        "inputSchema": {
+          "fields": [
+            {
+              "key": "status",
+              "type": "string",
+              "required": true
+            }
+          ]
+        },
+        "outputSchema": {
+          "fields": [
+            {
+              "key": "status",
+              "type": "string",
+              "required": true
+            }
+          ]
+        }
+      },
+      "nodes": [
+        {
+          "id": "start",
+          "type": "start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "data": {}
+        },
+        {
+          "id": "decision",
+          "type": "switch",
+          "position": {
+            "x": 250,
+            "y": 0
+          },
+          "data": {
+            "cases": [
+              {
+                "id": "ready",
+                "condition": "status == \"ready\""
+              },
+              {
+                "id": "hold",
+                "condition": "status == \"hold\""
+              }
+            ],
+            "defaultCase": {
+              "label": "Other"
+            }
+          }
+        },
+        {
+          "id": "end",
+          "type": "end",
+          "position": {
+            "x": 500,
+            "y": 0
+          },
+          "data": {}
+        }
+      ],
+      "edges": [
+        {
+          "id": "entry",
+          "source": "start",
+          "target": "decision"
+        },
+        {
+          "id": "route-0",
+          "source": "decision",
+          "target": "end",
+          "sourceHandle": "case:ready"
+        },
+        {
+          "id": "route-1",
+          "source": "decision",
+          "target": "end",
+          "sourceHandle": "case:hold"
+        },
+        {
+          "id": "route-2",
+          "source": "decision",
+          "target": "end",
+          "sourceHandle": "default"
+        }
+      ]
+    },
+    "runs": [
+      {
+        "input": {
+          "status": "ready"
+        },
+        "expectedRoute": "case:ready"
+      },
+      {
+        "input": {
+          "status": "hold"
+        },
+        "expectedRoute": "case:hold"
+      },
+      {
+        "input": {
+          "status": "unknown"
+        },
+        "expectedRoute": "default"
+      }
+    ]
+  },
+  {
+    "id": "boolean-routing",
+    "request": "Create a reusable boolean-routing workflow according to the agreed rules. Do not run it.",
+    "document": {
+      "settings": {
+        "name": "boolean-routing",
+        "mode": "task",
+        "inputSchema": {
+          "fields": [
+            {
+              "key": "enabled",
+              "type": "boolean",
+              "required": true
+            }
+          ]
+        },
+        "outputSchema": {
+          "fields": [
+            {
+              "key": "enabled",
+              "type": "boolean",
+              "required": true
+            }
+          ]
+        }
+      },
+      "nodes": [
+        {
+          "id": "start",
+          "type": "start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "data": {}
+        },
+        {
+          "id": "decision",
+          "type": "if_else",
+          "position": {
+            "x": 250,
+            "y": 0
+          },
+          "data": {
+            "conditions": {
+              "true": {
+                "condition": "enabled == true"
+              },
+              "false": {
+                "condition": "enabled == false"
+              }
+            }
+          }
+        },
+        {
+          "id": "end",
+          "type": "end",
+          "position": {
+            "x": 500,
+            "y": 0
+          },
+          "data": {}
+        }
+      ],
+      "edges": [
+        {
+          "id": "entry",
+          "source": "start",
+          "target": "decision"
+        },
+        {
+          "id": "route-0",
+          "source": "decision",
+          "target": "end",
+          "sourceHandle": "true"
+        },
+        {
+          "id": "route-1",
+          "source": "decision",
+          "target": "end",
+          "sourceHandle": "false"
+        }
+      ]
+    },
+    "runs": [
+      {
+        "input": {
+          "enabled": true
+        },
+        "expectedRoute": "true"
+      },
+      {
+        "input": {
+          "enabled": false
+        },
+        "expectedRoute": "false"
+      }
+    ]
+  }
+]

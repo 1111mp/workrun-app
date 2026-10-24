@@ -66,6 +66,8 @@ pub(super) async fn add_codeact_agent_node(
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("codeact_agent node `{id}` references unknown model `{profile_id}`"))?;
     let label = format!("{}/{}", model.id, model.model);
+    // Forward the SDK's requested transport mode for every provider. Progress
+    // instrumentation must not change generation policy or usage accounting.
     let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
     let tool_calls = Arc::new(AtomicU32::new(0));
     let tool_trace = Arc::new(Mutex::new(Vec::new()));
@@ -134,6 +136,38 @@ fn build_runtime(node: &WorkflowNode) -> Result<Arc<MontyRuntime>> {
     build_runtime_with_workspace(node, None)
 }
 
+// Describe the exact file ABI and completion bridge; vague "maps references"
+// wording caused models to guess dictionary keys and read artifact directories.
+pub(crate) const WORKRUN_CODEACT_RESOURCES: &str = r#"Workrun file and result contract:
+/artifacts/manifest.json is a JSON ARRAY, not a dictionary keyed by workflow input names.
+Each entry is {"reference":{"id":"artifact-id","name":"input.dat",...},"path":"/artifacts/artifact-id/input.dat"}.
+Read it as:
+    import json
+    from pathlib import Path
+    files = json.loads(Path("/artifacts/manifest.json").read_text())
+    text = Path(files[0]["path"]).read_text()
+For multiple files, match entry["reference"]["id"] to the input ArtifactRef ID. Never guess paths or read an artifact directory as a file.
+For a known input contract and bounded read-only processing, prefer one script that looks up the manifest, reads the selected files, validates the actual content, and computes final_result. Inspect inside that program instead of spending separate model turns only to print the manifest and raw file. Use observation when its result is genuinely needed to choose the next operation; keep required tool confirmations, validation and error handling.
+Monty supports only the modules listed in its language briefing. Passing bound dictionary methods as callbacks is unsupported (e.g. max(mapping, key=mapping.get)); use an explicit function or loop.
+The last Python expression must be {"type":"final_result","value":{...named output fields...}}. Return computed values, not a claim that global state was written. Workrun maps this object to node-private state; the configured state.globalKeys publishes selected fields. Do not call imaginary state tools or repeat computation just to publish.
+Write deliverable files under /outputs with pathlib.Path; successful regular files are exported as artifacts. Do not invent ArtifactRef objects, host paths or dependencies. Use configured tools for unsupported document/media processing."#;
+
+/// A pure description of the standard virtual workspace: no paths are opened,
+/// no host configuration is read, and no script or external tool is executed.
+/// Reuse the runtime's own briefing so dependency upgrades update discovery too.
+pub(crate) fn codeact_environment_guide() -> String {
+    use adk_rust::agent::codeact::CodeRuntime;
+    let runtime = MontyRuntime::builder()
+        .system_clock(true)
+        .allow_path("/artifacts", PathBuf::from("/artifacts"), PathAccess::ReadOnly)
+        .allow_path("/outputs", PathBuf::from("/outputs"), PathAccess::ReadWrite)
+        .build();
+    format!(
+        "## Linked runtime language and OS briefing\n\nReference policy only, not an execution grant or a complete Python API inventory. This describes the standard virtual workspace; actual mounts, environment, clock, limits and selected tools come from node configuration. Instructions below describe scripts inside the node, not the planning/authoring role.\n\n{}",
+        runtime.capabilities().prompt
+    )
+}
+
 fn build_runtime_with_workspace(
     node: &WorkflowNode,
     workspace: Option<&CodeActWorkspace>,
@@ -159,7 +193,7 @@ fn build_runtime_with_workspace(
         runtime = runtime
             .allow_path("/artifacts", workspace.inputs(), PathAccess::ReadOnly)
             .allow_path("/outputs", workspace.outputs(), PathAccess::ReadWrite)
-            .additional_prompt("Workrun resources: /artifacts/manifest.json maps each authorized artifact reference to its read-only virtual path. Read it with pathlib.Path.read_text() and json.loads(). Write deliverable files under /outputs using pathlib.Path; regular files there are collected as durable node State artifacts on successful completion. Do not invent ArtifactRef objects or use host paths. Monty cannot install third-party packages; use configured tools for PDF, image or video processing.");
+            .additional_prompt(WORKRUN_CODEACT_RESOURCES);
     }
 
     for mount in mounts {
@@ -225,13 +259,13 @@ fn build_runtime_with_workspace(
 }
 
 // Each compiled run owns its copies. Scripts never mount the immutable store itself.
-pub(super) struct CodeActWorkspace {
+pub(crate) struct CodeActWorkspace {
     directory: tempfile::TempDir,
     store: ArtifactStore,
 }
 
 impl CodeActWorkspace {
-    fn new(store: ArtifactStore) -> Result<Self> {
+    pub(crate) fn new(store: ArtifactStore) -> Result<Self> {
         let workspace = Self {
             directory: tempfile::tempdir()?,
             store,
@@ -241,14 +275,14 @@ impl CodeActWorkspace {
         Ok(workspace)
     }
 
-    fn inputs(&self) -> PathBuf {
+    pub(crate) fn inputs(&self) -> PathBuf {
         self.directory.path().join("inputs")
     }
-    fn outputs(&self) -> PathBuf {
+    pub(crate) fn outputs(&self) -> PathBuf {
         self.directory.path().join("outputs")
     }
 
-    pub(super) fn prepare(&self, input: &Value, snapshot: Option<&Value>) -> Result<()> {
+    pub(crate) fn prepare(&self, input: &Value, snapshot: Option<&Value>) -> Result<()> {
         let store = &self.store;
         for directory in [self.inputs(), self.outputs()] {
             std::fs::remove_dir_all(&directory)?;
@@ -323,7 +357,7 @@ impl CodeActWorkspace {
         }))).collect::<Result<Vec<_>>>().map(Value::Array)
     }
 
-    pub(super) fn collect(&self) -> Result<Value> {
+    pub(crate) fn collect(&self) -> Result<Value> {
         let store = &self.store;
         let refs = self
             .output_paths()?
@@ -458,6 +492,52 @@ mod tests {
     }
 
     #[test]
+    fn configuration_examples_codeact_exports_files_with_native_global_state() {
+        use adk_rust::agent::codeact::{CodeRuntime, RunStep};
+        let examples: Vec<Value> = serde_json::from_str(
+            &std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources/assistant/workflow_agent/reference/configuration-examples.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let example = examples
+            .iter()
+            .find(|example| example["node_type"] == "codeact_agent")
+            .unwrap();
+        let node: WorkflowNode = serde_json::from_value(example["document"]["nodes"][1].clone()).unwrap();
+        let (_root, store, workspace) = test_workspace();
+        let reference = store.save_bytes("input.txt", "文本".as_bytes()).unwrap();
+        workspace.prepare(&json!({"source_file":reference}), None).unwrap();
+        let runtime = build_runtime_with_workspace(&node, Some(&workspace)).unwrap();
+        let step = runtime.start("from pathlib import Path\nimport json\nfiles=json.loads(Path('/artifacts/manifest.json').read_text())\ntext=Path(files[0]['path']).read_text()\nPath('/outputs/copy.txt').write_text(text)\n{'type':'final_result','value':{'result':text}}", "example.py").unwrap();
+        let RunStep::Complete { value, .. } = step else {
+            panic!("local example script did not complete")
+        };
+        let artifacts = workspace.collect().unwrap();
+        let config = node_state_config(&node, &HashSet::from([node.id.clone()])).unwrap();
+        let mut bridge = WorkflowStateBridge::from_initial_state(json!({})).unwrap();
+        bridge
+            .apply_node_update(
+                &node.id,
+                crate::module::state::NodeStateUpdate::new()
+                    .set("result", value["value"]["result"].clone())
+                    .set("artifacts", artifacts.clone()),
+                &config.global_keys,
+            )
+            .unwrap();
+        assert_eq!(bridge.agent_input("consumer").unwrap()["result"], "文本");
+        assert_eq!(bridge.agent_input("consumer").unwrap()["artifacts"], artifacts);
+        let exported = references(&artifacts).unwrap();
+        assert_eq!(exported.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(store.resolve(&exported[0]).unwrap()).unwrap(),
+            "文本"
+        );
+    }
+
+    #[test]
     fn monty_reads_mapped_resources_and_generates_durable_output() {
         use adk_rust::agent::codeact::{CodeRuntime, RunStep};
         let (_root, store, workspace) = test_workspace();
@@ -492,6 +572,24 @@ Path("/outputs/report.txt").write_text("".join(texts))
             std::fs::read_to_string(store.resolve(&second).unwrap()).unwrap(),
             "beta\n"
         );
+    }
+
+    #[test]
+    fn codeact_environment_briefing_matches_basic_runtime_probes() {
+        use adk_rust::agent::codeact::{CodeRuntime, RunStep};
+        let runtime = MontyRuntime::builder().build();
+        let result = runtime.start(
+            "import json\nimport re\nvalues=json.loads('[2,4,6]')\n{'sum':sum(values),'match':re.search('ab+', 'abbb').group(0)}",
+            "environment-probe.py",
+        ).unwrap();
+        assert!(matches!(result, RunStep::Complete { value, .. }
+            if value == json!({"sum":12,"match":"abbb"})));
+        for script in ["import numpy\nnumpy.zeros(3)", "import socket\nsocket.socket()"] {
+            assert!(
+                matches!(runtime.start(script, "unsupported.py").unwrap(), RunStep::Raised { .. }),
+                "unexpected support: {script}"
+            );
+        }
     }
 
     #[test]
@@ -640,8 +738,9 @@ Path("/outputs/final.txt").write_text(Path("/outputs/draft.txt").read_text() + r
         async fn generate_content(
             &self,
             request: adk_rust::LlmRequest,
-            _: bool,
+            streaming: bool,
         ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            assert!(!streaming, "preserve the SDK's non-streaming request for CodeAct");
             assert!(
                 serde_json::to_string(&request)
                     .unwrap()
@@ -678,9 +777,22 @@ Path("/outputs/report.txt").write_text(text + " processed")
             },
         );
         let workspace = Arc::new(workspace);
+        let emitted = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let received = Arc::clone(&emitted);
+        let on_event = Channel::new(move |payload| {
+            if let tauri::ipc::InvokeResponseBody::Json(payload) = payload {
+                received.lock().unwrap().push(serde_json::from_str(&payload).unwrap());
+            }
+            Ok(())
+        });
         let agent = CodeActAgent::builder()
             .name("codeact")
-            .model(Arc::new(FileGeneratingModel))
+            .model(instrumented_model(
+                Arc::new(FileGeneratingModel),
+                "codeact",
+                "test",
+                Some(on_event),
+            ))
             .runtime(runtime(&workspace))
             .max_iterations(1)
             .build()
@@ -707,6 +819,16 @@ Path("/outputs/report.txt").write_text(text + " processed")
         for event in events {
             event.unwrap();
         }
+        let progress = emitted.lock().unwrap();
+        assert_eq!(
+            progress
+                .iter()
+                .map(|event| event["event_type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["agent.model_started", "agent.model_responding", "agent.model_call"]
+        );
+        assert!(progress[2]["data"]["firstResponseMs"].is_i64());
+        drop(progress);
         drop(node);
         let state = state.lock().unwrap();
         let downstream = state.agent_input("consumer").unwrap();
@@ -734,5 +856,119 @@ Path("/outputs/report.txt").write_text(text + " processed")
         let output = std::fs::File::create(workspace.outputs().join("large.bin")).unwrap();
         output.set_len(MAX_FILE_BYTES + 1).unwrap();
         assert!(workspace.collect().unwrap_err().to_string().contains("512 MiB"));
+    }
+    struct LiveSalesModel {
+        inner: adk_rust::model::GeminiModel,
+        requests: Arc<Mutex<Vec<Vec<Content>>>>,
+    }
+    #[async_trait::async_trait]
+    impl Llm for LiveSalesModel {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn schema_adapter(&self) -> &dyn adk_rust::SchemaAdapter {
+            self.inner.schema_adapter()
+        }
+        async fn generate_content(
+            &self,
+            request: adk_rust::LlmRequest,
+            stream: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            self.requests.lock().unwrap().push(request.contents.clone());
+            self.inner.generate_content(request, stream).await
+        }
+    }
+    #[tokio::test]
+    #[ignore = "uses configured Gemini; synthetic CSV in temporary artifact storage only"]
+    async fn live_codeact_sales_csv() {
+        let (_root, store, workspace) = test_workspace();
+        let input = store.save_bytes("sales.csv", "date,product,quantity,unit_price\n2026-10-01,产品A,10,100\n2026-10-02,产品B,5,200\n2026-10-03,产品A,3,100\n2026-10-04,产品C,2,500\n".as_bytes()).unwrap();
+        let state = Arc::new(Mutex::new(
+            WorkflowStateBridge::from_initial_state(json!({"sales_file":input})).unwrap(),
+        ));
+        let requests = Arc::new(Mutex::new(vec![]));
+        let agent = CodeActAgent::builder().name("codeact_calc")
+            .instruction("Read sales data from /artifacts/manifest.json. Calculate total sales, sales per product, and the product with the highest sales using Python. Publish these values to global state keys: total_sales, product_sales, top_product.")
+            .input_guardrails(input_guardrails())
+            .output_guardrails(output_guardrails())
+            .model(instrumented_model(Arc::new(LiveSalesModel { inner:crate::module::assistant::codeact_live_test_model(), requests:requests.clone() }), "codeact_calc", "gemini-test", None))
+            .runtime(runtime(&workspace)).max_iterations(8).build().unwrap();
+        let node = StreamingAgentNode::new(
+            AdkAgentNode::new(Arc::new(agent))
+                .with_input_mapper(agent_input_mapper(state.clone(), "codeact_calc".into())),
+            StreamingAgentNodeConfig {
+                id: "codeact_calc".into(),
+                kind: "codeact_agent".into(),
+                endpoint_or_model: "live-test".into(),
+                on_event: None,
+                tool_trace: None,
+                output_key: None,
+                output_schema: None,
+                state: state.clone(),
+                global_keys: ["total_sales".into(), "product_sales".into(), "top_product".into()]
+                    .into_iter()
+                    .collect(),
+                sensitive_fields: BTreeSet::new(),
+            },
+        )
+        .with_codeact_workspace(Arc::new(workspace));
+        let events = node
+            .execute_stream(&NodeContext::new(HashMap::new(), ExecutionConfig::default(), 0))
+            .collect::<Vec<_>>()
+            .await;
+        let request_count = requests.lock().unwrap().len();
+        println!("CodeAct model iterations: {}", request_count);
+        assert!(
+            events.iter().all(|event| event.is_ok()),
+            "CodeAct did not complete (see synthetic transcript)"
+        );
+        let output = state.lock().unwrap().agent_input("consumer").unwrap();
+        assert_eq!(output["total_sales"].as_f64(), Some(3300.0));
+        assert_eq!(output["product_sales"]["产品A"].as_f64(), Some(1300.0));
+        assert_eq!(output["product_sales"]["产品B"].as_f64(), Some(1000.0));
+        assert_eq!(output["product_sales"]["产品C"].as_f64(), Some(1000.0));
+        assert_eq!(output["top_product"], "产品A");
+        println!("Verified sales output: {}", output);
+        let analysis = LlmAgentBuilder::new("business_analysis")
+            .instruction("Review total_sales, product_sales and top_product. Generate a professional Chinese business analysis report based on these figures.")
+            .model(Arc::new(crate::module::assistant::codeact_live_test_model()))
+            .input_guardrails(input_guardrails()).build().unwrap();
+        let analysis = StreamingAgentNode::new(
+            AdkAgentNode::new(Arc::new(analysis))
+                .with_input_mapper(agent_input_mapper(state.clone(), "business_analysis".into())),
+            StreamingAgentNodeConfig {
+                id: "business_analysis".into(),
+                kind: "agent".into(),
+                endpoint_or_model: "live-test".into(),
+                on_event: None,
+                tool_trace: None,
+                output_key: Some("analysis_report".into()),
+                output_schema: None,
+                state: state.clone(),
+                global_keys: ["analysis_report".into()].into_iter().collect(),
+                sensitive_fields: BTreeSet::new(),
+            },
+        );
+        let events = analysis
+            .execute_stream(&NodeContext::new(HashMap::new(), ExecutionConfig::default(), 0))
+            .collect::<Vec<_>>()
+            .await;
+        assert!(
+            events.iter().all(|event| event.is_ok()),
+            "Analysis node did not complete"
+        );
+        let output = state.lock().unwrap().agent_input("consumer").unwrap();
+        let report = output["analysis_report"].as_str().unwrap();
+        assert!(
+            report.contains("3300") || report.contains("3,300"),
+            "Report omitted verified total"
+        );
+        assert!(!report.contains('$'), "Report invented a currency");
+        assert!(!report.contains("2023"), "Report invented a date");
+        assert!(report.contains("产品A"));
+        println!(
+            "Verified downstream Chinese report: {} characters",
+            report.chars().count()
+        );
     }
 }

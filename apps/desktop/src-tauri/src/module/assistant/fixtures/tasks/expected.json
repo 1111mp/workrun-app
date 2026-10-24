@@ -1,0 +1,34 @@
+{
+  "file-aggregation": [
+    {
+      "total": 24,
+      "record_count": 3,
+      "groups_json": "{\"甲\":17,\"乙\":7}",
+      "unit": ""
+    },
+    {
+      "total": 11,
+      "record_count": 2,
+      "groups_json": "{\"乙\":3,\"丙\":8}",
+      "unit": ""
+    }
+  ],
+  "stable-deduplication": [
+    {
+      "result_json": "[\"A\",\"B\",\"b\"]",
+      "count": 3
+    },
+    {
+      "result_json": "[\"中\",\"文\"]",
+      "count": 2
+    }
+  ],
+  "text-formatting": [
+    {
+      "markdown": "# Workrun\n\n第一次测试\n"
+    },
+    {
+      "markdown": "# 第二次\n\n保留 A & B\n"
+    }
+  ]
+}

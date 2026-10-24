@@ -1,12 +1,12 @@
 ---
 title: Workrun
-description: Turn Agents, Python, MCP tools, and human review into automation you can run, evaluate, and publish.
+description: Describe your goal and let Workrun compose an editable, reusable workflow through conversation.
 template: splash
 hero:
-  tagline: A local-first workspace for AI automation
+  tagline: Describe your goal. Let Workrun compose the workflow.
   actions:
-    - text: Start the 5-minute quickstart
-      link: /getting-started/quickstart/
+    - text: Build through conversation
+      link: /guides/conversational-workflows/
       icon: right-arrow
     - text: View the project on GitHub
       link: https://github.com/1111mp/workrun-app
@@ -18,40 +18,76 @@ import { Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
 import HomepageHero from '../../components/homepage-hero.astro';
 import WorkflowStudio from '../../components/workflow-studio.astro';
 
+<div class='homepage-kicker'>
+  CONVERSATION → WORKFLOW · LOCAL-FIRST · REUSABLE
+</div>
+
+## From a goal in your own words to a workflow you can run.
+
+Tell Workrun what you want to achieve. It works out the steps, selects the capabilities, and turns your plan into a reusable workflow. Refine it through conversation or open the canvas to edit the details. When a matching workflow already exists, ask Workrun to find and run it.
+
 <HomepageHero />
 
-<div class='homepage-kicker'>APPS + WORKFLOWS · LOCAL-FIRST · READY TO SHIP</div>
+<CardGrid>
+  <Card title='Describe the goal. Let it compose the steps.' icon='puzzle'>
+    Share your inputs, expected results, and business rules. Workrun plans how
+    to get there using the Agents, Apps, and tools in your workspace.
+  </Card>
+  <Card title='Shape the workflow as you talk' icon='approve-check'>
+    Add conditions, adjust steps, and refine the plan together. Approve it to
+    create a workflow, then keep editing through conversation or on the canvas.
+  </Card>
+  <Card title='Build once. Use it again.' icon='launch'>
+    Your workflow stays in your workspace. Bring new inputs, review the
+    selection, and run it again, with each step and result available to inspect.
+  </Card>
+</CardGrid>
 
-## From one Python App to automation your team can deliver.
-
-Workrun is not only a workflow canvas. Start with an independent local Python project that does one concrete job, or compose Agents, Apps, MCP tools, and human judgment on a canvas into a repeatable process. Both paths use the same workspace for running, debugging, evaluating, and publishing.
+Learn [how to build workflows through conversation](/guides/conversational-workflows/), or start with Apps and the canvas below.
 
 <div class='automation-paths'>
   <article class='automation-path app-path'>
     <p class='eyebrow'>APP · START WITH CODE</p>
     <h3>One independent Python project can be a runnable capability.</h3>
     <p>
-      Every App is a local <code>uv</code> project with its own dependencies, entry-point code, and data contract. Run it on its own for file work, internal integrations, or human input; a workflow is optional.
+      Every App is a local <code>uv</code> project with its own dependencies,
+      entry-point code, and data contract. Run it on its own for file work,
+      internal integrations, or human input; a workflow is optional.
     </p>
     <ul>
       <li>Write deterministic business logic in the Python you know</li>
       <li>Test, review, and version its code and dependencies independently</li>
-      <li>Later, use it as a Process node or an Agent tool when it belongs in a flow</li>
+      <li>
+        Later, use it as a Process node or an Agent tool when it belongs in a
+        flow
+      </li>
     </ul>
-    <a href='/guides/python-apps/' class='path-link'>Build your first Python App <span aria-hidden='true'>→</span></a>
+    <a href='/guides/python-apps/' class='path-link'>
+      Build your first Python App <span aria-hidden='true'>→</span>
+    </a>
   </article>
   <article class='automation-path workflow-path'>
     <p class='eyebrow'>WORKFLOW · START WITH COLLABORATION</p>
-    <h3>Connect capabilities when a task needs judgment, branches, and people.</h3>
+    <h3>
+      Connect capabilities when a task needs judgment, branches, and people.
+    </h3>
     <p>
-      Compose Agents, Process Apps, conditions, subworkflows, and human review on a canvas. Node state, tool traces, and results stay visible, so complex automation remains inspectable and resumable.
+      Compose Agents, Process Apps, conditions, subworkflows, and human review
+      on a canvas. Node state, tool traces, and results stay visible, so complex
+      automation remains inspectable and resumable.
     </p>
     <ul>
-      <li>Define what each step reads, produces, and hands to a decision maker</li>
+      <li>
+        Define what each step reads, produces, and hands to a decision maker
+      </li>
       <li>Resume input pauses and recover application interruptions</li>
-      <li>Iterate safely with evaluations, version comparison, and quality gates</li>
+      <li>
+        Iterate safely with evaluations, version comparison, and quality gates
+      </li>
     </ul>
-    <a href='/guides/build-a-workflow/' class='path-link'>Build your first workflow <span aria-hidden='true'>→</span></a>
+    <a href='/guides/build-a-workflow/' class='path-link'>
+      Build your first workflow <span aria-hidden='true'>→</span>
+    </a>
   </article>
 </div>
 
@@ -60,34 +96,58 @@ Workrun is not only a workflow canvas. Start with an independent local Python pr
 For data processing, file operations, internal integrations, or a local tool that needs input from a person, an App can run directly from **Apps**. Workrun creates and runs the project, preserves run history, and handles runtime interactions; the Python remains your codebase.
 
 <div class='homepage-app-demo'>
-  <video autoplay muted loop playsinline controls preload="metadata" aria-label="Independent Python App run demonstration">
-    <source src="/media/python-apps/01-standalone-health-information.mp4" type="video/mp4" />
-    Watch an App run from the Apps page, collect form input, and show its result.
+  <video
+    autoplay
+    muted
+    loop
+    playsinline
+    controls
+    preload='metadata'
+    aria-label='Independent Python App run demonstration'
+  >
+    <source
+      src='/media/python-apps/01-standalone-health-information.mp4'
+      type='video/mp4'
+    />
+    Watch an App run from the Apps page, collect form input, and show its
+    result.
   </video>
 </div>
 
 <CardGrid stagger>
   <Card title='Run on demand or on a schedule' icon='launch'>
-    Run a local project directly from Apps, or schedule recurring collection, cleanup, and synchronization work.
+    Run a local project directly from Apps, or schedule recurring collection,
+    cleanup, and synchronization work.
   </Card>
   <Card title='Let code control runtime interaction' icon='approve-check'>
-    Python can request a JSON-Schema form or confirmation. After a person submits, rejects, or cancels, the code decides what happens next.
+    Python can request a JSON-Schema form or confirmation. After a person
+    submits, rejects, or cancels, the code decides what happens next.
   </Card>
   <Card title='Join a flow when needed' icon='puzzle'>
-    The same App can become a fixed-position Process node; a Tool App lets an Agent call it on demand through a schema.
+    The same App can become a fixed-position Process node; a Tool App lets an
+    Agent call it on demand through a schema.
   </Card>
 </CardGrid>
 
 ## When one App is not enough, compose it in a Workflow
 
-Workflow configuration should not be a black box. It should remain visible and inspectable: where a node reads data, who makes a decision, when a human takes over, and which model and tools a run used.
+Open the canvas to inspect and refine the workflow created through conversation. Connect Agents, Apps, and branches, and check how data moves between steps. After running it, inspect node messages, tool calls, and results.
 
 <WorkflowStudio />
 
 <div class='homepage-workflow-demo'>
-  <video autoplay muted loop playsinline controls preload="metadata" aria-label="Workflow run demonstration">
-    <source src="/media/homepage/workflow-run-through.mp4" type="video/mp4" />
-    Watch the workflow run from input through Agent execution, human review, and completion.
+  <video
+    autoplay
+    muted
+    loop
+    playsinline
+    controls
+    preload='metadata'
+    aria-label='Workflow run demonstration'
+  >
+    <source src='/media/homepage/workflow-run-through.mp4' type='video/mp4' />
+    Watch the workflow run from input through Agent execution, human review, and
+    completion.
   </video>
 </div>
 
@@ -102,9 +162,15 @@ Hangzhou trip request → Choose to begin → Edit destination to Shanghai → A
 ```
 
 <div class='homepage-workflow-demo'>
-  <video controls playsinline preload="metadata" aria-label="Workflow demonstration: check weather and plan a trip">
-    <source src="/media/homepage/weather-trip-planning.mp4" type="video/mp4" />
-    Watch the workflow confirm requirements, authorize a weather lookup, and generate itinerary suggestions.
+  <video
+    controls
+    playsinline
+    preload='metadata'
+    aria-label='Workflow demonstration: check weather and plan a trip'
+  >
+    <source src='/media/homepage/weather-trip-planning.mp4' type='video/mp4' />
+    Watch the workflow confirm requirements, authorize a weather lookup, and
+    generate itinerary suggestions.
   </video>
 </div>
 
@@ -118,32 +184,35 @@ See [the workflow guide](/guides/build-a-workflow/) for import and export detail
 
 **Review can change the actual content.** The original request is “Plan a trip based on the weather in Hangzhou.” This review node uses `input` as its content key with **Allow editing** enabled; the reviewer changes “Hangzhou” to “Shanghai,” then approves and continues. Approval writes the edit back to that same state key, so the tool queries Shanghai weather and the planner follows the revised request. Check `city: "上海"` (Shanghai) on the tool authorization card to see that the edit reached downstream execution.
 
-| Step | Who handles it | What it produces |
-| --- | --- | --- |
-| Confirm requirements | You select, edit, or approve on question and review cards | Confirmed trip requirements; choosing not to plan or rejecting review ends the run |
-| Check the weather | The weather Agent calls its configured tool | Weather information in `weather_info`, accessible to the trip-planning Agent |
-| Plan the trip | The trip-planning Agent reads the requirements and upstream weather | Itinerary suggestions grounded in the tool result, without inventing weather |
+| Step                 | Who handles it                                                      | What it produces                                                                   |
+| -------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Confirm requirements | You select, edit, or approve on question and review cards           | Confirmed trip requirements; choosing not to plan or rejecting review ends the run |
+| Check the weather    | The weather Agent calls its configured tool                         | Weather information in `weather_info`, accessible to the trip-planning Agent       |
+| Plan the trip        | The trip-planning Agent reads the requirements and upstream weather | Itinerary suggestions grounded in the tool result, without inventing weather       |
 
 The video demonstrates orchestration and interaction. Actual weather depends on the connected tool's data source and query time. Suggestions based only on current weather are a reference, not a forecast for a future trip. Learn about [configuring human interactions](/guides/human-in-the-loop/) and [passing state between nodes](/concepts/workflows-and-state/).
 
 ## Whichever path you start with, evolve in one workspace
 
-| What you need to do | How Workrun helps |
-| --- | --- |
+| What you need to do  | How Workrun helps                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Compose capabilities | Run an App independently, or connect Agents, Processes, branches, subworkflows, and human nodes on a canvas. |
-| Run reliably | Isolated node state, input-pause resume, interruption recovery, and fresh reruns after failure. |
-| See what happened | Inspect model messages, tool calls, script logs, and traces node by node. |
-| Iterate safely | Validate workflow changes with evaluation suites and quality gates before publishing. |
+| Run reliably         | Isolated node state, input-pause resume, interruption recovery, and fresh reruns after failure.              |
+| See what happened    | Inspect model messages, tool calls, script logs, and traces node by node.                                    |
+| Iterate safely       | Validate workflow changes with evaluation suites and quality gates before publishing.                        |
 
 <div class='next-step'>
   <p class='eyebrow'>Choose your starting point</p>
-  <h2>Run one App first, or connect one workflow.</h2>
+  <h2>What would you like to automate first?</h2>
   <p>
-    Create a Python App when code should solve one deterministic job. Connect
-    <code>Start → Agent → End</code> when Agents, tools, and people need to collaborate. You can bring the two together whenever you need to.
+    Start a conversation and let Workrun compose your workflow. Add a Python App
+    for your own processing logic, and open the canvas whenever you want to
+    fine-tune the details.
   </p>
-  <LinkButton href='/guides/python-apps/'>
-    Build a Python App <span aria-hidden='true'>→</span>
+  <LinkButton href='/guides/conversational-workflows/'>
+    Build through conversation <span aria-hidden='true'>→</span>
   </LinkButton>
-  <a href='/getting-started/quickstart/' class='next-step-link'>Start the workflow quickstart <span aria-hidden='true'>→</span></a>
+  <a href='/getting-started/quickstart/' class='next-step-link'>
+    Learn the workflow canvas <span aria-hidden='true'>→</span>
+  </a>
 </div>

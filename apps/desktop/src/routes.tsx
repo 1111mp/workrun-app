@@ -12,6 +12,7 @@ export const router = createMemoryRouter(
       path: '/',
       Component: HomePage,
       children: [
+        { path: 'start', lazy: () => import('@/pages/start') },
         {
           path: 'workflows',
           lazy: () => import('@/pages/workflows'),
@@ -65,6 +66,6 @@ export const router = createMemoryRouter(
     },
   ],
   {
-    initialEntries: ['/workflows'],
+    initialEntries: ['/start'],
   },
 );

@@ -1,12 +1,12 @@
 ---
 title: Workrun
-description: 把 Agent、Python、MCP 工具和人工审批，变成可运行、可评估、可发布的自动化能力。
+description: 用对话自主编排工作流，将你的目标变成可编辑、可重复运行的自动化流程。
 template: splash
 hero:
-  tagline: 本地优先的 AI 自动化工作台
+  tagline: 说出目标，让 Workrun 帮你编排工作流
   actions:
-    - text: 5 分钟快速开始
-      link: /zh-cn/getting-started/quickstart/
+    - text: 用对话创建工作流
+      link: /zh-cn/guides/conversational-workflows/
       icon: right-arrow
     - text: 在 GitHub 查看项目
       link: https://github.com/1111mp/workrun-app
@@ -18,40 +18,61 @@ import { Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
 import HomepageHero from '../../../components/homepage-hero.astro';
 import WorkflowStudio from '../../../components/workflow-studio.astro';
 
+<div class='homepage-kicker'>对话自主编排 · 本地优先 · 持续复用</div>
+
+## 从一句需求，到一套能运行的工作流。
+
+告诉 Workrun 你想完成什么，它会帮你梳理步骤、选择所需能力，并生成可重复运行的工作流。你可以通过对话完善方案、调整流程，也可以随时打开画布编辑细节。已有合适的工作流时，直接让它帮你找到并运行。
+
 <HomepageHero />
 
-<div class='homepage-kicker'>APPS + WORKFLOWS · LOCAL-FIRST · READY TO SHIP</div>
+<CardGrid>
+  <Card title='说清目标，交给它来编排' icon='puzzle'>
+    描述输入、预期结果和业务规则，Workrun 会结合工作区中的 Agent、App
+    与工具，规划如何完成任务。
+  </Card>
+  <Card title='边聊边改，让流程符合你的想法' icon='approve-check'>
+    补充条件、调整步骤，一起完善方案。确认后生成工作流，后续仍能通过对话修改，或在画布上继续编辑。
+  </Card>
+  <Card title='搭建一次，反复使用' icon='launch'>
+    生成的工作流会保存在工作区中。下次交给它新的输入，核对后即可运行，还能查看每一步的执行过程与结果。
+  </Card>
+</CardGrid>
 
-## 从一个 Python App，到一套可交付的自动化。
-
-Workrun 不是只能画流程图。你可以先创建一个独立运行的本地 Python 项目，用代码完成一件具体的事；也可以在画布上把 Agent、App、MCP 工具与人工判断编排成可重复运行的流程。两种方式共享同一个运行、调试、评测与发布工作台。
+了解[如何通过对话编排工作流](/zh-cn/guides/conversational-workflows/)，或从下面的 App 与画布开始构建。
 
 <div class='automation-paths'>
   <article class='automation-path app-path'>
     <p class='eyebrow'>APP · 从代码开始</p>
     <h3>一个独立的 Python 项目，也是一项可运行能力。</h3>
     <p>
-      每个 App 都是本地 <code>uv</code> 项目，有自己的依赖、入口代码和数据契约。它可以独立运行，处理文件、调用内部系统、弹出表单让人填写，或按计划执行；不需要先建立工作流。
+      每个 App 都是本地 <code>uv</code>{' '}
+      项目，有自己的依赖、入口代码和数据契约。它可以独立运行，处理文件、调用内部系统、弹出表单让人填写，或按计划执行；不需要先建立工作流。
     </p>
     <ul>
       <li>用你熟悉的 Python 写确定性业务逻辑</li>
       <li>独立测试、审查和版本管理代码与依赖</li>
       <li>需要时，再接入流程成为 Process 节点或 Agent 工具</li>
     </ul>
-    <a href='/zh-cn/guides/python-apps/' class='path-link'>构建第一个 Python App <span aria-hidden='true'>→</span></a>
+    <a href='/zh-cn/guides/python-apps/' class='path-link'>
+      构建第一个 Python App <span aria-hidden='true'>→</span>
+    </a>
   </article>
   <article class='automation-path workflow-path'>
     <p class='eyebrow'>WORKFLOW · 从协作开始</p>
     <h3>当任务需要判断、分支与协作，把能力连接起来。</h3>
     <p>
-      在画布上组合 Agent、Process App、条件、子工作流和人工审核。每次运行都保留节点状态、工具轨迹与结果，复杂自动化依然可读、可检查、可恢复。
+      在画布上组合 Agent、Process
+      App、条件、子工作流和人工审核。每次运行都保留节点状态、工具轨迹与结果，复杂自动化依然可读、可检查、可恢复。
     </p>
     <ul>
       <li>清楚定义每一步读取、产出与交给谁判断</li>
       <li>等待输入时继续，应用中断后从检查点恢复</li>
       <li>用评测、版本对比和质量门安心迭代</li>
     </ul>
-    <a href='/zh-cn/guides/build-a-workflow/' class='path-link'>构建第一个工作流 <span aria-hidden='true'>→</span></a>
+    <a href='/zh-cn/guides/build-a-workflow/' class='path-link'>
+      构建第一个工作流 <span aria-hidden='true'>→</span>
+    </a>
   </article>
 </div>
 
@@ -60,8 +81,19 @@ Workrun 不是只能画流程图。你可以先创建一个独立运行的本地
 无论是数据处理、文件操作、内部系统集成，还是需要人工输入的本地小工具，App 都可以直接从 **Apps** 页面运行。Workrun 负责项目创建、运行记录与运行时交互；Python 代码依然是你自己的代码工程。
 
 <div class='homepage-app-demo'>
-  <video autoplay muted loop playsinline controls preload="metadata" aria-label="独立运行 Python App 的演示">
-    <source src="/media/python-apps/01-standalone-health-information.mp4" type="video/mp4" />
+  <video
+    autoplay
+    muted
+    loop
+    playsinline
+    controls
+    preload='metadata'
+    aria-label='独立运行 Python App 的演示'
+  >
+    <source
+      src='/media/python-apps/01-standalone-health-information.mp4'
+      type='video/mp4'
+    />
     观看从 Apps 页面独立运行 App、填写表单并查看结果的全过程。
   </video>
 </div>
@@ -71,22 +103,32 @@ Workrun 不是只能画流程图。你可以先创建一个独立运行的本地
     从 Apps 页面立即运行本地项目，或为周期性采集、清理与同步配置定时任务。
   </Card>
   <Card title='代码控制人与运行时交互' icon='approve-check'>
-    Python 可通过 JSON Schema 请求表单或确认；人提交、拒绝或取消后，代码再决定如何继续。
+    Python 可通过 JSON Schema
+    请求表单或确认；人提交、拒绝或取消后，代码再决定如何继续。
   </Card>
   <Card title='需要时自然进入流程' icon='puzzle'>
-    同一个 App 可作为固定顺序的 Process 节点；Tool App 则让 Agent 按 Schema 按需调用。
+    同一个 App 可作为固定顺序的 Process 节点；Tool App 则让 Agent 按 Schema
+    按需调用。
   </Card>
 </CardGrid>
 
 ## 当一个 App 不够时，再把它编排进 Workflow
 
-工作流配置不应是黑盒。节点从哪里取数据、由谁判断、何时暂停给人处理，以及一次运行使用的模型和工具，都应该可见、可检查。
+通过对话生成工作流后，打开画布检查和调整细节。连接 Agent、App 与条件分支，明确每一步读取什么、产出什么；运行后，再逐节点查看消息、工具调用与结果。
 
 <WorkflowStudio />
 
 <div class='homepage-workflow-demo'>
-  <video autoplay muted loop playsinline controls preload="metadata" aria-label="工作流运行演示">
-    <source src="/media/homepage/workflow-run-through.mp4" type="video/mp4" />
+  <video
+    autoplay
+    muted
+    loop
+    playsinline
+    controls
+    preload='metadata'
+    aria-label='工作流运行演示'
+  >
+    <source src='/media/homepage/workflow-run-through.mp4' type='video/mp4' />
     观看工作流从输入、Agent 执行、人工审核到完成的全过程。
   </video>
 </div>
@@ -102,8 +144,13 @@ Workrun 不是只能画流程图。你可以先创建一个独立运行的本地
 ```
 
 <div class='homepage-workflow-demo'>
-  <video controls playsinline preload="metadata" aria-label="查询天气并生成行程规划的工作流演示">
-    <source src="/media/homepage/weather-trip-planning.mp4" type="video/mp4" />
+  <video
+    controls
+    playsinline
+    preload='metadata'
+    aria-label='查询天气并生成行程规划的工作流演示'
+  >
+    <source src='/media/homepage/weather-trip-planning.mp4' type='video/mp4' />
     观看从选择开始规划、确认出行需求、授权天气查询，到生成行程建议的全过程。
   </video>
 </div>
@@ -118,32 +165,34 @@ Workrun 不是只能画流程图。你可以先创建一个独立运行的本地
 
 **审核也可以修改实际内容。** 用户最初输入的是“根据杭州天气给出行程规划”。本例将审核节点的内容键设为 `input`，并开启“允许编辑”；审核时把“杭州”改成“上海”，再批准并继续。修改会写回同一个状态键，因此后续工具查询的是上海天气，行程规划也以修改后的需求为准。你可以在工具授权卡片中核对调用参数 `city: "上海"`，确认这次编辑已影响下游执行。
 
-| 步骤 | 谁负责 | 交付什么 |
-| --- | --- | --- |
-| 确认需求 | 你通过问题和审核卡片选择、修改或批准 | 本次出行需求；选择暂不规划或拒绝审核则结束运行 |
-| 查询天气 | 天气查询 Agent 调用已配置的天气工具 | 天气信息 `weather_info`，向行程规划 Agent 开放读取 |
-| 规划行程 | 行程规划 Agent 读取需求与上游天气信息 | 基于查询结果的行程建议，不自行编造天气 |
+| 步骤     | 谁负责                                | 交付什么                                           |
+| -------- | ------------------------------------- | -------------------------------------------------- |
+| 确认需求 | 你通过问题和审核卡片选择、修改或批准  | 本次出行需求；选择暂不规划或拒绝审核则结束运行     |
+| 查询天气 | 天气查询 Agent 调用已配置的天气工具   | 天气信息 `weather_info`，向行程规划 Agent 开放读取 |
+| 规划行程 | 行程规划 Agent 读取需求与上游天气信息 | 基于查询结果的行程建议，不自行编造天气             |
 
 视频展示的是编排与交互方式，实际天气取决于所接工具的数据来源与查询时间。只有当前天气时，行程建议应作为参考，不能当作未来天气预报。了解[人工交互的配置](/zh-cn/guides/human-in-the-loop/)和[节点间的状态传递](/zh-cn/concepts/workflows-and-state/)。
 
 ## 无论从哪里开始，都在同一个工作台演进
 
-| 你要完成的事   | Workrun 如何帮助你                                      |
-| -------------- | ------------------------------------------------------- |
+| 你要完成的事   | Workrun 如何帮助你                                                      |
+| -------------- | ----------------------------------------------------------------------- |
 | 组合能力       | 独立运行 App，或在画布上连接 Agent、Process、分支、子工作流和人工节点。 |
-| 可靠运行       | 节点状态隔离；等待输入时继续，应用中断后恢复；失败后重新运行。      |
-| 看清发生了什么 | 逐节点查看模型消息、工具调用、脚本日志和 Trace。        |
-| 安心迭代       | 用评估集验证工作流变化，并在发布前设置质量门。          |
+| 可靠运行       | 节点状态隔离；等待输入时继续，应用中断后恢复；失败后重新运行。          |
+| 看清发生了什么 | 逐节点查看模型消息、工具调用、脚本日志和 Trace。                        |
+| 安心迭代       | 用评估集验证工作流变化，并在发布前设置质量门。                          |
 
 <div class='next-step'>
   <p class='eyebrow'>选择你的起点</p>
-  <h2>先跑一个 App，或先连起一个工作流。</h2>
+  <h2>说出你的第一个自动化需求。</h2>
   <p>
-    写代码解决一件确定的事时，创建 Python App；需要让 Agent、工具和人协作时，连接
-    <code>Start → Agent → End</code>。以后随时可以让两者相连。
+    从对话开始，让 Workrun 帮你编排工作流。需要编写自己的处理逻辑时，再接入
+    Python App；想调整细节时，随时打开画布。
   </p>
-  <LinkButton href='/zh-cn/guides/python-apps/'>
-    构建 Python App <span aria-hidden='true'>→</span>
+  <LinkButton href='/zh-cn/guides/conversational-workflows/'>
+    用对话创建工作流 <span aria-hidden='true'>→</span>
   </LinkButton>
-  <a href='/zh-cn/getting-started/quickstart/' class='next-step-link'>开始工作流快速教程 <span aria-hidden='true'>→</span></a>
+  <a href='/zh-cn/getting-started/quickstart/' class='next-step-link'>
+    学习画布搭建 <span aria-hidden='true'>→</span>
+  </a>
 </div>

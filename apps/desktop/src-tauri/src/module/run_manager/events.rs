@@ -393,6 +393,9 @@ pub(super) async fn complete_app_cancellation(run_id: &str) -> Result<()> {
 
 pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<String>) -> Result<()> {
     RunHistoryStore::finish_execution(run_id, status, error.clone()).await?;
+    // Native waiters must observe the durable outcome even if ancillary
+    // finalization fails before the renderer notification below.
+    let _ = STATUS_CHANGES.send(run_id.to_owned());
     let pool = crate::core::db::DBManager::global().pool()?;
     crate::module::run_history::recovery::complete_attempt(&pool, run_id).await?;
     if matches!(status, RunStatus::Completed | RunStatus::Cancelled | RunStatus::Failed) {
@@ -433,14 +436,14 @@ pub(super) async fn finish_run(run_id: &str, status: RunStatus, error: Option<St
     {
         log::warn!("failed to complete evaluation result for run {run_id}: {error:#}");
     }
-    // Output events precede the durable status update. Publish a separate
-    // notification afterwards so shell-level active-run queries cannot retain
-    // the stale "running" result from that earlier event.
+    // Refresh renderer projections after dependent chat/evaluation writes finish.
     publish_run_status(run_id, status)?;
     Ok(())
 }
 
 pub(super) fn publish_run_status(run_id: &str, status: RunStatus) -> Result<()> {
+    // Wake native waiters after persistence, independently of renderer delivery.
+    let _ = STATUS_CHANGES.send(run_id.to_owned());
     RunManager::global().supervisor.notify();
     emit_on_main_thread(
         "run-status-changed",
@@ -534,23 +537,27 @@ async fn persist_app_output(run_id: String, mut receiver: mpsc::UnboundedReceive
     Ok(())
 }
 
-fn emit_on_main_thread<S>(event_name: &'static str, payload: S) -> Result<()>
+pub(crate) fn emit_on_main_thread<S>(event_name: &'static str, payload: S) -> Result<()>
 where
     S: Serialize + Clone + Send + 'static,
 {
-    let Some(app) = crate::APP_HANDLE.get() else {
-        // Persistence also runs before the renderer exists and in native tests.
-        return Ok(());
-    };
-    let emit_app = app.clone();
-    // Wry synchronously evaluates listeners for an emit from a background
-    // worker. Queue it on the main loop so a concurrent WebView IPC request
-    // cannot invert the WebView lock and freeze the renderer.
-    app.run_on_main_thread(move || {
-        if let Err(error) = emit_app.emit(event_name, payload) {
-            log::warn!("failed to emit {event_name}: {error}");
-        }
-    })?;
+    // Native tests persist events without initializing a Tauri application.
+    #[cfg(test)]
+    let _ = (event_name, payload);
+    #[cfg(not(test))]
+    {
+        use tauri::Emitter;
+
+        let app = crate::core::handle::Handle::app_handle();
+        let emit_app = app.clone();
+        // Queue on the main loop to avoid inversion of the WebView lock
+        // between background event delivery and concurrent frontend IPC.
+        app.run_on_main_thread(move || {
+            if let Err(error) = emit_app.emit(event_name, payload) {
+                log::warn!("failed to emit {event_name}: {error}");
+            }
+        })?;
+    }
     Ok(())
 }
 

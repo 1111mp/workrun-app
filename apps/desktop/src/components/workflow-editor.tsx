@@ -36,7 +36,6 @@ import {
   Textarea,
 } from '@workspace/ui/components';
 import {
-  ArrowLeftIcon,
   BeakerIcon,
   HistoryIcon,
   SaveIcon,
@@ -45,7 +44,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -107,7 +106,9 @@ import {
 import { useWorkflowRun } from './workflow-editor/use-workflow-run';
 import { useWorkflowRunRecord } from './workflow-editor/use-workflow-run-record';
 import { useWorkflowRunSnapshot } from './workflow-editor/use-workflow-run-snapshot';
+import { WorkflowBackButton } from './workflow-editor/workflow-back-button';
 import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
+import { WorkflowEditorToolbar } from './workflow-editor/workflow-editor-toolbar';
 
 type WorkflowEditorProps = {
   workflow?: StoredWorkflow;
@@ -221,6 +222,7 @@ function WorkflowEditorContent({
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
   const [draftId] = useState(() => crypto.randomUUID());
   const workflowStore = useWorkflowStoreApi();
   const nodes = useStore(workflowStore, (state) => state.nodes);
@@ -245,9 +247,9 @@ function WorkflowEditorContent({
 
   const workflowDocument = toWorkflowDocument(nodes, edges, workflowSettings);
   const workflowDocumentSnapshot = JSON.stringify(workflowDocument);
-  const [savedDocument, setSavedDocument] = useState<string>(() =>
-    workflow ? JSON.stringify(workflow.document) : workflowDocumentSnapshot,
-  );
+  // Compare the same serialized shape: loaded JSON can have a different key
+  // order or React Flow measurements that toWorkflowDocument strips out.
+  const [savedDocument, setSavedDocument] = useState(workflowDocumentSnapshot);
   const isDirty = workflowDocumentSnapshot !== savedDocument;
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const localReleaseMatchesDraft = Boolean(
@@ -841,7 +843,7 @@ function WorkflowEditorContent({
   ];
 
   return (
-    <SidebarProvider className='relative flex size-full min-h-0! grow flex-row'>
+    <SidebarProvider className='workrun-shell workrun-editor relative flex size-full min-h-0! grow flex-row'>
       <WorkflowCanvas
         readOnly={readOnly}
         isRunning={workflowRun.isRunning}
@@ -899,30 +901,28 @@ function WorkflowEditorContent({
           ) : undefined
         }
         header={
-          <header className='flex h-10 shrink-0 items-center gap-2 pt-1 pr-4'>
-            <div className='flex flex-1 items-center gap-2 px-4'>
-              <Button
-                variant='ghost'
-                size='icon-sm'
-                aria-label={t('workflowEditor.backToWorkflows')}
-                nativeButton={false}
-                render={<Link to='/workflows' />}
-              >
-                <ArrowLeftIcon />
-              </Button>
+          <WorkflowEditorToolbar readOnly={readOnly}>
+            <div
+              data-tauri-drag-region={OS_PLATFORM !== 'win32'}
+              className='flex flex-1 items-center gap-2 px-4'
+            >
+              <WorkflowBackButton />
               <SidebarTrigger className='-ml-1' />
               <Separator
                 orientation='vertical'
                 className='my-auto mr-2 data-[orientation=vertical]:h-4'
               />
-              <FieldGroup className='flex-row items-center gap-2'>
+              <FieldGroup
+                className='flex-row items-center gap-2'
+                data-tauri-drag-region={OS_PLATFORM === 'darwin'}
+              >
                 <Field className='w-52'>
                   <FieldLabel className='sr-only' htmlFor='workflow-name'>
                     {t('workflowEditor.name')}
                   </FieldLabel>
                   <Input
                     id='workflow-name'
-                    className='border-none'
+                    className='light:bg-input/30 border-none'
                     value={workflowSettings.name}
                     disabled={readOnly}
                     onChange={(event) =>
@@ -946,7 +946,7 @@ function WorkflowEditorContent({
                   >
                     <SelectTrigger
                       id='workflow-mode'
-                      className='w-full border-none'
+                      className='light:bg-input/30 light:hover:bg-input/50 w-full border-none'
                     >
                       <SelectValue />
                     </SelectTrigger>
@@ -1060,7 +1060,7 @@ function WorkflowEditorContent({
                 </Button>
               ) : null}
             </div>
-          </header>
+          </WorkflowEditorToolbar>
         }
       >
         {!readOnly ? (

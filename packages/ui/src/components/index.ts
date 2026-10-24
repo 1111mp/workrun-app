@@ -10,6 +10,7 @@ export * from './bubble';
 export * from './button';
 export * from './card';
 export * from './checkbox';
+export * from './code-block';
 export * from './collapsible';
 export * from './combobox';
 export * from './context-menu';
@@ -44,5 +45,6 @@ export * from './switch';
 export * from './tabs';
 export * from './textarea';
 export * from './tooltip';
+export * from './trace';
 
 export { type VariantProps };

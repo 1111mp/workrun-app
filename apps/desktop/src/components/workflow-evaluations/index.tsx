@@ -42,7 +42,7 @@ import {
   UploadIcon,
   XCircleIcon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useEffectEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -436,23 +436,25 @@ export function WorkflowEvaluations({
     configuredRoutes,
   );
 
+  const onRunStatusChanged = useEffectEvent((runId: string) => {
+    // Workflow completion is emitted only after EvaluationStore has scored
+    // its linked Case, so this event is the durable replacement for polling.
+    if (!results.data?.some((row) => row.workflowRunId === runId)) return;
+    void queryClient.invalidateQueries({
+      queryKey: ['evaluation-case-results', activeRunId],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ['evaluation-run', activeRunId],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ['evaluation-run-history', effectiveSuiteId],
+    });
+  });
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<{ runId: string }>('run-status-changed', ({ payload }) => {
-      // Workflow completion is emitted only after EvaluationStore has scored
-      // its linked Case, so this event is the durable replacement for polling.
-      if (!results.data?.some((row) => row.workflowRunId === payload.runId))
-        return;
-      void queryClient.invalidateQueries({
-        queryKey: ['evaluation-case-results', activeRunId],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ['evaluation-run', activeRunId],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ['evaluation-run-history', effectiveSuiteId],
-      });
+      if (!disposed) onRunStatusChanged(payload.runId);
     }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
@@ -461,7 +463,7 @@ export function WorkflowEvaluations({
       disposed = true;
       unlisten?.();
     };
-  }, [activeRunId, effectiveSuiteId, queryClient, results.data]);
+  }, []);
 
   const openSuiteEditor = (suite?: EvaluationSuite) => {
     setEditingSuite(suite);

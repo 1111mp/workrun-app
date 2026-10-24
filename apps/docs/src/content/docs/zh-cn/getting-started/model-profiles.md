@@ -3,6 +3,8 @@ title: 配置模型访问
 description: 在设置中为 Provider 添加凭据，并在 Agent 中选择内置模型。
 ---
 
+也可以在开始页描述目标，让助手先提出方案，确认后生成可编辑工作流。详见[通过对话编排工作流](/zh-cn/guides/conversational-workflows/)。方案确认与执行确认相互独立。
+
 Workrun 内置模型目录，Agent 和 CodeAct Agent 都从该目录选择模型。无需创建模型 Profile，也无需为每个工作流重复填写模型 ID。
 
 ## 添加 Provider 凭据

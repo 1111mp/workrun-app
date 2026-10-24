@@ -1,0 +1,819 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "sales-report",
+      "name": "Sales report",
+      "description": "Generate a sales report from workspace data. Accepts reporting period. Does not parse invoices or translate documents.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "this_week",
+              "last_week",
+              "this_month"
+            ]
+          }
+        },
+        "required": [
+          "period"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "invoice-summary",
+      "name": "Invoice summary",
+      "description": "Summarize provided invoice files, not sales data.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "document-translation",
+      "name": "Document translation",
+      "description": "Translate supplied text into the requested language. Does not generate reports.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "English",
+              "Chinese",
+              "Japanese"
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "language"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "expense-review",
+      "name": "Expense review",
+      "description": "Evaluate a supplied expense amount against the 1000-unit review threshold using a local rule. Returns whether manual review is needed. No payments or business mutations.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "greeting",
+      "category": "conversation",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "你好"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "write-email",
+      "category": "conversation",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "帮我写一封简短的项目进展邮件"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "plan-only",
+      "category": "planning",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "先帮我规划资料整理步骤，不要执行"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "discuss-automation",
+      "category": "planning",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "我想把报表自动化，有什么建议"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "capability-question",
+      "category": "conversation",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "你能做什么？"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "status-completed",
+      "category": "followup",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成本周销售报表"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "执行回执：status=completed，销售报表已生成。"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "任务成功了吗"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "status"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "status-running",
+      "category": "followup",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成本周销售报表"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "执行回执：status=running，报表尚未完成。"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "现在进度怎么样"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "status"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "explain-failure",
+      "category": "followup",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成本周销售报表"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "执行回执：status=failed，原因：缺少销售数据。"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "为什么执行失败"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "explanation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "thanks-after-run",
+      "category": "followup",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成本周销售报表"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "执行回执：status=completed，报表已交付。"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "谢谢"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "explicit-retry",
+      "category": "execution",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成本周销售报表"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "执行回执：status=failed，服务暂时不可用。"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "重新生成本周销售报表"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "execution"
+        ],
+        "routing": "required",
+        "workflowId": "sales-report",
+        "arguments": {
+          "period": "this_week"
+        }
+      }
+    },
+    {
+      "id": "sales-this-week",
+      "category": "routing",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成本周销售报表"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "required",
+        "workflowId": "sales-report",
+        "arguments": {
+          "period": "this_week"
+        },
+        "answerContainsAny": [
+          "12500",
+          "12,500"
+        ]
+      },
+      "receipt": {
+        "status": "completed",
+        "result": {
+          "summary": "本周销售报表已生成，收入为 12500。"
+        }
+      }
+    },
+    {
+      "id": "sales-last-week",
+      "category": "routing",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "请生成上周销售报表"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "required",
+        "workflowId": "sales-report",
+        "arguments": {
+          "period": "last_week"
+        }
+      }
+    },
+    {
+      "id": "sales-english",
+      "category": "bilingual",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Generate the sales report for this month."
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "required",
+        "workflowId": "sales-report",
+        "arguments": {
+          "period": "this_month"
+        }
+      }
+    },
+    {
+      "id": "translate-cn",
+      "category": "routing",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "使用文档翻译工作流把“会议改到下午三点”翻译成英语"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "execution"
+        ],
+        "routing": "required",
+        "workflowId": "document-translation",
+        "arguments": {
+          "text": "会议改到下午三点",
+          "language": "English"
+        }
+      }
+    },
+    {
+      "id": "expense-low",
+      "category": "routing",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "用费用审核流程检查金额 800 是否需要人工审核"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "execution"
+        ],
+        "routing": "required",
+        "workflowId": "expense-review",
+        "arguments": {
+          "amount": 800
+        }
+      }
+    },
+    {
+      "id": "expense-high",
+      "category": "routing",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "检查这笔 1500 的费用是否需要人工审核"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "required",
+        "workflowId": "expense-review",
+        "arguments": {
+          "amount": 1500
+        }
+      }
+    },
+    {
+      "id": "confirm-plan",
+      "category": "context",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "我需要本周销售报表"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "我可以使用销售报表工作流生成本周报表，现在开始吗？"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "好的，开始吧"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "execution"
+        ],
+        "routing": "required",
+        "workflowId": "sales-report",
+        "arguments": {
+          "period": "this_week"
+        }
+      }
+    },
+    {
+      "id": "reject-plan",
+      "category": "context",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "我需要本周销售报表"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "我可以使用销售报表工作流，现在开始吗？"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "先别执行，解释一下流程"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "conversation",
+          "explanation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "missing-period",
+      "category": "missing_input",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成销售报表"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "clarify",
+        "workflowId": "sales-report"
+      }
+    },
+    {
+      "id": "missing-files",
+      "category": "missing_input",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "帮我汇总发票"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "clarify",
+        "workflowId": "invoice-summary"
+      }
+    },
+    {
+      "id": "ambiguous-target",
+      "category": "ambiguity",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "帮我处理一下"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "clarification",
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "ambiguous-followup",
+      "category": "ambiguity",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成销售报表并汇总发票"
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "你需要哪个报表周期、哪些发票文件？目前两项都还没执行。"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "那个再弄一下"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "clarification",
+          "conversation"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "no-match-images",
+      "category": "no_match",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "帮我把这些照片去重"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "no-match-email-send",
+      "category": "no_match",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "把一封邮件发送给张三"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "none"
+      }
+    },
+    {
+      "id": "receipt-delivery",
+      "category": "delivery",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "检查这笔 1500 的费用是否需要人工审核"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "required",
+        "workflowId": "expense-review",
+        "arguments": {
+          "amount": 1500
+        },
+        "answerContainsAny": [
+          "人工",
+          "review"
+        ]
+      },
+      "receipt": {
+        "status": "completed",
+        "result": {
+          "amount": 1500,
+          "needsManualReview": true
+        }
+      }
+    },
+    {
+      "id": "failed-receipt",
+      "category": "delivery",
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "生成本周销售报表"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "intents": [
+          "task"
+        ],
+        "routing": "required",
+        "workflowId": "sales-report",
+        "arguments": {
+          "period": "this_week"
+        },
+        "answerContainsAny": [
+          "失败",
+          "无法",
+          "不可用",
+          "failed",
+          "unavailable"
+        ]
+      },
+      "receipt": {
+        "status": "failed",
+        "error": "销售数据不可用"
+      }
+    }
+  ]
+}

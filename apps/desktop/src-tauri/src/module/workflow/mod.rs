@@ -6,8 +6,9 @@
 
 pub(crate) mod agent;
 mod ask_user_question;
-mod codeact_agent;
-mod guardrails;
+pub(crate) mod codeact_agent;
+pub mod contracts;
+pub(crate) mod guardrails;
 mod human_review;
 pub(crate) mod operation_review;
 pub(crate) mod operations;
@@ -834,21 +835,7 @@ pub(super) async fn compile_with_path(
                 saga::declaration(Some(value), false)?;
             }
         }
-        if !matches!(
-            node.kind.as_str(),
-            "start"
-                | "end"
-                | "agent"
-                | "remote_agent"
-                | "process"
-                | "if_else"
-                | "switch"
-                | "human_review"
-                | "ask_user_question"
-                | "subworkflow"
-                | "terminate"
-                | "group"
-        ) {
+        if !contracts::NODE_TYPES.contains(&node.kind.as_str()) {
             bail!("node `{}` has unsupported type `{}`", node.id, node.kind);
         }
         if node.kind == "group"
@@ -1052,9 +1039,18 @@ pub(super) async fn compile_with_path(
 }
 
 #[cfg(test)]
-tokio::task_local! { static TEST_CHECKPOINT_DB: String; }
+tokio::task_local! { pub(crate) static TEST_CHECKPOINT_DB: String; }
+
+#[cfg(test)]
+tokio::task_local! { pub(crate) static TEST_SUBWORKFLOW_CATALOG: std::path::PathBuf; }
+
+// Authoring compilation uses a temporary checkpointer, never the user's run DB.
+tokio::task_local! { pub(crate) static VALIDATION_CHECKPOINT_DB: String; }
 
 async fn workflow_checkpointer_db_url() -> Result<String> {
+    if let Ok(url) = VALIDATION_CHECKPOINT_DB.try_with(Clone::clone) {
+        return Ok(url);
+    }
     #[cfg(test)]
     {
         if let Ok(url) = TEST_CHECKPOINT_DB.try_with(Clone::clone) {
@@ -1259,7 +1255,7 @@ fn integer_data(node: &WorkflowNode, key: &str, default: u32, min: u32, max: u32
     Ok(value)
 }
 
-fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::Result<()> {
+pub(crate) fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> adk_rust::Result<()> {
     let validator = jsonschema::validator_for(schema)
         .map_err(|error| adk_rust::AdkError::tool(format!("Tool {kind} schema is invalid: {error}")))?;
     if let Some(error) = validator.iter_errors(value).next() {
@@ -1785,6 +1781,38 @@ mod tests {
 
         assert_eq!(updates["summary"], json!("Done"));
         assert_eq!(updates["score"], json!(92));
+    }
+
+    #[test]
+    fn codeact_final_objects_publish_without_optional_schema_but_plain_text_stays_text() {
+        for (kind, text, extracts, valid) in [
+            ("codeact_agent", r#"{"total_sales":3300,"top_product":"A"}"#, true, true),
+            ("agent", r#"{"total_sales":3300}"#, false, true),
+            ("codeact_agent", "finished", false, true),
+            ("codeact_agent", r#"{"workflow.internal":"forged"}"#, false, false),
+        ] {
+            let mut event = Event::new("response");
+            event.llm_response.content = Some(Content::new("model").with_text(text));
+            let result = agent_output_updates(
+                &[event],
+                AgentOutputContext {
+                    node_id: "calc",
+                    kind,
+                    endpoint_or_model: "test",
+                    on_event: None,
+                    tool_calls: &[],
+                    output_key: None,
+                    output_schema: None,
+                },
+            );
+            assert_eq!(result.is_ok(), valid);
+            if let Ok(updates) = result {
+                assert_eq!(updates.contains_key("total_sales"), extracts);
+                if extracts {
+                    assert_eq!(updates["total_sales"], json!(3300));
+                }
+            }
+        }
     }
 
     #[test]

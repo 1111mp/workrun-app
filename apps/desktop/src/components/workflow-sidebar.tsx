@@ -10,6 +10,7 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from '@workspace/ui/components';
+import { cn } from '@workspace/ui/lib/utils';
 import {
   BotIcon,
   CircleHelpIcon,
@@ -248,11 +249,20 @@ function WorkflowSidebar({ onNodeDrop }: WorkflowSidebarProps) {
 
   return (
     <Sidebar variant='floating' className='absolute h-full!'>
-      <SidebarHeader className='gap-0 px-3 py-2.5'>
-        <p className='text-sm font-medium tracking-tight'>
+      <SidebarHeader
+        data-tauri-drag-region={OS_PLATFORM !== 'win32'}
+        className={cn('gap-0 px-3 py-2.5', OS_PLATFORM === 'darwin' && 'pt-9')}
+      >
+        <p
+          data-tauri-drag-region={OS_PLATFORM !== 'win32'}
+          className='text-sm font-medium tracking-tight'
+        >
           {t('workflowEditor.palette.title')}
         </p>
-        <p className='text-muted-foreground mt-0.5 text-xs'>
+        <p
+          data-tauri-drag-region={OS_PLATFORM !== 'win32'}
+          className='text-muted-foreground mt-0.5 text-xs'
+        >
           {t('workflowEditor.palette.description')}
         </p>
       </SidebarHeader>

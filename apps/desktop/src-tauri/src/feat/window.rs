@@ -25,6 +25,7 @@ pub async fn quit() {
     Config::apply_all_and_save_file().await;
 
     run_manager::shutdown_supervisor().await;
+    crate::module::model_usage::flush().await;
     telemetry::shutdown();
 
     if let Err(error) = McpServerRegistry::shutdown_all().await {

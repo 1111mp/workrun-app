@@ -278,7 +278,7 @@ First run an App from the App page and confirm its form, stdout/stderr, and outp
 
 Run history retains App stdout/stderr, tool inputs and outputs, and node events. Locate the failing node first, then decide whether to change code, schema, permissions, instructions, or model configuration.
 
-For the complete runtime-form API, see [Apps, tools, and MCP](/concepts/apps-tools-and-mcp/#runtime-json-schema-forms-let-code-wait-for-a-person). To reuse an existing tool service, see [Connect an MCP Server](/guides/connect-an-mcp-server/).
+For another runtime-form example, see [Apps, tools, and MCP](/concepts/apps-tools-and-mcp/#runtime-json-schema-forms-code-can-wait-for-judgment). To reuse an existing tool service, see [Connect an MCP Server](/guides/connect-an-mcp-server/).
 
 ## Share an App in personal mode
 

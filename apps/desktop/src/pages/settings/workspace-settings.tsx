@@ -50,6 +50,8 @@ function WorkspaceSettings() {
         queryClient.removeQueries({ queryKey: ['team-user'] });
       }
 
+      // Clear before changing config only; a second clear afterward would remove
+      // the session query TeamSessionGate mounts for the new workspace.
       if (workspaceModeChanged) {
         await queryClient.cancelQueries();
         queryClient.clear();
@@ -61,10 +63,6 @@ function WorkspaceSettings() {
           ? { team: { server_url: normalizeServerUrl(serverUrl)! } }
           : {}),
       });
-
-      if (workspaceModeChanged) queryClient.clear();
-
-      toast.success(t('settings.workspace.saved'), { toasterId: 'global' });
     } catch {
       toast.error(t('settings.workspace.signOutFailed'), {
         toasterId: 'global',

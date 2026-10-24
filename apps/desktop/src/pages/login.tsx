@@ -1,9 +1,17 @@
 import { signInSocial } from '@daveyplate/better-auth-tauri';
 import { SiGithub, SiGoogle } from '@icons-pack/react-simple-icons';
-import { Button, Input, Label, Spinner } from '@workspace/ui/components';
+import {
+  Alert,
+  AlertTitle,
+  Button,
+  Input,
+  Label,
+  Spinner,
+} from '@workspace/ui/components';
+import { CircleAlertIcon } from 'lucide-react';
 import { type SubmitEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 
 import { AuthPageLayout } from '@/components/auth-page-layout';
 import { createTeamAuthClient } from '@/lib/auth-client';
@@ -21,6 +29,7 @@ function LoginPage() {
   const updateConfig = useWorkrunStore((s) => s.updateConfig);
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   const { t } = useTranslation();
   const isAuthenticating = saving || Boolean(startingProvider);
@@ -44,7 +53,7 @@ function LoginPage() {
       if (result.error || !(await getTeamUser(serverUrl))) {
         throw new Error('Login failed');
       }
-      void navigate('/workflows', { replace: true });
+      void navigate('/start', { replace: true });
     } catch {
       setError(t('onboarding.login.failed'));
     } finally {
@@ -90,7 +99,13 @@ function LoginPage() {
         description={t('onboarding.login.description', { serverUrl })}
         title={t('onboarding.login.title')}
       >
-        <div className='space-y-3'>
+        {location.state?.sessionUnavailable ? (
+          <Alert variant='destructive' className='mb-5'>
+            <CircleAlertIcon />
+            <AlertTitle>{t('onboarding.team.unreachable')}</AlertTitle>
+          </Alert>
+        ) : null}
+        <div className='flex flex-col gap-3'>
           <Button
             className='w-full'
             disabled={isAuthenticating}
@@ -117,11 +132,12 @@ function LoginPage() {
             {t('onboarding.login.moreProvidersSoon')}
           </p>
         </div>
-        <div className='relative my-6'>
-          <div className='border-border absolute inset-0 top-1/2 border-t' />
-          <span className='bg-background text-muted-foreground relative mx-auto block w-fit px-3 text-xs'>
+        <div className='my-6 flex items-center gap-3'>
+          <span className='bg-border h-px flex-1' aria-hidden='true' />
+          <span className='text-muted-foreground shrink-0 text-xs'>
             {t('onboarding.login.orContinueWithEmail')}
           </span>
+          <span className='bg-border h-px flex-1' aria-hidden='true' />
         </div>
         <form className='space-y-4' onSubmit={(event) => void login(event)}>
           <div className='space-y-2'>

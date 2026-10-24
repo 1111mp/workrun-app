@@ -1,10 +1,11 @@
 import { Toaster, TooltipProvider } from '@workspace/ui/components';
 import { RouterProvider } from 'react-router';
 
-import { ConfirmProvider, UpdateDialog } from '@/components';
+import { ConfirmProvider } from '@/components/confirm-dialog';
 import { PythonUiRequestDialog } from '@/components/python-ui-request-dialog';
 import { RunWorkspace } from '@/components/run-workspace';
 import { TeamAuthTauriHandler } from '@/components/team-auth-tauri-handler';
+import { UpdateDialog } from '@/components/update-dialog';
 import { useTheme } from '@/hooks';
 import { OnboardingPage } from '@/pages/onboarding';
 import { router } from '@/routes';

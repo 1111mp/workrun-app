@@ -49,3 +49,10 @@ export async function getAppInitialData(): Promise<
   ]);
   return [config, theme ?? 'light'];
 }
+
+let startupData: ReturnType<typeof getAppInitialData> | undefined;
+
+/** Share the initial read between Store hydration and the rendering entry point. */
+export function getStartupData() {
+  return (startupData ??= getAppInitialData());
+}

@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useEffect, useRef } from 'react';
 
 import type { WorkflowRunEventEnvelope } from '@/services/workflow';
+import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 
 /**
  * Keeps durable run queries current independently of whichever page launched a
@@ -14,51 +15,86 @@ function RunEventTracker() {
 
   useEffect(() => {
     let disposed = false;
-    let unlistenRunEvents: (() => void) | undefined;
-    let unlistenStatusChanges: (() => void) | undefined;
-    const stateSubscriptions: (() => void)[] = [];
-    let unlistenPendingActions: (() => void) | undefined;
+    const changedRuns = new Set<string>();
+    let detailRefresh: ReturnType<typeof setTimeout> | undefined;
+    const refreshDetails = () => {
+      detailRefresh = undefined;
+      const ids = new Set(changedRuns);
+      changedRuns.clear();
+      // Only open run details need token-level updates; lists refresh on status.
+      const details = queryClient.getQueryCache().findAll({
+        predicate: ({ queryKey }) =>
+          queryKey[0] === 'run-history' &&
+          (ids.has(queryKey[1] as string) ||
+            (queryKey[1] === 'assistant-inline' &&
+              ids.has(queryKey[3] as string))),
+      });
+      for (const query of details) {
+        const filters = { queryKey: query.queryKey, exact: true };
+        // An initial IPC read may still be pending when completion is pushed.
+        // Cancel its cache result so a stale first response cannot hide that event.
+        void queryClient.cancelQueries(filters).then(() => {
+          if (!disposed) void queryClient.invalidateQueries(filters);
+        });
+      }
+    };
 
-    void listen<WorkflowRunEventEnvelope>('run-event', ({ payload }) => {
-      const event = payload.event as { type?: string };
-      // An interaction event can precede its checkpoint write. Recheck cards
-      // when the graph confirms the durable pause, even for an announced run.
-      if (event?.type === 'interrupted') {
-        void queryClient.invalidateQueries({ queryKey: ['run-history'] });
-      }
+    const stops: (() => void)[] = [];
+    const keepListener = (stop: () => void) => {
+      if (disposed) stop();
+      else stops.push(stop);
+    };
 
-      if (announcedRuns.current.has(payload.runId)) return;
-      // A run needs one early refresh to enter Run Center. Its output chunks
-      // are rendered by the page-local subscriber and must not repeatedly
-      // invalidate shell-level history queries while the workflow is running.
-      announcedRuns.current.add(payload.runId);
-      void queryClient.invalidateQueries({ queryKey: ['run-history'] });
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlistenRunEvents = stop;
-    });
-    void listen<{ runId: string }>('run-status-changed', ({ payload }) => {
-      announcedRuns.current.delete(payload.runId);
-      void queryClient.invalidateQueries({ queryKey: ['remoteTaskWarnings'] });
-      void queryClient.invalidateQueries({ queryKey: ['run-history'] });
-    }).then((stop) => {
-      if (disposed) stop();
-      else {
-        unlistenStatusChanges = stop;
-        // Native events are not replayed. Reconcile changes that happened
-        // between the initial query and completion of listener registration.
+    const runEvents = listen<WorkflowRunEventEnvelope>(
+      'run-event',
+      ({ payload }) => {
+        if (disposed) return;
+        useRunWorkspaceStore.getState().noteEvent(payload.runId);
+        changedRuns.add(payload.runId);
+        // Batch bursts from pushed tokens. No timer runs without an event.
+        detailRefresh ??= setTimeout(refreshDetails, 100);
+        const event = payload.event as { type?: string };
+        // An interaction event can precede its checkpoint write. Recheck cards
+        // when the graph confirms the durable pause, even for an announced run.
+        if (event?.type === 'interrupted') {
+          void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+        }
+
+        if (announcedRuns.current.has(payload.runId)) return;
+        // A run needs one early refresh to enter Run Center. Its output chunks
+        // update open details separately and must not repeatedly invalidate
+        // shell-level history queries while the workflow is running.
+        announcedRuns.current.add(payload.runId);
         void queryClient.invalidateQueries({ queryKey: ['run-history'] });
-      }
-    });
-    void listen('pending-action-created', () => {
-      void queryClient.invalidateQueries({ queryKey: ['run-history'] });
-    }).then((stop) => {
-      if (disposed) stop();
-      else {
-        unlistenPendingActions = stop;
+      },
+    ).then(keepListener);
+    const statusChanges = listen<{ runId: string }>(
+      'run-status-changed',
+      ({ payload }) => {
+        if (disposed) return;
+        changedRuns.add(payload.runId);
+        detailRefresh ??= setTimeout(refreshDetails, 100);
+        announcedRuns.current.delete(payload.runId);
+        void queryClient.invalidateQueries({
+          queryKey: ['remoteTaskWarnings'],
+        });
         void queryClient.invalidateQueries({ queryKey: ['run-history'] });
-      }
-    });
+      },
+    ).then(keepListener);
+    const pendingActions = listen('pending-action-created', () => {
+      void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+    }).then(keepListener);
+    // Reconcile once after all three listeners are ready, covering the startup
+    // registration gap without issuing three identical history reads.
+    void Promise.allSettled([runEvents, statusChanges, pendingActions]).then(
+      (results) => {
+        if (disposed) return;
+        for (const result of results)
+          if (result.status === 'rejected')
+            console.error('Run event registration failed', result.reason);
+        void queryClient.invalidateQueries({ queryKey: ['run-history'] });
+      },
+    );
 
     // Subscribe before refreshing once, so changes during webview startup are
     // covered even when the initial query completed before listener setup.
@@ -73,7 +109,7 @@ function RunEventTracker() {
       void listen(event, refresh).then((stop) => {
         if (disposed) stop();
         else {
-          stateSubscriptions.push(stop);
+          stops.push(stop);
           refresh();
         }
       });
@@ -81,10 +117,8 @@ function RunEventTracker() {
 
     return () => {
       disposed = true;
-      stateSubscriptions.forEach((stop) => stop());
-      unlistenRunEvents?.();
-      unlistenStatusChanges?.();
-      unlistenPendingActions?.();
+      if (detailRefresh) clearTimeout(detailRefresh);
+      stops.forEach((stop) => stop());
     };
   }, [queryClient]);
 

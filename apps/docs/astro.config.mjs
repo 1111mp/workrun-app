@@ -97,6 +97,11 @@ export default defineConfig({
           translations: { 'zh-CN': '构建自动化' },
           items: [
             {
+              label: 'Build through conversation',
+              translations: { 'zh-CN': '通过对话编排工作流' },
+              link: '/guides/conversational-workflows/',
+            },
+            {
               label: 'Build your first workflow',
               translations: { 'zh-CN': '构建第一个工作流' },
               link: '/guides/build-a-workflow/',

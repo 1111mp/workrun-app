@@ -4,7 +4,6 @@ import {
   Avatar,
   AvatarFallback,
   AvatarImage,
-  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -12,45 +11,32 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  SidebarMenuButton,
 } from '@workspace/ui/components';
-import { cn } from '@workspace/ui/lib/utils';
 import {
-  AppWindowIcon,
   BookOpenIcon,
-  HistoryIcon,
+  ChevronsUpDown,
   LogOutIcon,
   RefreshCwIcon,
   ServerCogIcon,
   SettingsIcon,
   User,
-  WorkflowIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { NavLink, Outlet, useNavigate } from 'react-router';
+import { Outlet, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
 import { DeeplinkHandler } from '@/components/deeplink-handler';
-import { RunCenter } from '@/components/run-center';
-import { RunEventTracker } from '@/components/run-event-tracker';
 import { TeamSessionGate } from '@/components/team-session-gate';
+import { WorkspaceFrame } from '@/components/workspace-frame';
 import { createTeamAuthClient } from '@/lib/auth-client';
 import {
   selectWorkspaceUserInfo,
   useUpdaterStore,
   useWorkrunStore,
 } from '@/stores';
-
-const navigation = [
-  { to: '/workflows', labelKey: 'navigation.workflow', icon: WorkflowIcon },
-  {
-    to: '/apps',
-    labelKey: 'navigation.apps',
-    icon: AppWindowIcon,
-  },
-  { to: '/runs', labelKey: 'navigation.runHistory', icon: HistoryIcon },
-];
 
 function HomePage() {
   return (
@@ -71,7 +57,6 @@ function HomeLayout() {
   const queryClient = useQueryClient();
 
   const navigate = useNavigate();
-
   const { t } = useTranslation();
 
   const displayName = userInfo?.name;
@@ -121,70 +106,44 @@ function HomeLayout() {
   };
 
   return (
-    <div className='flex h-dvh min-h-0 flex-col overflow-hidden'>
-      <header
-        data-tauri-drag-region={OS_PLATFORM !== 'win32'}
-        className={cn(
-          'flex h-12 shrink-0 items-center gap-1 border-b px-2',
-          OS_PLATFORM === 'darwin' && 'pl-20',
-        )}
-      >
-        {OS_PLATFORM === 'darwin' && (
-          <span data-tauri-drag-region className='mr-3 text-sm font-semibold'>
-            Workrun
-          </span>
-        )}
-        <nav
-          aria-label={t('navigation.label')}
-          className='flex items-center gap-1'
-        >
-          {navigation.map(({ to, labelKey, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              viewTransition
-              className={({ isActive }) =>
-                [
-                  'flex h-7 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-muted text-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                ].join(' ')
-              }
-            >
-              <Icon className='size-3.5' />
-              {t(labelKey)}
-            </NavLink>
-          ))}
-        </nav>
-        <div data-tauri-drag-region className='flex-1' />
+    <WorkspaceFrame
+      accountMenu={
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button
-                variant='ghost'
-                size='sm'
-                className='relative'
-                aria-label={t('navigation.accountMenu')}
+              <SidebarMenuButton
+                size='lg'
+                aria-label={displayName || t('navigation.accountMenu')}
+                className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
               >
-                <Avatar size='sm'>
-                  {avatarUrl ? (
-                    <AvatarImage alt={displayName ?? ''} src={avatarUrl} />
-                  ) : null}
-                  <AvatarFallback>
+                <Avatar className='size-8 rounded-lg'>
+                  <AvatarImage src={avatarUrl ?? ''} alt={displayName ?? ''} />
+                  <AvatarFallback className='rounded-lg'>
                     <User />
                   </AvatarFallback>
                 </Avatar>
-                {availableUpdate ? (
-                  <span
-                    className='ring-background absolute top-1 right-1 size-1.5 rounded-full bg-red-500 ring-2'
-                    aria-label={t('updater.available')}
-                  />
-                ) : null}
-              </Button>
+
+                <div className='grid min-w-0 flex-1 text-left text-sm leading-tight'>
+                  <span className='truncate font-medium'>
+                    {displayName || t('navigation.accountMenu')}
+                  </span>
+                  {availableUpdate ? (
+                    <span
+                      className='ring-background absolute top-2 left-2 size-1.5 rounded-full bg-red-500 ring-2'
+                      aria-label={t('updater.available')}
+                    />
+                  ) : null}
+                </div>
+                <ChevronsUpDown className='ml-auto size-4' />
+              </SidebarMenuButton>
             }
           />
-          <DropdownMenuContent align='end' className='w-48'>
+          <DropdownMenuContent
+            className='w-(--anchor-width) min-w-56 rounded-lg'
+            side='right'
+            align='end'
+            sideOffset={4}
+          >
             <DropdownMenuGroup>
               {displayName ? (
                 <DropdownMenuLabel className='text-muted-foreground truncate px-2 py-1.5 text-sm font-medium'>
@@ -231,7 +190,7 @@ function HomeLayout() {
                     ? t('updater.available')
                     : t('navigation.checkForUpdates')}
                 {availableUpdate ? (
-                  <span className='ml-auto rounded-sm bg-red-500! px-1 py-0.5 text-[10px] leading-none font-semibold text-white!'>
+                  <span className='text-foreground ml-auto rounded-sm bg-red-500! px-1 py-0.5 text-[10px] leading-none font-semibold'>
                     NEW
                   </span>
                 ) : null}
@@ -251,13 +210,10 @@ function HomeLayout() {
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-      </header>
-      <main className='min-h-0 flex-1 [view-transition-name:page-content]'>
-        <Outlet />
-      </main>
-      <RunEventTracker />
-      <RunCenter />
-    </div>
+      }
+    >
+      <Outlet />
+    </WorkspaceFrame>
   );
 }
 

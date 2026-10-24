@@ -156,7 +156,7 @@ if __name__ == "__main__":
 
 ### 2. Build the canvas before configuring nodes
 
-Create a **task** workflow. The canvas starts with Start and End. Add two App nodes and one Agent node, then connect the whole path:
+Create a **task** workflow. The canvas starts with Start only. Add End, two Process nodes, and one Agent node, then connect the whole path:
 
 ```text
 Start → Normalize support ticket (App) → Order resolution (Agent)

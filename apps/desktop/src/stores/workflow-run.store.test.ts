@@ -1,5 +1,5 @@
 import type { Node } from '@xyflow/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowRunEventEnvelope } from '@/services/workflow';
 
@@ -663,3 +663,51 @@ it('refreshes a restored run without reopening a panel the user closed', () => {
   store.restoreWorkflowRun(projection);
   expect(useWorkflowRunStore.getState().runPanelOpen).toBe(true);
 });
+
+it.each(['done', 'error', 'cancelled'] as const)(
+  'freezes live elapsed time for %s without affecting history replay',
+  (kind) => {
+    const store = useWorkflowRunStore.getState();
+    const terminal: WorkflowRunEventEnvelope['event'] =
+      kind === 'done'
+        ? {
+            type: 'done',
+            state: { global: {}, nodes: {}, workflow: {} },
+            total_steps: 1,
+          }
+        : kind === 'error'
+          ? { type: 'error', message: 'failed', node: null }
+          : {
+              type: 'custom',
+              node: '',
+              event_type: 'workflow.run_cancelled',
+              data: {},
+            };
+    try {
+      vi.setSystemTime(new Date('2026-10-23T10:00:00Z'));
+      store.startWorkflowRun('run-1', {}, 'task');
+      vi.setSystemTime(new Date('2026-10-23T10:00:27.800Z'));
+      store.applyRunEvents(events(terminal), { mode: 'task', nodes: [node] });
+      const projection = useWorkflowRunStore.getState().projection;
+      expect(projection.durationMs).toBe(27800);
+      const end = projection.endedAt;
+      vi.setSystemTime(new Date('2026-10-23T10:01:00Z'));
+      store.applyRunEvents(events(terminal), { mode: 'task', nodes: [node] });
+      expect(useWorkflowRunStore.getState().projection.endedAt).toBe(end);
+      expect(useWorkflowRunStore.getState().projection.durationMs).toBe(27800);
+      expect(
+        replayWorkflowRunProjection('run-1', events(terminal), {
+          mode: 'task',
+          nodes: [node],
+        }).durationMs,
+      ).toBeUndefined();
+      store.resumeWorkflowRun();
+      expect(
+        useWorkflowRunStore.getState().projection.durationMs,
+      ).toBeUndefined();
+    } finally {
+      store.resetRunView();
+      vi.useRealTimers();
+    }
+  },
+);

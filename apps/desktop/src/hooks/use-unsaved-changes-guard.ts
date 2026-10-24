@@ -3,7 +3,7 @@ import { createElement, useEffect, useEffectEvent, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useBlocker } from 'react-router';
 
-import { useConfirm } from '@/components/confirm-dialog';
+import { useConfirm } from '@/lib/confirm-context';
 
 export type UnsavedChangesGuardOptions = {
   hasUnsavedChanges: boolean;

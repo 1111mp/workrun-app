@@ -93,6 +93,12 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
     let installation_scope = format!("release-{release_or_draft}");
     let dependencies = team_app_dependencies(&request.dsl, &installation_scope);
     let chat_message = request.input.get("input").and_then(Value::as_str).map(str::to_owned);
+    let context = crate::module::model_usage::current();
+    let usage_origin = if context.session_kind.as_deref() == Some("assistant") {
+        Some(context)
+    } else {
+        None
+    };
     let runtime = json!({
         "kind": "workflow",
         "compensationJournalVersion": 1,
@@ -101,6 +107,7 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
         "dsl": request.dsl,
         "threadId": request.thread_id,
         "chatSessionId": request.chat_session_id,
+        "usageOrigin": usage_origin,
         "initialState": request.initial_state,
         "evaluationProfile": request.evaluation_profile,
         "evaluationResultId": request.evaluation_result_id,
@@ -527,6 +534,7 @@ fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     object.remove("toolConfirmation");
     object.remove("pendingCheckpointUpdate");
     object.remove("restoredQueue");
+    object.remove("usageOrigin");
     object.remove("recoveryDismissed");
     if object.contains_key("threadId") {
         object.insert("threadId".to_string(), json!(uuid::Uuid::new_v4()));

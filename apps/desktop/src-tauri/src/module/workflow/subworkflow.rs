@@ -10,6 +10,7 @@ pub(super) fn add_subworkflow_node(
         .filter(|id| !id.trim().is_empty())
         .ok_or_else(|| anyhow!("Select a saved workflow in the subworkflow node settings"))?;
     Ok(graph.add_node(SubworkflowNode {
+        usage_context: crate::module::model_usage::current(),
         id: node.id.clone(),
         workflow_id,
         #[cfg(test)]
@@ -36,6 +37,7 @@ pub(super) struct SubworkflowNodeConfig {
 }
 
 struct SubworkflowNode {
+    usage_context: crate::module::model_usage::CallContext,
     id: String,
     workflow_id: String,
     #[cfg(test)]
@@ -176,12 +178,19 @@ impl Node for SubworkflowNode {
             .collect::<HashMap<_, _>>();
         let mut child_path = self.workflow_path.clone();
         child_path.push(dsl.id.clone());
-        let child = compile_with_path(
-            dsl.clone(),
-            &self.config,
-            self.on_event.clone(),
-            child_path,
-            self.execution_profile.clone(),
+        // Child graphs compile inside SDK node tasks, which do not inherit
+        // Tokio task locals. Restore the origin captured with the parent node.
+        let mut usage_context = self.usage_context.clone();
+        usage_context.workflow_path = child_path.clone();
+        let child = crate::module::model_usage::scope(
+            usage_context,
+            compile_with_path(
+                dsl.clone(),
+                &self.config,
+                self.on_event.clone(),
+                child_path,
+                self.execution_profile.clone(),
+            ),
         )
         .await
         .map_err(|error| graph_node_error(&self.id, error))?;
@@ -441,6 +450,7 @@ mod tests {
                 "edges":[{"source":"start","target":"review"},{"source":"review","target":"end","sourceHandle":"approved"},{"source":"review","target":"end","sourceHandle":"rejected"}]
             })).unwrap();
             let node = SubworkflowNode {
+                usage_context: Default::default(),
                 id:"child-node".into(), workflow_id:"child".into(), config:Default::default(),
                 test_storage:Some((pool.clone(), vec![42;32])), test_dsl:Some(dsl),
                 on_event:None, state:Arc::new(Mutex::new(WorkflowStateBridge::from_initial_state(json!({"summary":"done"})).unwrap())),

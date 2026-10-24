@@ -188,6 +188,7 @@ it('reconciles runs and pending actions changed before native listeners were rea
     // Completion and a new question occurred before either listener was ready;
     // no pushed event will replay them. Subscription must reconcile the snapshot.
     await act(async () => {
+      subscriptions.get('run-event')!.resolve(() => {});
       subscriptions.get('run-status-changed')!.resolve(() => {});
       subscriptions.get('pending-action-created')!.resolve(() => {});
     });
@@ -262,6 +263,118 @@ it('removes a completed App after a status event while retaining its older inter
     for (const subscription of subscriptions.values())
       subscription.resolve(() => {});
     unsubscribe();
+    client.clear();
+    host.remove();
+  }
+});
+
+it('updates open App and inline workflow details from events and stays idle without events', async () => {
+  subscriptions.clear();
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  let record = { status: 'running', output: 'before' };
+  const keys = [
+    ['run-history', 'run-1'],
+    ['run-history', 'assistant-inline', 'personal', 'run-1'],
+  ];
+  const reads = keys.map(() => vi.fn(async () => ({ ...record })));
+  const observers = keys.map(
+    (queryKey, index) =>
+      new QueryObserver(client, {
+        queryKey,
+        queryFn: reads[index],
+      }),
+  );
+  const unsubscribes = observers.map((observer) =>
+    observer.subscribe(() => {}),
+  );
+  const host = document.createElement('div');
+  const rendered = renderComponent(
+    <QueryClientProvider client={client}>
+      <RunEventTracker />
+    </QueryClientProvider>,
+    { container: host },
+  );
+  try {
+    await act(async () => {
+      for (const subscription of subscriptions.values())
+        subscription.resolve(() => {});
+    });
+    await vi.waitFor(() => {
+      for (const observer of observers)
+        expect(observer.getCurrentResult().data?.output).toBe('before');
+    });
+    record = { status: 'running', output: 'pushed text' };
+    await act(async () => {
+      for (let i = 0; i < 5; i++)
+        subscriptions.get('run-event')!.callback({
+          payload: { runId: 'run-1', event: { type: 'message' } },
+        });
+    });
+    await vi.waitFor(() => {
+      for (const observer of observers)
+        expect(observer.getCurrentResult().data?.output).toBe('pushed text');
+    });
+    // Let the one-shot event batch finish, then cross both old polling intervals.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    const counts = reads.map((read) => read.mock.calls.length);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
+    reads.forEach((read, index) =>
+      expect(read).toHaveBeenCalledTimes(counts[index]!),
+    );
+    // The output event can precede the terminal write. Status alone must recover it.
+    for (const status of ['completed', 'failed', 'cancelled', 'interrupted']) {
+      record = { status, output: 'final' };
+      await act(async () => {
+        subscriptions
+          .get('run-status-changed')!
+          .callback({ payload: { runId: 'run-1' } });
+      });
+      await vi.waitFor(() => {
+        for (const observer of observers)
+          expect(observer.getCurrentResult().data?.status).toBe(status);
+      });
+    }
+  } finally {
+    rendered.unmount();
+    unsubscribes.forEach((unsubscribe) => unsubscribe());
+    client.clear();
+    host.remove();
+  }
+});
+
+it('reconciles history only once after all startup listeners are ready', async () => {
+  subscriptions.clear();
+  const client = new QueryClient();
+  const invalidate = vi.spyOn(client, 'invalidateQueries');
+  const host = document.createElement('div');
+  const rendered = renderComponent(
+    <QueryClientProvider client={client}>
+      <RunEventTracker />
+    </QueryClientProvider>,
+    { container: host },
+  );
+  try {
+    await act(async () => {
+      subscriptions.get('run-event')!.resolve(() => {});
+      subscriptions.get('run-status-changed')!.resolve(() => {});
+    });
+    expect(invalidate).not.toHaveBeenCalled();
+    await act(async () => {
+      subscriptions.get('pending-action-created')!.resolve(() => {});
+    });
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+      queryKey: ['run-history'],
+    });
+  } finally {
+    rendered.unmount();
+    for (const subscription of subscriptions.values())
+      subscription.resolve(() => {});
     client.clear();
     host.remove();
   }

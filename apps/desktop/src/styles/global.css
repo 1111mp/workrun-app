@@ -47,3 +47,314 @@
     }
   }
 }
+
+.workrun-shell {
+  --primary: oklch(0.53 0.21 265);
+  --primary-foreground: oklch(0.99 0 0);
+  --ring: oklch(0.64 0.16 265);
+  --sidebar: oklch(0.99 0.003 265);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.92 0.025 265);
+  --sidebar-accent-foreground: oklch(0.38 0.13 265);
+  --workrun-canvas-dot: oklch(0.66 0.025 265 / 40%);
+  --workrun-glow-blue: oklch(0.8 0.09 265 / 23%);
+  --workrun-glow-violet: oklch(0.84 0.08 305 / 15%);
+  --workrun-glow-cyan: oklch(0.83 0.075 210 / 20%);
+  --workrun-surface: oklch(0.99 0.003 265);
+  --workrun-panel: oklch(1 0 0 / 85%);
+  --workrun-panel-hover: oklch(1 0 0);
+  --workrun-shadow: 0 8px 30px oklch(0.35 0.05 265 / 5%);
+}
+
+.dark .workrun-shell {
+  --primary: oklch(0.74 0.14 265);
+  --primary-foreground: oklch(0.18 0.035 265);
+  --ring: oklch(0.7 0.14 265);
+  --sidebar: oklch(0.16 0.012 265);
+  --sidebar-accent: oklch(0.28 0.035 265);
+  --sidebar-accent-foreground: oklch(0.88 0.07 265);
+  --workrun-canvas-dot: oklch(0.6 0.035 265 / 30%);
+  --workrun-glow-blue: oklch(0.43 0.105 265 / 30%);
+  --workrun-glow-violet: oklch(0.38 0.09 305 / 18%);
+  --workrun-glow-cyan: oklch(0.4 0.065 225 / 24%);
+  --workrun-surface: oklch(0.16 0.012 265);
+  --workrun-panel: oklch(0.225 0.014 265 / 85%);
+  --workrun-panel-hover: oklch(0.25 0.019 265);
+  --workrun-shadow: 0 8px 30px oklch(0.08 0.02 265 / 16%);
+}
+
+/* Keep loading placeholders visible against the pale workflow canvas,
+   including the dim phase of their pulse. Scope the token to this loading view. */
+.light .workrun-workflow-skeleton {
+  --muted: color-mix(in oklch, var(--foreground) 14%, var(--background));
+}
+
+/* Share the theme palette while keeping the sidebar inset layout intact. */
+.workrun-shell {
+  background-color: var(--workrun-surface);
+  background-image:
+    radial-gradient(
+      ellipse 85% 65% at 40% 0%,
+      var(--workrun-glow-blue),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 65% 55% at 100% 35%,
+      var(--workrun-glow-violet),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 75% 65% at 0% 100%,
+      var(--workrun-glow-cyan),
+      transparent
+    );
+}
+
+/* Let the inset navigation share the outer chrome instead of painting a
+   square panel inside the rounded window. Floating editor palettes stay solid. */
+.workrun-shell
+  [data-slot='sidebar'][data-variant='inset']
+  [data-slot='sidebar-inner'] {
+  background: transparent;
+}
+
+/* SidebarInset owns its spacing, radius and shadow. Only theme its surface. */
+.workrun-shell .workrun-surface {
+  background-color: var(--workrun-surface);
+  background-image: inherit;
+}
+
+.workrun-topbar {
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+.workrun-library-toolbar {
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Symmetric surroundings prevent the shell's cyan/violet split from making
+   identical cards appear different in brightness across columns. */
+.workrun-library {
+  background-color: var(--workrun-surface);
+  background-image:
+    radial-gradient(
+      ellipse 100% 65% at 50% 0%,
+      var(--workrun-glow-blue),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 100% 65% at 50% 100%,
+      var(--workrun-glow-cyan),
+      transparent
+    );
+}
+
+/* Card width follows the actual workspace instead of the window breakpoints. */
+.workrun-library-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+}
+
+.workrun-library-card {
+  --card-spacing: 1.125rem;
+  --library-card-tint: oklch(0.65 0.16 290 / 12%);
+  /* An opaque base keeps the window gradient from changing card brightness by column. */
+  background-color: var(--workrun-panel-hover);
+  background-image: linear-gradient(
+    135deg,
+    var(--library-card-tint),
+    transparent 75%
+  );
+  box-shadow: var(--workrun-shadow);
+  transition:
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+/* Keep the per-card gradient visible during hover as well. */
+.workrun-library-card[data-library-kind='tool'] {
+  --library-card-tint: oklch(0.7 0.13 225 / 12%);
+}
+
+.workrun-library-card:hover {
+  background-color: var(--workrun-panel-hover);
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--primary) 35%, transparent),
+    var(--workrun-shadow);
+}
+
+/* Give status a separate row so long names never collide with badges. */
+.workrun-library-card-header[data-slot='card-header'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  gap: 12px;
+}
+
+.workrun-library-card-header > [data-slot='card-action'] {
+  grid-column: 1;
+  grid-row: auto;
+  justify-self: start;
+  align-items: flex-start;
+}
+
+.workrun-library-card-header > [data-slot='card-action'] > div {
+  flex-wrap: wrap;
+}
+
+.workrun-library-card [data-slot='card-footer'] {
+  background: color-mix(in oklch, var(--workrun-surface) 45%, transparent);
+}
+
+.workrun-workflow-metrics {
+  background: color-mix(in oklch, var(--workrun-surface) 70%, transparent);
+  border: 1px solid var(--border);
+}
+
+.workrun-start-mark {
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border: 1px solid color-mix(in oklch, var(--primary) 25%, transparent);
+  border-radius: 1.125rem;
+  color: var(--primary);
+  background: linear-gradient(
+    145deg,
+    var(--workrun-panel),
+    var(--workrun-glow-blue)
+  );
+  box-shadow: 0 10px 45px var(--workrun-glow-blue);
+}
+
+.workrun-start-mark svg {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+/* Frame the editable surface only; the helper text stays outside its border. */
+.workrun-start-composer [data-slot='input-group'] {
+  background: var(--workrun-panel);
+  /* Mix in sRGB to avoid hue shifts toward pink when blending with neutral gray. */
+  border-color: color-mix(in srgb, var(--primary) 20%, var(--border));
+  box-shadow: var(--workrun-shadow);
+}
+
+.workrun-shell .workrun-account {
+  background: color-mix(in oklch, var(--workrun-panel) 45%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+  border-radius: 0.75rem;
+}
+
+.workrun-shell .workrun-account:hover,
+.workrun-shell .workrun-account[data-open] {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+
+.workrun-shell .workrun-account:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.workrun-start-link {
+  background: var(--workrun-panel);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.workrun-start-link:hover {
+  background: var(--workrun-panel-hover);
+  border-color: color-mix(in oklch, var(--primary) 40%, var(--border));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workrun-library-card,
+  .workrun-start-link {
+    transition: none;
+  }
+}
+
+/* React Flow paints its own background; let the shared workspace show through. */
+.workrun-editor .react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: color-mix(
+    in oklch,
+    var(--foreground) 40%,
+    var(--workrun-surface)
+  );
+  --xy-edge-stroke-selected: var(--primary);
+  --xy-connectionline-stroke: var(--primary);
+  --xy-controls-button-background-color: var(--workrun-panel-hover);
+  --xy-controls-button-background-color-hover: var(--sidebar-accent);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--primary);
+  --xy-controls-button-border-color: var(--border);
+  --xy-minimap-background-color: var(--workrun-panel-hover);
+  --xy-minimap-mask-background-color: color-mix(
+    in oklch,
+    var(--workrun-surface) 75%,
+    transparent
+  );
+  --xy-minimap-node-background-color: color-mix(
+    in oklch,
+    var(--primary) 40%,
+    var(--workrun-panel-hover)
+  );
+  background: transparent;
+}
+
+.workrun-editor [data-slot='workflow-editor-toolbar'] {
+  margin: 0.5rem 0.5rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--workrun-panel);
+  box-shadow: var(--workrun-shadow);
+}
+
+.workrun-editor [data-slot='sidebar-inner'] {
+  background: var(--workrun-panel);
+  box-shadow: var(--workrun-shadow);
+  border-radius: 1rem;
+}
+
+.workrun-editor .react-flow__controls,
+.workrun-editor .react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: var(--workrun-shadow);
+}
+
+.workrun-editor .react-flow__node.selected > div {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
+}
+
+/* Drawers render in a portal, so they must carry their own workspace tokens. */
+.workrun-editor-panel {
+  --background: var(--workrun-surface);
+  --card: var(--workrun-panel-hover);
+  background-color: var(--workrun-surface);
+}
+
+.workrun-auth-content {
+  max-width: 28rem;
+}
+.workrun-auth-content[data-wide] {
+  max-width: 48rem;
+}
+.workrun-auth-panel {
+  background: var(--workrun-panel);
+  box-shadow: var(--workrun-shadow);
+}
+.workrun-auth [data-slot='input'] {
+  background-color: var(--workrun-panel-hover);
+}
+
+/* An empty draft disables Send, not the composer. InputGroup's generic
+   has-disabled styles otherwise dim the entire editable surface. */
+.workrun-shell [data-workrun-composer]:not(:has(textarea:disabled)) {
+  opacity: 1;
+  background-color: var(--workrun-panel-hover);
+}

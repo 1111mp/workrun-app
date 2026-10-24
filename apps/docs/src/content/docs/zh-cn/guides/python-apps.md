@@ -278,7 +278,7 @@ Process App 和 Tool App 都可以在同一项目配置独立的 `compensate.py`
 
 运行记录会保留 App 的 stdout/stderr、工具输入输出和节点事件。先定位失败节点，再决定改代码、Schema、权限、指令还是模型配置。
 
-完整的表单 API 说明见[App、工具与 MCP](/zh-cn/concepts/apps-tools-and-mcp/#运行时-json-schema-表单让代码等待人的判断)；已有工具服务可通过[连接 MCP Server](/zh-cn/guides/connect-an-mcp-server/)接入。
+更多运行时表单示例见[App、工具与 MCP](/zh-cn/concepts/apps-tools-and-mcp/#运行时-json-schema-表单让代码等待人的判断)；已有工具服务可通过[连接 MCP Server](/zh-cn/guides/connect-an-mcp-server/)接入。
 
 ## 在个人模式下分享 App
 

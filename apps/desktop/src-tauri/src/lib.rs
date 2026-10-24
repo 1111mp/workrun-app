@@ -106,6 +106,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            cmd::model_usage::model_usage_session,
             // deeplink
             cmd::deeplink::deeplink_snapshot,
             cmd::deeplink::deeplink_dismiss,
@@ -113,6 +114,13 @@ pub fn run() {
             // app
             cmd::app::restart_app,
             cmd::artifact::artifact_pick,
+            // assistant
+            cmd::assistant::assistant_turn_start,
+            cmd::assistant::assistant_turn_stop,
+            cmd::assistant::assistant_session_save,
+            cmd::assistant::assistant_session_list,
+            cmd::assistant::assistant_session_delete,
+            cmd::assistant::assistant_session_get,
             cmd::artifact::artifact_export,
             cmd::artifact::artifact_preview,
             cmd::artifact::artifact_open_pdf,
@@ -203,6 +211,7 @@ pub fn run() {
             cmd::run_history::run_history_finalize,
             cmd::run_history::run_history_mark_running,
             cmd::run_history::run_history_list,
+            cmd::run_history::run_history_delete,
             cmd::run_history::run_history_list_timeline,
             cmd::run_history::run_history_inspect,
             cmd::run_history::run_history_list_active,

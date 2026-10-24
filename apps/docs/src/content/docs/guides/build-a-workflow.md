@@ -3,6 +3,8 @@ title: Build your first workflow
 description: Build and verify a Process → Agent → branch flow, from customer feedback to human approval.
 ---
 
+You can also describe your goal on the start page, review a plan, and generate an editable workflow. See [Build workflows through conversation](/guides/conversational-workflows/). Plan approval and execution confirmation are separate steps.
+
 This tutorial extends the Agent from the [quickstart](/getting-started/quickstart/) with deterministic data preparation, structured output, conditional routing, and human review. You will build an explainable customer-feedback routing flow: low-priority feedback ends automatically; high-priority feedback waits for a person to decide.
 
 ```text
@@ -55,11 +57,11 @@ if __name__ == "__main__":
     main()
 ```
 
-Save it, then run it once from the App page and confirm the result contains `normalized_feedback`. For project setup, dependencies, and debugging, see [Use Python Apps](/guides/python-apps/).
+Save the App and install its dependencies. This example reads `feedback` from workflow stdin; test it through the workflow in step 5 so it receives a non-empty input. An independent App run does not supply workflow input. For project setup, dependencies, and debugging, see [Use Python Apps](/guides/python-apps/).
 
 ## 3. Build and configure the canvas
 
-Create a **Task** workflow; the canvas already contains Start and End. Add **Process**, **Agent**, **If/Else**, and **Human Review** in order, and connect them as shown above. Select Process and choose “Normalize feedback” under **App connection**.
+Continue with the Task workflow from the quickstart, keeping its `feedback` run input, Start, Agent, and End. Add **Process**, **If/Else**, and **Human Review**, then reconnect the nodes as shown above. If you create a new workflow instead, it starts with only Start: add the other nodes and define a required multiline-text `feedback` field under **More settings → Run inputs**. Select Process and choose “Normalize feedback” under **App connection**.
 
 Under **Publish to global state → Published output keys** on Process, enter:
 

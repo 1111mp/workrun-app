@@ -33,5 +33,8 @@
   "python-envs.defaultEnvManager": "ms-python.python:system",
   "[astro]": {
     "editor.defaultFormatter": "astro-build.astro-vscode"
+  },
+  "[sql]": {
+    "editor.defaultFormatter": "inferrinizzard.prettier-sql-vscode"
   }
 }

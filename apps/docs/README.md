@@ -1,49 +1,47 @@
-# Starlight Starter Kit: Basics
+# Workrun documentation
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+The official documentation uses Astro and Starlight. English pages live in
+`src/content/docs/`; Simplified Chinese pages mirror them under `zh-cn/`.
 
-```
-pnpm create astro@latest -- --template starlight
-```
+## Develop and build
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+Run these commands from the repository root:
 
-## 🚀 Project Structure
-
-Inside of your Astro + Starlight project, you'll see the following folders and files:
-
-```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   └── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
+```sh
+pnpm docs:dev
+pnpm docs:build
 ```
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+The static site is generated in `apps/docs/dist/`, including the Pagefind search
+index and sitemap. Building locally does not deploy the website.
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+## Conversational workflow documentation
 
-Static assets, like favicons, can be placed in the `public/` directory.
+- English: [Build workflows through conversation](src/content/docs/guides/conversational-workflows.md)
+- 简体中文：[通过对话编排工作流](src/content/docs/zh-cn/guides/conversational-workflows.md)
+- Implementation and test boundaries: [Assistant README](../desktop/src-tauri/src/module/assistant/README.md)
 
-## 🧞 Commands
+Keep both languages, homepage entry points, quickstart, model setup, and the
+`astro.config.mjs` sidebar aligned. Document plan approval, execution confirmation,
+and direct-tool confirmation as separate interactions. Workflow Chat mode is a
+separate feature from the start-page assistant.
 
-All commands are run from the root of the project, from a terminal:
+## Documentation review checklist
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `pnpm install`             | Installs dependencies                            |
-| `pnpm dev`             | Starts local dev server at `localhost:4321`      |
-| `pnpm build`           | Build your production site to `./dist/`          |
-| `pnpm preview`         | Preview your build locally, before deploying     |
-| `pnpm astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `pnpm astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+- Keep each English content page paired with `zh-cn/`, with equivalent examples,
+  limitations, screenshots, and sidebar entries. Internal Chinese links should
+  stay under `/zh-cn/`.
+- Verify local links, media paths, and heading fragments against the generated
+  HTML in `dist/`; a successful build alone does not catch broken anchors.
+- Check Python snippets against `packages/python-sdk/src/workrun_sdk/` and JSON
+  examples against the fields defined earlier in their tutorial.
+- Check behavior against the desktop implementation: a new workflow starts with
+  Start only; visible global state is shared, while private node output needs a
+  reader grant from its producer.
+- Evaluation Tool App and MCP calls require exact tool-and-argument fixtures.
+  Unmatched calls fail without executing the real tool. Process, CodeAct Agent,
+  and Remote Agent nodes remain unsupported in evaluations.
+- Distinguish pending-action continuation, interrupted-run recovery, and **Run
+  again**. Failed or stopped tasks require a new run.
+- Run `pnpm docs:build` and `git diff --check` after changes. Review build warnings
+  separately from successful page generation and search indexing.
