@@ -17,7 +17,7 @@ The release page lists the installers and notes that are actually available for 
 
 ## First launch
 
-On first launch, follow the onboarding flow to choose a personal or team workspace. Then:
+On first launch, choose a personal or team workspace. Personal mode requires a profile but no login; team mode requires a Workrun Server address and sign-in. See [Team workspaces](/team/publishing/). Then configure model access:
 
 1. Open **Settings → Models**.
 2. Enter an API key for one provider you want to use.
@@ -31,13 +31,15 @@ Do not create a model profile or enter a model ID manually. Workrun provides a b
 To develop or modify Workrun, prepare:
 
 - Node.js 24 or newer;
-- pnpm 12;
+- pnpm 12 (use the exact version in the root `package.json` → `packageManager`);
 - the Rust toolchain and Tauri build dependencies for your platform;
 - network access: `uv` downloads Python and dependencies while developing Python Apps.
 
-After cloning the repository, run this from its root:
+Clone the repository and start desktop development:
 
 ```bash
+git clone https://github.com/1111mp/workrun-app.git
+cd workrun-app
 pnpm install
 pnpm app:dev
 ```

@@ -37,13 +37,13 @@ Before a run, Workrun validates graph structure and routing. For example, a work
 
 ## State is explicit, not hidden context
 
-Every run has its own state. Input fields become its initial state. Data produced by a node stays in that node's namespace unless it is explicitly published as global state, and a node must be granted read access to the state it consumes.
+Every run has its own state. Input fields become its initial state. Data produced by a node stays in that node's private namespace unless explicitly published as global state. All nodes can read the visible global values; reading another node's private output requires permission from its producer.
 
 These boundaries make a workflow reviewable: you can see what an Agent, App, or branch reads and produces instead of allowing every step to silently alter all context. Workflow inputs and outputs can declare field schemas; Agents can also use structured output or an output key to create stable data for later conditions and nodes.
 
 ```text
 Run input → state
-              ├─ Agent: reads granted fields and produces a result
+              ├─ Agent: reads global and authorized private values, then produces a result
               ├─ Process: transforms state and returns structured updates
               └─ Condition: reads published fields and selects a path
 ```

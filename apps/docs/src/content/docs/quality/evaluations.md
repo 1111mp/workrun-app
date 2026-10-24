@@ -23,17 +23,17 @@ This does not make those nodes less important. Use ordinary runs, run history, a
 
 ## Direction for future integration evaluation
 
-The goal is not to remove the limit, but to let more nodes participate behind **controlled boundaries**. The following are planned directions, not commitments to a particular delivery date:
+The goal is not to remove the limit, but to let more nodes participate behind **controlled boundaries**. Tool Apps and MCP already support exact-match fixtures; adapters for the remaining restricted nodes are future directions, not commitments to a particular delivery date:
 
-| Node or boundary | Evaluation adapter needed | What it could verify |
-| --- | --- | --- |
-| Process App | Fixed input/output fixture or isolated project runtime | App data contract, state publication, and error handling. |
-| Tool App, MCP, and remote services | Node- and argument-matched fixture or test endpoint | Arguments, call count, response shape, and failure paths. |
-| Remote Agent / CodeAct Agent | Replay, test service, or constrained sandbox | Agent protocol, code-execution result, and cost boundary. |
-| Human Review / Ask User Question | Preset approval, rejection, edits, or answers | State and routing after each human decision. |
-| Subworkflow | Recursive check that internal nodes have compatible adapters | Parent/child inputs, outputs, and version combinations. |
+| Node or boundary                     | Evaluation adapter needed                                    | What it could verify                                                                   |
+| ------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Process App                          | Fixed input/output fixture or isolated project runtime       | App data contract, state publication, and error handling.                              |
+| Tool App and MCP (already supported) | Exact tool-and-argument fixture, optionally scoped to a node | Arguments, call count, response shape, and failure paths; unmatched calls are blocked. |
+| Remote Agent / CodeAct Agent         | Replay, test service, or constrained sandbox                 | Agent protocol, code-execution result, and cost boundary.                              |
+| Human Review / Ask User Question     | Preset approval, rejection, edits, or answers                | State and routing after each human decision.                                           |
+| Subworkflow                          | Recursive check that internal nodes have compatible adapters | Parent/child inputs, outputs, and version combinations.                                |
 
-Until those adapters exist, split the quality strategy in two: use Agent evaluations to protect model behavior, and ordinary runs plus run history to verify the complete Workflow. This avoids bringing external side effects into a regression suite without ignoring real end-to-end risk.
+Until adapters cover the remaining restricted nodes, split the quality strategy in two: use Agent evaluations to protect model behavior, and ordinary runs plus run history to verify the complete Workflow. This avoids bringing external side effects into a regression suite without ignoring real end-to-end risk.
 
 ## Define the behavior you must protect first
 
@@ -41,12 +41,12 @@ Do not start with “what score do we need?” Choose a behavior a change must n
 
 For customer-feedback triage, a first suite named “Customer feedback classification regression” should cover:
 
-| Case type | Input characteristic | Behavior to protect |
-| --- | --- | --- |
-| Common | Ordinary, complete request | Correct category, priority, and recommendation. |
-| Edge | Missing or ambiguous information | Does not invent facts; marks missing information in structured output. |
-| High risk | Refund, privacy, or account-security issue | Returns the correct priority and recommendation; does not expose sensitive fields. |
-| Regression | A real issue that happened before | The original problem stays fixed, including the constraint that revealed it. |
+| Case type  | Input characteristic                       | Behavior to protect                                                                |
+| ---------- | ------------------------------------------ | ---------------------------------------------------------------------------------- |
+| Common     | Ordinary, complete request                 | Correct category, priority, and recommendation.                                    |
+| Edge       | Missing or ambiguous information           | Does not invent facts; marks missing information in structured output.             |
+| High risk  | Refund, privacy, or account-security issue | Returns the correct priority and recommendation; does not expose sensitive fields. |
+| Regression | A real issue that happened before          | The original problem stays fixed, including the constraint that revealed it.       |
 
 One Case should describe one decidable behavior. The more realistic the input, the more assertions should focus on stable fields, tool behavior, and safety boundaries—not a word-for-word free-text response.
 
@@ -63,7 +63,9 @@ One Case should describe one decidable behavior. The more realistic the input, t
 Example input JSON:
 
 ```json
-{ "feedback": "The CSV exported after the upgrade cannot be opened, and Finance must reconcile accounts this afternoon." }
+{
+  "feedback": "The CSV exported after the upgrade cannot be opened, and Finance must reconcile accounts this afternoon."
+}
 ```
 
 Do not assert only a response sentence for this input. At minimum, require `priority` to be `high` and require the classification Agent’s structured output to contain an actionable `recommendation`.
@@ -90,11 +92,13 @@ Top-level input JSON keys must match the workflow’s run-input keys. Do not add
 
 In **Validation rules**, add a rule and select **Final output field**. Add:
 
-| Field path | Operator | Expected value | Why |
-| --- | --- | --- | --- |
-| `$.priority` | Equals | `high` | Verifies a stable classification result. |
-| `$.recommendation` | Contains | `refund`, or your team’s agreed handling advice | Verifies that the user receives actionable advice. |
-| `$.status` | Exists | None | Verifies the workflow delivered an explicit status. |
+| Field path         | Operator | Expected value | Why                                                |
+| ------------------ | -------- | -------------- | -------------------------------------------------- |
+| `$.priority`       | Equals   | `high`         | Verifies a stable classification result.           |
+| `$.category`       | Exists   | None           | Verifies that the classification field is present. |
+| `$.recommendation` | Exists   | None           | Verifies that the recommendation field is present. |
+
+These fields match the classification Agent’s structured output schema. An existence assertion only checks that a field is present; review the first result for actionable advice, then add a contains assertion if your requirements call for specific content. Only assert fields and handling advice defined by your workflow contract.
 
 Use JSONPath such as `$.priority`. Prefer structured fields for model output; choose **Final output text** with exact-match, contains, or similarity only when wording itself is a product promise.
 
@@ -106,11 +110,11 @@ When the product requires specific wording, use **Agent message assertions** for
 
 ### 4. Add tool and safety rules when needed
 
-If high-priority handling must look up an order:
+The CSV classification example needs no order tool. To test order lookup separately, first define a `ticket_id` workflow input, include `"ticket_id": "TK-2025-001"` in the Case, select `lookup_order`, and instruct the Agent to query that ticket. Then:
 
 1. Under **Node tool assertions**, select the classification Agent and `lookup_order`; set call count to `1`.
 2. If arguments matter, enable strict arguments and enter expected JSON such as `{"ticket_id":"TK-2025-001"}`.
-3. When live tool data changes, add a **Tool fixture** for the same tool, optionally matching arguments, and return fixed test-result JSON. The evaluation will not need the live order system.
+3. Add a **Tool fixture** for the same tool with arguments exactly matching the call (`{"ticket_id":"TK-2025-001"}` here), and return fixed JSON that matches the tool’s output schema. Evaluation blocks unmatched calls instead of falling back to the live order system.
 
 Under **Safety assertions**, choose final output, tool arguments, or tool results. Add forbidden field paths such as `$.customer.phone`, or forbidden text such as a real API key. Protect data that truly must not cross a boundary; do not prohibit normal business fields by mistake.
 
@@ -129,21 +133,21 @@ After this Case first passes, add an ordinary-feedback Case that asserts `priori
 
 ## Choose the right assertion
 
-| What you need to verify | Assertion | Useful example |
-| --- | --- | --- |
-| Value delivered by the workflow | Final-output field / JSON assertion | `priority` equals `high`; `recommendation` contains refund guidance. |
-| Result produced by a control node | Node-output assertion | A condition node’s `$.route` equals the expected exit. Use final-output field assertions for an Agent’s structured result. |
-| An Agent answer | Agent-message assertion | Exact match, contains text, or compares similarity to expected text. |
-| Correct capability use | Node-tool assertion or tool trajectory | `lookup_order` is called exactly once with the expected arguments. |
-| A prohibited leak or action | Safety assertion | Final output, tool arguments, or results omit a field path or text. |
+| What you need to verify           | Assertion                              | Useful example                                                                                                             |
+| --------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Value delivered by the workflow   | Final-output field / JSON assertion    | `priority` equals `high`; `category` and `recommendation` are present.                                                     |
+| Result produced by a control node | Node-output assertion                  | A condition node’s `$.route` equals the expected exit. Use final-output field assertions for an Agent’s structured result. |
+| An Agent answer                   | Agent-message assertion                | Exact match, contains text, or compares similarity to expected text.                                                       |
+| Correct capability use            | Node-tool assertion or tool trajectory | `lookup_order` is called exactly once with the expected arguments.                                                         |
+| A prohibited leak or action       | Safety assertion                       | Final output, tool arguments, or results omit a field path or text.                                                        |
 
 Prefer final-output and node-output assertions because they are stable and explainable. Add tool assertions only when Agent tool use itself matters; do not freeze irrelevant implementation detail just to claim broader coverage.
 
 ## Make tool evaluations repeatable
 
-Real tools may read changing data or send, write, and delete. For stable verification, add a tool fixture to a Case: match a tool and optional arguments, then return fixed JSON. The same input can then observe the same tool boundary every time.
+Real tools may read changing data or send, write, and delete. Tool App and MCP calls in evaluations must match a fixture by tool name and exact argument JSON. A fixture can also target an Agent node; node-specific fixtures take precedence over fixtures without a node. A match returns fixed JSON; a miss reports an error without executing the real tool. Even a no-argument call needs an explicit `{}` fixture.
 
-Fixtures can assert call order, arguments, and returned values. Do not run production side-effect tools in an ordinary regression suite; use fixtures, test credentials, or a dedicated non-production target instead.
+Use tool assertions to check call order, counts, and arguments, and keep fixture results compatible with the tool’s output schema. Verify a real service through ordinary runs against a dedicated non-production target; test credentials do not bypass the evaluation fixture requirement.
 
 ## Open a Case result, not only the pass rate
 

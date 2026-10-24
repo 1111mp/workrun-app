@@ -2,50 +2,63 @@
 
 [English](README.md) | **简体中文**
 
-> 本地优先的 AI 自动化工作台：独立运行 Python App，或用可视化工作流组合 Agent、App、MCP 工具与人工审核，再按需定时运行、评估和发布。
+> 本地优先的 AI 自动化工作台。从一次对话开始，将任务沉淀为可编辑、可重复运行的工作流。
 
-Workrun 面向想把一次性的 AI 对话沉淀为可复用自动化能力的开发者和团队。它将用户输入、模型推理、确定性代码、外部工具和人工审批组织为可执行工作流；你可以在画布上搭建流程，也可以维护完整的本地 Python 项目，并在每次运行后检查结果、轨迹和质量。
+用自然语言分析任务、生成工作流，再在画布上调整 Agent、Python App、MCP 工具与人工审核。你也可以直接运行独立的 Python App，按需接入工作流，并通过运行记录、评估和版本发布持续改进。
 
-你可以先用一个独立的 Python App 完成数据处理、文件操作或系统集成，再将它接入工作流成为 Process 节点或 Agent 工具。个人模式无需登录；团队模式通过自托管 Workrun Server 共享资产与发布版本，实际运行仍在桌面端完成。
+**个人模式无需登录，工作流和 Python App 在桌面端执行。** 团队可连接自托管 Workrun Server，共享资产和发布版本。
 
-**[官方文档](https://workrun-docs.pages.dev/) · [中文文档](https://workrun-docs.pages.dev/zh-cn/) · [下载安装](https://github.com/1111mp/workrun-app/releases/latest) · [5 分钟快速开始](https://workrun-docs.pages.dev/zh-cn/getting-started/quickstart/)**
-
-项目仍在快速迭代。本文概述当前能力；具体操作和使用边界请参阅官方文档。
+**[下载安装](https://github.com/1111mp/workrun-app/releases/latest) · [中文文档](https://workrun-docs.pages.dev/zh-cn/) · [5 分钟快速开始](https://workrun-docs.pages.dev/zh-cn/getting-started/quickstart/) · [对话搭建工作流](https://workrun-docs.pages.dev/zh-cn/guides/conversational-workflows/)**
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/start-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/start-light.png" />
-    <img src="apps/docs/public/media/homepage/start-light.png" width="24%" alt="Workrun 首页" />
+    <img src="apps/docs/public/media/homepage/start-light.png" width="49%" alt="Workrun 首页" />
   </picture>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflows-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflows-light.png" />
-    <img src="apps/docs/public/media/homepage/workflows-light.png" width="24%" alt="Workrun 工作流列表" />
+    <img src="apps/docs/public/media/homepage/workflows-light.png" width="49%" alt="Workrun 工作流列表" />
   </picture>
+</p>
+
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/apps-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/apps-light.png" />
-    <img src="apps/docs/public/media/homepage/apps-light.png" width="24%" alt="Workrun 应用列表" />
+    <img src="apps/docs/public/media/homepage/apps-light.png" width="49%" alt="Workrun 应用列表" />
   </picture>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="apps/docs/public/media/homepage/workflow-editor-dark.png" />
     <source media="(prefers-color-scheme: light)" srcset="apps/docs/public/media/homepage/workflow-editor-light.png" />
-    <img src="apps/docs/public/media/homepage/workflow-editor-light.png" width="24%" alt="Workrun 工作流详情与画布" />
+    <img src="apps/docs/public/media/homepage/workflow-editor-light.png" width="49%" alt="Workrun 工作流详情与画布" />
   </picture>
 </p>
 
-**用对话搭建工作流。** 告诉 Workrun 你想完成什么，它会帮你梳理步骤、选择所需能力，并将方案生成可重复运行的工作流。你可以通过对话不断调整，也可以打开画布编辑细节；已有合适的工作流时，还能直接让它帮你找到并运行。了解[如何通过对话编排工作流](https://workrun-docs.pages.dev/zh-cn/guides/conversational-workflows/)。
+## 为什么用 Workrun
 
-## 你可以用 Workrun 做什么
+| 需求                   | Workrun 的做法                                                         |
+| ---------------------- | ---------------------------------------------------------------------- |
+| 把临时任务变成自动化   | 在首页对话中分析任务、审阅方案并生成工作流，也可直接在画布上搭建       |
+| 将模型与代码组合       | 用 Agent 处理推理，用 Python App 完成确定性计算，通过 MCP 连接外部工具 |
+| 在关键步骤保留人工判断 | 审核、提问和工具审批；人工节点完成后从检查点继续                       |
+| 检查结果并持续改进     | 查看节点输出、工具调用、脚本日志和 Trace，用评估集对比版本结果         |
+| 重复执行与团队复用     | 为 App 和工作流配置定时任务，发布固定依赖版本的团队资产                |
 
-- 从 Apps 页面独立运行 Python 项目，用表单、收集输入和确认交互完成本地任务。
-- 将 Agent、Python App、MCP 工具、条件分支和人工操作组合成可视化工作流。
-- 为 App 和工作流配置带时区的 Cron 定时任务，查看后续触发时间和运行记录。
-- 管理可编辑的 Python 项目：既可作为工作流中的 Process 节点，也可作为 Agent 按需调用的 Tool App。
-- 在运行面板查看节点状态、模型输出、工具调用、脚本日志和 OpenTelemetry 轨迹；失败后可从检查点重试。
-- 用评估集批量回归工作流，比较版本结果，并以质量门约束发布。
-- 在团队服务中发布带版本的工作流和 App；已发布工作流会固定引用对应版本的 Team App，保证复现性。
+## 从对话到工作流
+
+```text
+“帮我分析这份销售数据”
+          ↓
+“以后还要重复做，帮我做成工作流，先不要运行”
+          ↓
+审阅方案 → 确认方案并保存 → 在画布中检查或调整
+          ↓
+“现在帮我运行” → 确认本次工作流与输入 → 查看结果
+```
+
+方案确认用于保存工作流，执行确认用于启动本次运行。完整示例见[销售数据分析与工作流编排教程](https://workrun-docs.pages.dev/zh-cn/guides/conversational-workflows/)。
 
 ## 快速开始
 
@@ -58,16 +71,20 @@ Workrun 面向想把一次性的 AI 对话沉淀为可复用自动化能力的�
 - **从 App 开始**：在 Apps 页面创建本地 Python 项目，编辑代码并直接运行；参见[Python App 指南](https://workrun-docs.pages.dev/zh-cn/guides/python-apps/)。
 - **从工作流开始**：在 **设置 → 模型** 配置 Provider API Key（Ollama 配置端点），新建并连接 `Start → Agent → End`，为 Agent 选择对应模型，在 **更多设置 → 运行输入** 定义输入后运行；参见[快速开始](https://workrun-docs.pages.dev/zh-cn/getting-started/quickstart/)。
 
-### 从源码运行：前置条件
+## 本地开发
+
+### 前置条件
 
 - Node.js 24+
-- pnpm 12（仓库锁定 `pnpm@12.6.0`）
+- pnpm 12（仓库锁定 `pnpm@12.11.2`）
 - Rust 工具链与对应平台的 Tauri 构建依赖
 - Python App 开发需要网络，以便 `uv` 下载 Python 与依赖；发行包会携带 `uv` sidecar
 
 ### 启动桌面端开发环境
 
 ```bash
+git clone https://github.com/1111mp/workrun-app.git
+cd workrun-app
 pnpm install
 pnpm app:dev
 ```
@@ -99,92 +116,33 @@ pnpm server:dev
 
 ## 核心能力
 
-### 1. 工作流：从画布到可恢复执行
+- **可视化工作流**：支持任务与对话模式，组合 Agent、CodeAct Agent、Remote Agent、Process、条件分支、人工节点和子工作流；运行前验证图结构与输入输出 Schema。
+- **Agent 与模型**：支持 Gemini、OpenAI 与兼容接口、Anthropic、DeepSeek、Groq 和 Ollama；可配置结构化输出、工具调用限制与超时，并加载兼容 `SKILL.md` 的本地 Skills。
+- **Python App**：每个 App 都是完整的本地 `uv` 项目，可独立运行、作为 Process 节点执行，或作为 Tool App 供 Agent 调用。SDK 提供结果返回、表单、输入收集和确认交互。
+- **MCP 与远程 Agent**：连接本地 `stdio` 或远程 Streamable HTTP MCP Server，支持 Bearer Token、OAuth 和工具审批；通过 A2A 协议接入 Remote Agent。
+- **运行与恢复**：查看节点状态、模型消息、工具调用、脚本日志和 OpenTelemetry Trace；人工节点暂停后可恢复，应用中断的运行可在通过检查点与操作日志检查后恢复。
+- **评估与发布**：批量执行评估用例，对比版本结果，通过质量门约束发布；团队工作流固定 Team App 的不可变发布版本。
+- **定时与外部调用**：为 App 和工作流配置带时区的 Cron，或通过 `workrun://` 链接打开与请求运行；运行链接仍需用户确认。
+- **状态与凭据保护**：逐节点授权私有输出读取，支持敏感字段、加密检查点、PII 脱敏与工具参数护栏；Provider 和 MCP 凭据加密保存在本机。
 
-工作流支持任务与对话两种模式。画布提供 `Start`、`End`、`Agent`、`CodeAct Agent`、`Remote Agent`、`Process`、`If/Else`、`Switch`、`Human Review`、`Ask User Question`、`Subworkflow`、`Terminate` 和 `Group` 节点；`Group` 仅用于布局。
+### 使用边界
 
-- 运行前会验证图结构、分支和输入/输出 JSON Schema，并编译为 Rust 执行图。
-- `Subworkflow` 会传递上下文与暂停恢复信息，并阻止自引用、循环引用和过深嵌套；`Terminate` 可结束整次运行。
-- 人工审核和提问会将执行状态写入本地 SQLite 检查点。用户提交结果后从暂停点继续，而非重跑已完成节点。
-- 失败的后台运行可从检查点重试；当前要求检查点只剩一个待执行节点。运行记录保留执行计划、最终状态和关键事件。
+- 本地 Python App **不是沙箱**，请仅运行可信代码。CodeAct Agent 使用单独的受限 Python 运行环境。
+- 定时任务仅在桌面应用打开时执行，不补跑关闭期间错过的触发；同一目标忙碌时跳过触发。包含人工审核或提问节点的工作流不能保存为定时任务。
+- 评估暂不支持包含 Process、CodeAct Agent 或 Remote Agent 的工作流，包括通过子工作流引用；人工节点需要手动处理。
+- 失败或已停止的运行需通过**重新运行**创建新任务。只有应用退出或崩溃造成的中断运行，才能在通过检查点和操作日志检查后恢复原任务。
+- 团队服务管理身份、共享资产和发布版本，实际执行仍在成员桌面端。个人与团队工作区相互独立。
 
-```text
-Start → 数据准备（Process） → Agent → Human Review → If/Else → End
-                                  │             │
-                                  │             └─ 审批后从检查点恢复
-                                  └─ Tool App / MCP 工具调用
-```
+## 进阶指南
 
-### 2. Agent、工具与模型
-
-- Agent 可配置名称、职责、指令、内置模型、结构化输出、工具调用上限和超时；结果可写入指定状态字段，供后续节点和分支使用。
-- 支持 Gemini、OpenAI 与兼容接口、Anthropic、DeepSeek、Groq、Ollama。
-- 本地 Skills 兼容 Agent Skills 的 `SKILL.md` 格式，可渐进加载说明，并限制 Agent 可用工具。
-- `CodeAct Agent` 在受限 Python 运行环境内编写和执行代码，支持迭代次数、工具调用数、时长、内存、目录挂载、环境变量和系统时钟限制。
-- `Remote Agent` 通过 A2A（Agent-to-Agent）协议成为工作流中的一个执行节点。
-- 工具可以来自本地 Tool App 或 MCP Server；可要求每次人工确认，拒绝会反馈给 Agent 以便调整方案。
-
-### 3. Python App：保留代码工程化体验
-
-App 可以从 Apps 页面独立运行，不需要先创建工作流；也可以配置定时任务，或接入工作流。每个 App 都是可自由编辑的本地 `uv` Python 项目，拥有自己的 `pyproject.toml`、锁文件、虚拟环境和入口脚本。桌面端负责创建环境、同步依赖和显示 stdout/stderr，但不会把业务代码塞进节点配置。
-
-| 类型               | 在工作流中的角色                                     | 适用场景                           |
-| ------------------ | ---------------------------------------------------- | ---------------------------------- |
-| App / Process Node | 独立运行，或在工作流中读取获授权状态并返回结构化结果 | 数据处理、系统集成、确定性业务规则 |
-| Tool App           | 由 Agent 按 JSON Schema 参数调用                     | 查询、计算、文件或服务操作         |
-
-- Process App 通过 `workrun_sdk.process.result(...)` 返回结果。
-- Python SDK 还提供 `form()`、`collect()`、`confirm()` 等 API，可经受令牌保护的本地 IPC 向桌面端请求表单或确认。
-- 本地 App 不是沙箱：只运行你信任的代码，并按实际权限范围审查项目。
-
-### 4. MCP Server：接入已有工具生态
-
-可注册本地 `stdio` 或远程 Streamable HTTP MCP Server，测试连接、启停、重连并查看已发现工具。远程服务支持无认证、Bearer Token 和 OAuth；凭据仅以加密形式保存在本机。已启用 Server 中的工具可以被 Agent 选择，并同样受超时、调用额度、审批和运行追踪约束。
-
-### 5. 状态、安全与可观察性
-
-- 节点拥有隔离的状态命名空间；只有显式发布的字段才能共享，读取权限逐节点授予。
-- 输入和节点输出可声明为敏感；检查点原始状态加密保存，对模型、工具和界面默认提供脱敏视图。
-- 内置输入、输出和工具护栏：限制长度，脱敏常见 PII、中国大陆手机号和身份证号，并阻止凭据或认证秘密进入工具参数。
-- 运行面板流式展示节点状态、模型消息、工具输入输出、脚本日志和轨迹。可配置 OTLP/gRPC collector，将诊断 Trace 导出到外部可观测性系统。
-
-### 6. 评估、回归与发布质量
-
-工作流编辑器内置 Evaluation lab，用评估集验证工作流变更：
-
-- 创建、导入、排序、归档和恢复评估用例，批量执行用例并查看每项结果与失败原因。
-- 对比两个版本的用例判定与评分标准，识别新增失败、回归和修复；失败用例可单独重试。
-- 为工作流配置质量门，在发布前要求指定评估条件；必要时可记录带理由的人工豁免审计。
-- 评估会保存对应工作流快照，避免把草稿变更误认为已发布版本的结果。
-
-评测执行目前不支持包含 Process、CodeAct Agent 或 Remote Agent 的工作流，子工作流引用这些节点也会受限。人工节点需要手动处理；完整流程应结合正常运行与运行历史验证。参见[评测、回归与质量门](https://workrun-docs.pages.dev/zh-cn/quality/evaluations/)。
-
-### 7. 定时运行
-
-- App 和工作流支持持久化、时区感知的五字段 Cron，可预览接下来的触发时间，并编辑、暂停或恢复任务。
-- 定时任务仅在 Workrun 桌面应用保持打开时执行；关闭期间错过的触发不会补跑。同一目标已排队、运行中或等待输入时会跳过本次触发，避免重叠执行。
-- 本地工作流按最新保存的定义运行；团队工作流固定已发布版本。包含 Human Review 或 Ask User Question 节点的工作流无法保存为定时任务。
-
-详见[定时运行指南](https://workrun-docs.pages.dev/zh-cn/guides/scheduled-runs/)。
-
-### 8. 团队工作区与版本化资产
-
-个人与团队工作区相互独立，切换模式不会自动共享个人资产。桌面端可连接自托管的 NestJS 团队服务并登录。团队服务负责身份、共享资产与发布版本，工作流和 Python App 仍由成员的桌面端执行。团队成员可以浏览和运行已发布的工作流，也可发布带语义版本的 Workflow 与 App。工作流发布时会校验引用；Team App 以不可变 release 固定到工作流版本，运行时按该 release 安装隔离副本，从而让历史运行和回归结果可复现。
-
-### 9. 通过 Deeplink 打开与运行
-
-在已保存的 App 或 Workflow 中点击 **外部调用**，即可复制打开链接或运行链接。Workflow 运行链接支持 URL 编码的 JSON 输入对象。Workrun 等待启动和登录完成后，展示确认与输入表单，再通过现有运行管理器执行。
-
-```text
-workrun://v1/apps/{appId}
-workrun://v1/apps/{appId}/run
-workrun://v1/workflows/{workflowId}
-workrun://v1/workflows/{workflowId}/run?input=%7B%22message%22%3A%22hello%22%7D&requestId=example-1
-```
-
-链接中的 ID 在当前工作区解析。App 与 Workflow 依赖需要提前准备好，链接不会自动安装。第一版暂不支持 App 输入参数、免确认执行和结果回调。请勿在 URL 中放入密钥或大文件；链接长度限制为 32 KB。
-
-`requestId` 可选。相同 ID、目标与原始输入会定位到已有运行，重启 Workrun 后依然有效；相同 ID 携带不同参数会提示冲突。不携带时，每次新点击都可以创建运行。待确认请求可以跨 WebView 刷新保留，但退出桌面进程后会清除。系统协议唤起需要使用安装后的构建验证，尤其是 macOS。
+| 主题               | 文档                                                                                                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 画布、节点与状态   | [搭建工作流](https://workrun-docs.pages.dev/zh-cn/guides/build-a-workflow/) · [工作流与状态](https://workrun-docs.pages.dev/zh-cn/concepts/workflows-and-state/)  |
+| Python 项目与交互  | [Python App](https://workrun-docs.pages.dev/zh-cn/guides/python-apps/) · [Python SDK](packages/python-sdk/README.md)                                              |
+| 外部工具与人工参与 | [连接 MCP](https://workrun-docs.pages.dev/zh-cn/guides/connect-an-mcp-server/) · [人工审核与恢复](https://workrun-docs.pages.dev/zh-cn/guides/human-in-the-loop/) |
+| 运行质量           | [运行与追踪](https://workrun-docs.pages.dev/zh-cn/quality/runs-and-traces/) · [评估与质量门](https://workrun-docs.pages.dev/zh-cn/quality/evaluations/)           |
+| 自动触发           | [定时运行](https://workrun-docs.pages.dev/zh-cn/guides/scheduled-runs/) · [Deeplink](https://workrun-docs.pages.dev/zh-cn/guides/deeplinks/)                      |
+| 团队共享           | [发布与部署](https://workrun-docs.pages.dev/zh-cn/team/publishing/)                                                                                               |
 
 ## 架构概览
 

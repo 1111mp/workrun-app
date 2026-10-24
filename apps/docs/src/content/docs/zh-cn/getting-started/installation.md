@@ -17,7 +17,7 @@ Release 页面会列出当前版本实际提供的安装包和说明。请始终
 
 ## 首次启动
 
-首次启动时，按引导选择个人或团队工作区。随后：
+首次启动时，按引导选择个人或团队工作区。个人模式填写个人资料即可使用，无需登录；团队模式需要 Workrun Server 地址并登录，详见[团队工作区](/zh-cn/team/publishing/)。随后配置模型访问：
 
 1. 打开 **设置 → 模型**；
 2. 为一个要使用的 Provider 填写 API 密钥；
@@ -31,13 +31,15 @@ Release 页面会列出当前版本实际提供的安装包和说明。请始终
 如果你需要开发或修改 Workrun，请准备：
 
 - Node.js 24 或更高版本；
-- pnpm 12；
+- pnpm 12（精确版本以仓库根目录 `package.json` 的 `packageManager` 为准）；
 - Rust 工具链和当前平台所需的 Tauri 构建依赖；
 - 网络连接：开发 Python App 时，`uv` 需要下载 Python 和依赖。
 
-克隆仓库后，在仓库根目录执行：
+克隆仓库并启动桌面端：
 
 ```bash
+git clone https://github.com/1111mp/workrun-app.git
+cd workrun-app
 pnpm install
 pnpm app:dev
 ```

@@ -57,14 +57,14 @@ Think of state in every run as three layers:
 ```text
 Initial input
    ↓
-Global state ───────────────→ readable by authorized later nodes and routing
+Global state ───────────────→ visible values readable by all nodes and routing
    ↑         published
 Private node namespaces ←─── each node's outputs remain here by default
 ```
 
 1. **Initial input** comes from the run panel, a chat turn, or a schedule and starts the run.
 2. **A private node namespace** holds a node's ordinary outputs by default, preventing one step from accidentally overwriting another's data.
-3. **Global state** receives values only when a node lists output keys in its state settings as published output keys. Those values can then be consumed by authorized nodes, conditions, and workflow outputs.
+3. **Global state** receives values only when a node lists output keys in its state settings as published output keys. Those visible values can then be consumed by all nodes, conditions, and workflow outputs without an additional reader grant.
 
 This model implements least privilege: publish a value only when a later step needs it; leave values used only for local processing or debugging in the node namespace. It prevents arbitrary nodes from silently rewriting the entire context and makes a global field traceable to its producer.
 
@@ -72,8 +72,8 @@ This model implements least privilege: publish a value only when a later step ne
 
 Node state settings define access boundaries:
 
-- **Reader nodes** specify which later executable nodes may read a node's published state.
-- **Raw reader nodes** are a smaller subset of reader nodes that may receive the unredacted original namespace.
+- **Reader nodes (Allowed readers)** are configured on the producing node and specify which other executable nodes may read its private output namespace. They do not limit access to published global values.
+- **Raw reader nodes** are a subset of reader nodes allowed to receive original values from that namespace, including values it published globally. Agent prompts always receive redacted values; authorized raw values can be resolved for their tool calls.
 - **Sensitive fields** mark fields or dot-separated paths in node output, such as `customer.email` or `payment.token`.
 - **Published output keys** promote selected top-level outputs into global state.
 
@@ -103,7 +103,7 @@ Configure it in this order:
 1. Define `feedback` and `customer_id` in More settings, and mark only the values that truly need protection as sensitive.
 2. Have the Agent produce `category`, `priority`, and `recommendation` with structured output.
 3. Publish only the keys needed for routing and the final result in the Agent's state settings.
-4. Grant If/Else access to `priority`, rather than exposing all state.
+4. Have If/Else read the published global `priority`; no Allowed readers setting is needed. If another executable node needs private output instead, grant it access on the producing node.
 5. Show the necessary context in Human Review and use its decision to control the next route.
 
 The branch now depends on a stable `priority` field, not a variable phrase in an Agent response.
