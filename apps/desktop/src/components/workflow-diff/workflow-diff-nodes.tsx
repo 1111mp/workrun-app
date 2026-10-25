@@ -54,7 +54,7 @@ function decorateNode(Component: NodeTypes[string]) {
             <Badge
               variant='outline'
               className={cn(
-                'bg-[var(--workrun-panel-hover)] shadow-sm',
+                'bg-(--workrun-panel-hover) shadow-sm',
                 badgeClass[decoration.status],
               )}
             >

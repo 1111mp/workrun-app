@@ -88,7 +88,7 @@ import { inspectRunRecord } from '@/services/run-history';
 import { getWorkflow } from '@/services/workflow';
 import { useWorkflowRunStore } from '@/stores/workflow-run.store';
 
-import { Component } from './index';
+import { WorkflowRoute as Component } from './workflow-route';
 
 beforeEach(() => {
   vi.stubGlobal('OS_PLATFORM', 'darwin');
