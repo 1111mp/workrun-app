@@ -35,7 +35,9 @@ describe('Personal onboarding', () => {
     );
     await browser.refresh();
     await expect(browser.$('#display-name')).not.toExist();
-    await expect(browser.$('a[href="/workflows"]')).toBeDisplayed();
+    await expect(
+      browser.$('a[data-sidebar="menu-button"][href="/workflows"]'),
+    ).toBeDisplayed();
     const config = await browser.tauri.execute(
       ({ core }) =>
         core.invoke('get_workrun_config') as Promise<IWorkrunConfig>,
