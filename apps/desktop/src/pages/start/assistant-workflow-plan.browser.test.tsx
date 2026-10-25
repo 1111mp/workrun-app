@@ -105,15 +105,71 @@ it('keeps legacy creation receipts compact and readable on desktop and narrow sc
     await page.viewport(width, 900);
     const preview = screen.getByText(summary, { exact: true }).element();
     expect(preview.getBoundingClientRect().height).toBeLessThanOrEqual(84);
-    await screen.getByRole('button', { name: '查看创建详情' }).click();
+    await screen.getByRole('button', { name: '查看保存详情' }).click();
     const details = screen.getByTestId('plan-outcome-details').element();
     expect(details.textContent).toBe(summary);
     expect(details.querySelectorAll('p').length).toBeGreaterThan(10);
     expect(getComputedStyle(details).maxWidth).not.toBe('none');
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
-    await screen.getByRole('button', { name: '收起创建详情' }).click();
+    await screen.getByRole('button', { name: '收起保存详情' }).click();
     await expect
       .element(screen.getByTestId('plan-outcome-details'))
       .not.toBeInTheDocument();
   }
+});
+
+it('presents a node naming request as an update to the existing workflow', async () => {
+  const decide = vi.fn();
+  const plan: WorkflowPlan = {
+    id: 'rename-plan',
+    sessionId: 'session',
+    version: 1,
+    status: 'ready',
+    dependencyIssues: [],
+    interaction: {
+      id: 'review',
+      taskId: 'task',
+      threadId: 'thread',
+      checkpointId: 'checkpoint',
+      kind: 'plan_confirmation',
+      version: 1,
+      status: 'waiting',
+    },
+    document: {
+      goal: '给现有工作流的 CodeAct 和 Agent 节点添加合适的名称',
+      summary: '仅修改两个节点的名称',
+      target_id: 'existing-workflow',
+      inputs: [],
+      outputs: [],
+      steps: [],
+      constraints: [],
+      assumptions: [],
+      questions: [],
+      acceptance_criteria: [],
+    },
+  };
+  const screen = await render(
+    <MemoryRouter>
+      <AssistantWorkflowPlan
+        plan={plan}
+        busy={false}
+        onDecide={decide}
+        onDiscuss={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+  await expect
+    .element(screen.getByText('工作流修改方案 · 版本 1'))
+    .toBeVisible();
+  await expect
+    .element(screen.getByText('任务已暂停，等待你的反馈。本次修改尚未保存。'))
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole('link', { name: '此方案将修改现有工作流' }))
+    .toHaveAttribute('href', '/workflows/existing-workflow');
+  await expect
+    .element(screen.getByRole('button', { name: '确认方案并创建' }))
+    .not.toBeInTheDocument();
+  await screen.getByRole('button', { name: '确认修改并保存' }).click();
+  expect(decide).toHaveBeenCalledExactlyOnceWith('approve');
 });

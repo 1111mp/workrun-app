@@ -2,7 +2,7 @@ use crate::{config::with_encryption, logging, utils::logging::Type};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_yaml_ng::{Mapping, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// read data from yaml as struct T
 pub async fn read_yaml<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
@@ -94,4 +94,21 @@ pub async fn save_json<T: Serialize + Sync>(path: &PathBuf, data: &T, prefix: Op
     tokio::fs::write(path, json_str.as_bytes())
         .await
         .with_context(|| format!("failed to save file \"{path_str}\""))
+}
+
+/// Publish a catalog pointer only after its full replacement is durable.
+pub async fn save_json_atomic<T: Serialize + Sync>(path: &Path, data: &T) -> Result<()> {
+    let bytes = with_encryption(|| async { serde_json::to_vec(data) }).await?;
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        use std::io::Write;
+        let parent = path.parent().context("Catalog path has no parent")?;
+        std::fs::create_dir_all(parent)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(&bytes)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path).map_err(|error| error.error)?;
+        Ok(())
+    })
+    .await?
 }

@@ -13,6 +13,8 @@ pub struct IWorkflow {
     pub created_at: String,
     pub updated_at: String,
     pub document: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_revision_id: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -40,7 +42,7 @@ impl IWorkflows {
 
     /// Save the workflow catalog to file
     pub async fn save_file(&self) -> Result<()> {
-        help::save_json(&dirs::workflow_catalog_path()?, self, None).await
+        help::save_json_atomic(&dirs::workflow_catalog_path()?, self).await
     }
 
     /// get workflows

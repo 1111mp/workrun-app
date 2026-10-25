@@ -303,3 +303,54 @@ it('folds historical dense receipts and separates sentences without changing con
   );
   expect(screen.queryByTestId('plan-outcome-details')).not.toBeInTheDocument();
 });
+
+it('labels an existing-workflow edit as an update and keeps its target link', async () => {
+  const user = userEvent.setup();
+  const { decide } = view({
+    ...plan,
+    document: { ...plan.document, target_id: 'existing-workflow' },
+    interaction: {
+      id: 'review',
+      taskId: 'plan',
+      threadId: 'thread',
+      checkpointId: 'checkpoint',
+      kind: 'plan_confirmation',
+      version: 2,
+      status: 'waiting',
+    },
+  });
+  expect(screen.getByText(/assistant.plan.revisionTitle/)).toBeVisible();
+  expect(
+    screen.getByText('assistant.plan.revisionWaitingFeedback'),
+  ).toBeVisible();
+  expect(screen.getByText('assistant.plan.revisionOnly')).toBeVisible();
+  expect(
+    screen.getByRole('link', { name: 'assistant.plan.revisionTarget' }),
+  ).toHaveAttribute('href', '/workflows/existing-workflow');
+  expect(
+    screen.queryByText('assistant.plan.waitingFeedback'),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText('assistant.plan.creationOnly'),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', {
+      name: 'assistant.plan.approve',
+    }),
+  ).not.toBeInTheDocument();
+  await user.click(
+    screen.getByRole('button', { name: 'assistant.plan.approveRevision' }),
+  );
+  expect(decide).toHaveBeenCalledWith('approve');
+});
+it('shows update progress for an existing workflow', () => {
+  view({
+    ...plan,
+    status: 'building',
+    document: { ...plan.document, target_id: 'existing-workflow' },
+  });
+  expect(screen.getByText('assistant.plan.revisionBuilding')).toBeVisible();
+  expect(
+    screen.queryByText('assistant.plan.status.building'),
+  ).not.toBeInTheDocument();
+});

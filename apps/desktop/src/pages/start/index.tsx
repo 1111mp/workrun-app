@@ -457,7 +457,9 @@ function AssistantChat({ scope }: { scope: string }) {
                                           decision,
                                           t(
                                             decision === 'approve'
-                                              ? 'assistant.plan.approveMessage'
+                                              ? entry.plan.document.target_id
+                                                ? 'assistant.plan.approveRevisionMessage'
+                                                : 'assistant.plan.approveMessage'
                                               : 'assistant.plan.cancelMessage',
                                             { version: entry.plan.version },
                                           ),

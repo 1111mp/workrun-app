@@ -1,28 +1,27 @@
-// Generated from JSON Schema. Runtime validation remains authoritative.
+// Generated from editor workflow.d.ts and runtime constraints; do not edit.
 export interface IfElseNodeData {
-  "name"?: string;
-  "label"?: string;
-  "description"?: string;
   "state"?: {
     "access"?: {
       /** {"uniqueItems":true} */
       "readers"?: Array<string>;
-      /** {"uniqueItems":true} */
+      /** {"description":"Readers that may receive this node's original, unredacted namespace.","uniqueItems":true} */
       "rawReaders"?: Array<string>;
     };
-    /** {"uniqueItems":true} */
+    /** {"description":"Keys emitted by this node that should be published to shared global State.","uniqueItems":true} */
     "globalKeys"?: Array<string>;
-    /** {"uniqueItems":true} */
+    /** {"description":"Dot-separated output paths always redacted in this node's visible State.","uniqueItems":true} */
     "sensitiveFields"?: Array<string>;
   };
+  "label"?: string;
+  /** {"description":"Conditions evaluated independently for the two outgoing branches."} */
   "conditions": {
     "true": {
-      "label"?: string;
+      "label": string;
       /** {"minLength":1} */
       "condition": string;
     };
     "false": {
-      "label"?: string;
+      "label": string;
       /** {"minLength":1} */
       "condition": string;
     };

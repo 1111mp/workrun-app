@@ -26,6 +26,8 @@ jobs:
               - 'apps/desktop/wdio.conf.ts'
               - 'apps/desktop/test/e2e/**'
               - 'apps/desktop/scripts/**'
+              - 'apps/desktop/src-tauri/src/module/workflow/node-contract*.json'
+              - 'apps/desktop/src-tauri/src/module/assistant/workflow_agent/reference/**'
               - 'apps/desktop/src/**'
               - 'apps/docs/src/**'
               - 'packages/ui/src/**'
@@ -70,6 +72,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
         if: steps.check_frontend.outputs.frontend == 'true'
+
+      - name: Check workflow contracts and generated references
+        if: steps.check_frontend.outputs.frontend == 'true'
+        run: pnpm --filter workrun workflow:check
 
       # Path filters gate execution; Turbo filters limit which packages are checked.
       - name: Run formatting check

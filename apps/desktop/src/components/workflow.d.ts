@@ -89,8 +89,33 @@ type WorkflowSettings = {
   sessionStateFields?: string[];
 };
 
+/** Compensation supported by the native durable operation journal. */
+type WorkflowCompensation =
+  | { mode: 'unspecified' | 'read_only' }
+  | { mode: 'irreversible'; reason: string }
+  | {
+      mode: 'compensatable';
+      action:
+        | { kind: 'app_entry' }
+        | { kind: 'tool'; toolId: string }
+        | { kind: 'process'; processNodeId: string }
+        | {
+            kind: 'remote_agent';
+            url: string;
+            authentication?: import('@/services/remote-agent').RemoteAuthentication;
+          };
+      bindings: Record<
+        string,
+        | { from: 'literal'; value: unknown }
+        | { from: 'input' | 'output'; pointer: string }
+      >;
+      idempotency: { keyArgument: string; contract: string };
+    };
+
 // ---------- Agent Node ----------
 type WorkflowAgentNodeData = WorkflowStatefulNodeData & {
+  /** Per-tool compensation declarations; CodeAct effects have no compensation journal. */
+  toolCompensations?: Record<string, WorkflowCompensation>;
   name: string;
   modelProfileId: string;
   /** Visible State paths containing ArtifactRefs, injected as model attachments. */
@@ -149,6 +174,7 @@ type WorkflowCodeActAgentNode = WorkflowBaseNode & {
 
 // ---------- Remote Agent Node ----------
 type WorkflowRemoteAgentNodeData = WorkflowStatefulNodeData & {
+  compensation?: WorkflowCompensation;
   authentication?: import('@/services/remote-agent').RemoteAuthentication;
   attachmentPaths?: string[];
   timeoutSeconds?: number;
@@ -163,6 +189,7 @@ type WorkflowRemoteAgentNode = WorkflowBaseNode & {
 
 // ---------- Process Node ----------
 type WorkflowProcessNodeData = WorkflowStatefulNodeData & {
+  compensation?: WorkflowCompensation;
   name: string;
   processNodeId: string;
   description: string;
@@ -176,6 +203,8 @@ type WorkflowProcessNode = WorkflowBaseNode & {
 
 // ---------- Subworkflow Node ----------
 type WorkflowSubworkflowNodeData = WorkflowStatefulNodeData & {
+  /** Child operations own their compensation declarations. */
+  compensation?: { mode: 'delegated' };
   workflowId: string;
   workflowName?: string;
 };

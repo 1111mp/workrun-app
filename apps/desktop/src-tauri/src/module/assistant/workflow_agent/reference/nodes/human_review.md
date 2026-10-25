@@ -11,32 +11,30 @@ Dynamically interrupts execution for a real human decision. contentKey/contextKe
 TypeScript is a readable projection of the node data schema, not executable configuration. Numeric limits, uniqueness, additional-property rules and native semantics are validated by save_workflow_draft before writing. Use validate_workflow_draft separately only for a validation-only review. Request topic=node-schema with this node type only when the exact JSON Schema is needed.
 
 ```typescript
-// Generated from JSON Schema. Runtime validation remains authoritative.
+// Generated from editor workflow.d.ts and runtime constraints; do not edit.
 export interface HumanReviewNodeData {
-  "name"?: string;
-  "label"?: string;
-  "description"?: string;
   "state"?: {
     "access"?: {
       /** {"uniqueItems":true} */
       "readers"?: Array<string>;
-      /** {"uniqueItems":true} */
+      /** {"description":"Readers that may receive this node's original, unredacted namespace.","uniqueItems":true} */
       "rawReaders"?: Array<string>;
     };
-    /** {"uniqueItems":true} */
+    /** {"description":"Keys emitted by this node that should be published to shared global State.","uniqueItems":true} */
     "globalKeys"?: Array<string>;
-    /** {"uniqueItems":true} */
+    /** {"description":"Dot-separated output paths always redacted in this node's visible State.","uniqueItems":true} */
     "sensitiveFields"?: Array<string>;
   };
-  "title"?: string;
-  /** {"minLength":1} */
+  "title": string;
+  "description": string;
+  /** {"description":"State key whose value is presented to the reviewer.","minLength":1} */
   "contentKey"?: string;
-  /** {"uniqueItems":true} */
-  "contextKeys"?: Array<string>;
+  /** {"description":"Whether the reviewer may edit the string value before approval."} */
   "editable"?: boolean;
-  /** {"uniqueItems":true} */
+  /** {"description":"Additional read-only state values shown with the review content.","uniqueItems":true} */
+  "contextKeys"?: Array<string>;
+  /** {"description":"Visible flat State paths selecting additional files for the reviewer.","uniqueItems":true} */
   "attachmentPaths"?: Array<string>;
-  "editableKey"?: string;
 }
 ```
 
@@ -55,7 +53,8 @@ Replace discovery placeholders with real resource IDs before validation.
   "data": {
     "title": "Review the result",
     "contentKey": "summary",
-    "editable": true
+    "editable": true,
+    "description": ""
   },
   "position": {
     "x": 320,

@@ -205,17 +205,16 @@ async fn native_outcomes_saved_interactive_workflows_pause_reload_and_follow_bot
     use crate::module::workflow;
     for kind in ["human_review", "ask_user_question"] {
         let gate = if kind == "human_review" {
-            json!({"title":"Review input","contentKey":"payload","editable":false})
+            json!({"title":"Review input","description":"Review the supplied input","contentKey":"payload","editable":false})
         } else {
-            json!({"title":"Choose a path","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]})
+            json!({"title":"Choose a path","description":"Choose the next branch","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]})
         };
         let handles = if kind == "human_review" {
             ["approved", "rejected"]
         } else {
             ["option:a", "option:b"]
         };
-        let branch =
-            json!({"conditions":{"true":{"condition":"payload != \"\""},"false":{"condition":"payload == \"\""}}});
+        let branch = json!({"conditions":{"true":{"label":"Nonempty","condition":"payload != \"\""},"false":{"label":"Empty","condition":"payload == \"\""}}});
         let document = json!({
             "settings":{"name":format!("Interactive {kind}"),"mode":"task",
                 "inputSchema":{"fields":[{"key":"payload","type":"string","required":true}]},
@@ -355,6 +354,7 @@ async fn native_outcomes_subworkflow_reuses_persisted_definition_and_reports_una
     // Persist the authored definition as an ordinary catalog entry; the only
     // substituted boundary is its storage root, not child execution or outputs.
     let entry = crate::config::IWorkflow {
+        current_revision_id: None,
         id: child_id.clone(),
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),

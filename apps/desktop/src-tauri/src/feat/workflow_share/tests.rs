@@ -8,6 +8,7 @@ fn id() -> String {
 
 fn workflow(id: &str, name: &str, nodes: Value) -> IWorkflow {
     IWorkflow {
+        current_revision_id: None,
         id: id.into(),
         created_at: "now".into(),
         updated_at: "now".into(),

@@ -92,7 +92,12 @@ export type WorkflowPlan = {
     | 'cancelled';
   dependencyIssues: string[];
   workflowId?: string | null;
-  outcome?: { summary?: string; status?: string } | null;
+  outcome?: {
+    summary?: string;
+    status?: string;
+    before_revision_id?: string | null;
+    after_revision_id?: string;
+  } | null;
   document: {
     goal: string;
     summary: string;

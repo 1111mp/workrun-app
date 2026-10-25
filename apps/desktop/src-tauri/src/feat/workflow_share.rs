@@ -731,6 +731,7 @@ fn remap_documents(
         let id = workflow_map.get(id).context("Missing Workflow mapping")?.clone();
         validate_document(&document, Some(&id))?;
         workflows.push(IWorkflow {
+            current_revision_id: None,
             id,
             document,
             created_at: now.clone(),
@@ -819,8 +820,11 @@ async fn commit_import(
             validate_process_node_catalog(&app_data)?;
             workflows_catalog
                 .with_data_modify(|mut workflow_data| async move {
+                    let revisions =
+                        super::workflow::RevisionStore::new(workflow_path.with_file_name("workflow-revisions"));
                     for workflow in workflows {
-                        workflow_data.add_workflow(workflow);
+                        let revision = revisions.prepare(None, &workflow, "import", None)?;
+                        workflow_data.add_workflow(revision.workflow());
                     }
                     save_catalog(app_path.clone(), &app_data).await?;
                     if let Err(error) = save_catalog(workflow_path, &workflow_data).await {
@@ -1121,8 +1125,13 @@ pub async fn workflow_share_configure(
             let mut updated = remap_documents(&documents, &app_map, &workflow_map, &bindings)?;
             validate_bound_skills(&updated)?;
             record_pending_requirements(&mut updated, &preview.manifest.requirements)?;
+            let revisions = super::workflow::RevisionStore::new(path.with_file_name("workflow-revisions"));
             for workflow in &mut updated {
-                workflow.created_at = data.find_workflow(&workflow.id).context("Missing Workflow")?.created_at;
+                let previous = data.find_workflow(&workflow.id).context("Missing Workflow")?;
+                workflow.created_at = previous.created_at.clone();
+                *workflow = revisions
+                    .prepare(Some(&previous), workflow, "configuration", None)?
+                    .workflow();
                 data.replace_workflow(workflow.clone());
             }
             save_catalog(path, &data).await?;

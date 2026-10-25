@@ -89,3 +89,37 @@ describe('native configuration knowledge examples', () => {
     },
   );
 });
+
+it('saves legacy Agent display names in the canonical name field without rewriting the source', () => {
+  const document: WorkflowDocument = {
+    settings: {
+      name: 'Workflow',
+      description: '',
+      mode: 'task',
+      inputSchema: { fields: [] },
+    },
+    nodes: [
+      {
+        id: 'code',
+        type: 'codeact_agent',
+        position: { x: 0, y: 0 },
+        data: {
+          name: '',
+          label: '销售指标计算',
+          instruction: 'Keep this instruction',
+        },
+      },
+    ],
+    edges: [],
+  };
+  const saved = toWorkflowDocument(
+    document.nodes,
+    document.edges,
+    document.settings,
+  );
+  expect(saved.nodes[0].data).toEqual({
+    name: '销售指标计算',
+    instruction: 'Keep this instruction',
+  });
+  expect(document.nodes[0].data).toHaveProperty('label', '销售指标计算');
+});

@@ -1193,7 +1193,7 @@ async fn wait_with(pool: &SqlitePool, workspace: &str, session: &mut Value, runs
 }
 fn apply_pause(session: &mut Value, message_id: &str, pause: &Value) -> Result<()> {
     if pause["reason"] == "confirmation_required" {
-        session["messages"].as_array_mut().context("Messages missing")?.push(json!({"id":message_id,"role":"assistant","text":"","notice":"plan_confirmation_required","content":{"role":"model","parts":[{"text":"Native state: this plan has not been approved and no Workflow has been created. User confirmation is required before creation. The run request did not revise the plan or execute anything."}]}}));
+        session["messages"].as_array_mut().context("Messages missing")?.push(json!({"id":message_id,"role":"assistant","text":"","notice":"plan_confirmation_required","content":{"role":"model","parts":[{"text":"Native state: this plan has not been approved and its proposed workflow changes have not been saved. User confirmation is required before saving this plan. The run request did not revise the plan or execute anything."}]}}));
     }
     // A review checkpoint is the response. Do not append an empty or generated
     // assistant message after the card, including when a delivery is retried.

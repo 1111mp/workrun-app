@@ -28,3 +28,8 @@ pub async fn update_workflow(id: String, document: Value) -> CmdResult<IWorkflow
 pub async fn delete_workflow(id: String) -> CmdResult<()> {
     feat::delete_workflow(&id).await.stringify_err()
 }
+
+#[tauri::command]
+pub async fn get_workflow_revision(id: String) -> CmdResult<feat::WorkflowRevision> {
+    feat::get_workflow_revision(&id).await.stringify_err()
+}

@@ -16,21 +16,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from 'zustand';
 
-import {
-  AgentNode,
-  AskUserQuestionNode,
-  CodeActAgentNode,
-  EndNode,
-  GroupNode,
-  HumanReviewNode,
-  IfElseNode,
-  ProcessNode,
-  RemoteAgentNode,
-  StartNode,
-  SubworkflowNode,
-  SwitchNode,
-  TerminateNode,
-} from '@/components/nodes';
+import { workflowNodeTypes } from '@/components/nodes/node-types';
 import {
   actionPayload,
   useWorkflowActions,
@@ -39,22 +25,6 @@ import { WorkflowSidebar } from '@/components/workflow-sidebar';
 import { useWorkflowStoreApi, useWorkrunStore } from '@/stores';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 import { useWorkflowRunStore } from '@/stores/workflow-run.store';
-
-const nodeTypes = {
-  agent: AgentNode,
-  codeact_agent: CodeActAgentNode,
-  remote_agent: RemoteAgentNode,
-  process: ProcessNode,
-  start: StartNode,
-  end: EndNode,
-  if_else: IfElseNode,
-  switch: SwitchNode,
-  group: GroupNode,
-  human_review: HumanReviewNode,
-  ask_user_question: AskUserQuestionNode,
-  subworkflow: SubworkflowNode,
-  terminate: TerminateNode,
-};
 
 function createNodeData(type: WorkflowNodeType, t: TFunction) {
   switch (type) {
@@ -375,7 +345,7 @@ function WorkflowCanvas({
               fitView
               nodes={nodes}
               edges={displayEdges}
-              nodeTypes={nodeTypes}
+              nodeTypes={workflowNodeTypes}
               onInit={setReactFlowInstance}
               nodesDraggable={!readOnly}
               nodesConnectable={!readOnly}

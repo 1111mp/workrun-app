@@ -27,7 +27,7 @@
     "test:e2e": "node scripts/e2e.mjs",
     "test:browser": "vitest run --config vitest.config.ts --project browser",
     "workflow:generate": "node scripts/generate-workflow-reference.mjs",
-    "workflow:check": "node scripts/generate-workflow-reference.mjs --check"
+    "workflow:check": "node --test scripts/workflow-node-schema.test.mjs && node scripts/generate-workflow-reference.mjs --check"
   },
   "dependencies": {
     "@daveyplate/better-auth-tauri": "^0.1.9",
@@ -83,6 +83,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@babel/parser": "7.29.9",
     "@rolldown/plugin-babel": "^0.2.4",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.12.2",

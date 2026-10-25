@@ -1,26 +1,25 @@
-// Generated from JSON Schema. Runtime validation remains authoritative.
+// Generated from editor workflow.d.ts and runtime constraints; do not edit.
 export interface AskUserQuestionNodeData {
-  "name"?: string;
-  "label"?: string;
-  "description"?: string;
   "state"?: {
     "access"?: {
       /** {"uniqueItems":true} */
       "readers"?: Array<string>;
-      /** {"uniqueItems":true} */
+      /** {"description":"Readers that may receive this node's original, unredacted namespace.","uniqueItems":true} */
       "rawReaders"?: Array<string>;
     };
-    /** {"uniqueItems":true} */
+    /** {"description":"Keys emitted by this node that should be published to shared global State.","uniqueItems":true} */
     "globalKeys"?: Array<string>;
-    /** {"uniqueItems":true} */
+    /** {"description":"Dot-separated output paths always redacted in this node's visible State.","uniqueItems":true} */
     "sensitiveFields"?: Array<string>;
   };
-  "title"?: string;
+  "title": string;
+  "description": string;
   /** {"minItems":1} */
   "options": Array<{
-    /** {"minLength":1} */
+    /** {"description":"Stable identifier used as the React Flow source handle ID.","minLength":1} */
     "id": string;
-    "label"?: string;
+    /** {"description":"Text presented to the person answering the question."} */
+    "label": string;
     "description"?: string;
   }>;
 }

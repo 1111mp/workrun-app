@@ -1,6 +1,4 @@
-// Generated from JSON Schema. Runtime validation remains authoritative.
+// Generated from editor workflow.d.ts and runtime constraints; do not edit.
 export interface StartNodeData {
-  "name"?: string;
   "label"?: string;
-  "description"?: string;
 }

@@ -259,6 +259,7 @@ pub fn run() {
             cmd::workflow_share::workflow_share_configure,
             cmd::workflow_catalog::create_workflow,
             cmd::workflow_catalog::get_workflow,
+            cmd::workflow_catalog::get_workflow_revision,
             cmd::workflow_catalog::update_workflow,
             cmd::workflow_catalog::delete_workflow,
             // Python runtime

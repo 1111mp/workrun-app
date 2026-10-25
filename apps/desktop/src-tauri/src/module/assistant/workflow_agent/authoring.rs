@@ -287,7 +287,8 @@ pub(in crate::module::assistant) fn parse_document(args: &Value) -> Result<Value
         .as_str()
         .context("document_json must be a JSON string containing settings, nodes and edges")?;
     ensure!(text.len() <= 256_000, "Draft JSON exceeds 256 KB");
-    serde_json::from_str(text).map_err(|error| anyhow::anyhow!("Invalid workflow JSON: {error}"))
+    let document = serde_json::from_str(text).map_err(|error| anyhow::anyhow!("Invalid workflow JSON: {error}"))?;
+    Ok(document)
 }
 #[cfg(test)]
 fn digest(document: &Value) -> Result<String> {
@@ -363,19 +364,20 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
                 "Workflow must pass validation before saving: {}",
                 validation["issues"]
             );
-            let workflow = crate::feat::save_authored_workflow(
+            let (workflow, revision) = crate::feat::save_authored_workflow(
                 args["operation_id"]
                     .as_str()
                     .context("Native delegation operation ID is missing")?,
                 args["target_id"].as_str(),
                 document,
+                args.get("expected_document").cloned(),
             )
             .await?;
             // The validation-only hint says to save next; that action has now
             // completed and must not encourage another full-document submission.
             validation.as_object_mut().unwrap().remove("next");
             Ok(
-                json!({"capability_id":workflow.id,"draft_id":workflow.id,"validation":validation,"published":false,"executed":false,"next":"Saving is complete. Return the saved identity and pending checks; do not save again or execute."}),
+                json!({"capability_id":workflow.id,"draft_id":workflow.id,"before_revision_id":revision.parent_revision_id,"after_revision_id":revision.id,"validation":validation,"published":false,"executed":false,"next":"Saving is complete. Return the saved identity and pending checks; do not save again or execute."}),
             )
         },
         "list_authoring_resources" => match args["kind"].as_str().unwrap_or("models") {
@@ -400,6 +402,27 @@ mod tests {
         workflow["document"]["settings"]["name"] = json!("Generated expense routing");
         workflow["document"].clone()
     }
+    #[test]
+    fn authoring_does_not_repair_invalid_new_agent_fields_before_validation() {
+        let mut document = document();
+        document["nodes"][1] = json!({"id":"review-rule","type":"agent","data":{
+            "name":"Valid name","description":"","instruction":"Review","modelProfileId":"model","label":"Invalid alias"
+        }});
+        let parsed = parse_document(&json!({"document_json":document.to_string()})).unwrap();
+        assert!(
+            structural_issues(&parsed)
+                .iter()
+                .any(|issue| issue["phase"] == "node_schema")
+        );
+        assert!(
+            parsed["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|node| node["data"].get("label").is_some())
+        );
+    }
+
     #[test]
     fn references_and_skill_are_progressive_and_reject_unknown_nodes() {
         let index = reference(&json!({})).unwrap();

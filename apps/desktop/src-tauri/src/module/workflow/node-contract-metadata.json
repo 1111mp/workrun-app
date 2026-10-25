@@ -1,0 +1,872 @@
+{
+  "start": {
+    "title": "Start",
+    "example": {
+      "id": "start1",
+      "type": "start",
+      "data": {},
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Exactly one entry is required. It may only connect to executable nodes, cannot be an edge target, and cannot connect directly to end. Each run input key enters global state.",
+    "summary": "Enter a workflow and expose run inputs.",
+    "dataConstraints": {}
+  },
+  "end": {
+    "title": "End",
+    "example": {
+      "id": "end1",
+      "type": "end",
+      "data": {},
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "At least one end node is required. End nodes only accept incoming edges; all map to graph END. Declaring outputSchema does not create output: executable nodes must publish output keys to global state.",
+    "summary": "Complete a workflow branch.",
+    "dataConstraints": {}
+  },
+  "agent": {
+    "title": "Local agent",
+    "example": {
+      "id": "agent1",
+      "type": "agent",
+      "data": {
+        "modelProfileId": "DISCOVER_MODEL_ID",
+        "instruction": "Analyze visible inputs and return structured findings.",
+        "outputSchema": "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}},\"required\":[\"summary\"]}",
+        "state": {
+          "globalKeys": [
+            "summary"
+          ]
+        },
+        "name": "Local agent",
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths containing ArtifactRefs (files), never ordinary text, JSON strings or objects. Visible ordinary values are already available as scoped state; refer to their existing keys in instruction and use native state visibility. Do not add attachmentPaths merely to pass a previous node result. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.\n\nTool IDs and callable names are different: select the discovered ID in toolIds and toolStateBindings.toolId; use the tool contract for its callable name and argument schema. With no selected Skills, selected tools are attached directly. With skillRefs, SkillToolset exposes Skill discovery/loading and resolves tools after the declaring Skill is loaded. Every Skill-declared tool must be selected; nonempty allowedTools declarations restrict the effective tool set to their union. Reading a Skill during planning does not activate it in this node. Read reference topic=configuration for resource wiring and topic=examples with node_types=[\"agent\"] for a native example.",
+    "summary": "Use a configured model, tools and personal skills.",
+    "dataConstraints": {
+      "properties": {
+        "name": {
+          "description": "Visible node name in the workflow canvas and editor. Set this field when naming or renaming the node."
+        },
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "modelProfileId": {
+          "minLength": 1
+        },
+        "outputSchema": {
+          "description": "JSON-serialized object schema; the visual editor stores this field as JSON text."
+        },
+        "toolIds": {
+          "items": {
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "toolStateBindings": {
+          "items": {
+            "properties": {
+              "toolId": {
+                "minLength": 1
+              },
+              "argumentPath": {
+                "minLength": 1
+              },
+              "statePath": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "maxToolCalls": {
+          "integer": true,
+          "minimum": 1,
+          "maximum": 50,
+          "default": 8
+        },
+        "toolTimeoutSeconds": {
+          "integer": true,
+          "minimum": 1,
+          "maximum": 600,
+          "default": 60
+        },
+        "outputKey": {
+          "minLength": 1
+        },
+        "temperature": {
+          "minimum": 0,
+          "maximum": 2
+        },
+        "topP": {
+          "minimum": 0,
+          "maximum": 1
+        },
+        "attachmentPaths": {
+          "items": {
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "skillRefs": {
+          "items": {
+            "properties": {
+              "name": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "toolCompensations": {
+          "additionalProperties": {
+            "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+          }
+        }
+      }
+    }
+  },
+  "codeact_agent": {
+    "title": "CodeAct agent",
+    "example": {
+      "id": "codeact_agent1",
+      "type": "codeact_agent",
+      "data": {
+        "modelProfileId": "DISCOVER_MODEL_ID",
+        "instruction": "Read inputs from authorized resources, calculate results and write files to /outputs.",
+        "maxIterations": 8,
+        "name": "CodeAct agent",
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Uses the restricted Monty Python runtime, not an unrestricted Python terminal or package installer. Read reference topic=nodes with node_types=[\"codeact_agent\"] for the linked runtime language/module/OS briefing before committing to an implementation; Python familiarity does not establish library or method support. Read input files through /artifacts/manifest.json; write deliverables under /outputs for runtime export. maxIterations: 1–50, default 8; script duration: 1–300 seconds, default 5; memory: 16–4096 MiB, default 256. mounts/environment grant real host access and must come from explicitly authorized configuration. Never invent paths or secrets. Reserve /artifacts and /outputs; mounts must not overlap. Compilation currently requires a configured model and workspace runtime. The artifact manifest is an array of {reference:{id,name,...},path}; read entry.path, not a guessed input-name key or artifact directory. Inspect input structure before processing. Finish with a last-expression {\"type\":\"final_result\",\"value\":{...named output fields...}}. Object fields enter private state and state.globalKeys publishes them; use outputSchema for explicit validation. Do not invent global-state tools. Avoid bound dictionary methods as callbacks in Monty; use explicit loops.\n\nCodeAct selects executable dependencies with discovered toolIds and may bind arguments with toolStateBindings. It does not support personal skillRefs or Agent outputKey/attachmentPaths. Visible ArtifactRefs are mapped to its file workspace automatically. Workrun writes exported files to the artifacts state key; publish artifacts with state.globalKeys or share the namespace through readers when downstream nodes need them. Do not put invented ArtifactRefs into final_result. Read reference topic=configuration and topic=examples with node_types=[\"codeact_agent\"] for a native example.",
+    "summary": "Compose authorized tools with restricted Python.",
+    "dataConstraints": {
+      "properties": {
+        "name": {
+          "description": "Visible node name in the workflow canvas and editor. Set this field when naming or renaming the node."
+        },
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "modelProfileId": {
+          "minLength": 1
+        },
+        "outputSchema": {
+          "description": "JSON-serialized object schema; the visual editor stores this field as JSON text."
+        },
+        "toolIds": {
+          "items": {
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "toolStateBindings": {
+          "items": {
+            "properties": {
+              "toolId": {
+                "minLength": 1
+              },
+              "argumentPath": {
+                "minLength": 1
+              },
+              "statePath": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "maxToolCalls": {
+          "integer": true,
+          "minimum": 1,
+          "maximum": 50,
+          "default": 8
+        },
+        "toolTimeoutSeconds": {
+          "integer": true,
+          "minimum": 1,
+          "maximum": 600,
+          "default": 60
+        },
+        "maxIterations": {
+          "integer": true,
+          "minimum": 1,
+          "maximum": 50,
+          "default": 8
+        },
+        "maxScriptDurationSeconds": {
+          "integer": true,
+          "minimum": 1,
+          "maximum": 300,
+          "default": 5
+        },
+        "maxScriptMemoryMiB": {
+          "integer": true,
+          "minimum": 16,
+          "maximum": 4096,
+          "default": 256
+        },
+        "systemClock": {
+          "default": true
+        },
+        "mounts": {
+          "items": {
+            "properties": {
+              "virtualPath": {
+                "minLength": 1
+              },
+              "hostPath": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "environment": {
+          "items": {
+            "properties": {
+              "name": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "process": {
+    "title": "Workflow App",
+    "example": {
+      "id": "process1",
+      "type": "process",
+      "data": {
+        "processNodeId": "DISCOVER_LOCAL_APP_ID",
+        "state": {
+          "globalKeys": [
+            "result"
+          ]
+        },
+        "name": "Workflow App",
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Uses the existing Process executor for installed Workflow-type Apps. Tool-type Apps belong in agent.toolIds; never change their type to bypass confirmation. processNodeId is the native local App ID, without the app: capability prefix. The App receives visible inputs; outputs remain private until their agreed keys are published. Team appRef requires immutable coordinates for an authorized published version; ask for missing coordinates. Do not substitute inline scripts for Apps. Read the recovery topic for compensation.\n\nDiscover the App contract before configuration: process receives scoped visible state, so its expected input keys must be available under the names its contract declares. Node edges do not rename fields. For tool-shaped calls inside an Agent, select a Tool App or MCP tool in toolIds instead. Publish only actual declared outputs through state.globalKeys. Read reference topic=configuration and topic=examples with node_types=[\"process\"] for a native example.",
+    "summary": "Execute an installed Workflow-type App.",
+    "dataConstraints": {
+      "properties": {
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "processNodeId": {
+          "minLength": 1
+        },
+        "compensation": {
+          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+        }
+      }
+    }
+  },
+  "remote_agent": {
+    "title": "Remote agent",
+    "example": {
+      "id": "remote_agent1",
+      "type": "remote_agent",
+      "data": {
+        "url": "https://example.invalid/a2a",
+        "timeoutSeconds": 120,
+        "authentication": {
+          "type": "none"
+        },
+        "name": "Remote agent",
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Uses A2A v1.0.1 JSON-RPC. HTTP(S) URLs must not contain user information or fragments. authentication references existing credential IDs; never embed secrets. Attachments select visible state paths, at most 10 files and 20 MiB total; binary content stays outside state. timeoutSeconds: 1–600, default 120. Timeout does not prove absence of remote side effects: use native task inspection, cancellation and recovery rather than blindly retrying.",
+    "summary": "Call a configured remote A2A agent.",
+    "dataConstraints": {
+      "properties": {
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "url": {
+          "minLength": 1
+        },
+        "timeoutSeconds": {
+          "integer": true,
+          "minimum": 1,
+          "maximum": 600,
+          "default": 120
+        },
+        "attachmentPaths": {
+          "items": {
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "compensation": {
+          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+        },
+        "authentication": {
+          "properties": {
+            "credentialId": {
+              "minLength": 1
+            },
+            "headerName": {
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  },
+  "if_else": {
+    "title": "Conditional branch",
+    "example": {
+      "id": "if_else1",
+      "type": "if_else",
+      "data": {
+        "conditions": {
+          "true": {
+            "label": "Matched",
+            "condition": "flag == true"
+          },
+          "false": {
+            "label": "Unmatched",
+            "condition": "flag == false"
+          }
+        }
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [
+      "true",
+      "false"
+    ],
+    "guide": "true and false are independent conditions, evaluated in that order; if neither matches, execution ends. Supported syntax is a field path tested for truthiness, or compared to one literal with == != >= <= > <. No Python/JavaScript, and/or, calls or arbitrary expressions. Use sourceHandle true/false, with at most one edge per handle; an unconnected result ends. This node records routing and trace, not a business boolean output. Agent/App/CodeAct nodes must create business outputs and publish them with globalKeys.",
+    "summary": "Route using two ordered, independent conditions.",
+    "dataConstraints": {
+      "properties": {
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "conditions": {
+          "properties": {
+            "true": {
+              "properties": {
+                "condition": {
+                  "minLength": 1
+                }
+              }
+            },
+            "false": {
+              "properties": {
+                "condition": {
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "switch": {
+    "title": "Switch",
+    "example": {
+      "id": "switch1",
+      "type": "switch",
+      "data": {
+        "cases": [
+          {
+            "id": "ready",
+            "label": "Ready",
+            "condition": "status == \"ready\""
+          }
+        ],
+        "defaultCase": {
+          "label": "Other",
+          "condition": "When no case matches"
+        }
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [
+      "case:<id>",
+      "default"
+    ],
+    "guide": "Evaluate cases in order and select the first match; otherwise use default. Case IDs must be nonempty and unique. sourceHandle is case:<id> or default, with at most one edge per handle. defaultCase.condition is descriptive only. Conditions use the same limited syntax as if_else. Connect the default branch explicitly.",
+    "summary": "Route to the first matching case or default.",
+    "dataConstraints": {
+      "properties": {
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "cases": {
+          "items": {
+            "properties": {
+              "id": {
+                "minLength": 1
+              },
+              "condition": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "human_review": {
+    "title": "Human review",
+    "example": {
+      "id": "human_review1",
+      "type": "human_review",
+      "data": {
+        "title": "Review the result",
+        "contentKey": "summary",
+        "editable": true,
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [
+      "approved",
+      "rejected"
+    ],
+    "guide": "Dynamically interrupts execution for a real human decision. contentKey/contextKeys select displayed state; editable allows string edits; attachmentPaths select extra files. sourceHandle is approved/rejected; unconnected outcomes end. Resume through native run-center actions. Never fabricate workflow.human_review.*.approved inputs. editableKey is a legacy field; use contentKey for new workflows.",
+    "summary": "Pause for a real human approval or rejection.",
+    "dataConstraints": {
+      "properties": {
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "contentKey": {
+          "minLength": 1
+        },
+        "contextKeys": {
+          "items": {
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "attachmentPaths": {
+          "items": {
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "ask_user_question": {
+    "title": "Ask user",
+    "example": {
+      "id": "ask_user_question1",
+      "type": "ask_user_question",
+      "data": {
+        "title": "Choose an action",
+        "options": [
+          {
+            "id": "continue",
+            "label": "Continue"
+          },
+          {
+            "id": "stop",
+            "label": "Stop"
+          }
+        ],
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [
+      "option:<id>"
+    ],
+    "guide": "Dynamically interrupts execution until the user selects an option. Option IDs must be nonempty and unique. Use sourceHandle option:<id> and connect each option to a destination. Native user actions supply the answer; never answer on the user’s behalf or fabricate workflow.ask_user_question.*.answer.",
+    "summary": "Pause for the user to select an option.",
+    "dataConstraints": {
+      "properties": {
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "options": {
+          "minItems": 1,
+          "items": {
+            "properties": {
+              "id": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "subworkflow": {
+    "title": "Subworkflow",
+    "example": {
+      "id": "subworkflow1",
+      "type": "subworkflow",
+      "data": {
+        "workflowId": "DISCOVER_SAVED_WORKFLOW_ID",
+        "compensation": {
+          "mode": "delegated"
+        }
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "workflowId must identify a saved workflow in the current workspace, not an App, temporary draft or nested nodes/edges document. Inputs are the parent node’s visible state. Only child outputSchema keys are collected; publish them through the parent node’s globalKeys. Direct and indirect recursion are detected. Child reviews/questions use native resume chains. If compensation is declared, only delegated mode is allowed; actual actions live in the child execution journal.",
+    "summary": "Reuse a saved workflow in this workspace.",
+    "dataConstraints": {
+      "properties": {
+        "state": {
+          "properties": {
+            "access": {
+              "properties": {
+                "readers": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "items": {
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            "globalKeys": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "items": {
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "workflowId": {
+          "minLength": 1
+        },
+        "compensation": {
+          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+        }
+      }
+    }
+  },
+  "terminate": {
+    "title": "Terminate",
+    "example": {
+      "id": "terminate1",
+      "type": "terminate",
+      "data": {
+        "label": "Stop the entire workflow"
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Stops this workflow and all parent workflows, unlike ordinary end. Successors must not continue business execution. Termination does not undo existing side effects; use native compensation and cleanup records.",
+    "summary": "Stop the current workflow and its parents.",
+    "dataConstraints": {}
+  },
+  "group": {
+    "title": "Layout group",
+    "example": {
+      "id": "group1",
+      "type": "group",
+      "data": {
+        "label": "Analysis stage"
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Canvas layout only; not executable and must have no edges. Children may use React Flow parentId/extent and relative coordinates. Grouping does not create subworkflows or loops.",
+    "summary": "Organize canvas nodes without executing.",
+    "dataConstraints": {}
+  }
+}

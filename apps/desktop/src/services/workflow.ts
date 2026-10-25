@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { Edge, Node } from '@xyflow/react';
 
 import { isTeamMode } from '@/lib/constant';
+import { normalizeWorkflowNodeName } from '@/lib/workflow-node-name';
 import { fetchApi } from '@/services/fetch-api';
 import type { RunRecordSummary } from '@/services/run-history';
 
@@ -36,6 +37,7 @@ export function workflowDocumentFromSnapshot(
 
 export type StoredWorkflow = {
   id: string;
+  currentRevisionId?: string;
   createdAt: string;
   updatedAt: string;
   document: WorkflowDocument;
@@ -390,7 +392,7 @@ export function toWorkflowDocument(
         height: _height,
         measured: _measured,
         ...node
-      }) => node as Node,
+      }) => normalizeWorkflowNodeName(node as Node),
     ),
     edges: edges.map(({ selected: _selected, ...edge }) => edge as Edge),
     settings,

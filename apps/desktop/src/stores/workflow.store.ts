@@ -12,6 +12,8 @@ import { temporal } from 'zundo';
 import { createStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
+import { normalizeWorkflowNodeName } from '@/lib/workflow-node-name';
+
 const maxHistoryEntries = 50;
 
 type TemporalControls = {
@@ -73,7 +75,9 @@ export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>
   createStore<WorkflowStore>()(
     temporal(
       immer((set, get, store) => ({
-        nodes: initialWorkflow?.nodes ?? initialNodes,
+        nodes: (initialWorkflow?.nodes ?? initialNodes).map(
+          normalizeWorkflowNodeName,
+        ),
         edges: initialWorkflow?.edges ?? [],
         settings: initialWorkflow?.settings ?? initialSettings,
         selectedNodeId: null,
@@ -216,7 +220,7 @@ export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>
 
         replaceWorkflow: (workflow) => {
           set({
-            nodes: workflow.nodes,
+            nodes: workflow.nodes.map(normalizeWorkflowNodeName),
             edges: workflow.edges,
             settings: workflow.settings,
             selectedNodeId: null,
