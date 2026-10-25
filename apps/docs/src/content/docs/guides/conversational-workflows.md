@@ -1,6 +1,6 @@
 ---
 title: Build workflows through conversation
-description: Analyze a sales CSV, turn the analysis into a reusable workflow, and run it from the same conversation.
+description: Create, run, and revise a reusable workflow through conversation, then inspect the changes saved in each update.
 ---
 
 Start by asking Workrun to help with a task. When you want to repeat it, turn the process into a workflow. This guide follows a sales-data example from a one-time analysis to reusable automation.
@@ -131,7 +131,51 @@ The direct analysis and workflow output can use different wording, but the calcu
 
 Next time, provide new sales data and ask to use this workflow. Reruns use the latest saved definition, including canvas edits, rather than regenerating the workflow. See [Runs, debugging, and traces](/quality/runs-and-traces/) for output inspection and troubleshooting.
 
-## 6. Inspect the conversation's token usage
+## 6. Revise the workflow and review its changes
+
+To adjust a saved workflow, identify it in the same conversation and describe the changes you want. For example:
+
+```text
+Give this workflow's CodeAct and Agent nodes descriptive names.
+Only change their names; keep the instructions, models, and connections.
+Don't run it yet.
+```
+
+Check the target in the **Workflow update plan**, then approve the changes. Approval updates the existing workflow; execution still requires separate confirmation.
+
+### Open View changes from the conversation
+
+After the update is saved, a change card in the conversation summarizes additions, modifications, and removals. Select **View changes** to open the comparison for that update. This example modifies two nodes without adding or removing nodes.
+
+The screenshots below use the Chinese interface.
+
+![A saved workflow update in the conversation, with two modified items and the View changes button on the right of the change card.](/media/conversational-workflows/workflow-changes-entry.png)
+
+The dialog compares **the two saved versions before and after this update**. Later edits do not change this historical comparison. Open the workflow details to edit or inspect its latest state.
+
+### Change details: see exactly what changed
+
+The dialog opens on **Change details**. The summary shows the number of changes and affected fields. The left navigation groups changes by nodes, connections, and workflow settings; the main panel shows each field's **Before** and **After** values.
+
+For a node rename, compare the old and new names directly. When only names changed, the summary also notes that connections and other settings are unchanged. Longer text uses a line-by-line comparison with expandable unchanged context.
+
+![Change details lists both node renames, showing the previous names in red and the saved names in green.](/media/conversational-workflows/workflow-change-details.png)
+
+In this example, the calculation node becomes “销售指标计算（CodeAct）” (Sales metrics calculation), and the report node becomes “中文分析报告撰写（Agent）” (Chinese analysis report writing). Each changes one name field, so the summary reports **2 changes · 2 fields changed**.
+
+Select an entry on the left or use the previous and next controls to review each change. **Layout changes**, such as moved nodes, appear separately so you can distinguish positioning from configuration changes.
+
+### Flow comparison: locate changes in the graph
+
+Switch to **Flow comparison** to inspect the nodes and their connections on the canvas. Toggle **Before / After** to view either saved graph. Select a change on the left to locate its nodes and inspect the field comparison in the detail panel, to the right on wide windows or below the canvas on narrow windows.
+
+Nodes keep the same type colors as the workflow editor. Separate badges identify additions, modifications, and removals, while a prominent outline highlights the selected changed node. Read the badges to identify the change type rather than relying on the node's background color.
+
+![Flow comparison keeps the CodeAct and Agent type colors, marks each rename with a Modified · Name badge, and highlights the selected node with a blue outline. Its field comparison appears on the right.](/media/conversational-workflows/workflow-flow-comparison.png)
+
+This canvas is read-only. Open the workflow details to move nodes, edit configuration, or reconnect steps, or request another revision in the conversation.
+
+## 7. Inspect the conversation's token usage
 
 Select **Token usage** at the top right of the conversation to inspect recorded consumption across the analysis, planning, authoring, and workflow execution.
 
