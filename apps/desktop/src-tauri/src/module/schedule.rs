@@ -1,7 +1,6 @@
 //! Durable, local schedules for top-level executions.
 
 use crate::{
-    config::Config,
     core::db::DBManager,
     module::{
         run_manager::{self, ScheduleTrigger, StartAppRun, StartWorkflowRun},
@@ -544,10 +543,7 @@ async fn resolve_workflow_recipe(
             release_version,
         } => Ok((dsl, stored_snapshot, Some(release_id), Some(release_version))),
         WorkflowScheduleSource::LatestLocal => {
-            let workflows = Config::workflows().await.data_arc();
-            let workflow = workflows
-                .find_workflow(workflow_id)
-                .ok_or_else(|| anyhow!("scheduled Workflow no longer exists"))?;
+            let workflow = crate::feat::get_workflow(workflow_id).await?;
             let dsl = workflow_dsl_from_document(workflow_id, &workflow.document)?;
             Ok((dsl, workflow.document, None, None))
         },

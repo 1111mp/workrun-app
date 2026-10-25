@@ -81,10 +81,6 @@ impl WorkspacePaths {
         self.mcp_server_dir().join("catalog.json")
     }
 
-    pub fn workflow_catalog_path(&self) -> PathBuf {
-        self.root.join("workflow.json")
-    }
-
     pub fn skills_dir(&self) -> PathBuf {
         self.root.join(".skills")
     }
@@ -282,11 +278,6 @@ pub fn mcp_server_dir() -> Result<PathBuf> {
 /// Local catalog of configured stdio MCP Servers.
 pub fn mcp_server_catalog_path() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.mcp_server_catalog_path())
-}
-
-/// Local workflow catalog managed from the Workflows page.
-pub fn workflow_catalog_path() -> Result<PathBuf> {
-    Ok(active_workspace_paths()?.workflow_catalog_path())
 }
 
 /// Root directory for Agent Skills managed by the active workspace.
