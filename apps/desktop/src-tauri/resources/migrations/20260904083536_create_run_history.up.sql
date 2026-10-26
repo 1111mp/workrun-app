@@ -1,336 +1,368 @@
 -- Add up migration script here
 -- run_records：一次 workflow 或 app 执行一条记录。事件日志才是事实来源，
 -- output_view_json 仅保留为打开历史记录时的投影缓存。
-CREATE TABLE run_records (
-  id TEXT PRIMARY KEY NOT NULL,
-  target_type TEXT NOT NULL CHECK (target_type IN ('workflow', 'app')),
-  target_id TEXT NOT NULL,
-  target_name TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (
-    status IN (
-      'queued', 'running', 'waiting_for_input',
-      'completed', 'failed', 'cancelled', 'interrupted'
-    )
-  ),
-  started_at TEXT NOT NULL,
-  ended_at TEXT,
-  duration_ms INTEGER,
-  input_json TEXT,
-  output_view_json TEXT NOT NULL DEFAULT '{}',
-  target_snapshot_json TEXT NOT NULL,
-  runtime_json TEXT NOT NULL DEFAULT '{}',
-  last_sequence INTEGER NOT NULL DEFAULT -1,
-  error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+CREATE TABLE
+  run_records (
+    id TEXT PRIMARY KEY NOT NULL,
+    target_type TEXT NOT NULL CHECK (target_type IN ('workflow', 'app')),
+    target_id TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+      status IN (
+        'queued',
+        'running',
+        'waiting_for_input',
+        'completed',
+        'failed',
+        'cancelled',
+        'interrupted'
+      )
+    ),
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_ms INTEGER,
+    input_json TEXT,
+    output_view_json TEXT NOT NULL DEFAULT '{}',
+    target_snapshot_json TEXT NOT NULL,
+    runtime_json TEXT NOT NULL DEFAULT '{}',
+    last_sequence INTEGER NOT NULL DEFAULT -1,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 
-CREATE INDEX idx_run_records_target_time
-  ON run_records(target_type, target_id, started_at DESC);
+CREATE INDEX idx_run_records_started_at_id ON run_records (started_at DESC, id DESC);
 
-CREATE INDEX idx_run_records_started_at
-  ON run_records(started_at DESC);
+CREATE INDEX idx_run_records_target_started_at_id ON run_records (target_type, target_id, started_at DESC, id DESC);
 
-CREATE INDEX idx_run_records_status_time
-  ON run_records(status, started_at DESC);
-
-CREATE INDEX idx_run_records_started_at_id
-  ON run_records(started_at DESC, id DESC);
-
-CREATE INDEX idx_run_records_target_started_at_id
-  ON run_records(target_type, target_id, started_at DESC, id DESC);
-
-CREATE INDEX idx_run_records_status_started_at_id
-  ON run_records(status, started_at DESC, id DESC);
+CREATE INDEX idx_run_records_status_started_at_id ON run_records (status, started_at DESC, id DESC);
 
 -- The dispatcher claims queued work by creation time, unlike history views.
-CREATE INDEX idx_run_records_queue_claim
-  ON run_records(status, created_at ASC, id ASC);
+CREATE INDEX idx_run_records_queue_claim ON run_records (status, created_at ASC, id ASC);
 
 -- Chat sessions keep only the explicitly configured workflow global state
 -- between turns. The turn record is tied to the immutable workflow run.
-CREATE TABLE chat_sessions (
-  id TEXT PRIMARY KEY NOT NULL,
-  workflow_id TEXT NOT NULL,
-  workflow_snapshot_json TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
-  active_run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
-  state_json TEXT NOT NULL DEFAULT '{}',
-  summary TEXT NOT NULL DEFAULT '',
-  summary_through_sequence INTEGER NOT NULL DEFAULT -1,
-  summary_status TEXT NOT NULL DEFAULT 'idle'
-    CHECK (summary_status IN ('idle', 'ready', 'failed')),
-  summary_updated_at TEXT,
-  summary_error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+CREATE TABLE
+  chat_sessions (
+    id TEXT PRIMARY KEY NOT NULL,
+    workflow_id TEXT NOT NULL,
+    workflow_snapshot_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+    active_run_id TEXT REFERENCES run_records (id) ON DELETE SET NULL,
+    state_json TEXT NOT NULL DEFAULT '{}',
+    summary TEXT NOT NULL DEFAULT '',
+    summary_through_sequence INTEGER NOT NULL DEFAULT -1,
+    summary_status TEXT NOT NULL DEFAULT 'idle' CHECK (summary_status IN ('idle', 'ready', 'failed')),
+    summary_updated_at TEXT,
+    summary_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 
-CREATE INDEX idx_chat_sessions_workflow_updated
-  ON chat_sessions(workflow_id, status, updated_at DESC, id DESC);
+CREATE INDEX idx_chat_sessions_workflow_updated ON chat_sessions (workflow_id, status, updated_at DESC, id DESC);
 
-CREATE TABLE chat_turns (
-  id TEXT PRIMARY KEY NOT NULL,
-  session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-  run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE RESTRICT,
-  sequence INTEGER NOT NULL,
-  user_message TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'waiting_for_input', 'completed', 'failed', 'cancelled', 'interrupted')),
-  created_at TEXT NOT NULL,
-  completed_at TEXT,
-  UNIQUE(session_id, sequence),
-  UNIQUE(run_id)
-);
-
-CREATE INDEX idx_chat_turns_session_sequence
-  ON chat_turns(session_id, sequence ASC);
+CREATE TABLE
+  chat_turns (
+    id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES run_records (id) ON DELETE RESTRICT,
+    sequence INTEGER NOT NULL,
+    user_message TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+      status IN (
+        'queued',
+        'running',
+        'waiting_for_input',
+        'completed',
+        'failed',
+        'cancelled',
+        'interrupted'
+      )
+    ),
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE (session_id, sequence),
+    UNIQUE (run_id)
+  );
 
 -- run_events：流式事件与日志，按顺序追加
-CREATE TABLE run_events (
-  run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE CASCADE,
-  sequence INTEGER NOT NULL,
-  event_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (run_id, sequence)
-);
-
-CREATE INDEX idx_run_events_run_sequence
-  ON run_events(run_id, sequence);
+CREATE TABLE
+  run_events (
+    run_id TEXT NOT NULL REFERENCES run_records (id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    event_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, sequence)
+  );
 
 -- run_spans is the queryable telemetry projection. Raw content remains in
 -- the redacted event journal rather than becoming a second sensitive store.
-CREATE TABLE run_spans (
-  id TEXT PRIMARY KEY NOT NULL,
-  run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE CASCADE,
-  parent_span_id TEXT REFERENCES run_spans(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('workflow_node', 'agent', 'model_call', 'tool_call')),
-  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
-  node_id TEXT,
-  node_name TEXT,
-  provider TEXT,
-  model TEXT,
-  tool_name TEXT,
-  started_at TEXT NOT NULL,
-  ended_at TEXT,
-  duration_ms INTEGER,
-  input_tokens INTEGER,
-  output_tokens INTEGER,
-  total_tokens INTEGER,
-  total_tokens_estimated INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens_estimated IN (0, 1)),
-  cache_read_tokens INTEGER,
-  cache_write_tokens INTEGER,
-  reasoning_tokens INTEGER,
-  audio_input_tokens INTEGER,
-  audio_output_tokens INTEGER,
-  estimated_cost_microusd INTEGER,
-  is_byok INTEGER CHECK (is_byok IN (0, 1)),
-  error_code TEXT,
-  error_message TEXT,
-  attributes_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+CREATE TABLE
+  run_spans (
+    id TEXT PRIMARY KEY NOT NULL,
+    run_id TEXT NOT NULL REFERENCES run_records (id) ON DELETE CASCADE,
+    parent_span_id TEXT REFERENCES run_spans (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (
+      kind IN (
+        'workflow_node',
+        'agent',
+        'model_call',
+        'tool_call'
+      )
+    ),
+    status TEXT NOT NULL CHECK (
+      status IN ('running', 'completed', 'failed', 'cancelled')
+    ),
+    node_id TEXT,
+    node_name TEXT,
+    provider TEXT,
+    model TEXT,
+    tool_name TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_ms INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    total_tokens INTEGER,
+    total_tokens_estimated INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens_estimated IN (0, 1)),
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    audio_input_tokens INTEGER,
+    audio_output_tokens INTEGER,
+    estimated_cost_microusd INTEGER,
+    is_byok INTEGER CHECK (is_byok IN (0, 1)),
+    error_code TEXT,
+    error_message TEXT,
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 
-CREATE INDEX idx_run_spans_run_time
-  ON run_spans(run_id, started_at ASC, id ASC);
+CREATE INDEX idx_run_spans_run_time ON run_spans (run_id, started_at ASC, id ASC);
 
-CREATE INDEX idx_run_spans_parent
-  ON run_spans(parent_span_id);
+CREATE INDEX idx_run_spans_parent ON run_spans (parent_span_id);
 
-CREATE INDEX idx_run_spans_kind_model
-  ON run_spans(kind, provider, model);
+CREATE INDEX idx_run_spans_kind_model ON run_spans (kind, provider, model);
 
 -- A pending action is separate from the run status: many runs may wait at
 -- once, while the UI chooses only one action to present at a time.
-CREATE TABLE run_pending_actions (
-  id TEXT PRIMARY KEY NOT NULL,
-  run_id TEXT NOT NULL REFERENCES run_records(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (
-    kind IN ('tool_approval', 'human_review', 'ask_user_question')
-  ),
-  payload_json TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (
-    status IN ('pending', 'resolved', 'cancelled', 'expired')
-  ),
-  -- A claim is a temporary UI ownership lease, not a terminal state.
-  claimed_by TEXT,
-  claimed_at TEXT,
-  created_at TEXT NOT NULL,
-  resolved_at TEXT,
-  resolution_json TEXT
-);
+CREATE TABLE
+  run_pending_actions (
+    id TEXT PRIMARY KEY NOT NULL,
+    run_id TEXT NOT NULL REFERENCES run_records (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (
+      kind IN (
+        'tool_approval',
+        'human_review',
+        'ask_user_question'
+      )
+    ),
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+      status IN ('pending', 'resolved', 'cancelled', 'expired')
+    ),
+    -- A claim is a temporary UI ownership lease, not a terminal state.
+    claimed_by TEXT,
+    claimed_at TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolution_json TEXT
+  );
 
-CREATE INDEX idx_run_pending_actions_status_created
-  ON run_pending_actions(status, created_at ASC);
+CREATE INDEX idx_run_pending_actions_status_created ON run_pending_actions (status, created_at ASC);
 
-CREATE INDEX idx_run_pending_actions_claim
-  ON run_pending_actions(status, claimed_by, created_at ASC, id ASC);
+CREATE INDEX idx_run_pending_actions_claim ON run_pending_actions (status, claimed_by, created_at ASC, id ASC);
 
 -- Evaluation configuration belongs to the product database. A workflow ID is
 -- intentionally not a foreign key because a deleted workflow must not erase
 -- the immutable evidence retained by an evaluation run snapshot.
-CREATE TABLE evaluation_suites (
-  id TEXT PRIMARY KEY NOT NULL,
-  workflow_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+CREATE TABLE
+  evaluation_suites (
+    workspace_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY NOT NULL,
+    workflow_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 
-CREATE INDEX idx_evaluation_suites_workflow_name
-  ON evaluation_suites(workflow_id, name COLLATE NOCASE);
+CREATE INDEX idx_evaluation_suites_workflow_name ON evaluation_suites (workspace_id, workflow_id, name COLLATE NOCASE);
 
-CREATE TABLE evaluation_cases (
-  id TEXT PRIMARY KEY NOT NULL,
-  suite_id TEXT NOT NULL REFERENCES evaluation_suites(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  position INTEGER NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-  target_agent_id TEXT,
-  input_json TEXT NOT NULL DEFAULT '{}',
-  expectation_json TEXT NOT NULL DEFAULT '{}',
-  fixture_json TEXT NOT NULL DEFAULT '{}',
-  deleted_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(suite_id, position)
-);
+CREATE TABLE
+  evaluation_cases (
+    id TEXT PRIMARY KEY NOT NULL,
+    suite_id TEXT NOT NULL REFERENCES evaluation_suites (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    position INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    target_agent_id TEXT,
+    input_json TEXT NOT NULL DEFAULT '{}',
+    expectation_json TEXT NOT NULL DEFAULT '{}',
+    fixture_json TEXT NOT NULL DEFAULT '{}',
+    deleted_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (suite_id, position)
+  );
 
-CREATE INDEX idx_evaluation_cases_suite_position
-  ON evaluation_cases(suite_id, position ASC, id ASC);
+CREATE INDEX idx_evaluation_cases_suite_position ON evaluation_cases (suite_id, position ASC, id ASC);
 
-CREATE INDEX idx_evaluation_cases_active_suite_position
-  ON evaluation_cases(suite_id, deleted_at, position ASC, id ASC);
+CREATE INDEX idx_evaluation_cases_active_suite_position ON evaluation_cases (suite_id, deleted_at, position ASC, id ASC);
 
 -- A run freezes all mutable inputs. Re-scoring a historical execution must not
 -- accidentally use today's workflow or Case definition.
-CREATE TABLE evaluation_runs (
-  id TEXT PRIMARY KEY NOT NULL,
-  suite_id TEXT NOT NULL REFERENCES evaluation_suites(id) ON DELETE RESTRICT,
-  workflow_id TEXT NOT NULL,
-  -- A retry reuses frozen evidence from a finished batch rather than current
-  -- mutable definitions; retain its origin for audit and history display.
-  retry_of_run_id TEXT REFERENCES evaluation_runs(id) ON DELETE SET NULL,
-  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
-  workflow_snapshot_json TEXT NOT NULL,
-  -- Candidate releases are evaluated before receiving a release version.
-  -- This fingerprint binds the run to that exact immutable draft snapshot.
-  workflow_fingerprint TEXT NOT NULL,
-  suite_snapshot_json TEXT NOT NULL,
-  execution_profile_json TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  ended_at TEXT,
-  duration_ms INTEGER,
-  total_cases INTEGER NOT NULL DEFAULT 0,
-  passed_cases INTEGER NOT NULL DEFAULT 0,
-  failed_cases INTEGER NOT NULL DEFAULT 0,
-  total_tokens INTEGER,
-  estimated_cost_microusd INTEGER,
-  error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+CREATE TABLE
+  evaluation_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    suite_id TEXT NOT NULL REFERENCES evaluation_suites (id) ON DELETE RESTRICT,
+    workflow_id TEXT NOT NULL,
+    -- A retry reuses frozen evidence from a finished batch rather than current
+    -- mutable definitions; retain its origin for audit and history display.
+    retry_of_run_id TEXT REFERENCES evaluation_runs (id) ON DELETE SET NULL,
+    status TEXT NOT NULL CHECK (
+      status IN (
+        'queued',
+        'running',
+        'completed',
+        'failed',
+        'cancelled'
+      )
+    ),
+    workflow_snapshot_json TEXT NOT NULL,
+    -- Candidate releases are evaluated before receiving a release version.
+    -- This fingerprint binds the run to that exact immutable draft snapshot.
+    workflow_fingerprint TEXT NOT NULL,
+    suite_snapshot_json TEXT NOT NULL,
+    execution_profile_json TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_ms INTEGER,
+    total_cases INTEGER NOT NULL DEFAULT 0,
+    passed_cases INTEGER NOT NULL DEFAULT 0,
+    failed_cases INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER,
+    estimated_cost_microusd INTEGER,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+CREATE INDEX idx_evaluation_runs_suite_started ON evaluation_runs (suite_id, started_at DESC, id DESC);
+
+CREATE INDEX idx_evaluation_runs_workflow_started ON evaluation_runs (workflow_id, started_at DESC, id DESC);
+
+CREATE INDEX idx_evaluation_runs_workflow_fingerprint_started ON evaluation_runs (
+  workflow_id,
+  workflow_fingerprint,
+  started_at DESC,
+  id DESC
 );
 
-CREATE INDEX idx_evaluation_runs_suite_started
-  ON evaluation_runs(suite_id, started_at DESC, id DESC);
+CREATE INDEX idx_evaluation_runs_retry_of ON evaluation_runs (retry_of_run_id, started_at DESC, id DESC);
 
-CREATE INDEX idx_evaluation_runs_workflow_started
-  ON evaluation_runs(workflow_id, started_at DESC, id DESC);
+CREATE TABLE
+  evaluation_case_results (
+    id TEXT PRIMARY KEY NOT NULL,
+    evaluation_run_id TEXT NOT NULL REFERENCES evaluation_runs (id) ON DELETE CASCADE,
+    evaluation_case_id TEXT NOT NULL REFERENCES evaluation_cases (id) ON DELETE RESTRICT,
+    workflow_run_id TEXT REFERENCES run_records (id) ON DELETE SET NULL,
+    case_snapshot_json TEXT NOT NULL,
+    execution_status TEXT NOT NULL CHECK (
+      execution_status IN (
+        'queued',
+        'running',
+        'completed',
+        'blocked',
+        'failed',
+        'cancelled'
+      )
+    ),
+    verdict TEXT NOT NULL CHECK (
+      verdict IN ('pending', 'passed', 'failed', 'error', 'skipped')
+    ),
+    score REAL,
+    criteria_results_json TEXT NOT NULL DEFAULT '[]',
+    normalized_trace_json TEXT NOT NULL DEFAULT '{}',
+    actual_output_json TEXT NOT NULL DEFAULT '{}',
+    failure_reason TEXT,
+    duration_ms INTEGER,
+    total_tokens INTEGER,
+    estimated_cost_microusd INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (evaluation_run_id, evaluation_case_id)
+  );
 
-CREATE INDEX idx_evaluation_runs_workflow_fingerprint_started
-  ON evaluation_runs(workflow_id, workflow_fingerprint, started_at DESC, id DESC);
+CREATE INDEX idx_evaluation_case_results_run_verdict ON evaluation_case_results (evaluation_run_id, verdict, id ASC);
 
-CREATE INDEX idx_evaluation_runs_retry_of
-  ON evaluation_runs(retry_of_run_id, started_at DESC, id DESC);
+CREATE INDEX idx_evaluation_case_results_workflow_run ON evaluation_case_results (workflow_run_id);
 
-CREATE TABLE evaluation_case_results (
-  id TEXT PRIMARY KEY NOT NULL,
-  evaluation_run_id TEXT NOT NULL REFERENCES evaluation_runs(id) ON DELETE CASCADE,
-  evaluation_case_id TEXT NOT NULL REFERENCES evaluation_cases(id) ON DELETE RESTRICT,
-  workflow_run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
-  case_snapshot_json TEXT NOT NULL,
-  execution_status TEXT NOT NULL CHECK (execution_status IN ('queued', 'running', 'completed', 'blocked', 'failed', 'cancelled')),
-  verdict TEXT NOT NULL CHECK (verdict IN ('pending', 'passed', 'failed', 'error', 'skipped')),
-  score REAL,
-  criteria_results_json TEXT NOT NULL DEFAULT '[]',
-  normalized_trace_json TEXT NOT NULL DEFAULT '{}',
-  actual_output_json TEXT NOT NULL DEFAULT '{}',
-  failure_reason TEXT,
-  duration_ms INTEGER,
-  total_tokens INTEGER,
-  estimated_cost_microusd INTEGER,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(evaluation_run_id, evaluation_case_id)
-);
+CREATE TABLE
+  evaluation_quality_gates (
+    workspace_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    policy_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, workflow_id)
+  );
 
-CREATE INDEX idx_evaluation_case_results_run_verdict
-  ON evaluation_case_results(evaluation_run_id, verdict, id ASC);
+CREATE TABLE
+  evaluation_quality_gate_audits (
+    workspace_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY NOT NULL,
+    workflow_id TEXT NOT NULL,
+    release_version TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT 'local-user',
+    reason TEXT NOT NULL,
+    gate_snapshot_json TEXT NOT NULL,
+    evaluation_snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 
-CREATE INDEX idx_evaluation_case_results_workflow_run
-  ON evaluation_case_results(workflow_run_id);
-
-CREATE TABLE evaluation_quality_gates (
-  workflow_id TEXT PRIMARY KEY NOT NULL,
-  policy_json TEXT NOT NULL DEFAULT '{}',
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE evaluation_quality_gate_audits (
-  id TEXT PRIMARY KEY NOT NULL,
-  workflow_id TEXT NOT NULL,
-  release_version TEXT NOT NULL,
-  actor TEXT NOT NULL DEFAULT 'local-user',
-  reason TEXT NOT NULL,
-  gate_snapshot_json TEXT NOT NULL,
-  evaluation_snapshot_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX idx_evaluation_quality_gate_audits_workflow_created
-  ON evaluation_quality_gate_audits(workflow_id, created_at DESC);
+CREATE INDEX idx_evaluation_quality_gate_audits_workflow_created ON evaluation_quality_gate_audits (workspace_id, workflow_id, created_at DESC);
 
 -- Schedules retain a target discriminator even though the first product surface
 -- only creates App schedules. Workflow schedules can reuse the same durable
 -- trigger and occurrence history without a schema redesign.
-CREATE TABLE schedules (
-  id TEXT PRIMARY KEY NOT NULL,
-  name TEXT NOT NULL,
-  target_type TEXT NOT NULL CHECK (target_type IN ('app', 'workflow')),
-  target_id TEXT NOT NULL,
-  target_name TEXT NOT NULL,
-  target_snapshot_json TEXT NOT NULL,
-  -- The target snapshot is history-facing. Execution recipes may instead be
-  -- pinned Team releases or a local-latest resolver.
-  execution_recipe_json TEXT NOT NULL DEFAULT '{}',
-  cron_expression TEXT NOT NULL,
-  timezone TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-  overlap_policy TEXT NOT NULL DEFAULT 'skip_if_active'
-    CHECK (overlap_policy IN ('skip_if_active')),
-  next_run_at TEXT NOT NULL,
-  last_run_at TEXT,
-  last_error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+CREATE TABLE
+  schedules (
+    workspace_id TEXT NOT NULL,
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    target_type TEXT NOT NULL CHECK (target_type IN ('app', 'workflow')),
+    target_id TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    target_snapshot_json TEXT NOT NULL,
+    -- The target snapshot is history-facing. Execution recipes may instead be
+    -- pinned Team releases or a local-latest resolver.
+    execution_recipe_json TEXT NOT NULL DEFAULT '{}',
+    cron_expression TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    overlap_policy TEXT NOT NULL DEFAULT 'skip_if_active' CHECK (overlap_policy IN ('skip_if_active')),
+    next_run_at TEXT NOT NULL,
+    last_run_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 
-CREATE INDEX idx_schedules_due
-  ON schedules(enabled, next_run_at ASC, id ASC);
+CREATE INDEX idx_schedules_due ON schedules (workspace_id, enabled, next_run_at ASC, id ASC);
 
-CREATE TABLE schedule_occurrences (
-  id TEXT PRIMARY KEY NOT NULL,
-  schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
-  scheduled_for TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('queued', 'skipped')),
-  run_id TEXT REFERENCES run_records(id) ON DELETE SET NULL,
-  reason TEXT,
-  error TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE(schedule_id, scheduled_for)
-);
+CREATE TABLE
+  schedule_occurrences (
+    id TEXT PRIMARY KEY NOT NULL,
+    schedule_id TEXT NOT NULL REFERENCES schedules (id) ON DELETE CASCADE,
+    scheduled_for TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'skipped')),
+    run_id TEXT REFERENCES run_records (id) ON DELETE SET NULL,
+    reason TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (schedule_id, scheduled_for)
+  );
 
-CREATE INDEX idx_schedule_occurrences_schedule_time
-  ON schedule_occurrences(schedule_id, scheduled_for DESC);
+CREATE INDEX idx_schedule_occurrences_schedule_time ON schedule_occurrences (schedule_id, scheduled_for DESC);

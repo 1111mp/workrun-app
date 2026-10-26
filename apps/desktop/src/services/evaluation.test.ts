@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   compareEvaluationVersions,
+  listEvaluationCaseResults,
+  inspectEvaluationCaseResult,
   cancelEvaluationRun,
   listEvaluationCases,
   latestEvaluationRunsForWorkflowSnapshot,
@@ -116,6 +118,26 @@ describe('evaluation service contracts', () => {
     expect(invoke).toHaveBeenNthCalledWith(2, 'evaluation_run_retry_failed', {
       sourceRunId: 'run-source',
       id: 'run-retry',
+    });
+  });
+  it('pages result summaries and fetches full evidence only when requested', async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      total: 0,
+      completed: 0,
+      passed: 0,
+    });
+    await listEvaluationCaseResults('run', 'result-cursor');
+    expect(invoke).toHaveBeenLastCalledWith('evaluation_run_case_results', {
+      evaluationRunId: 'run',
+      after: 'result-cursor',
+    });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await inspectEvaluationCaseResult('run', 'result');
+    expect(invoke).toHaveBeenLastCalledWith('evaluation_case_result_inspect', {
+      evaluationRunId: 'run',
+      id: 'result',
     });
   });
 });

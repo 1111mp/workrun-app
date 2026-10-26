@@ -19,7 +19,11 @@ async fn database() -> SqlitePool {
         .await
         .unwrap();
     sqlx::query("CREATE TABLE model_calls(id TEXT PRIMARY KEY,workspace_id TEXT,session_kind TEXT,session_id TEXT,run_id TEXT,started_at TEXT,status TEXT,record_json TEXT)").execute(&pool).await.unwrap();
-    sqlx::query("CREATE TABLE assistant_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,session_json TEXT)")
+    sqlx::query("CREATE TABLE assistant_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,active_run_id TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE assistant_messages(workspace_id TEXT,session_id TEXT,run_id TEXT)")
         .execute(&pool)
         .await
         .unwrap();
@@ -225,7 +229,11 @@ async fn native_receipts_link_historical_execution_without_double_counting() {
     let pool = database().await;
     let writer = Writer::new(pool.clone());
     sqlx::query("INSERT INTO assistant_sessions VALUES ('session','personal',?)")
-        .bind(json!({"messages":[{"runId":"run"},{"runId":"run"}],"activeCall":{"runId":"run"}}).to_string())
+        .bind(None::<&str>)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO assistant_messages VALUES ('personal','session','run'),('personal','session','run')")
         .execute(&pool)
         .await
         .unwrap();

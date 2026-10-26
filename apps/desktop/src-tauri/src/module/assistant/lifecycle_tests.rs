@@ -151,7 +151,7 @@ async fn approved_edit_receives_current_graph_once_and_saves_only_the_original_t
         // Model-selected targets cannot replace the target confirmed by the user.
         tests::call(
             "save_workflow_draft",
-            json!({"document_json":graph.to_string(),"target_id":uuid::Uuid::new_v4().to_string()}),
+            json!({"document_json":graph.to_string(),"target_id":uuid::Uuid::new_v4().to_string(),"session_id":"forged-session"}),
         ),
         Content::new("model")
             .with_text(r#"{"status":"completed","summary":"Updated the existing workflow","assumptions":[]}"#),
@@ -180,6 +180,7 @@ async fn approved_edit_receives_current_graph_once_and_saves_only_the_original_t
     assert!(reply.call.is_none());
     assert_eq!(*workspace.reads.lock().unwrap(), 2);
     assert_eq!(workspace.writes.lock().unwrap().len(), 1);
+    assert_eq!(workspace.writes.lock().unwrap()[0]["session_id"], sid);
     assert_eq!(workspace.entry()["document"], graph);
     let saved = store.current(&sid).unwrap().unwrap();
     assert_eq!(saved.workflow_id.as_deref(), Some(workspace.id.as_str()));

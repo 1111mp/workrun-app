@@ -828,14 +828,14 @@ async fn commit_import(
             // Apps still use a file catalog. Keep its update permit and restore it
             // if the workflow transaction fails; activated sources follow that result.
             save_catalog(app_path.clone(), &app_data).await?;
-            if let Err(error) = tx.commit().await {
+            if let Err(error) = repository.commit(tx).await {
                 if let Err(rollback) = save_catalog(app_path, &original).await {
                     retain.store(true, std::sync::atomic::Ordering::Release);
-                    return Err(anyhow::anyhow!(error).context(format!(
+                    return Err(error.context(format!(
                         "App catalog rollback failed; source retained for recovery: {rollback}"
                     )));
                 }
-                return Err(error.into());
+                return Err(error);
             }
             Ok((app_data, saved))
         })
@@ -1134,7 +1134,7 @@ pub async fn workflow_share_configure(
             root = Some(saved);
         }
     }
-    tx.commit().await?;
+    repository.commit(tx).await?;
     root.context("Missing root Workflow")
 }
 

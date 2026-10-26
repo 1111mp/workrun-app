@@ -9,7 +9,7 @@ checkpoint's workflow fingerprint; it does not apply edits from the editor.
 ## Durable records
 
 - `run_attempts` retains each task execution interval, outcome, error and output
-  snapshot. Existing historical runs are backfilled. Resume after a user-input
+  snapshot. Resume after a user-input
   pause starts another interval in the same task.
 - `run_events` remains append-only with a monotonically increasing cursor. A
   previous writer drains before failure is published and recovery can begin.
@@ -22,11 +22,10 @@ checkpoint's workflow fingerprint; it does not apply edits from the editor.
 - `remote_tasks` retains encrypted A2A connection/task identities and protocol
   state. Adapter completion and the common reusable output commit together,
   before publishing Workrun State or the next graph checkpoint.
-- `workflow_tool_inputs` stores encrypted resolved tool inputs, linked to the
-  common operation. Tool results are encrypted envelopes in the common journal.
-- `workflow_process_inputs` stores encrypted scoped inputs and resolved catalog
-  snapshots. Process receipts include structured output, logs and exit status,
-  encrypted in the common journal before State/checkpoint publication.
+- `workflow_operation_inputs` stores encrypted tool or scoped Process inputs,
+  linked to the common operation. Adapter results (including Process output,
+  logs and exit status) are encrypted in the common journal before State and
+  checkpoint publication.
 - `workflow_subworkflow_invocations` binds each parent logical operation to a
   unique child checkpoint thread and encrypted input/DSL/scope snapshot.
 - `run_recovery_jobs` persists claim status, retry count, next check time and last
@@ -305,3 +304,12 @@ operation-review, or compensation panel. Automatic App cleanup and Remote
 cancellation messages appear under the owning node. Attempts and operation facts
 remain persisted for diagnostics and recovery. Application-interrupted recovery
 remains available from Run Workspace.
+
+## Storage lifecycle
+
+Each graph thread retains its latest 20 recovery checkpoints. Run events remain
+the durable execution history. Explicit deletion of an eligible terminal Run
+collects its exclusive operation records and cascades encrypted inputs, child
+invocation snapshots and compensation facts. Other Run attempts and operation
+dependencies pin shared facts. Active or unresolved recovery/compensation records
+cannot be deleted. Checkpoints shared by another Run or child invocation remain.

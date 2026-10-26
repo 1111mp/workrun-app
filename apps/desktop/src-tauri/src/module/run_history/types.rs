@@ -383,6 +383,8 @@ pub struct RunRecord {
     pub output_view: Value,
     pub target_snapshot: Value,
     pub runtime: Value,
+    pub last_sequence: i64,
+    pub last_span_id: Option<String>,
     pub events: Vec<StoredRunEvent>,
     pub spans: Vec<RunSpan>,
     pub execution_history: super::recovery::ExecutionHistory,
@@ -430,4 +432,17 @@ pub struct RunSpan {
 
 fn empty_json_object() -> Value {
     Value::Object(Default::default())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEventPage {
+    pub items: Vec<StoredRunEvent>,
+    pub next_cursor: Option<i64>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSpanPage {
+    pub items: Vec<RunSpan>,
+    pub next_cursor: Option<String>,
 }

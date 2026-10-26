@@ -1,6 +1,7 @@
 import {
   keepPreviousData,
   useQuery,
+  useInfiniteQuery,
   useQueryClient,
 } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
@@ -57,6 +58,7 @@ import {
   deleteEvaluationSuite,
   getEvaluationQualityGate,
   inspectEvaluationRun,
+  inspectEvaluationCaseResult,
   listEvaluationCaseResults,
   listEvaluationCases,
   listEvaluationRuns,
@@ -223,6 +225,10 @@ export function WorkflowEvaluations({
     useState<EvaluationVersionCaseDiff>();
   const [showArchivedCases, setShowArchivedCases] = useState(false);
   const [selectedResult, setSelectedResult] = useState<EvaluationCaseResult>();
+  const selectRun = (id?: string) => {
+    setSelectedResult(undefined);
+    setActiveRunId(id);
+  };
   const [suiteDialogOpen, setSuiteDialogOpen] = useState(false);
   const [qualityGateOpen, setQualityGateOpen] = useState(false);
   const [testImport, setTestImport] = useState<TestImportPreview>();
@@ -307,7 +313,7 @@ export function WorkflowEvaluations({
   const selectSuite = (suiteId?: string) => {
     // A Run belongs to exactly one Suite. Keeping it selected across a Suite
     // change mixes immutable historical evidence with unrelated Case rows.
-    setActiveRunId(undefined);
+    selectRun(undefined);
     setSelectedResult(undefined);
     setSelectedSuiteId(suiteId);
   };
@@ -342,12 +348,20 @@ export function WorkflowEvaluations({
     queryFn: () => listEvaluationCases(effectiveSuiteId!, showArchivedCases),
     enabled: Boolean(effectiveSuiteId),
   });
-  const results = useQuery({
+  const results = useInfiniteQuery({
     queryKey: ['evaluation-case-results', activeRunId],
-    queryFn: () => listEvaluationCaseResults(activeRunId!),
+    queryFn: ({ pageParam }) =>
+      listEvaluationCaseResults(activeRunId!, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: Boolean(activeRunId),
-    // Preserve the detail panel while switching between entries in Run history.
-    placeholderData: keepPreviousData,
+  });
+  const resultRows = results.data?.pages.flatMap((page) => page.items);
+  const selectedResultDetail = useQuery({
+    queryKey: ['evaluation-case-result', activeRunId, selectedResult?.id],
+    queryFn: () =>
+      inspectEvaluationCaseResult(activeRunId!, selectedResult!.id),
+    enabled: Boolean(activeRunId && selectedResult),
   });
   const runDetail = useQuery({
     queryKey: ['evaluation-run', activeRunId],
@@ -436,12 +450,15 @@ export function WorkflowEvaluations({
     configuredRoutes,
   );
 
-  const onRunStatusChanged = useEffectEvent((runId: string) => {
+  const onRunStatusChanged = useEffectEvent((_runId: string) => {
     // Workflow completion is emitted only after EvaluationStore has scored
     // its linked Case, so this event is the durable replacement for polling.
-    if (!results.data?.some((row) => row.workflowRunId === runId)) return;
+    if (!activeRunId) return;
     void queryClient.invalidateQueries({
       queryKey: ['evaluation-case-results', activeRunId],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ['evaluation-case-result', activeRunId],
     });
     void queryClient.invalidateQueries({
       queryKey: ['evaluation-run', activeRunId],
@@ -644,7 +661,7 @@ export function WorkflowEvaluations({
         workflowId,
         workflowSnapshot,
       });
-      setActiveRunId(run.id);
+      selectRun(run.id);
       await queryClient.invalidateQueries({
         queryKey: ['evaluation-case-results', run.id],
       });
@@ -695,7 +712,7 @@ export function WorkflowEvaluations({
         activeRunId,
         crypto.randomUUID(),
       );
-      setActiveRunId(run.id);
+      selectRun(run.id);
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: ['evaluation-case-results', run.id],
@@ -809,10 +826,8 @@ export function WorkflowEvaluations({
     }
   };
 
-  const completed =
-    results.data?.filter((row) => row.verdict !== 'pending').length ?? 0;
-  const passed =
-    results.data?.filter((row) => row.verdict === 'passed').length ?? 0;
+  const completed = results.data?.pages[0]?.completed ?? 0;
+  const passed = results.data?.pages[0]?.passed ?? 0;
 
   const exportCases = async () => {
     if (!selectedSuite || !cases.data) return;
@@ -1305,7 +1320,7 @@ export function WorkflowEvaluations({
                               size='sm'
                               variant='ghost'
                               onClick={() =>
-                                setActiveRunId(
+                                selectRun(
                                   runDetail.data?.retryOfRunId ?? undefined,
                                 )
                               }
@@ -1315,7 +1330,7 @@ export function WorkflowEvaluations({
                           ) : null}
                           {runDetail.data?.status !== 'queued' &&
                           runDetail.data?.status !== 'running' &&
-                          results.data?.some(
+                          resultRows?.some(
                             (result) =>
                               result.verdict === 'failed' ||
                               result.verdict === 'error',
@@ -1347,7 +1362,7 @@ export function WorkflowEvaluations({
                               ? t(
                                   `evaluations.outcomes.${runOutcome(runDetail.data)}`,
                                 )
-                              : `${completed}/${results.data?.length ?? 0}`}
+                              : `${completed}/${results.data?.pages[0]?.total ?? 0}`}
                           </Badge>
                         </div>
                       ) : null}
@@ -1423,7 +1438,7 @@ export function WorkflowEvaluations({
                         })()
                       : null}
                     <div className='flex flex-col gap-2'>
-                      {results.data?.map((result) => (
+                      {resultRows?.map((result) => (
                         <button
                           key={result.id}
                           type='button'
@@ -1460,14 +1475,29 @@ export function WorkflowEvaluations({
                         </button>
                       ))}
                     </div>
+                    {results.hasNextPage ? (
+                      <Button
+                        variant='outline'
+                        disabled={results.isFetchingNextPage}
+                        onClick={() => void results.fetchNextPage()}
+                      >
+                        {results.isFetchingNextPage ? <Spinner /> : null}
+                        {t('runs.loadMore')}
+                      </Button>
+                    ) : null}
+                    {results.isError ? (
+                      <p role='alert' className='text-destructive text-sm'>
+                        {String(results.error)}
+                      </p>
+                    ) : null}
                     {activeRunId &&
                     results.isFetching &&
-                    !results.data?.length ? (
+                    !resultRows?.length ? (
                       <div className='text-muted-foreground mt-3 flex items-center gap-2 text-sm'>
                         <Spinner /> {t('evaluations.creatingRun')}
                       </div>
                     ) : null}
-                    {activeRunId && results.data?.length ? (
+                    {activeRunId && resultRows?.length ? (
                       <p className='text-muted-foreground mt-3 text-xs'>
                         {t('evaluations.runProgress', { passed, completed })}
                       </p>
@@ -1503,7 +1533,7 @@ export function WorkflowEvaluations({
                             <button
                               key={run.id}
                               type='button'
-                              onClick={() => setActiveRunId(run.id)}
+                              onClick={() => selectRun(run.id)}
                               className={`grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border p-2 text-left transition-colors ${run.id === activeRunId ? 'border-primary bg-primary/5 ring-primary/10 shadow-sm ring-1' : 'bg-background/60 hover:bg-background hover:shadow-sm'}`}
                             >
                               <div
@@ -1835,7 +1865,14 @@ export function WorkflowEvaluations({
       />
 
       <EvaluationResultDialog
-        result={selectedResult}
+        result={selectedResultDetail.data ?? selectedResult}
+        loading={Boolean(selectedResult && selectedResultDetail.isPending)}
+        error={
+          selectedResultDetail.error
+            ? String(selectedResultDetail.error)
+            : undefined
+        }
+        onRetry={() => void selectedResultDetail.refetch()}
         cases={cases.data ?? []}
         nodeNames={evaluationNodeNameMap(configuredWorkflowNodes)}
         routeNames={Object.fromEntries(

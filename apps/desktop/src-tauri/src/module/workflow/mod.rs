@@ -1028,7 +1028,10 @@ pub(super) async fn compile_with_path(
     )?);
     let graph = graph
         .compile()?
-        .with_checkpointer_arc(Arc::clone(&state_checkpointer) as Arc<dyn Checkpointer>);
+        .with_checkpointer_arc(Arc::clone(&state_checkpointer) as Arc<dyn Checkpointer>)
+        // Checkpoints are recovery state, not an unbounded execution journal.
+        // Retain recent steps; run_events remains the durable history.
+        .with_checkpoint_retention(adk_rust::graph::checkpoint::RetentionPolicy::keep_last(20));
 
     Ok(CompiledWorkflow {
         graph,

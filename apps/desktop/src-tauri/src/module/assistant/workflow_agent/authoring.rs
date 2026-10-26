@@ -368,6 +368,9 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
                 args["operation_id"]
                     .as_str()
                     .context("Native delegation operation ID is missing")?,
+                args["session_id"]
+                    .as_str()
+                    .context("Native conversation ID is missing")?,
                 args["target_id"].as_str(),
                 document,
                 args.get("expected_document").cloned(),

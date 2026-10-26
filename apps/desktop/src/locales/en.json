@@ -4,7 +4,7 @@
     "open": "Open",
     "delete": "Delete",
     "deleteTitle": "Delete “{{name}}”?",
-    "deleteConversationDescription": "This permanently deletes this conversation. Associated execution records are retained. Active conversations cannot be deleted.",
+    "deleteConversationDescription": "This permanently deletes this conversation and removes unused workflow change snapshots. Current workflow versions, snapshots still used by other conversations, and execution records are retained. Active conversations cannot be deleted.",
     "deleteRunDescription": "This permanently deletes this execution record and its logs. Active runs and records linked to workflow conversations cannot be deleted.",
     "noConversations": "No recent conversations"
   },
@@ -2092,6 +2092,11 @@
     "emptyDescription": "Create or import an app or workflow. It will appear here when ready."
   },
   "assistant": {
+    "history": {
+      "loadEarlier": "Load earlier messages",
+      "loading": "Loading…",
+      "loadError": "Could not load earlier messages. Try again."
+    },
     "runConfirmation": {
       "reselect": "Not this workflow",
       "rejected": "Feedback sent",

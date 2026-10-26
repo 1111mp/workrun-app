@@ -151,7 +151,7 @@ The screenshots below use the Chinese interface.
 
 ![A saved workflow update in the conversation, with two modified items and the View changes button on the right of the change card.](/media/conversational-workflows/workflow-changes-entry.png)
 
-The dialog compares **the two saved versions before and after this update**. Later edits do not change this historical comparison. Open the workflow details to edit or inspect its latest state.
+The dialog compares **the two saved versions before and after this update**. Later edits do not change this historical comparison. Open the workflow details to edit or inspect its latest state. Deleting a conversation removes its unused change snapshots while retaining current workflow versions, snapshots referenced by other conversations, and execution records.
 
 ### Change details: see exactly what changed
 
@@ -191,6 +191,8 @@ The right panel breaks usage and call counts down by purpose. Expand the model-c
 Input and output make up the total. Cache hits are included in input, and reported reasoning usage is included in output; do not add them again. The panel counts recorded usage, so delayed or missing records can leave the totals incomplete. Token counts do not directly represent cost.
 
 ## Recover and troubleshoot
+
+Reopening a conversation loads its latest 50 messages. Scroll up and select **Load earlier messages** to retrieve an earlier page while keeping your reading position.
 
 | Situation                                                  | What to do                                                                                     |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |

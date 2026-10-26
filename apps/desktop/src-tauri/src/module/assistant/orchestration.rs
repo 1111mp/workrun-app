@@ -629,6 +629,8 @@ impl NativeTurn<'_> {
                 planning_agent::plans::validate_graph(plan, &document)?;
                 ensure!(self.saved.is_none(), "Workflow already saved for this handoff");
                 args["operation_id"] = record["id"].clone();
+                // Conversation ownership comes from native context, never model arguments.
+                args["session_id"] = json!(self.context.session_id.as_deref().context("Conversation is missing")?);
                 args.as_object_mut().unwrap().remove("expected_document");
                 if let Some(document) = record.get("baseDocument") {
                     args["expected_document"] = document.clone();

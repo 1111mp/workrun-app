@@ -143,6 +143,21 @@ impl WorkflowRepository {
                 "Workflow changed while this update was being prepared. Read the latest workflow and prepare a new update."
             );
         }
+        // Manual saves have no operation receipt to publish. Identical documents
+        // must not create a new historical version just because Save was clicked.
+        if operation.is_none()
+            && let Some(parent) = &parent
+        {
+            let row = sqlx::query("SELECT * FROM workflow_revisions WHERE workspace_id=? AND id=?")
+                .bind(&self.workspace)
+                .bind(parent)
+                .fetch_one(&mut **tx)
+                .await?;
+            let current = revision(row)?;
+            if current.document == candidate.document {
+                return Ok(current);
+            }
+        }
         let created: String = existing
             .as_ref()
             .map(|row| row.try_get("created_at"))
@@ -168,16 +183,88 @@ impl WorkflowRepository {
         Ok(saved)
     }
 
+    /// Pin both sides of the diff in the same transaction that publishes the save.
+    pub async fn retain_for_session(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        session_id: &str,
+        saved: &WorkflowRevision,
+    ) -> Result<()> {
+        for id in saved.parent_revision_id.iter().chain(std::iter::once(&saved.id)) {
+            sqlx::query(
+                "INSERT OR IGNORE INTO workflow_revision_sessions (workspace_id,session_id,revision_id) VALUES (?,?,?)",
+            )
+            .bind(&self.workspace)
+            .bind(session_id)
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// The caller holds the conversation lease; the write transaction also excludes
+    /// concurrent workflow saves and pins from other conversations during collection.
+    pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        let mut tx = self.begin().await?;
+        sqlx::query("INSERT OR IGNORE INTO workflow_revision_gc (workspace_id,revision_id) SELECT workspace_id,revision_id FROM workflow_revision_sessions WHERE workspace_id=? AND session_id=?")
+            .bind(&self.workspace).bind(session_id).execute(&mut *tx).await?;
+        let deleted = sqlx::query("DELETE FROM assistant_sessions WHERE workspace_id=? AND id=?")
+            .bind(&self.workspace)
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await?;
+        ensure!(
+            deleted.rows_affected() == 1,
+            "Conversation was not found in this workspace"
+        );
+        self.commit(tx).await
+    }
+
+    /// Publish only after diff pins are installed. Recheck versions retained by a
+    /// deleted conversation whenever a later save replaces a current pointer.
+    pub async fn commit(&self, mut tx: Transaction<'_, Sqlite>) -> Result<()> {
+        // Keep the latest 50 versions per workflow. Live diff references and the
+        // current pointer are protected by the collector below, regardless of age.
+        sqlx::query("INSERT OR IGNORE INTO workflow_revision_gc(workspace_id,revision_id) SELECT workspace_id,id FROM (SELECT workspace_id,id,ROW_NUMBER() OVER(PARTITION BY workflow_id ORDER BY created_at DESC,id DESC) AS position FROM workflow_revisions WHERE workspace_id=?) WHERE position>50")
+            .bind(&self.workspace).execute(&mut *tx).await?;
+        // Deleted identities prevent retries from resurrecting a removed workflow.
+        // Their documents survive only while a conversation still references them.
+        sqlx::query("INSERT OR IGNORE INTO workflow_revision_gc(workspace_id,revision_id) SELECT r.workspace_id,r.id FROM workflow_revisions r JOIN workflows w ON w.workspace_id=r.workspace_id AND w.id=r.workflow_id WHERE w.workspace_id=? AND w.deleted_at IS NOT NULL")
+            .bind(&self.workspace).execute(&mut *tx).await?;
+        let candidates: Vec<String> = sqlx::query_scalar("SELECT g.revision_id FROM workflow_revision_gc g WHERE g.workspace_id=? AND NOT EXISTS(SELECT 1 FROM workflows w WHERE w.workspace_id=g.workspace_id AND w.current_revision_id=g.revision_id) AND NOT EXISTS(SELECT 1 FROM workflow_revision_sessions s WHERE s.workspace_id=g.workspace_id AND s.revision_id=g.revision_id)")
+            .bind(&self.workspace).fetch_all(&mut *tx).await?;
+        for id in candidates {
+            // Parent IDs describe lineage, not a live diff reference. Detach only
+            // this metadata before removing an unreferenced immutable document.
+            sqlx::query(
+                "UPDATE workflow_revisions SET parent_revision_id=NULL WHERE workspace_id=? AND parent_revision_id=?",
+            )
+            .bind(&self.workspace)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DELETE FROM workflow_revisions WHERE workspace_id=? AND id=?")
+                .bind(&self.workspace)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn delete(&self, id: &str) -> Result<()> {
+        let mut tx = self.begin().await?;
         let result =
-            sqlx::query("UPDATE workflows SET deleted_at=? WHERE workspace_id=? AND id=? AND deleted_at IS NULL")
+            sqlx::query("UPDATE workflows SET deleted_at=?,current_revision_id=NULL WHERE workspace_id=? AND id=? AND deleted_at IS NULL")
                 .bind(Utc::now().to_rfc3339())
                 .bind(&self.workspace)
                 .bind(id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         ensure!(result.rows_affected() == 1, "Workflow is not in the catalog");
-        Ok(())
+        self.commit(tx).await
     }
 }
 

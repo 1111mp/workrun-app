@@ -85,7 +85,7 @@ impl Session {
                 .unwrap()
                 .retain(|key, _| matches!(key.as_str(), "messageId" | "text"));
         }
-        self.snapshot = session.clone();
+        self.snapshot = super::storage::window(session);
     }
     fn stream(&mut self, payload: &Value) {
         if !busy(&self.snapshot) || self.snapshot["responsePhaseId"] != payload["messageId"] {

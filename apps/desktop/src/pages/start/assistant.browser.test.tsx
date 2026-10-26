@@ -31,6 +31,7 @@ const host = vi.hoisted(() => {
   })();
   return {
     reply: vi.fn(),
+    history: vi.fn(),
     start: vi.fn(),
     inspect: vi.fn(),
     saved,
@@ -125,6 +126,7 @@ vi.mock('@tauri-apps/api/core', () => ({
         type: 'list',
         payload: [],
       };
+    if (command === 'assistant_session_history') return host.history(args);
     if (command === 'assistant_session_get') {
       await host.snapshotGate;
       const id = args.id as string;
@@ -1728,4 +1730,70 @@ it('keeps one live workflow and a continuous spinner across snapshots and the re
   await expect
     .element(screen.getByTestId('workflow-run-timeline'))
     .toBeVisible();
+});
+
+it('loads an earlier history page without losing recent messages or the reading position', async () => {
+  const session = {
+    id: 'paged-history',
+    title: '分页对话',
+    modelId: 'model',
+    status: 'idle',
+    steps: 0,
+    messages: [
+      {
+        id: 'recent',
+        role: 'user',
+        text: '最近的消息',
+        content: { role: 'user', parts: [] },
+      },
+    ],
+    history: { hasMore: true, beforeSequence: 50 },
+  };
+  host.saved.set(session.id, session);
+  host.history.mockResolvedValue({
+    ...session,
+    messages: [
+      {
+        id: 'older',
+        role: 'user',
+        text: '更早的消息',
+        content: { role: 'user', parts: [] },
+      },
+    ],
+    history: { hasMore: false, beforeSequence: 0 },
+  });
+  const screen = await render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter initialEntries={['/start?session=paged-history']}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await expect
+    .element(screen.getByText('最近的消息', { exact: true }))
+    .toBeVisible();
+  const viewport = document.querySelector<HTMLElement>(
+    '[data-conversation-scroll-viewport]',
+  )!;
+  viewport.scrollTop = 0;
+  await screen
+    .getByRole('button', { name: zh.assistant.history.loadEarlier })
+    .click();
+  await expect
+    .element(screen.getByText('更早的消息', { exact: true }))
+    .toBeVisible();
+  expect(
+    screen.getByText('最近的消息', { exact: true }).elements(),
+  ).toHaveLength(1);
+  expect(host.history).toHaveBeenCalledWith({
+    id: 'paged-history',
+    beforeSequence: 50,
+  });
+  expect(
+    screen
+      .getByRole('button', { name: zh.assistant.history.loadEarlier })
+      .elements(),
+  ).toHaveLength(0);
 });

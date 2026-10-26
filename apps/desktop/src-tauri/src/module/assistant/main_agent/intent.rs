@@ -288,13 +288,15 @@ mod tests {
         )
         .await
         .unwrap();
-        let source: String = sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id=?")
-            .bind(&id)
-            .fetch_one(&mut connection)
-            .await
-            .unwrap();
+        let rows: Vec<String> =
+            sqlx::query_scalar("SELECT message_json FROM assistant_messages WHERE session_id=? ORDER BY sequence")
+                .bind(&id)
+                .fetch_all(&mut connection)
+                .await
+                .unwrap();
         connection.close().await.unwrap();
-        let session: Value = serde_json::from_str(&source).unwrap();
+        let session =
+            json!({"messages":rows.into_iter().map(|s|serde_json::from_str::<Value>(&s).unwrap()).collect::<Vec<_>>()});
         let messages = session["messages"].as_array().unwrap();
         let history = messages
             .iter()

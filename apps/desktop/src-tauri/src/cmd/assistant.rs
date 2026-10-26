@@ -15,7 +15,10 @@ pub async fn assistant_turn_start(request: crate::module::assistant::session::Tu
 
 #[tauri::command]
 pub async fn assistant_turn_stop(id: String) -> CmdResult<Value> {
-    crate::module::assistant::session::stop(&id).await.stringify_err()
+    crate::module::assistant::session::stop(&id)
+        .await
+        .map(|session| crate::module::assistant::storage::window(&session))
+        .stringify_err()
 }
 
 #[tauri::command]
@@ -25,7 +28,7 @@ pub async fn assistant_session_get(id: String) -> CmdResult<Value> {
         let pool = DBManager::global().pool()?;
         loop {
             let before = crate::module::assistant::events::revision(&workspace, &id);
-            let session = crate::module::assistant::session::get(&pool, &workspace, &id).await?;
+            let session = crate::module::assistant::session::history(&pool, &workspace, &id, i64::MAX).await?;
             anyhow::ensure!(
                 workspace == active_workspace_id(),
                 "Workspace changed while reading conversation"
@@ -34,6 +37,22 @@ pub async fn assistant_session_get(id: String) -> CmdResult<Value> {
                 return Ok(snapshot);
             }
         }
+    }
+    .await
+    .stringify_err()
+}
+
+#[tauri::command]
+pub async fn assistant_session_history(id: String, before_sequence: i64) -> CmdResult<Value> {
+    async {
+        let workspace = active_workspace_id();
+        let pool = DBManager::global().pool()?;
+        let page = crate::module::assistant::session::history(&pool, &workspace, &id, before_sequence).await?;
+        anyhow::ensure!(
+            workspace == active_workspace_id(),
+            "Workspace changed while reading history"
+        );
+        Ok(page)
     }
     .await
     .stringify_err()
@@ -73,7 +92,7 @@ pub async fn assistant_session_save(session: Value) -> CmdResult {
 
 async fn list_in_workspace(workspace: &str) -> Result<Vec<Value>> {
     let pool = DBManager::global().pool()?;
-    let rows = sqlx::query("SELECT id, json_extract(session_json, '$.title') AS title, updated_at FROM assistant_sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT 50")
+    let rows = sqlx::query("SELECT id, title, updated_at FROM assistant_sessions WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC LIMIT 50")
         .bind(workspace).fetch_all(&pool).await?;
     rows.into_iter().map(|row| Ok(json!({"id": row.try_get::<String, _>("id")?, "title": row.try_get::<String, _>("title")?, "updatedAt": row.try_get::<String, _>("updated_at")?}))).collect()
 }
@@ -84,12 +103,7 @@ mod tests {
     #[tokio::test]
     async fn session_deletion_is_scoped_and_rejects_pending_calls() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../resources/migrations/20261016100000_assistant_sessions.up.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
+        crate::module::assistant::storage::test_schema(&pool).await;
         let id = uuid::Uuid::new_v4().to_string();
         let mut session = json!({"id": id, "title":"Test", "status":"idle", "messages":[]});
         save_session_in_pool(&pool, "personal", &session).await.unwrap();
@@ -124,26 +138,19 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../resources/migrations/20261016100000_assistant_sessions.up.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
+        crate::module::assistant::storage::test_schema(&pool).await;
         let id = uuid::Uuid::new_v4().to_string();
-        let session = json!({"id": id, "title": "Report", "messages": [{"role": "user", "text": "Hello"}]});
+        let session =
+            json!({"id": id, "title": "Report", "messages": [{"id":"message", "role": "user", "text": "Hello"}]});
         save_session_in_pool(&pool, "personal", &session).await.unwrap();
-        let saved: String =
-            sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id = ? AND workspace_id = ?")
-                .bind(&id)
-                .bind("personal")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&saved).unwrap(), session);
+        let saved = crate::module::assistant::storage::load(&pool, "personal", &id, None, true)
+            .await
+            .unwrap();
+        assert_eq!(saved["messages"], session["messages"]);
+        assert_eq!(saved["title"], session["title"]);
         assert!(save_session_in_pool(&pool, "team:other", &session).await.is_err());
         let hidden: Option<String> =
-            sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id = ? AND workspace_id = ?")
+            sqlx::query_scalar("SELECT state_json FROM assistant_sessions WHERE id = ? AND workspace_id = ?")
                 .bind(&id)
                 .bind("team:other")
                 .fetch_optional(&pool)

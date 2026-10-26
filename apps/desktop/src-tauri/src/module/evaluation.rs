@@ -293,6 +293,31 @@ struct EvaluationWorkflowSnapshot {
 /// normal user run history; history is only linked after an evaluation executes.
 pub struct EvaluationStore;
 
+// Child records inherit the suite's workspace. IDs are globally unique and
+// ownership is immutable, so one join guards every direct-ID store entry point.
+async fn ensure_evaluation_scope(pool: &sqlx::SqlitePool, kind: &str, id: &str) -> Result<()> {
+    ensure_evaluation_scope_in(pool, &crate::utils::dirs::active_workspace_id(), kind, id).await
+}
+async fn ensure_evaluation_scope_in(pool: &sqlx::SqlitePool, workspace: &str, kind: &str, id: &str) -> Result<()> {
+    let query = match kind {
+        "suite" => "SELECT EXISTS(SELECT 1 FROM evaluation_suites WHERE workspace_id=? AND id=?)",
+        "case" => {
+            "SELECT EXISTS(SELECT 1 FROM evaluation_cases c JOIN evaluation_suites s ON s.id=c.suite_id WHERE s.workspace_id=? AND c.id=?)"
+        },
+        "run" => {
+            "SELECT EXISTS(SELECT 1 FROM evaluation_runs r JOIN evaluation_suites s ON s.id=r.suite_id WHERE s.workspace_id=? AND r.id=?)"
+        },
+        _ => unreachable!(),
+    };
+    let owned: bool = sqlx::query_scalar(query)
+        .bind(workspace)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(owned, "Evaluation record was not found in this workspace");
+    Ok(())
+}
+
 impl EvaluationStore {
     pub async fn record_quality_gate_override(request: RecordQualityGateOverride) -> Result<()> {
         if request.workflow_id.trim().is_empty()
@@ -304,15 +329,15 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         // Audit payloads are snapshots so later policy edits cannot rewrite why
         // a specific release was allowed through a failed gate.
-        sqlx::query("INSERT INTO evaluation_quality_gate_audits (id, workflow_id, release_version, reason, gate_snapshot_json, evaluation_snapshot_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(uuid::Uuid::new_v4().to_string()).bind(request.workflow_id).bind(request.release_version).bind(request.reason).bind(request.gate_snapshot.to_string()).bind(request.evaluation_snapshot.to_string()).bind(chrono::Utc::now().to_rfc3339()).execute(&pool).await?;
+        sqlx::query("INSERT INTO evaluation_quality_gate_audits (workspace_id, id, workflow_id, release_version, reason, gate_snapshot_json, evaluation_snapshot_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(crate::utils::dirs::active_workspace_id()).bind(uuid::Uuid::new_v4().to_string()).bind(request.workflow_id).bind(request.release_version).bind(request.reason).bind(request.gate_snapshot.to_string()).bind(request.evaluation_snapshot.to_string()).bind(chrono::Utc::now().to_rfc3339()).execute(&pool).await?;
         Ok(())
     }
 
     pub async fn list_quality_gate_audits(workflow_id: &str) -> Result<Vec<QualityGateAuditSummary>> {
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, release_version, actor, reason, gate_snapshot_json, evaluation_snapshot_json, created_at FROM evaluation_quality_gate_audits WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 50")
-            .bind(workflow_id).fetch_all(&pool).await?;
+        let rows = sqlx::query("SELECT id, release_version, actor, reason, gate_snapshot_json, evaluation_snapshot_json, created_at FROM evaluation_quality_gate_audits WHERE workspace_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 50")
+            .bind(crate::utils::dirs::active_workspace_id()).bind(workflow_id).fetch_all(&pool).await?;
         rows.into_iter()
             .map(|row| {
                 Ok(QualityGateAuditSummary {
@@ -329,12 +354,14 @@ impl EvaluationStore {
     }
     pub async fn get_quality_gate(workflow_id: &str) -> Result<EvaluationQualityGate> {
         let pool = DBManager::global().pool()?;
-        let value = sqlx::query("SELECT policy_json FROM evaluation_quality_gates WHERE workflow_id = ?")
-            .bind(workflow_id)
-            .fetch_optional(&pool)
-            .await?
-            .map(|row| row.try_get::<String, _>("policy_json"))
-            .transpose()?;
+        let value =
+            sqlx::query("SELECT policy_json FROM evaluation_quality_gates WHERE workspace_id = ? AND workflow_id = ?")
+                .bind(crate::utils::dirs::active_workspace_id())
+                .bind(workflow_id)
+                .fetch_optional(&pool)
+                .await?
+                .map(|row| row.try_get::<String, _>("policy_json"))
+                .transpose()?;
         Ok(value
             .map(|json| serde_json::from_str(&json))
             .transpose()?
@@ -349,8 +376,11 @@ impl EvaluationStore {
             bail!("minimum pass rate must be between 0 and 1");
         }
         let pool = DBManager::global().pool()?;
-        sqlx::query("INSERT INTO evaluation_quality_gates (workflow_id, policy_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(workflow_id) DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at")
-            .bind(workflow_id).bind(serde_json::to_string(&policy)?).bind(chrono::Utc::now().to_rfc3339()).execute(&pool).await?;
+        for suite in &policy.required_suite_ids {
+            ensure_evaluation_scope(&pool, "suite", suite).await?;
+        }
+        sqlx::query("INSERT INTO evaluation_quality_gates (workspace_id, workflow_id, policy_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(workspace_id,workflow_id) DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at")
+            .bind(crate::utils::dirs::active_workspace_id()).bind(workflow_id).bind(serde_json::to_string(&policy)?).bind(chrono::Utc::now().to_rfc3339()).execute(&pool).await?;
         Ok(())
     }
     /// Completes the linked Case after Run History is durable. Evaluation
@@ -468,9 +498,9 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO evaluation_suites (id, workflow_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO evaluation_suites (workspace_id, id, workflow_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&request.id)
+        .bind(crate::utils::dirs::active_workspace_id()).bind(&request.id)
         .bind(&request.workflow_id)
         .bind(&request.name)
         .bind(&request.description)
@@ -495,9 +525,9 @@ impl EvaluationStore {
         }
         let pool = DBManager::global().pool()?;
         let rows = sqlx::query(
-            "SELECT suites.id, suites.workflow_id, suites.name, suites.description, suites.created_at, suites.updated_at, COUNT(cases.id) AS case_count FROM evaluation_suites AS suites LEFT JOIN evaluation_cases AS cases ON cases.suite_id = suites.id AND cases.deleted_at IS NULL WHERE suites.workflow_id = ? GROUP BY suites.id ORDER BY suites.name COLLATE NOCASE ASC, suites.id ASC",
+            "SELECT suites.id, suites.workflow_id, suites.name, suites.description, suites.created_at, suites.updated_at, COUNT(cases.id) AS case_count FROM evaluation_suites AS suites LEFT JOIN evaluation_cases AS cases ON cases.suite_id = suites.id AND cases.deleted_at IS NULL WHERE suites.workspace_id = ? AND suites.workflow_id = ? GROUP BY suites.id ORDER BY suites.name COLLATE NOCASE ASC, suites.id ASC",
         )
-        .bind(workflow_id)
+        .bind(crate::utils::dirs::active_workspace_id()).bind(workflow_id)
         .fetch_all(&pool)
         .await?;
         rows.into_iter().map(suite_from_row).collect()
@@ -508,6 +538,7 @@ impl EvaluationStore {
             bail!("suite id and name are required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", &request.id).await?;
         let now = chrono::Utc::now().to_rfc3339();
         let updated =
             sqlx::query("UPDATE evaluation_suites SET name = ?, description = ?, updated_at = ? WHERE id = ?")
@@ -532,6 +563,7 @@ impl EvaluationStore {
             bail!("suite id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", id).await?;
         let mut transaction = pool.begin().await?;
         let exists = sqlx::query("SELECT 1 FROM evaluation_suites WHERE id = ?")
             .bind(id)
@@ -560,6 +592,7 @@ impl EvaluationStore {
     pub async fn create_case(request: CreateEvaluationCase) -> Result<EvaluationCaseSummary> {
         validate_case(&request)?;
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", &request.suite_id).await?;
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO evaluation_cases (id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -606,6 +639,7 @@ impl EvaluationStore {
             bail!("suite id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", suite_id).await?;
         let rows = sqlx::query(
             "SELECT id, suite_id, name, description, position, enabled, target_agent_id, input_json, expectation_json, fixture_json, deleted_at, created_at, updated_at FROM evaluation_cases WHERE suite_id = ? AND (? OR deleted_at IS NULL) ORDER BY deleted_at IS NOT NULL ASC, position ASC, id ASC",
         )
@@ -621,6 +655,7 @@ impl EvaluationStore {
         }
         request.expectation.validate()?;
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "case", &request.id).await?;
         let now = chrono::Utc::now().to_rfc3339();
         let updated = sqlx::query("UPDATE evaluation_cases SET name = ?, description = ?, enabled = ?, target_agent_id = ?, input_json = ?, expectation_json = ?, fixture_json = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
             .bind(&request.name).bind(&request.description).bind(request.enabled).bind(&request.target_agent_id).bind(request.input.to_string()).bind(serde_json::to_string(&request.expectation)?).bind(request.fixture.to_string()).bind(&now).bind(&request.id)
@@ -638,6 +673,7 @@ impl EvaluationStore {
             bail!("case id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "case", id).await?;
         let deleted = sqlx::query("UPDATE evaluation_cases SET deleted_at = ?, enabled = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
             .bind(chrono::Utc::now().to_rfc3339()).bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
         if deleted.rows_affected() == 0 {
@@ -648,6 +684,7 @@ impl EvaluationStore {
 
     pub async fn restore_case(id: &str) -> Result<()> {
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "case", id).await?;
         let restored = sqlx::query("UPDATE evaluation_cases SET deleted_at = NULL, enabled = 1, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL")
             .bind(chrono::Utc::now().to_rfc3339()).bind(id).execute(&pool).await?;
         if restored.rows_affected() == 0 {
@@ -661,6 +698,7 @@ impl EvaluationStore {
             bail!("suite id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", suite_id).await?;
         let mut transaction = pool.begin().await?;
         let existing = sqlx::query(
             "SELECT id FROM evaluation_cases WHERE suite_id = ? AND deleted_at IS NULL ORDER BY position, id",
@@ -703,6 +741,7 @@ impl EvaluationStore {
             bail!("evaluation run id, suite id, and workflow id are required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", &request.suite_id).await?;
         let mut transaction = pool.begin().await?;
         let suite = sqlx::query("SELECT id, workflow_id, name, description FROM evaluation_suites WHERE id = ?")
             .bind(&request.suite_id)
@@ -784,6 +823,7 @@ impl EvaluationStore {
             bail!("source evaluation run id and retry run id are required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "run", source_run_id).await?;
         let summary = retry_failed_cases_in_pool(&pool, source_run_id, id).await?;
         Self::start_next_case(&summary.id).await?;
         Ok(summary)
@@ -794,6 +834,7 @@ impl EvaluationStore {
             bail!("evaluation run id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "run", evaluation_run_id).await?;
         let mut transaction = pool.begin().await?;
         let run = sqlx::query(
             "SELECT workflow_id, workflow_snapshot_json FROM evaluation_runs WHERE id = ? AND status IN ('queued', 'running')",
@@ -872,6 +913,7 @@ impl EvaluationStore {
             bail!("evaluation run id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "run", evaluation_run_id).await?;
         let workflow_run_ids = cancel_run_in_pool(&pool, evaluation_run_id).await?;
         for workflow_run_id in workflow_run_ids {
             // Cancellation is asynchronous for an active graph. The terminal
@@ -893,27 +935,37 @@ impl EvaluationStore {
         let profile: EvaluationExecutionProfile = serde_json::from_value(claimed.case_snapshot.fixture.clone())
             .context("evaluation case fixture is invalid")?;
         let workflow_run_id = uuid::Uuid::new_v4().to_string();
-        run_manager::start_workflow(StartWorkflowRun {
-            chat_session_id: None,
-            chat_turn_id: None,
-            run_id: workflow_run_id.clone(),
-            target_id: claimed.workflow_id.clone(),
-            target_name: snapshot.target_name,
-            input: claimed.case_snapshot.input.clone(),
-            target_snapshot: snapshot.target_snapshot,
-            release_id: snapshot.release_id,
-            release_version: snapshot.release_version,
-            dsl: snapshot.dsl,
-            initial_state: claimed.case_snapshot.input.clone(),
-            thread_id: format!(
-                "evaluation/{}/{}",
-                claimed.evaluation_run_id, claimed.evaluation_case_id
-            ),
-            evaluation_profile: Some(profile),
-            evaluation_result_id: Some(claimed.result_id.clone()),
-            schedule_trigger: None,
-            deeplink_trigger: None,
-        })
+        let pool = DBManager::global().pool()?;
+        let workspace: String = sqlx::query_scalar(
+            "SELECT s.workspace_id FROM evaluation_suites s JOIN evaluation_runs r ON r.suite_id=s.id WHERE r.id=?",
+        )
+        .bind(&claimed.evaluation_run_id)
+        .fetch_one(&pool)
+        .await?;
+        run_manager::start_workflow_in_workspace(
+            StartWorkflowRun {
+                chat_session_id: None,
+                chat_turn_id: None,
+                run_id: workflow_run_id.clone(),
+                target_id: claimed.workflow_id.clone(),
+                target_name: snapshot.target_name,
+                input: claimed.case_snapshot.input.clone(),
+                target_snapshot: snapshot.target_snapshot,
+                release_id: snapshot.release_id,
+                release_version: snapshot.release_version,
+                dsl: snapshot.dsl,
+                initial_state: claimed.case_snapshot.input.clone(),
+                thread_id: format!(
+                    "evaluation/{}/{}",
+                    claimed.evaluation_run_id, claimed.evaluation_case_id
+                ),
+                evaluation_profile: Some(profile),
+                evaluation_result_id: Some(claimed.result_id.clone()),
+                schedule_trigger: None,
+                deeplink_trigger: None,
+            },
+            &workspace,
+        )
         .await?;
         let pool = DBManager::global().pool()?;
         sqlx::query("UPDATE evaluation_case_results SET workflow_run_id = ?, updated_at = ? WHERE id = ?")
@@ -930,29 +982,20 @@ impl EvaluationStore {
         fail_case_start_in_pool(&pool, &claimed.evaluation_run_id, &claimed.result_id, reason).await
     }
 
-    pub async fn list_case_results(evaluation_run_id: &str) -> Result<Vec<EvaluationCaseResultSummary>> {
+    pub async fn list_case_results(evaluation_run_id: &str, after: Option<&str>) -> Result<EvaluationCaseResultPage> {
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, evaluation_case_id, workflow_run_id, execution_status, verdict, score, actual_output_json, criteria_results_json, normalized_trace_json, failure_reason, duration_ms, total_tokens, estimated_cost_microusd FROM evaluation_case_results WHERE evaluation_run_id = ? ORDER BY created_at ASC, id ASC")
-            .bind(evaluation_run_id).fetch_all(&pool).await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(EvaluationCaseResultSummary {
-                    id: row.try_get("id")?,
-                    evaluation_case_id: row.try_get("evaluation_case_id")?,
-                    workflow_run_id: row.try_get("workflow_run_id")?,
-                    execution_status: row.try_get("execution_status")?,
-                    verdict: row.try_get("verdict")?,
-                    score: row.try_get("score")?,
-                    actual_output: serde_json::from_str(&row.try_get::<String, _>("actual_output_json")?)?,
-                    criteria_results: serde_json::from_str(&row.try_get::<String, _>("criteria_results_json")?)?,
-                    normalized_trace: serde_json::from_str(&row.try_get::<String, _>("normalized_trace_json")?)?,
-                    failure_reason: row.try_get("failure_reason")?,
-                    duration_ms: row.try_get("duration_ms")?,
-                    total_tokens: row.try_get("total_tokens")?,
-                    estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
-                })
-            })
-            .collect()
+        ensure_evaluation_scope(&pool, "run", evaluation_run_id).await?;
+        case_result_page_in(&pool, evaluation_run_id, after).await
+    }
+
+    pub async fn inspect_case_result(evaluation_run_id: &str, id: &str) -> Result<EvaluationCaseResultSummary> {
+        let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "run", evaluation_run_id).await?;
+        let row=sqlx::query("SELECT id,evaluation_case_id,workflow_run_id,execution_status,verdict,score,actual_output_json,criteria_results_json,normalized_trace_json,failure_reason,duration_ms,total_tokens,estimated_cost_microusd FROM evaluation_case_results WHERE evaluation_run_id=? AND id=?")
+            .bind(evaluation_run_id).bind(id).fetch_one(&pool).await?;
+        case_results_from_rows(vec![row])?
+            .pop()
+            .context("Evaluation result was not found")
     }
 
     pub async fn inspect_run(evaluation_run_id: &str) -> Result<EvaluationRunDetail> {
@@ -960,6 +1003,7 @@ impl EvaluationStore {
             bail!("evaluation run id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "run", evaluation_run_id).await?;
         let row = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE id = ?")
             .bind(evaluation_run_id)
             .fetch_optional(&pool)
@@ -990,6 +1034,7 @@ impl EvaluationStore {
             bail!("suite id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", suite_id).await?;
         let rows = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE suite_id = ? ORDER BY started_at DESC, id DESC LIMIT 30")
             .bind(suite_id).fetch_all(&pool).await?;
         rows.into_iter()
@@ -1021,6 +1066,7 @@ impl EvaluationStore {
             bail!("suite id is required");
         }
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", suite_id).await?;
         // Draft snapshots predate releases, so they deliberately form a
         // separate comparable cohort instead of being attributed to a release.
         let rows = sqlx::query("SELECT json_extract(workflow_snapshot_json, '$.releaseId') AS release_id, COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') AS release_version, json_extract(workflow_snapshot_json, '$.baseReleaseVersion') AS base_release_version, workflow_fingerprint, COUNT(*) AS run_count, SUM(total_cases) AS total_cases, SUM(passed_cases) AS passed_cases, SUM(COALESCE(duration_ms, 0)) AS total_duration_ms, SUM(COALESCE(estimated_cost_microusd, 0)) AS estimated_cost_microusd FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL GROUP BY release_id, release_version, base_release_version, workflow_fingerprint ORDER BY MAX(started_at) DESC")
@@ -1055,6 +1101,7 @@ impl EvaluationStore {
         candidate: &str,
     ) -> Result<Vec<EvaluationVersionCaseDiff>> {
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", suite_id).await?;
         let latest_sql = "SELECT id FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL AND (workflow_fingerprint = ? OR (json_extract(workflow_snapshot_json, '$.releaseId') IS NOT NULL AND COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') = ?)) ORDER BY started_at DESC, id DESC LIMIT 1";
         let baseline_run = sqlx::query_scalar::<_, String>(latest_sql)
             .bind(suite_id)
@@ -1130,6 +1177,7 @@ impl EvaluationStore {
         case_id: &str,
     ) -> Result<EvaluationVersionCaseCriterionComparison> {
         let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "suite", suite_id).await?;
         let latest_sql = "SELECT id FROM evaluation_runs WHERE suite_id = ? AND retry_of_run_id IS NULL AND (workflow_fingerprint = ? OR (json_extract(workflow_snapshot_json, '$.releaseId') IS NOT NULL AND COALESCE(json_extract(workflow_snapshot_json, '$.releaseVersion'), 'draft') = ?)) ORDER BY started_at DESC, id DESC LIMIT 1";
         let baseline_run = sqlx::query_scalar::<_, String>(latest_sql)
             .bind(suite_id)
@@ -1191,8 +1239,8 @@ impl EvaluationStore {
             bail!("workflow id is required");
         }
         let pool = DBManager::global().pool()?;
-        let row = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE workflow_id = ? ORDER BY started_at DESC, id DESC LIMIT 1")
-            .bind(workflow_id).fetch_optional(&pool).await?;
+        let row = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE suite_id IN (SELECT id FROM evaluation_suites WHERE workspace_id=?) AND workflow_id = ? ORDER BY started_at DESC, id DESC LIMIT 1")
+            .bind(crate::utils::dirs::active_workspace_id()).bind(workflow_id).fetch_optional(&pool).await?;
         row.map(|row| {
             Ok(EvaluationRunDetail {
                 summary: EvaluationRunSummary {
@@ -1227,8 +1275,8 @@ impl EvaluationStore {
             bail!("workflow id is required");
         }
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE workflow_id = ? AND workflow_fingerprint = ? AND retry_of_run_id IS NULL ORDER BY started_at DESC, id DESC")
-            .bind(workflow_id)
+        let rows = sqlx::query("SELECT id, suite_id, workflow_id, retry_of_run_id, status, total_cases, started_at, ended_at, duration_ms, passed_cases, failed_cases, total_tokens, estimated_cost_microusd, error FROM evaluation_runs WHERE suite_id IN (SELECT id FROM evaluation_suites WHERE workspace_id=?) AND workflow_id = ? AND workflow_fingerprint = ? AND retry_of_run_id IS NULL ORDER BY started_at DESC, id DESC")
+            .bind(crate::utils::dirs::active_workspace_id()).bind(workflow_id)
             .bind(workflow_snapshot_fingerprint(workflow_snapshot))
             .fetch_all(&pool)
             .await?;
@@ -1267,6 +1315,75 @@ struct WorkflowRunMetrics {
     duration_ms: Option<i64>,
     total_tokens: Option<i64>,
     estimated_cost_microusd: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationCaseResultPage {
+    pub items: Vec<EvaluationCaseResultSummary>,
+    pub next_cursor: Option<String>,
+    pub total: i64,
+    pub completed: i64,
+    pub passed: i64,
+}
+async fn case_result_page_in(
+    pool: &sqlx::SqlitePool,
+    evaluation_run_id: &str,
+    after: Option<&str>,
+) -> Result<EvaluationCaseResultPage> {
+    // The list never reads potentially large trace/output payloads.
+    let rows = sqlx::query("SELECT id,evaluation_case_id,workflow_run_id,execution_status,verdict,score,NULL AS actual_output_json,NULL AS criteria_results_json,NULL AS normalized_trace_json,failure_reason,duration_ms,total_tokens,estimated_cost_microusd FROM evaluation_case_results WHERE evaluation_run_id=? AND id>? ORDER BY id LIMIT 101")
+            .bind(evaluation_run_id).bind(after.unwrap_or("")).fetch_all(pool).await?;
+    let mut items = case_results_from_rows(rows)?;
+    let next_cursor = if items.len() > 100 {
+        items.pop();
+        items.last().map(|row| row.id.clone())
+    } else {
+        None
+    };
+    let (total,completed,passed):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COALESCE(SUM(verdict!='pending'),0),COALESCE(SUM(verdict='passed'),0) FROM evaluation_case_results WHERE evaluation_run_id=?")
+            .bind(evaluation_run_id).fetch_one(pool).await?;
+    Ok(EvaluationCaseResultPage {
+        items,
+        next_cursor,
+        total,
+        completed,
+        passed,
+    })
+}
+
+fn case_results_from_rows(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<EvaluationCaseResultSummary>> {
+    rows.into_iter()
+        .map(|row| {
+            Ok(EvaluationCaseResultSummary {
+                id: row.try_get("id")?,
+                evaluation_case_id: row.try_get("evaluation_case_id")?,
+                workflow_run_id: row.try_get("workflow_run_id")?,
+                execution_status: row.try_get("execution_status")?,
+                verdict: row.try_get("verdict")?,
+                score: row.try_get("score")?,
+                actual_output: row
+                    .try_get::<Option<String>, _>("actual_output_json")?
+                    .map(|v| serde_json::from_str(&v))
+                    .transpose()?
+                    .unwrap_or(Value::Null),
+                criteria_results: row
+                    .try_get::<Option<String>, _>("criteria_results_json")?
+                    .map(|v| serde_json::from_str(&v))
+                    .transpose()?
+                    .unwrap_or(Value::Null),
+                normalized_trace: row
+                    .try_get::<Option<String>, _>("normalized_trace_json")?
+                    .map(|v| serde_json::from_str(&v))
+                    .transpose()?
+                    .unwrap_or(Value::Null),
+                failure_reason: row.try_get("failure_reason")?,
+                duration_ms: row.try_get("duration_ms")?,
+                total_tokens: row.try_get("total_tokens")?,
+                estimated_cost_microusd: row.try_get("estimated_cost_microusd")?,
+            })
+        })
+        .collect()
 }
 
 async fn workflow_run_metrics(pool: &sqlx::SqlitePool, workflow_run_id: &str) -> Result<WorkflowRunMetrics> {
@@ -3045,5 +3162,66 @@ mod tests {
             workflow_snapshot_fingerprint(&baseline),
             workflow_snapshot_fingerprint(&changed),
         );
+    }
+    #[tokio::test]
+    async fn evaluation_children_inherit_workspace_ownership() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../resources/migrations/20260904083536_create_run_history.up.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql("INSERT INTO evaluation_suites(workspace_id,id,workflow_id,name,created_at,updated_at) VALUES('personal','suite','shared-workflow','Suite','now','now'); INSERT INTO evaluation_cases(id,suite_id,name,position,created_at,updated_at) VALUES('case','suite','Case',0,'now','now'); INSERT INTO evaluation_runs(id,suite_id,workflow_id,status,workflow_snapshot_json,workflow_fingerprint,suite_snapshot_json,execution_profile_json,started_at,created_at,updated_at) VALUES('run','suite','shared-workflow','queued','{}','fingerprint','{}','{}','now','now','now');").execute(&pool).await.unwrap();
+        for (kind, id) in [("suite", "suite"), ("case", "case"), ("run", "run")] {
+            ensure_evaluation_scope_in(&pool, "personal", kind, id).await.unwrap();
+            assert!(
+                ensure_evaluation_scope_in(&pool, "team/default", kind, id)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    #[tokio::test]
+    async fn result_pages_do_not_embed_trace_or_output_history() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../resources/migrations/20260904083536_create_run_history.up.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql("INSERT INTO evaluation_suites(workspace_id,id,workflow_id,name,created_at,updated_at) VALUES('personal','suite','workflow','Suite','now','now'); INSERT INTO evaluation_runs(id,suite_id,workflow_id,status,workflow_snapshot_json,workflow_fingerprint,suite_snapshot_json,execution_profile_json,started_at,created_at,updated_at) VALUES('run','suite','workflow','completed','{}','fingerprint','{}','{}','now','now','now');").execute(&pool).await.unwrap();
+        for i in 0..125 {
+            sqlx::query("INSERT INTO evaluation_cases(id,suite_id,name,position,created_at,updated_at) VALUES(?,'suite','Case',?,'now','now')")
+                .bind(format!("case-{i}")).bind(i).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO evaluation_case_results(id,evaluation_run_id,evaluation_case_id,case_snapshot_json,execution_status,verdict,actual_output_json,normalized_trace_json,created_at,updated_at) VALUES(?,'run',?,'{}','completed','passed',?,?,'now','now')")
+                .bind(format!("result-{i:03}")).bind(format!("case-{i}"))
+                .bind(json!({"body":"x".repeat(64000)}).to_string()).bind(json!({"trace":"x".repeat(64000)}).to_string()).execute(&pool).await.unwrap();
+        }
+        let first = case_result_page_in(&pool, "run", None).await.unwrap();
+        assert_eq!(first.items.len(), 100);
+        assert_eq!(first.total, 125);
+        assert_eq!(first.completed, 125);
+        assert!(
+            first
+                .items
+                .iter()
+                .all(|row| row.actual_output.is_null() && row.normalized_trace.is_null())
+        );
+        let next = case_result_page_in(&pool, "run", first.next_cursor.as_deref())
+            .await
+            .unwrap();
+        assert_eq!(next.items.len(), 25);
+        assert!(next.next_cursor.is_none());
+        assert_ne!(first.items.last().unwrap().id, next.items[0].id);
     }
 }

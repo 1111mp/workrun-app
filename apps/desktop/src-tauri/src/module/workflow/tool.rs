@@ -679,7 +679,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!raw.contains("private-resource"));
-        let input: String = sqlx::query_scalar("SELECT input_ciphertext FROM workflow_tool_inputs")
+        let input: String = sqlx::query_scalar("SELECT input_ciphertext FROM workflow_operation_inputs")
             .fetch_one(&pool)
             .await
             .unwrap();

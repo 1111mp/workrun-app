@@ -467,7 +467,9 @@ mod workflow;
 use events::{publish_run_status, terminate_process_tree};
 use execution::execute_claimed_run;
 
+pub(crate) use app::start_app_in_workspace;
 pub use app::{cancel_running_app, start_app};
+pub(crate) use workflow::start_workflow_in_workspace;
 pub use workflow::{
     MissingReplayDependency, cancel_waiting_workflow, dismiss_interrupted_run, recover_interrupted_workflow,
     replay_missing_dependencies, replay_run, resolve_workflow_action, resume_workflow, review_operation,

@@ -15,7 +15,7 @@ export function groupAssistantMessages(
   interactionTurnIds: Iterable<string> = [],
 ): AssistantTurnGroup[] {
   const groups: AssistantTurnGroup[] = [];
-  let turnId = '';
+  let turnId = messages[0]?.turnId ?? '';
   let reply: AssistantTurnGroup | undefined;
   for (const message of messages) {
     if (message.role === 'user') {

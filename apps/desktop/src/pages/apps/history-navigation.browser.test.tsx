@@ -62,6 +62,8 @@ const record: RunRecord = {
   runtime: {},
   events: [],
   spans: [],
+  lastSequence: -1,
+  lastSpanId: null,
 };
 
 it.each([false, true])(

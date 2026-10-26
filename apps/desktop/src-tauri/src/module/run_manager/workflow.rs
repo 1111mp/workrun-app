@@ -18,7 +18,11 @@ pub struct MissingReplayDependency {
     pub installation_scope: String,
 }
 
-pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
+pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
+    start_workflow_in_workspace(request, &crate::utils::dirs::active_workspace_id()).await
+}
+
+pub(crate) async fn start_workflow_in_workspace(mut request: StartWorkflowRun, workspace: &str) -> Result<()> {
     if request.run_id.trim().is_empty() || request.thread_id.trim().is_empty() {
         bail!("run id and thread id are required");
     }
@@ -142,7 +146,7 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
         let pool = DBManager::global().pool()?;
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
         ChatSessionStore::ensure_turn_available(&mut transaction, session_id).await?;
-        crate::module::run_history::create_in_transaction(&mut transaction, &record).await?;
+        crate::module::run_history::create_in_transaction_for_workspace(&mut transaction, &record, workspace).await?;
         let sequence: i64 =
             sqlx::query_scalar("SELECT COALESCE(MAX(sequence), -1) + 1 FROM chat_turns WHERE session_id = ?")
                 .bind(session_id)
@@ -158,7 +162,7 @@ pub async fn start_workflow(mut request: StartWorkflowRun) -> Result<()> {
             .await?;
         transaction.commit().await?;
     } else {
-        RunHistoryStore::create(record).await?;
+        RunHistoryStore::create_for_workspace(record, workspace).await?;
     }
     publish_run_status(&request.run_id, RunStatus::Queued)?;
     RunManager::global().supervisor.notify();

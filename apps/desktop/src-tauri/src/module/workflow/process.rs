@@ -67,7 +67,7 @@ pub(super) async fn execute_durable(
     let encrypted =
         crate::config::encrypt_data_with_key(&json!({"input": input, "snapshot": snapshot}).to_string(), key)
             .map_err(|_| anyhow!("Cannot encrypt Process input"))?;
-    sqlx::query("INSERT OR IGNORE INTO workflow_process_inputs (operation_id, input_ciphertext) VALUES (?, ?)")
+    sqlx::query("INSERT OR IGNORE INTO workflow_operation_inputs (operation_id, input_ciphertext) VALUES (?, ?)")
         .bind(&op.id)
         .bind(encrypted)
         .execute(&pool)
@@ -325,7 +325,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!raw.contains("generated.txt"));
-        let raw: String = sqlx::query_scalar("SELECT input_ciphertext FROM workflow_process_inputs")
+        let raw: String = sqlx::query_scalar("SELECT input_ciphertext FROM workflow_operation_inputs")
             .fetch_one(&pool)
             .await
             .unwrap();

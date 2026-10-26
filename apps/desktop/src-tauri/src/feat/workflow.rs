@@ -14,13 +14,14 @@ pub async fn get_workflows() -> Result<Vec<IWorkflow>> {
 
 pub async fn create_workflow(document: Value) -> Result<IWorkflow> {
     validate_document(&document, None)?;
-    save_document(&Uuid::now_v7().to_string(), document, false, "manual", None, None)
+    save_document(&Uuid::now_v7().to_string(), document, false, "manual", None, None, None)
         .await
         .map(|r| r.workflow())
 }
 
 pub(crate) async fn save_authored_workflow(
     operation_id: &str,
+    session_id: &str,
     target_id: Option<&str>,
     document: Value,
     expected_document: Option<Value>,
@@ -33,6 +34,7 @@ pub(crate) async fn save_authored_workflow(
         "conversation",
         Some(operation_id),
         expected_document.as_ref(),
+        Some(session_id),
     )
     .await?;
     Ok((revision.workflow(), revision))
@@ -45,6 +47,7 @@ async fn save_document(
     source: &str,
     operation: Option<&str>,
     expected: Option<&Value>,
+    session_id: Option<&str>,
 ) -> Result<WorkflowRevision> {
     validate_id(id)?;
     validate_document(&document, Some(id))?;
@@ -61,7 +64,10 @@ async fn save_document(
     let revision = repository
         .save(&mut tx, candidate, revise, source, operation, expected)
         .await?;
-    tx.commit().await?;
+    if let Some(session_id) = session_id {
+        repository.retain_for_session(&mut tx, session_id, &revision).await?;
+    }
+    repository.commit(tx).await?;
     Ok(revision)
 }
 
@@ -83,7 +89,7 @@ pub async fn get_workflow(id: &str) -> Result<IWorkflow> {
 }
 
 pub async fn update_workflow(id: &str, document: Value) -> Result<IWorkflow> {
-    save_document(id, document, true, "manual", None, None)
+    save_document(id, document, true, "manual", None, None, None)
         .await
         .map(|r| r.workflow())
 }

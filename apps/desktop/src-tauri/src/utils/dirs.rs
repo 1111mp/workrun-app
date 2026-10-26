@@ -186,6 +186,7 @@ pub fn default_team_workspace_scope() -> WorkspaceScope {
 
 pub fn initialize_active_workspace_scope(scope: WorkspaceScope) {
     *ACTIVE_WORKSPACE_SCOPE.write() = scope;
+    crate::module::schedule::notify_scheduler();
 }
 
 /// Stable local ownership key; it does not depend on the filesystem path.
@@ -236,11 +237,6 @@ pub fn app_logs_dir() -> Result<PathBuf> {
 /// sqlite db dir
 pub fn app_db_dir() -> Result<PathBuf> {
     Ok(global_paths()?.db_dir())
-}
-
-/// db migration dir
-pub fn db_migration_dir() -> Result<PathBuf> {
-    Ok(app_resources_dir()?.join("migrations"))
 }
 
 /// runtime dir

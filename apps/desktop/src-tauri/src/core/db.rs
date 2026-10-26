@@ -9,6 +9,12 @@ use sqlx::{
 };
 use std::{str::FromStr as _, sync::OnceLock};
 
+fn app_migrator() -> migrate::Migrator {
+    let mut migrator = sqlx::migrate!("resources/migrations");
+    migrator.dangerous_set_table_name("_workrun_sqlx_migrations");
+    migrator
+}
+
 pub struct DBManager {
     db_pool: OnceLock<sqlx::SqlitePool>,
 }
@@ -44,11 +50,9 @@ impl DBManager {
 
         logging!(info, Type::Setup, "Successfully connected to the client database");
 
-        // Run migrations
-        let migration_dir = dirs::db_migration_dir()?;
-        let mut migrator = migrate::Migrator::new(migration_dir).await?;
-        migrator.dangerous_set_table_name("_workrun_sqlx_migrations");
-        migrator.run(&db_pool).await?;
+        // Compile the schema with this binary; development resource directories
+        // can retain SQL files that were removed during a baseline consolidation.
+        app_migrator().run(&db_pool).await?;
 
         // No request from a previous process can still be running after restart.
         sqlx::query("UPDATE model_calls SET status='interrupted', record_json=json_set(record_json, '$.status', 'interrupted') WHERE status='running'")
@@ -78,5 +82,56 @@ impl DBManager {
             .get()
             .cloned()
             .ok_or_else(|| anyhow!("database is not initialized"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn consolidated_migrations_initialize_revert_and_reapply_without_legacy_steps() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().in_memory(true).foreign_keys(true))
+            .await
+            .unwrap();
+        let migrator = app_migrator();
+        migrator.run(&pool).await.unwrap();
+        let versions: Vec<i64> = sqlx::query_scalar("SELECT version FROM _workrun_sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(versions, vec![20260904083536, 20261005100000, 20261016100000]);
+        assert!(
+            sqlx::query("SELECT state_json,title,model_id,status,created_at FROM assistant_sessions")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        migrator.undo(&pool, 20261005100000).await.unwrap();
+        assert!(
+            sqlx::query("SELECT * FROM assistant_sessions")
+                .fetch_all(&pool)
+                .await
+                .is_err()
+        );
+        assert!(sqlx::query("SELECT * FROM run_records").fetch_all(&pool).await.is_ok());
+        migrator.run(&pool).await.unwrap();
+        assert!(
+            sqlx::query("SELECT * FROM assistant_messages")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

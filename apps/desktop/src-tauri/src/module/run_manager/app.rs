@@ -2,10 +2,14 @@ use super::events::{complete_app_cancellation, finish_run, publish_run_status, t
 use super::*;
 
 pub async fn start_app(request: StartAppRun) -> Result<()> {
+    start_app_in_workspace(request, &crate::utils::dirs::active_workspace_id()).await
+}
+
+pub(crate) async fn start_app_in_workspace(request: StartAppRun, workspace: &str) -> Result<()> {
     if request.run_id.trim().is_empty() || request.target_id.trim().is_empty() {
         bail!("run id and target id are required");
     }
-    RunHistoryStore::create(CreateRunRecord {
+    RunHistoryStore::create_for_workspace(CreateRunRecord {
         id: request.run_id.clone(),
         target_type: RunTargetType::App,
         target_id: request.target_id.clone(),
@@ -16,7 +20,7 @@ pub async fn start_app(request: StartAppRun) -> Result<()> {
         output_view: request.output_view,
         target_snapshot: request.target_snapshot,
         runtime: json!({ "kind": "app", "trigger": request.deeplink_trigger.or_else(|| request.schedule_trigger.map(|trigger| json!({ "type": "schedule", "scheduleId": trigger.schedule_id, "scheduledFor": trigger.scheduled_for }))) }),
-    })
+    }, workspace)
     .await?;
     publish_run_status(&request.run_id, RunStatus::Queued)?;
     RunManager::global().supervisor.notify();
@@ -70,12 +74,9 @@ async fn reconcile_inactive_app_run(run_id: &str) -> Result<()> {
     if run.summary.target_type != "app" || run.summary.status != "running" {
         bail!("App run is no longer active: {run_id}");
     }
-    let exit_code = run.events.iter().rev().find_map(|stored| {
-        let event = stored.event.as_object()?;
-        (event.get("type")?.as_str()? == "app_done")
-            .then(|| event.get("execution")?.get("exitCode")?.as_i64())
-            .flatten()
-    });
+    let exit_code = RunHistoryStore::last_event(run_id, "app_done")
+        .await?
+        .and_then(|event| event["execution"]["exitCode"].as_i64());
     let (status, error) = match exit_code {
         Some(0) => (RunStatus::Completed, None),
         Some(code) => (RunStatus::Failed, Some(format!("Process exited with code {code}"))),

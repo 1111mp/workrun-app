@@ -4,6 +4,7 @@ import { createTeamAuthClient } from '@/lib/auth-client';
 import {
   startAssistantTurn,
   getAssistantSnapshot,
+  getAssistantHistory,
   getAssistantListSnapshot,
   type AssistantEvent,
   type AssistantSession,
@@ -41,9 +42,98 @@ export function ensureWorkspace(scope: string) {
       'Workspace changed. Reopen this conversation in its workspace.',
     );
 }
+const itemFields = [
+  'workflowPlans',
+  'workflowConfirmations',
+  'toolConfirmations',
+  'reasoning',
+  'activities',
+] as const;
+function mergeHistory(
+  previous: AssistantSession,
+  incoming: AssistantSession,
+  prepend = false,
+): AssistantSession {
+  const merge = <T>(older: T[], newer: T[], key: (value: T) => string) => {
+    const result = new Map(older.map((value) => [key(value), value]));
+    for (const value of newer) result.set(key(value), value);
+    return [...result.values()];
+  };
+  const result = { ...incoming };
+  result.messages = prepend
+    ? merge(incoming.messages, previous.messages, (message) => message.id)
+    : merge(previous.messages, incoming.messages, (message) => message.id);
+  for (const field of itemFields) {
+    const key = (value: unknown) => {
+      const item = value as {
+        id?: string;
+        turnId?: string;
+        plan?: { id: string; version: number };
+      };
+      return field === 'workflowPlans'
+        ? JSON.stringify([item.turnId, item.plan?.id, item.plan?.version])
+        : item.id!;
+    };
+    // Item unions stay field-specific at the public API boundary.
+    (result as unknown as Record<string, unknown>)[field] = prepend
+      ? merge<unknown>(incoming[field] ?? [], previous[field] ?? [], key)
+      : merge<unknown>(previous[field] ?? [], incoming[field] ?? [], key);
+  }
+  if (
+    !prepend &&
+    previous.history &&
+    incoming.history &&
+    previous.history.beforeSequence !== null &&
+    (incoming.history.beforeSequence === null ||
+      previous.history.beforeSequence < incoming.history.beforeSequence)
+  ) {
+    result.history = previous.history;
+  }
+  return result;
+}
+
+export async function loadAssistantHistory(id: string, scope: string) {
+  ensureWorkspace(scope);
+  const current = latest(id);
+  const before = current.history?.beforeSequence;
+  if (!current.history?.hasMore || before == null) return;
+  const page = await getAssistantHistory(id, before);
+  ensureWorkspace(scope);
+  useAssistantStore.setState((state) => {
+    const current = state.sessions[id];
+    if (
+      !current ||
+      state.scopes[id] !== scope ||
+      current.history?.beforeSequence !== before
+    )
+      return;
+    const merged = mergeHistory(current, page, true);
+    // Historical reads must never overwrite a newer native status or pending decision.
+    state.sessions[id] = {
+      ...current,
+      messages: merged.messages,
+      ...Object.fromEntries(itemFields.map((field) => [field, merged[field]])),
+      history: page.history,
+    };
+  });
+}
+
 function publish({ session, stream }: AssistantSnapshot, scope: string) {
   useAssistantStore.setState((state) => {
-    state.sessions[session.id] = session;
+    const previous =
+      state.scopes[session.id] === scope
+        ? state.sessions[session.id]
+        : undefined;
+    // Reconnect must not silently leave a missing page inside cached history.
+    const overlaps = previous?.messages.some((message) =>
+      session.messages.some((next) => next.id === message.id),
+    );
+    state.sessions[session.id] =
+      previous &&
+      session.history &&
+      (previous.messages.length === 0 || overlaps)
+        ? mergeHistory(previous, session)
+        : session;
     state.scopes[session.id] = scope;
     if (stream) state.streams[session.id] = stream;
     else delete state.streams[session.id];

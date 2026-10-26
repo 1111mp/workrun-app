@@ -817,3 +817,49 @@ it('keeps phase and plan order when late streaming updates revise an earlier ent
   ).toEqual([1, 2]);
   expect(current(session.id).workflowPlans?.[0]?.plan.status).toBe('saved');
 });
+
+it('prepends older messages and preserves live state and loaded history across bounded snapshots', async () => {
+  const { loadAssistantHistory } = await import('./assistant.runtime');
+  const session = await createAssistantSession('model', 'Paged', scope);
+  const recent = {
+    ...session,
+    messages: [assistantMessage],
+    history: { hasMore: true, beforeSequence: 50 },
+  };
+  store(recent);
+  host.invoke.mockImplementationOnce(async () => ({
+    ...recent,
+    status: 'idle',
+    messages: [{ ...assistantMessage, id: 'old', text: 'Older' }],
+    history: { hasMore: false, beforeSequence: 0 },
+  }));
+  await loadAssistantHistory(session.id, scope);
+  expect(current(session.id).messages.map((message) => message.id)).toEqual([
+    'old',
+    'answer',
+  ]);
+  store({
+    ...recent,
+    status: 'thinking',
+    messages: [{ ...assistantMessage, text: 'Updated' }],
+  });
+  expect(current(session.id).messages.map((message) => message.id)).toEqual([
+    'old',
+    'answer',
+  ]);
+  expect(current(session.id).messages[1]!.text).toBe('Updated');
+  expect(current(session.id).history).toEqual({
+    hasMore: false,
+    beforeSequence: 0,
+  });
+  expect(current(session.id).status).toBe('thinking');
+  store({
+    ...recent,
+    messages: [{ ...assistantMessage, id: 'far-away' }],
+    history: { hasMore: true, beforeSequence: 100 },
+  });
+  expect(current(session.id).messages.map((message) => message.id)).toEqual([
+    'far-away',
+  ]);
+  expect(current(session.id).history?.hasMore).toBe(true);
+});
