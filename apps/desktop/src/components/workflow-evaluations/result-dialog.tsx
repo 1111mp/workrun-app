@@ -1,5 +1,6 @@
 import {
   Button,
+  Spinner,
   Dialog,
   DialogClose,
   DialogContent,
@@ -48,6 +49,9 @@ function ResultIcon({ verdict }: { verdict: EvaluationCaseResult['verdict'] }) {
 
 export function EvaluationResultDialog({
   result,
+  loading,
+  error,
+  onRetry,
   cases,
   nodeNames,
   routeNames,
@@ -56,6 +60,9 @@ export function EvaluationResultDialog({
   onViewWorkflowRun,
 }: {
   result?: EvaluationCaseResult;
+  loading?: boolean;
+  error?: string;
+  onRetry?: () => void;
   cases: EvaluationCase[];
   nodeNames: Record<string, string>;
   routeNames: Record<string, string>;
@@ -94,7 +101,20 @@ export function EvaluationResultDialog({
           </div>
         </DialogHeader>
         <div className='max-h-[min(68vh,620px)] overflow-y-auto px-6 py-6'>
-          {result ? (
+          {loading ? (
+            <div className='flex justify-center py-8'>
+              <Spinner />
+            </div>
+          ) : null}
+          {error ? (
+            <div role='alert' className='text-destructive p-4 text-sm'>
+              {error}
+              <Button variant='outline' onClick={onRetry}>
+                {t('common.retry')}
+              </Button>
+            </div>
+          ) : null}
+          {result && !loading && !error ? (
             <div className='flex flex-col gap-4'>
               <div className='rounded-xl border border-violet-500/20 bg-violet-500/5 p-4'>
                 <div className='mb-3 flex items-center gap-2'>

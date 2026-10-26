@@ -81,10 +81,6 @@ impl WorkspacePaths {
         self.mcp_server_dir().join("catalog.json")
     }
 
-    pub fn workflow_catalog_path(&self) -> PathBuf {
-        self.root.join("workflow.json")
-    }
-
     pub fn skills_dir(&self) -> PathBuf {
         self.root.join(".skills")
     }
@@ -190,6 +186,7 @@ pub fn default_team_workspace_scope() -> WorkspaceScope {
 
 pub fn initialize_active_workspace_scope(scope: WorkspaceScope) {
     *ACTIVE_WORKSPACE_SCOPE.write() = scope;
+    crate::module::schedule::notify_scheduler();
 }
 
 /// Stable local ownership key; it does not depend on the filesystem path.
@@ -242,11 +239,6 @@ pub fn app_db_dir() -> Result<PathBuf> {
     Ok(global_paths()?.db_dir())
 }
 
-/// db migration dir
-pub fn db_migration_dir() -> Result<PathBuf> {
-    Ok(app_resources_dir()?.join("migrations"))
-}
-
 /// runtime dir
 pub fn runtime_dir() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.runtime_dir())
@@ -282,11 +274,6 @@ pub fn mcp_server_dir() -> Result<PathBuf> {
 /// Local catalog of configured stdio MCP Servers.
 pub fn mcp_server_catalog_path() -> Result<PathBuf> {
     Ok(active_workspace_paths()?.mcp_server_catalog_path())
-}
-
-/// Local workflow catalog managed from the Workflows page.
-pub fn workflow_catalog_path() -> Result<PathBuf> {
-    Ok(active_workspace_paths()?.workflow_catalog_path())
 }
 
 /// Root directory for Agent Skills managed by the active workspace.

@@ -22,6 +22,8 @@ function record(outputView: unknown): RunRecord {
     targetSnapshot: definition,
     runtime: {},
     spans: [],
+    lastSequence: -1,
+    lastSpanId: null,
     events: [
       {
         sequence: 1,

@@ -1,9 +1,9 @@
 use crate::{
     cmd::{CmdResult, StringifyErr},
     module::run_history::{
-        AppendRunEvents, CreatePendingAction, CreateRunRecord, FinalizeRunRecord, PendingAction, RunHistoryPage,
-        RunHistoryQuery, RunHistoryStore, RunHistoryTimelinePage, RunHistoryTimelineQuery, RunObservability,
-        RunObservabilityQuery, RunRecord, RunRecordSummary,
+        AppendRunEvents, CreatePendingAction, CreateRunRecord, FinalizeRunRecord, PendingAction, RunEventPage,
+        RunHistoryPage, RunHistoryQuery, RunHistoryStore, RunHistoryTimelinePage, RunHistoryTimelineQuery,
+        RunObservability, RunObservabilityQuery, RunRecord, RunRecordSummary, RunSpanPage,
     },
 };
 
@@ -44,6 +44,17 @@ pub async fn run_history_list_timeline(query: RunHistoryTimelineQuery) -> CmdRes
 pub async fn run_history_inspect(id: String) -> CmdResult<RunRecord> {
     RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
     RunHistoryStore::inspect(&id).await.stringify_err()
+}
+
+#[tauri::command]
+pub async fn run_history_events_page(id: String, after: i64, through: i64) -> CmdResult<RunEventPage> {
+    RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
+    RunHistoryStore::events_page(&id, after, through).await.stringify_err()
+}
+#[tauri::command]
+pub async fn run_history_spans_page(id: String, after: String, through: String) -> CmdResult<RunSpanPage> {
+    RunHistoryStore::ensure_active_workspace(&id).await.stringify_err()?;
+    RunHistoryStore::spans_page(&id, &after, &through).await.stringify_err()
 }
 
 #[tauri::command]

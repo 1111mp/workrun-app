@@ -45,10 +45,12 @@
           "data": {
             "conditions": {
               "true": {
-                "condition": "reading >= 10"
+                "condition": "reading >= 10",
+                "label": "true"
               },
               "false": {
-                "condition": "reading < 10"
+                "condition": "reading < 10",
+                "label": "false"
               }
             }
           }
@@ -151,15 +153,18 @@
             "cases": [
               {
                 "id": "ready",
-                "condition": "status == \"ready\""
+                "condition": "status == \"ready\"",
+                "label": "ready"
               },
               {
                 "id": "hold",
-                "condition": "status == \"hold\""
+                "condition": "status == \"hold\"",
+                "label": "hold"
               }
             ],
             "defaultCase": {
-              "label": "Other"
+              "label": "Other",
+              "condition": ""
             }
           }
         },
@@ -266,10 +271,12 @@
           "data": {
             "conditions": {
               "true": {
-                "condition": "enabled == true"
+                "condition": "enabled == true",
+                "label": "true"
               },
               "false": {
-                "condition": "enabled == false"
+                "condition": "enabled == false",
+                "label": "false"
               }
             }
           }

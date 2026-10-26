@@ -271,7 +271,7 @@ pub async fn session_usage(pool: &SqlitePool, workspace: &str, kind: &str, id: &
     anyhow::ensure!(matches!(kind, "assistant" | "workflow_chat"), "Unknown session kind");
     // Native run receipts also link imported history. OR keeps a call unique
     // when both the new origin metadata and an old receipt identify the run.
-    let rows = sqlx::query("SELECT record_json FROM model_calls WHERE workspace_id=? AND ((session_kind=? AND session_id=?) OR (?='assistant' AND run_id IN (SELECT json_extract(m.value, '$.runId') FROM assistant_sessions s, json_each(s.session_json, '$.messages') m WHERE s.workspace_id=? AND s.id=? UNION SELECT json_extract(session_json, '$.activeCall.runId') FROM assistant_sessions WHERE workspace_id=? AND id=?))) ORDER BY started_at,id")
+    let rows = sqlx::query("SELECT record_json FROM model_calls WHERE workspace_id=? AND ((session_kind=? AND session_id=?) OR (?='assistant' AND run_id IN (SELECT run_id FROM assistant_messages WHERE workspace_id=? AND session_id=? UNION SELECT active_run_id FROM assistant_sessions WHERE workspace_id=? AND id=?))) ORDER BY started_at,id")
         .bind(workspace).bind(kind).bind(id).bind(kind).bind(workspace).bind(id).bind(workspace).bind(id)
         .fetch_all(pool).await?;
     let calls = rows

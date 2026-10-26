@@ -1,6 +1,6 @@
 use super::Draft;
 use crate::{
-    config::{IMcpServers, IProcessNodes, IWorkflows},
+    config::{IMcpServers, IProcessNodes},
     logging, logging_error,
     process::AsyncHandler,
     utils::logging::Type,
@@ -8,7 +8,6 @@ use crate::{
 use tokio::sync::OnceCell;
 
 pub struct Config {
-    workflow_config: Draft<IWorkflows>,
     process_node_config: Draft<IProcessNodes>,
     team_process_node_config: Draft<IProcessNodes>,
     mcp_server_config: Draft<IMcpServers>,
@@ -20,17 +19,12 @@ impl Config {
         CONFIG
             .get_or_init(|| async {
                 Self {
-                    workflow_config: Draft::new(IWorkflows::new().await),
                     process_node_config: Draft::new(IProcessNodes::new().await),
                     team_process_node_config: Draft::new(IProcessNodes::new_team_releases().await),
                     mcp_server_config: Draft::new(IMcpServers::new().await),
                 }
             })
             .await
-    }
-
-    pub async fn workflows() -> Draft<IWorkflows> {
-        Self::global().await.workflow_config.clone()
     }
 
     pub async fn process_nodes() -> Draft<IProcessNodes> {
@@ -48,7 +42,6 @@ impl Config {
     /// Reloads catalog snapshots after the active workspace directory changes.
     pub async fn reload_workspace() {
         let config = Self::global().await;
-        config.workflow_config.replace(IWorkflows::new().await);
         config.process_node_config.replace(IProcessNodes::new().await);
         config
             .team_process_node_config
@@ -58,12 +51,6 @@ impl Config {
 
     pub async fn apply_all_and_save_file() {
         logging!(info, Type::Config, "save all draft data");
-
-        let save_workflow_task = AsyncHandler::spawn(|| async {
-            let workflow = Self::workflows().await;
-            workflow.apply();
-            logging_error!(Type::Config, workflow.data_arc().save_file().await);
-        });
 
         let save_process_node_task = AsyncHandler::spawn(|| async {
             let process_node = Self::process_nodes().await;
@@ -84,7 +71,6 @@ impl Config {
         });
 
         let _ = tokio::join!(
-            save_workflow_task,
             save_process_node_task,
             save_team_process_node_task,
             save_mcp_server_task

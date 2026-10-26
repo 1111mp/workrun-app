@@ -107,11 +107,13 @@ impl ToolJournal {
         if action == ExecutionAction::Submit {
             let encrypted = crate::config::encrypt_data_with_key(&input.to_string(), &self.key)
                 .map_err(|_| anyhow::anyhow!("Cannot encrypt tool execution input"))?;
-            sqlx::query("INSERT OR IGNORE INTO workflow_tool_inputs (operation_id, input_ciphertext) VALUES (?, ?)")
-                .bind(&operation.id)
-                .bind(encrypted)
-                .execute(&self.pool)
-                .await?;
+            sqlx::query(
+                "INSERT OR IGNORE INTO workflow_operation_inputs (operation_id, input_ciphertext) VALUES (?, ?)",
+            )
+            .bind(&operation.id)
+            .bind(encrypted)
+            .execute(&self.pool)
+            .await?;
         }
         Ok(operation)
     }

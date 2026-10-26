@@ -1,29 +1,31 @@
-// Generated from JSON Schema. Runtime validation remains authoritative.
+// Generated from editor workflow.d.ts and runtime constraints; do not edit.
 export interface SwitchNodeData {
-  "name"?: string;
-  "label"?: string;
-  "description"?: string;
   "state"?: {
     "access"?: {
       /** {"uniqueItems":true} */
       "readers"?: Array<string>;
-      /** {"uniqueItems":true} */
+      /** {"description":"Readers that may receive this node's original, unredacted namespace.","uniqueItems":true} */
       "rawReaders"?: Array<string>;
     };
-    /** {"uniqueItems":true} */
+    /** {"description":"Keys emitted by this node that should be published to shared global State.","uniqueItems":true} */
     "globalKeys"?: Array<string>;
-    /** {"uniqueItems":true} */
+    /** {"description":"Dot-separated output paths always redacted in this node's visible State.","uniqueItems":true} */
     "sensitiveFields"?: Array<string>;
   };
-  "cases"?: Array<{
-    /** {"minLength":1} */
+  "label"?: string;
+  "cases": Array<{
+    /** {"description":"Stable identifier used as the React Flow source handle ID.","minLength":1} */
     "id": string;
-    "label"?: string;
-    /** {"minLength":1} */
+    /** {"description":"Human-readable branch name shown on the canvas."} */
+    "label": string;
+    /** {"description":"Expression evaluated against workflow state for this branch.","minLength":1} */
     "condition": string;
   }>;
-  "defaultCase"?: {
-    "label"?: string;
-    "condition"?: string;
+  /** {"description":"Fallback branch used when no case condition matches."} */
+  "defaultCase": {
+    /** {"description":"Human-readable fallback branch name shown on the canvas."} */
+    "label": string;
+    /** {"description":"Description of the unmatched cases; this is not evaluated."} */
+    "condition": string;
   };
 }

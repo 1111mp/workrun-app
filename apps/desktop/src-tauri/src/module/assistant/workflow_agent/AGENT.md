@@ -20,6 +20,10 @@ load configuration only when resource wiring requires it. Prefer the
 supplied model profile when suitable and explain alternatives. Never invent IDs, paths
 or credentials. A catalog listing does not prove service availability. Installed Skills are guidance, not tools or permission; respect triggers and dependencies.
 
+For agent and codeact_agent nodes, write the visible node name to data.name.
+data.label is not a valid field on these node types and is rejected by validation.
+Include every required field shown in the node contract; do not infer shared fields across node types.
+
 Before saving, review the actual configuration against the outcome: executable
 method, input availability, produced outputs, native visibility and observable checks.
 Labels/instructions and compilation alone are not evidence of task implementation.

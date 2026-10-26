@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router';
 
+import { WorkflowChangeCard } from '@/components/workflow-diff/workflow-change-card';
 import type { WorkflowPlan } from '@/services/assistant';
 
 import { AssistantPlanOutcome } from './assistant-plan-outcome';
@@ -46,6 +47,10 @@ export function AssistantWorkflowPlan({
         }
       : undefined;
   const doc = plan.document;
+  const isRevision = Boolean(doc.target_id);
+  const titleKey = isRevision
+    ? 'assistant.plan.revisionTitle'
+    : 'assistant.plan.title';
   const compact =
     ['approved', 'building', 'saved', 'cancelled'].includes(plan.status) ||
     (!active && !doc.questions.length);
@@ -79,16 +84,20 @@ export function AssistantWorkflowPlan({
       open={open}
       onOpenChange={(open) => setExpansion({ compact, open })}
     >
-      <Card className='my-3 w-full' aria-label={t('assistant.plan.title')}>
+      <Card className='my-3 w-full' aria-label={t(titleKey)}>
         <CardHeader>
           <CardTitle>
-            {t('assistant.plan.title')} ·{' '}
+            {t(titleKey)} ·{' '}
             {t('assistant.plan.version', { version: plan.version })}
           </CardTitle>
           <CardDescription>{doc.summary}</CardDescription>
           <CardAction>
             <Badge variant='secondary'>
-              {t(`assistant.plan.status.${plan.status}`)}
+              {t(
+                isRevision && plan.status === 'building'
+                  ? 'assistant.plan.revisionBuilding'
+                  : `assistant.plan.status.${plan.status}`,
+              )}
             </Badge>
           </CardAction>
         </CardHeader>
@@ -102,7 +111,11 @@ export function AssistantWorkflowPlan({
           <CardContent className='flex flex-col gap-5'>
             {active && plan.interaction?.status === 'waiting' && (
               <p className='text-muted-foreground text-sm'>
-                {t('assistant.plan.waitingFeedback')}
+                {t(
+                  isRevision
+                    ? 'assistant.plan.revisionWaitingFeedback'
+                    : 'assistant.plan.waitingFeedback',
+                )}
               </p>
             )}
             {doc.questions.length > 0 && (
@@ -211,6 +224,12 @@ export function AssistantWorkflowPlan({
           </CardContent>
         </CollapsibleContent>
         <CardFooter className='flex-wrap gap-2'>
+          {plan.outcome?.after_revision_id && (
+            <WorkflowChangeCard
+              beforeRevisionId={plan.outcome.before_revision_id}
+              afterRevisionId={plan.outcome.after_revision_id}
+            />
+          )}
           {plan.outcome?.summary && (
             <AssistantPlanOutcome summary={plan.outcome.summary} />
           )}
@@ -220,7 +239,11 @@ export function AssistantWorkflowPlan({
                 disabled={busy || !ready}
                 onClick={() => onDecide('approve')}
               >
-                {t('assistant.plan.approve')}
+                {t(
+                  isRevision
+                    ? 'assistant.plan.approveRevision'
+                    : 'assistant.plan.approve',
+                )}
               </Button>
               <Button
                 variant='outline'
@@ -254,7 +277,11 @@ export function AssistantWorkflowPlan({
             </Button>
           )}
           <p className='text-muted-foreground text-xs'>
-            {t('assistant.plan.creationOnly')}
+            {t(
+              isRevision
+                ? 'assistant.plan.revisionOnly'
+                : 'assistant.plan.creationOnly',
+            )}
           </p>
         </CardFooter>
       </Card>

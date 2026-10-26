@@ -143,6 +143,8 @@ High-priority feedback displays a review card in the node output. Inspect the co
 
 If a run differs, inspect in this order: the App’s stdout/stderr and `normalized_feedback`; the Agent’s model and schema; whether both producing nodes published their required keys; then the If/Else conditions and outgoing edges. Keep these three inputs as your first [evaluation cases](/quality/evaluations/).
 
+You can also revise a saved workflow through conversation. After saving an update, select **View changes** in the conversation to compare fields and the graph. See [Revise the workflow and review its changes](/guides/conversational-workflows/#6-revise-the-workflow-and-review-its-changes).
+
 ## Share or delete a saved Workflow
 
 In personal mode, save your changes, then open the **More (⋯)** menu in the Workflow detail page and choose **Export**. Select ZIP or TAR and review the package. It bundles the main definition, referenced Process Apps, Agent and CodeAct Tool Apps, and recursively referenced child Workflows. Repeated dependencies are included once. Missing dependencies and child-Workflow cycles prevent export.

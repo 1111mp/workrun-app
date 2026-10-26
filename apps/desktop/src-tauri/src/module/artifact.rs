@@ -34,6 +34,19 @@ impl ArtifactStore {
         Ok(Self::new(crate::utils::dirs::artifacts_dir()?))
     }
 
+    /// Native work may enqueue after the UI leaves its owning workspace.
+    pub fn for_workspace(workspace: &str) -> Result<Self> {
+        use crate::utils::dirs::{self, WorkspaceScope};
+        let scope = if workspace == "personal" {
+            WorkspaceScope::Personal
+        } else {
+            WorkspaceScope::Team {
+                team_id: workspace.strip_prefix("team:").context("Invalid workspace ID")?.into(),
+            }
+        };
+        Ok(Self::new(dirs::workspace_paths(scope)?.artifacts_dir()))
+    }
+
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }

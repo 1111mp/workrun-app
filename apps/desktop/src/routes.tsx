@@ -1,6 +1,10 @@
 import { createMemoryRouter } from 'react-router';
 
 import { HomePage } from '@/pages/home';
+import {
+  NewWorkflowRoute,
+  WorkflowRoute,
+} from '@/pages/workflow/workflow-route';
 
 export const router = createMemoryRouter(
   [
@@ -19,11 +23,11 @@ export const router = createMemoryRouter(
         },
         {
           path: 'workflows/new',
-          lazy: () => import('@/pages/workflows/new'),
+          Component: NewWorkflowRoute,
         },
         {
           path: 'workflows/:id',
-          lazy: () => import('@/pages/workflow'),
+          Component: WorkflowRoute,
         },
         {
           path: 'apps',

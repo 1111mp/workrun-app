@@ -14,6 +14,7 @@ mod resources;
 mod sdk;
 pub mod session;
 mod skills;
+pub(crate) mod storage;
 mod task_runtime;
 mod tool_execution;
 mod tools;

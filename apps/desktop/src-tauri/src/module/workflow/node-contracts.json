@@ -1,22 +1,6 @@
 {
   "start": {
     "title": "Start",
-    "dataSchema": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        }
-      },
-      "required": [],
-      "additionalProperties": false
-    },
     "example": {
       "id": "start1",
       "type": "start",
@@ -28,26 +12,20 @@
     },
     "sourceHandles": [],
     "guide": "Exactly one entry is required. It may only connect to executable nodes, cannot be an edge target, and cannot connect directly to end. Each run input key enters global state.",
-    "summary": "Enter a workflow and expose run inputs."
-  },
-  "end": {
-    "title": "End",
+    "summary": "Enter a workflow and expose run inputs.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
         "label": {
-          "type": "string"
-        },
-        "description": {
           "type": "string"
         }
       },
       "required": [],
       "additionalProperties": false
-    },
+    }
+  },
+  "end": {
+    "title": "End",
     "example": {
       "id": "end1",
       "type": "end",
@@ -59,22 +37,46 @@
     },
     "sourceHandles": [],
     "guide": "At least one end node is required. End nodes only accept incoming edges; all map to graph END. Declaring outputSchema does not create output: executable nodes must publish output keys to global state.",
-    "summary": "Complete a workflow branch."
-  },
-  "agent": {
-    "title": "Local agent",
+    "summary": "Complete a workflow branch.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
         "label": {
           "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  "agent": {
+    "title": "Local agent",
+    "example": {
+      "id": "agent1",
+      "type": "agent",
+      "data": {
+        "modelProfileId": "DISCOVER_MODEL_ID",
+        "instruction": "Analyze visible inputs and return structured findings.",
+        "outputSchema": "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}},\"required\":[\"summary\"]}",
+        "state": {
+          "globalKeys": [
+            "summary"
+          ]
         },
-        "description": {
-          "type": "string"
-        },
+        "name": "Local agent",
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths containing ArtifactRefs (files), never ordinary text, JSON strings or objects. Visible ordinary values are already available as scoped state; refer to their existing keys in instruction and use native state visibility. Do not add attachmentPaths merely to pass a previous node result. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.\n\nTool IDs and callable names are different: select the discovered ID in toolIds and toolStateBindings.toolId; use the tool contract for its callable name and argument schema. With no selected Skills, selected tools are attached directly. With skillRefs, SkillToolset exposes Skill discovery/loading and resolves tools after the declaring Skill is loaded. Every Skill-declared tool must be selected; nonempty allowedTools declarations restrict the effective tool set to their union. Reading a Skill during planning does not activate it in this node. Read reference topic=configuration for resource wiring and topic=examples with node_types=[\"agent\"] for a native example.",
+    "summary": "Use a configured model, tools and personal skills.",
+    "dataSchema": {
+      "type": "object",
+      "properties": {
         "state": {
           "type": "object",
           "properties": {
@@ -95,6 +97,7 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
                   "uniqueItems": true
                 }
               },
@@ -107,6 +110,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Keys emitted by this node that should be published to shared global State.",
               "uniqueItems": true
             },
             "sensitiveFields": {
@@ -115,72 +119,283 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
               "uniqueItems": true
             }
           },
           "required": [],
           "additionalProperties": false
         },
+        "toolCompensations": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "unspecified",
+                      "read_only"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "irreversible"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "compensatable"
+                  },
+                  "action": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "app_entry"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "tool"
+                          },
+                          "toolId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "toolId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "process"
+                          },
+                          "processNodeId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "processNodeId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "remote_agent"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "authentication": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "none"
+                                  }
+                                },
+                                "required": [
+                                  "type"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "bearer"
+                                  },
+                                  "credentialId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "credentialId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "apiKey"
+                                  },
+                                  "credentialId": {
+                                    "type": "string"
+                                  },
+                                  "headerName": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "credentialId",
+                                  "headerName"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "url"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "bindings": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "from": {
+                              "type": "string",
+                              "const": "literal"
+                            },
+                            "value": {}
+                          },
+                          "required": [
+                            "from",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "from": {
+                              "type": "string",
+                              "enum": [
+                                "input",
+                                "output"
+                              ]
+                            },
+                            "pointer": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "from",
+                            "pointer"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "idempotency": {
+                    "type": "object",
+                    "properties": {
+                      "keyArgument": {
+                        "type": "string"
+                      },
+                      "contract": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "keyArgument",
+                      "contract"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "mode",
+                  "action",
+                  "bindings",
+                  "idempotency"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+          },
+          "description": "Per-tool compensation declarations; CodeAct effects have no compensation journal."
+        },
+        "name": {
+          "type": "string",
+          "description": "Visible node name in the workflow canvas and editor. Set this field when naming or renaming the node."
+        },
         "modelProfileId": {
           "type": "string",
           "minLength": 1
         },
-        "instruction": {
-          "type": "string"
-        },
-        "outputSchema": {
-          "type": "string",
-          "description": "JSON-serialized object schema; the visual editor stores this field as JSON text."
-        },
-        "toolIds": {
+        "attachmentPaths": {
           "type": "array",
           "items": {
             "type": "string",
             "minLength": 1
           },
+          "description": "Visible State paths containing ArtifactRefs, injected as model attachments.",
           "uniqueItems": true
         },
-        "toolStateBindings": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "toolId": {
-                "type": "string",
-                "minLength": 1
-              },
-              "argumentPath": {
-                "type": "string",
-                "minLength": 1
-              },
-              "statePath": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "toolId",
-              "argumentPath",
-              "statePath"
-            ],
-            "additionalProperties": false
-          }
+        "description": {
+          "type": "string"
         },
-        "maxToolCalls": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 50,
-          "default": 8
-        },
-        "toolTimeoutSeconds": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 600,
-          "default": 60
+        "instruction": {
+          "type": "string"
         },
         "outputKey": {
           "type": "string",
+          "description": "Optional state key that receives the agent's complete final text.",
           "minLength": 1
+        },
+        "outputSchema": {
+          "type": "string",
+          "description": "JSON-serialized object schema; the visual editor stores this field as JSON text."
         },
         "temperature": {
           "type": "number",
@@ -192,20 +407,13 @@
           "minimum": 0,
           "maximum": 1
         },
-        "attachmentPaths": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true
-        },
         "skillRefs": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
               "source": {
+                "type": "string",
                 "const": "personal"
               },
               "name": {
@@ -220,112 +428,6 @@
             "additionalProperties": false
           }
         },
-        "toolCompensations": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
-          }
-        }
-      },
-      "required": [
-        "modelProfileId"
-      ],
-      "additionalProperties": false
-    },
-    "example": {
-      "id": "agent1",
-      "type": "agent",
-      "data": {
-        "modelProfileId": "DISCOVER_MODEL_ID",
-        "instruction": "Analyze visible inputs and return structured findings.",
-        "outputSchema": "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}},\"required\":[\"summary\"]}",
-        "state": {
-          "globalKeys": [
-            "summary"
-          ]
-        }
-      },
-      "position": {
-        "x": 320,
-        "y": 160
-      }
-    },
-    "sourceHandles": [],
-    "guide": "Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths containing ArtifactRefs (files), never ordinary text, JSON strings or objects. Visible ordinary values are already available as scoped state; refer to their existing keys in instruction and use native state visibility. Do not add attachmentPaths merely to pass a previous node result. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.\n\nTool IDs and callable names are different: select the discovered ID in toolIds and toolStateBindings.toolId; use the tool contract for its callable name and argument schema. With no selected Skills, selected tools are attached directly. With skillRefs, SkillToolset exposes Skill discovery/loading and resolves tools after the declaring Skill is loaded. Every Skill-declared tool must be selected; nonempty allowedTools declarations restrict the effective tool set to their union. Reading a Skill during planning does not activate it in this node. Read reference topic=configuration for resource wiring and topic=examples with node_types=[\"agent\"] for a native example.",
-    "summary": "Use a configured model, tools and personal skills."
-  },
-  "codeact_agent": {
-    "title": "CodeAct agent",
-    "dataSchema": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "state": {
-          "type": "object",
-          "properties": {
-            "access": {
-              "type": "object",
-              "properties": {
-                "readers": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "uniqueItems": true
-                },
-                "rawReaders": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "uniqueItems": true
-                }
-              },
-              "required": [],
-              "additionalProperties": false
-            },
-            "globalKeys": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            },
-            "sensitiveFields": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            }
-          },
-          "required": [],
-          "additionalProperties": false
-        },
-        "modelProfileId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "instruction": {
-          "type": "string"
-        },
-        "outputSchema": {
-          "type": "string",
-          "description": "JSON-serialized object schema; the visual editor stores this field as JSON text."
-        },
         "toolIds": {
           "type": "array",
           "items": {
@@ -345,10 +447,12 @@
               },
               "argumentPath": {
                 "type": "string",
+                "description": "Dot-separated path in the Tool's arguments.",
                 "minLength": 1
               },
               "statePath": {
                 "type": "string",
+                "description": "Dot-separated path in the Agent's scoped State.",
                 "minLength": 1
               }
             },
@@ -371,12 +475,160 @@
           "minimum": 1,
           "maximum": 600,
           "default": 60
+        }
+      },
+      "required": [
+        "name",
+        "modelProfileId",
+        "description",
+        "instruction"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "codeact_agent": {
+    "title": "CodeAct agent",
+    "example": {
+      "id": "codeact_agent1",
+      "type": "codeact_agent",
+      "data": {
+        "modelProfileId": "DISCOVER_MODEL_ID",
+        "instruction": "Read inputs from authorized resources, calculate results and write files to /outputs.",
+        "maxIterations": 8,
+        "name": "CodeAct agent",
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Uses the restricted Monty Python runtime, not an unrestricted Python terminal or package installer. Read reference topic=nodes with node_types=[\"codeact_agent\"] for the linked runtime language/module/OS briefing before committing to an implementation; Python familiarity does not establish library or method support. Read input files through /artifacts/manifest.json; write deliverables under /outputs for runtime export. maxIterations: 1–50, default 8; script duration: 1–300 seconds, default 5; memory: 16–4096 MiB, default 256. mounts/environment grant real host access and must come from explicitly authorized configuration. Never invent paths or secrets. Reserve /artifacts and /outputs; mounts must not overlap. Compilation currently requires a configured model and workspace runtime. The artifact manifest is an array of {reference:{id,name,...},path}; read entry.path, not a guessed input-name key or artifact directory. Inspect input structure before processing. Finish with a last-expression {\"type\":\"final_result\",\"value\":{...named output fields...}}. Object fields enter private state and state.globalKeys publishes them; use outputSchema for explicit validation. Do not invent global-state tools. Avoid bound dictionary methods as callbacks in Monty; use explicit loops.\n\nCodeAct selects executable dependencies with discovered toolIds and may bind arguments with toolStateBindings. It does not support personal skillRefs or Agent outputKey/attachmentPaths. Visible ArtifactRefs are mapped to its file workspace automatically. Workrun writes exported files to the artifacts state key; publish artifacts with state.globalKeys or share the namespace through readers when downstream nodes need them. Do not put invented ArtifactRefs into final_result. Read reference topic=configuration and topic=examples with node_types=[\"codeact_agent\"] for a native example.",
+    "summary": "Compose authorized tools with restricted Python.",
+    "dataSchema": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "object",
+          "properties": {
+            "access": {
+              "type": "object",
+              "properties": {
+                "readers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
+                  "uniqueItems": true
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "globalKeys": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Keys emitted by this node that should be published to shared global State.",
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
+              "uniqueItems": true
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "name": {
+          "type": "string",
+          "description": "Visible node name in the workflow canvas and editor. Set this field when naming or renaming the node."
+        },
+        "modelProfileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "toolIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "toolStateBindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "toolId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "argumentPath": {
+                "type": "string",
+                "description": "Dot-separated path in the Tool's arguments.",
+                "minLength": 1
+              },
+              "statePath": {
+                "type": "string",
+                "description": "Dot-separated path in the Agent's scoped State.",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "toolId",
+              "argumentPath",
+              "statePath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "outputSchema": {
+          "type": "string",
+          "description": "JSON-serialized object schema; the visual editor stores this field as JSON text."
         },
         "maxIterations": {
           "type": "integer",
           "minimum": 1,
           "maximum": 50,
           "default": 8
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 8
+        },
+        "toolTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 60
         },
         "maxScriptDurationSeconds": {
           "type": "integer",
@@ -408,6 +660,7 @@
                 "minLength": 1
               },
               "access": {
+                "type": "string",
                 "enum": [
                   "read_only",
                   "read_write"
@@ -444,104 +697,16 @@
         }
       },
       "required": [
-        "modelProfileId"
+        "name",
+        "modelProfileId",
+        "description",
+        "instruction"
       ],
       "additionalProperties": false
-    },
-    "example": {
-      "id": "codeact_agent1",
-      "type": "codeact_agent",
-      "data": {
-        "modelProfileId": "DISCOVER_MODEL_ID",
-        "instruction": "Read inputs from authorized resources, calculate results and write files to /outputs.",
-        "maxIterations": 8
-      },
-      "position": {
-        "x": 320,
-        "y": 160
-      }
-    },
-    "sourceHandles": [],
-    "guide": "Uses the restricted Monty Python runtime, not an unrestricted Python terminal or package installer. Read reference topic=nodes with node_types=[\"codeact_agent\"] for the linked runtime language/module/OS briefing before committing to an implementation; Python familiarity does not establish library or method support. Read input files through /artifacts/manifest.json; write deliverables under /outputs for runtime export. maxIterations: 1–50, default 8; script duration: 1–300 seconds, default 5; memory: 16–4096 MiB, default 256. mounts/environment grant real host access and must come from explicitly authorized configuration. Never invent paths or secrets. Reserve /artifacts and /outputs; mounts must not overlap. Compilation currently requires a configured model and workspace runtime. The artifact manifest is an array of {reference:{id,name,...},path}; read entry.path, not a guessed input-name key or artifact directory. Inspect input structure before processing. Finish with a last-expression {\"type\":\"final_result\",\"value\":{...named output fields...}}. Object fields enter private state and state.globalKeys publishes them; use outputSchema for explicit validation. Do not invent global-state tools. Avoid bound dictionary methods as callbacks in Monty; use explicit loops.\n\nCodeAct selects executable dependencies with discovered toolIds and may bind arguments with toolStateBindings. It does not support personal skillRefs or Agent outputKey/attachmentPaths. Visible ArtifactRefs are mapped to its file workspace automatically. Workrun writes exported files to the artifacts state key; publish artifacts with state.globalKeys or share the namespace through readers when downstream nodes need them. Do not put invented ArtifactRefs into final_result. Read reference topic=configuration and topic=examples with node_types=[\"codeact_agent\"] for a native example.",
-    "summary": "Compose authorized tools with restricted Python."
+    }
   },
   "process": {
     "title": "Workflow App",
-    "dataSchema": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "state": {
-          "type": "object",
-          "properties": {
-            "access": {
-              "type": "object",
-              "properties": {
-                "readers": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "uniqueItems": true
-                },
-                "rawReaders": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "uniqueItems": true
-                }
-              },
-              "required": [],
-              "additionalProperties": false
-            },
-            "globalKeys": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            },
-            "sensitiveFields": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            }
-          },
-          "required": [],
-          "additionalProperties": false
-        },
-        "processNodeId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "appRef": {
-          "type": "object"
-        },
-        "compensation": {
-          "type": "object",
-          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
-        }
-      },
-      "required": [
-        "processNodeId"
-      ],
-      "additionalProperties": false
-    },
     "example": {
       "id": "process1",
       "type": "process",
@@ -551,7 +716,9 @@
           "globalKeys": [
             "result"
           ]
-        }
+        },
+        "name": "Workflow App",
+        "description": ""
       },
       "position": {
         "x": 320,
@@ -560,22 +727,10 @@
     },
     "sourceHandles": [],
     "guide": "Uses the existing Process executor for installed Workflow-type Apps. Tool-type Apps belong in agent.toolIds; never change their type to bypass confirmation. processNodeId is the native local App ID, without the app: capability prefix. The App receives visible inputs; outputs remain private until their agreed keys are published. Team appRef requires immutable coordinates for an authorized published version; ask for missing coordinates. Do not substitute inline scripts for Apps. Read the recovery topic for compensation.\n\nDiscover the App contract before configuration: process receives scoped visible state, so its expected input keys must be available under the names its contract declares. Node edges do not rename fields. For tool-shaped calls inside an Agent, select a Tool App or MCP tool in toolIds instead. Publish only actual declared outputs through state.globalKeys. Read reference topic=configuration and topic=examples with node_types=[\"process\"] for a native example.",
-    "summary": "Execute an installed Workflow-type App."
-  },
-  "remote_agent": {
-    "title": "Remote agent",
+    "summary": "Execute an installed Workflow-type App.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
         "state": {
           "type": "object",
           "properties": {
@@ -596,6 +751,7 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
                   "uniqueItems": true
                 }
               },
@@ -608,6 +764,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Keys emitted by this node that should be published to shared global State.",
               "uniqueItems": true
             },
             "sensitiveFields": {
@@ -616,21 +773,696 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
               "uniqueItems": true
             }
           },
           "required": [],
           "additionalProperties": false
         },
-        "url": {
+        "compensation": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "unspecified",
+                    "read_only"
+                  ]
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "irreversible"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "compensatable"
+                },
+                "action": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "app_entry"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "tool"
+                        },
+                        "toolId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "toolId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "process"
+                        },
+                        "processNodeId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "processNodeId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "remote_agent"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "authentication": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "none"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "bearer"
+                                },
+                                "credentialId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "credentialId"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "apiKey"
+                                },
+                                "credentialId": {
+                                  "type": "string"
+                                },
+                                "headerName": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "credentialId",
+                                "headerName"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "bindings": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string",
+                            "const": "literal"
+                          },
+                          "value": {}
+                        },
+                        "required": [
+                          "from",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string",
+                            "enum": [
+                              "input",
+                              "output"
+                            ]
+                          },
+                          "pointer": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "pointer"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "idempotency": {
+                  "type": "object",
+                  "properties": {
+                    "keyArgument": {
+                      "type": "string"
+                    },
+                    "contract": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "keyArgument",
+                    "contract"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "mode",
+                "action",
+                "bindings",
+                "idempotency"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+        },
+        "name": {
+          "type": "string"
+        },
+        "processNodeId": {
           "type": "string",
           "minLength": 1
         },
-        "timeoutSeconds": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 600,
-          "default": 120
+        "description": {
+          "type": "string"
+        },
+        "appRef": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "const": "local"
+                },
+                "localAppId": {
+                  "type": "string"
+                },
+                "appName": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "sourceHash": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "localAppId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "const": "team"
+                },
+                "remoteAppId": {
+                  "type": "string"
+                },
+                "releaseId": {
+                  "type": "string"
+                },
+                "appName": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "archiveSha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "remoteAppId",
+                "releaseId",
+                "version",
+                "archiveSha256"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Local Apps use a local ID; Team Apps pin an immutable server release."
+        }
+      },
+      "required": [
+        "name",
+        "processNodeId",
+        "description"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "remote_agent": {
+    "title": "Remote agent",
+    "example": {
+      "id": "remote_agent1",
+      "type": "remote_agent",
+      "data": {
+        "url": "https://example.invalid/a2a",
+        "timeoutSeconds": 120,
+        "authentication": {
+          "type": "none"
+        },
+        "name": "Remote agent",
+        "description": ""
+      },
+      "position": {
+        "x": 320,
+        "y": 160
+      }
+    },
+    "sourceHandles": [],
+    "guide": "Uses A2A v1.0.1 JSON-RPC. HTTP(S) URLs must not contain user information or fragments. authentication references existing credential IDs; never embed secrets. Attachments select visible state paths, at most 10 files and 20 MiB total; binary content stays outside state. timeoutSeconds: 1–600, default 120. Timeout does not prove absence of remote side effects: use native task inspection, cancellation and recovery rather than blindly retrying.",
+    "summary": "Call a configured remote A2A agent.",
+    "dataSchema": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "object",
+          "properties": {
+            "access": {
+              "type": "object",
+              "properties": {
+                "readers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                },
+                "rawReaders": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
+                  "uniqueItems": true
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "globalKeys": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Keys emitted by this node that should be published to shared global State.",
+              "uniqueItems": true
+            },
+            "sensitiveFields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
+              "uniqueItems": true
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "compensation": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "unspecified",
+                    "read_only"
+                  ]
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "irreversible"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "compensatable"
+                },
+                "action": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "app_entry"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "tool"
+                        },
+                        "toolId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "toolId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "process"
+                        },
+                        "processNodeId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "processNodeId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "remote_agent"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "authentication": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "none"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "bearer"
+                                },
+                                "credentialId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "credentialId"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "apiKey"
+                                },
+                                "credentialId": {
+                                  "type": "string"
+                                },
+                                "headerName": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "credentialId",
+                                "headerName"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "bindings": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string",
+                            "const": "literal"
+                          },
+                          "value": {}
+                        },
+                        "required": [
+                          "from",
+                          "value"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string",
+                            "enum": [
+                              "input",
+                              "output"
+                            ]
+                          },
+                          "pointer": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "pointer"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "idempotency": {
+                  "type": "object",
+                  "properties": {
+                    "keyArgument": {
+                      "type": "string"
+                    },
+                    "contract": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "keyArgument",
+                    "contract"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "mode",
+                "action",
+                "bindings",
+                "idempotency"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+        },
+        "authentication": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "none"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "bearer"
+                },
+                "credentialId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "type",
+                "credentialId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "apiKey"
+                },
+                "credentialId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "headerName": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "type",
+                "credentialId",
+                "headerName"
+              ],
+              "additionalProperties": false
+            }
+          ]
         },
         "attachmentPaths": {
           "type": "array",
@@ -640,167 +1472,33 @@
           },
           "uniqueItems": true
         },
-        "authentication": {
-          "type": "object",
-          "properties": {
-            "type": {
-              "enum": [
-                "none",
-                "bearer",
-                "apiKey"
-              ]
-            },
-            "credentialId": {
-              "type": "string",
-              "minLength": 1
-            },
-            "headerName": {
-              "type": "string",
-              "minLength": 1
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 120
         },
-        "compensation": {
-          "type": "object",
-          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
-        }
-      },
-      "required": [
-        "url"
-      ],
-      "additionalProperties": false
-    },
-    "example": {
-      "id": "remote_agent1",
-      "type": "remote_agent",
-      "data": {
-        "url": "https://example.invalid/a2a",
-        "timeoutSeconds": 120,
-        "authentication": {
-          "type": "none"
-        }
-      },
-      "position": {
-        "x": 320,
-        "y": 160
-      }
-    },
-    "sourceHandles": [],
-    "guide": "Uses A2A v1.0.1 JSON-RPC. HTTP(S) URLs must not contain user information or fragments. authentication references existing credential IDs; never embed secrets. Attachments select visible state paths, at most 10 files and 20 MiB total; binary content stays outside state. timeoutSeconds: 1–600, default 120. Timeout does not prove absence of remote side effects: use native task inspection, cancellation and recovery rather than blindly retrying.",
-    "summary": "Call a configured remote A2A agent."
-  },
-  "if_else": {
-    "title": "Conditional branch",
-    "dataSchema": {
-      "type": "object",
-      "properties": {
         "name": {
           "type": "string"
         },
-        "label": {
-          "type": "string"
+        "url": {
+          "type": "string",
+          "minLength": 1
         },
         "description": {
           "type": "string"
-        },
-        "state": {
-          "type": "object",
-          "properties": {
-            "access": {
-              "type": "object",
-              "properties": {
-                "readers": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "uniqueItems": true
-                },
-                "rawReaders": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "uniqueItems": true
-                }
-              },
-              "required": [],
-              "additionalProperties": false
-            },
-            "globalKeys": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            },
-            "sensitiveFields": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
-            }
-          },
-          "required": [],
-          "additionalProperties": false
-        },
-        "conditions": {
-          "type": "object",
-          "properties": {
-            "true": {
-              "type": "object",
-              "properties": {
-                "label": {
-                  "type": "string"
-                },
-                "condition": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              },
-              "required": [
-                "condition"
-              ],
-              "additionalProperties": false
-            },
-            "false": {
-              "type": "object",
-              "properties": {
-                "label": {
-                  "type": "string"
-                },
-                "condition": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              },
-              "required": [
-                "condition"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "required": [
-            "true",
-            "false"
-          ],
-          "additionalProperties": false
         }
       },
       "required": [
-        "conditions"
+        "name",
+        "url",
+        "description"
       ],
       "additionalProperties": false
-    },
+    }
+  },
+  "if_else": {
+    "title": "Conditional branch",
     "example": {
       "id": "if_else1",
       "type": "if_else",
@@ -826,22 +1524,10 @@
       "false"
     ],
     "guide": "true and false are independent conditions, evaluated in that order; if neither matches, execution ends. Supported syntax is a field path tested for truthiness, or compared to one literal with == != >= <= > <. No Python/JavaScript, and/or, calls or arbitrary expressions. Use sourceHandle true/false, with at most one edge per handle; an unconnected result ends. This node records routing and trace, not a business boolean output. Agent/App/CodeAct nodes must create business outputs and publish them with globalKeys.",
-    "summary": "Route using two ordered, independent conditions."
-  },
-  "switch": {
-    "title": "Switch",
+    "summary": "Route using two ordered, independent conditions.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
         "state": {
           "type": "object",
           "properties": {
@@ -862,6 +1548,7 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
                   "uniqueItems": true
                 }
               },
@@ -874,6 +1561,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Keys emitted by this node that should be published to shared global State.",
               "uniqueItems": true
             },
             "sensitiveFields": {
@@ -882,53 +1570,70 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
               "uniqueItems": true
             }
           },
           "required": [],
           "additionalProperties": false
         },
-        "cases": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "label": {
-                "type": "string"
-              },
-              "condition": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "id",
-              "condition"
-            ],
-            "additionalProperties": false
-          }
+        "label": {
+          "type": "string"
         },
-        "defaultCase": {
+        "conditions": {
           "type": "object",
           "properties": {
-            "label": {
-              "type": "string"
+            "true": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "label",
+                "condition"
+              ],
+              "additionalProperties": false
             },
-            "condition": {
-              "type": "string"
+            "false": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "label",
+                "condition"
+              ],
+              "additionalProperties": false
             }
           },
-          "required": [],
-          "additionalProperties": false
+          "required": [
+            "true",
+            "false"
+          ],
+          "additionalProperties": false,
+          "description": "Conditions evaluated independently for the two outgoing branches."
         }
       },
-      "required": [],
+      "required": [
+        "conditions"
+      ],
       "additionalProperties": false
-    },
+    }
+  },
+  "switch": {
+    "title": "Switch",
     "example": {
       "id": "switch1",
       "type": "switch",
@@ -955,22 +1660,10 @@
       "default"
     ],
     "guide": "Evaluate cases in order and select the first match; otherwise use default. Case IDs must be nonempty and unique. sourceHandle is case:<id> or default, with at most one edge per handle. defaultCase.condition is descriptive only. Conditions use the same limited syntax as if_else. Connect the default branch explicitly.",
-    "summary": "Route to the first matching case or default."
-  },
-  "human_review": {
-    "title": "Human review",
+    "summary": "Route to the first matching case or default.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
         "state": {
           "type": "object",
           "properties": {
@@ -991,6 +1684,7 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
                   "uniqueItems": true
                 }
               },
@@ -1003,6 +1697,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Keys emitted by this node that should be published to shared global State.",
               "uniqueItems": true
             },
             "sensitiveFields": {
@@ -1011,52 +1706,81 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
               "uniqueItems": true
             }
           },
           "required": [],
           "additionalProperties": false
         },
-        "title": {
+        "label": {
           "type": "string"
         },
-        "contentKey": {
-          "type": "string",
-          "minLength": 1
-        },
-        "contextKeys": {
+        "cases": {
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier used as the React Flow source handle ID.",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "description": "Human-readable branch name shown on the canvas."
+              },
+              "condition": {
+                "type": "string",
+                "description": "Expression evaluated against workflow state for this branch.",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "condition"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "defaultCase": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "description": "Human-readable fallback branch name shown on the canvas."
+            },
+            "condition": {
+              "type": "string",
+              "description": "Description of the unmatched cases; this is not evaluated."
+            }
           },
-          "uniqueItems": true
-        },
-        "editable": {
-          "type": "boolean"
-        },
-        "attachmentPaths": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true
-        },
-        "editableKey": {
-          "type": "string"
+          "required": [
+            "label",
+            "condition"
+          ],
+          "additionalProperties": false,
+          "description": "Fallback branch used when no case condition matches."
         }
       },
-      "required": [],
+      "required": [
+        "cases",
+        "defaultCase"
+      ],
       "additionalProperties": false
-    },
+    }
+  },
+  "human_review": {
+    "title": "Human review",
     "example": {
       "id": "human_review1",
       "type": "human_review",
       "data": {
         "title": "Review the result",
         "contentKey": "summary",
-        "editable": true
+        "editable": true,
+        "description": ""
       },
       "position": {
         "x": 320,
@@ -1068,22 +1792,10 @@
       "rejected"
     ],
     "guide": "Dynamically interrupts execution for a real human decision. contentKey/contextKeys select displayed state; editable allows string edits; attachmentPaths select extra files. sourceHandle is approved/rejected; unconnected outcomes end. Resume through native run-center actions. Never fabricate workflow.human_review.*.approved inputs. editableKey is a legacy field; use contentKey for new workflows.",
-    "summary": "Pause for a real human approval or rejection."
-  },
-  "ask_user_question": {
-    "title": "Ask user",
+    "summary": "Pause for a real human approval or rejection.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
         "state": {
           "type": "object",
           "properties": {
@@ -1104,6 +1816,7 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
                   "uniqueItems": true
                 }
               },
@@ -1116,6 +1829,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Keys emitted by this node that should be published to shared global State.",
               "uniqueItems": true
             },
             "sensitiveFields": {
@@ -1124,6 +1838,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
               "uniqueItems": true
             }
           },
@@ -1133,35 +1848,46 @@
         "title": {
           "type": "string"
         },
-        "options": {
+        "description": {
+          "type": "string"
+        },
+        "contentKey": {
+          "type": "string",
+          "description": "State key whose value is presented to the reviewer.",
+          "minLength": 1
+        },
+        "editable": {
+          "type": "boolean",
+          "description": "Whether the reviewer may edit the string value before approval."
+        },
+        "contextKeys": {
           "type": "array",
-          "minItems": 1,
           "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "label": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id"
-            ],
-            "additionalProperties": false
-          }
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Additional read-only state values shown with the review content.",
+          "uniqueItems": true
+        },
+        "attachmentPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Visible flat State paths selecting additional files for the reviewer.",
+          "uniqueItems": true
         }
       },
       "required": [
-        "options"
+        "title",
+        "description"
       ],
       "additionalProperties": false
-    },
+    }
+  },
+  "ask_user_question": {
+    "title": "Ask user",
     "example": {
       "id": "ask_user_question1",
       "type": "ask_user_question",
@@ -1176,7 +1902,8 @@
             "id": "stop",
             "label": "Stop"
           }
-        ]
+        ],
+        "description": ""
       },
       "position": {
         "x": 320,
@@ -1187,22 +1914,10 @@
       "option:<id>"
     ],
     "guide": "Dynamically interrupts execution until the user selects an option. Option IDs must be nonempty and unique. Use sourceHandle option:<id> and connect each option to a destination. Native user actions supply the answer; never answer on the user’s behalf or fabricate workflow.ask_user_question.*.answer.",
-    "summary": "Pause for the user to select an option."
-  },
-  "subworkflow": {
-    "title": "Subworkflow",
+    "summary": "Pause for the user to select an option.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
         "state": {
           "type": "object",
           "properties": {
@@ -1223,6 +1938,7 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
                   "uniqueItems": true
                 }
               },
@@ -1235,6 +1951,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Keys emitted by this node that should be published to shared global State.",
               "uniqueItems": true
             },
             "sensitiveFields": {
@@ -1243,29 +1960,56 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
               "uniqueItems": true
             }
           },
           "required": [],
           "additionalProperties": false
         },
-        "workflowId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "workflowName": {
+        "title": {
           "type": "string"
         },
-        "compensation": {
-          "type": "object",
-          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+        "description": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier used as the React Flow source handle ID.",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "description": "Text presented to the person answering the question."
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
         }
       },
       "required": [
-        "workflowId"
+        "title",
+        "description",
+        "options"
       ],
       "additionalProperties": false
-    },
+    }
+  },
+  "subworkflow": {
+    "title": "Subworkflow",
     "example": {
       "id": "subworkflow1",
       "type": "subworkflow",
@@ -1282,22 +2026,10 @@
     },
     "sourceHandles": [],
     "guide": "workflowId must identify a saved workflow in the current workspace, not an App, temporary draft or nested nodes/edges document. Inputs are the parent node’s visible state. Only child outputSchema keys are collected; publish them through the parent node’s globalKeys. Direct and indirect recursion are detected. Child reviews/questions use native resume chains. If compensation is declared, only delegated mode is allowed; actual actions live in the child execution journal.",
-    "summary": "Reuse a saved workflow in this workspace."
-  },
-  "terminate": {
-    "title": "Terminate",
+    "summary": "Reuse a saved workflow in this workspace.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
         "state": {
           "type": "object",
           "properties": {
@@ -1318,6 +2050,7 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "description": "Readers that may receive this node's original, unredacted namespace.",
                   "uniqueItems": true
                 }
               },
@@ -1330,6 +2063,7 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Keys emitted by this node that should be published to shared global State.",
               "uniqueItems": true
             },
             "sensitiveFields": {
@@ -1338,16 +2072,43 @@
                 "type": "string",
                 "minLength": 1
               },
+              "description": "Dot-separated output paths always redacted in this node's visible State.",
               "uniqueItems": true
             }
           },
           "required": [],
           "additionalProperties": false
+        },
+        "compensation": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "delegated"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false,
+          "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
+        },
+        "workflowId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowName": {
+          "type": "string"
         }
       },
-      "required": [],
+      "required": [
+        "workflowId"
+      ],
       "additionalProperties": false
-    },
+    }
+  },
+  "terminate": {
+    "title": "Terminate",
     "example": {
       "id": "terminate1",
       "type": "terminate",
@@ -1361,26 +2122,20 @@
     },
     "sourceHandles": [],
     "guide": "Stops this workflow and all parent workflows, unlike ordinary end. Successors must not continue business execution. Termination does not undo existing side effects; use native compensation and cleanup records.",
-    "summary": "Stop the current workflow and its parents."
-  },
-  "group": {
-    "title": "Layout group",
+    "summary": "Stop the current workflow and its parents.",
     "dataSchema": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": "string"
-        },
         "label": {
-          "type": "string"
-        },
-        "description": {
           "type": "string"
         }
       },
       "required": [],
       "additionalProperties": false
-    },
+    }
+  },
+  "group": {
+    "title": "Layout group",
     "example": {
       "id": "group1",
       "type": "group",
@@ -1394,6 +2149,17 @@
     },
     "sourceHandles": [],
     "guide": "Canvas layout only; not executable and must have no edges. Children may use React Flow parentId/extent and relative coordinates. Grouping does not create subworkflows or loops.",
-    "summary": "Organize canvas nodes without executing."
+    "summary": "Organize canvas nodes without executing.",
+    "dataSchema": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Human-readable title shown in the group header."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
   }
 }

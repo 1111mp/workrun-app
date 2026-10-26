@@ -237,6 +237,8 @@ export type RunRecord = RunRecordSummary & {
   outputView: unknown;
   targetSnapshot: unknown;
   runtime: unknown;
+  lastSequence: number;
+  lastSpanId: string | null;
   events: RunEvent[];
   spans: RunSpan[];
   executionHistory?: ExecutionHistory;
@@ -317,8 +319,44 @@ export function listRunHistoryTimelinePage(
   });
 }
 
-export function inspectRunRecord(id: string) {
-  return invoke<RunRecord>('run_history_inspect', { id });
+export async function inspectRunRecord(id: string) {
+  const record = await invoke<RunRecord>('run_history_inspect', { id });
+  // Reconstructing a graph requires its event sequence. Read bounded pages up
+  // to the snapshot cursor so a live stream cannot make this loop grow forever.
+  let after = -1;
+  do {
+    const page = await invoke<{
+      items: RunEvent[];
+      nextCursor: number | null;
+    }>('run_history_events_page', {
+      id,
+      after,
+      through: record.lastSequence,
+    });
+    record.events.push(...page.items);
+    if (page.nextCursor === null) break;
+    after = page.nextCursor;
+  } while (after < record.lastSequence);
+  let spanAfter = '';
+  for (;;) {
+    const page = await invoke<{
+      items: RunSpan[];
+      nextCursor: string | null;
+    }>('run_history_spans_page', {
+      id,
+      after: spanAfter,
+      through: record.lastSpanId ?? '',
+    });
+    record.spans.push(...page.items);
+    if (page.nextCursor === null) break;
+    spanAfter = page.nextCursor;
+  }
+  record.spans.sort(
+    (left, right) =>
+      left.startedAt.localeCompare(right.startedAt) ||
+      left.id.localeCompare(right.id),
+  );
+  return record;
 }
 
 export function getWorkflowObservability(query: {

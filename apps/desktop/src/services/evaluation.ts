@@ -215,9 +215,29 @@ export function cancelEvaluationRun(evaluationRunId: string) {
   return invoke('evaluation_run_cancel', { evaluationRunId });
 }
 
-export function listEvaluationCaseResults(evaluationRunId: string) {
-  return invoke<EvaluationCaseResult[]>('evaluation_run_case_results', {
+export type EvaluationCaseResultPage = {
+  items: EvaluationCaseResult[];
+  nextCursor: string | null;
+  total: number;
+  completed: number;
+  passed: number;
+};
+export function listEvaluationCaseResults(
+  evaluationRunId: string,
+  after?: string,
+) {
+  return invoke<EvaluationCaseResultPage>('evaluation_run_case_results', {
     evaluationRunId,
+    after,
+  });
+}
+export function inspectEvaluationCaseResult(
+  evaluationRunId: string,
+  id: string,
+) {
+  return invoke<EvaluationCaseResult>('evaluation_case_result_inspect', {
+    evaluationRunId,
+    id,
   });
 }
 

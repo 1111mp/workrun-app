@@ -42,6 +42,9 @@ async function inspect(id: string) {
 }
 
 async function viewHistory() {
+  // The editor has its own sidebar; return to the app navigation first.
+  const back = browser.$('a[aria-label="Back to workflows"]');
+  if (await back.isExisting()) await back.click();
   await browser.$('a[href="/runs"]').click();
   await expect(browser.$('body')).toHaveText(expect.stringContaining(name));
   await expect(browser.$('body')).toHaveText(
@@ -133,6 +136,9 @@ describe('Native workflow execution', () => {
         document,
       );
       await browser.refresh();
+      await browser
+        .$('a[data-sidebar="menu-button"][href="/workflows"]')
+        .click();
       await browser.$(`a[href="/workflows/${workflow.id}?run=true"]`).click();
       await browser.$('#run-input-message').setValue(message);
       await browser.$('form button[type="submit"]').click();

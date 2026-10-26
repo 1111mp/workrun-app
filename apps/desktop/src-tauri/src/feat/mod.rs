@@ -19,5 +19,6 @@ pub use python_runtime::*;
 pub use skill::*;
 pub use system::*;
 pub use window::*;
+pub(crate) use workflow::repository::WorkflowRepository;
 pub use workflow::*;
 pub use workflow_share::*;

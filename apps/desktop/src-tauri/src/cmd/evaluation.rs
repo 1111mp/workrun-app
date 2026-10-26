@@ -2,10 +2,10 @@ use crate::{
     cmd::{CmdResult, StringifyErr},
     module::evaluation::{
         ClaimedEvaluationCase, CreateEvaluationCase, CreateEvaluationRun, CreateEvaluationSuite,
-        EvaluationCaseResultSummary, EvaluationCaseSummary, EvaluationQualityGate, EvaluationRunDetail,
-        EvaluationRunSummary, EvaluationStore, EvaluationSuiteSummary, EvaluationVersionCaseCriterionComparison,
-        EvaluationVersionCaseDiff, EvaluationVersionSummary, QualityGateAuditSummary, RecordQualityGateOverride,
-        UpdateEvaluationCase, UpdateEvaluationSuite,
+        EvaluationCaseResultPage, EvaluationCaseResultSummary, EvaluationCaseSummary, EvaluationQualityGate,
+        EvaluationRunDetail, EvaluationRunSummary, EvaluationStore, EvaluationSuiteSummary,
+        EvaluationVersionCaseCriterionComparison, EvaluationVersionCaseDiff, EvaluationVersionSummary,
+        QualityGateAuditSummary, RecordQualityGateOverride, UpdateEvaluationCase, UpdateEvaluationSuite,
     },
 };
 
@@ -96,8 +96,21 @@ pub async fn evaluation_run_cancel(evaluation_run_id: String) -> CmdResult {
 }
 
 #[tauri::command]
-pub async fn evaluation_run_case_results(evaluation_run_id: String) -> CmdResult<Vec<EvaluationCaseResultSummary>> {
-    EvaluationStore::list_case_results(&evaluation_run_id)
+pub async fn evaluation_run_case_results(
+    evaluation_run_id: String,
+    after: Option<String>,
+) -> CmdResult<EvaluationCaseResultPage> {
+    EvaluationStore::list_case_results(&evaluation_run_id, after.as_deref())
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn evaluation_case_result_inspect(
+    evaluation_run_id: String,
+    id: String,
+) -> CmdResult<EvaluationCaseResultSummary> {
+    EvaluationStore::inspect_case_result(&evaluation_run_id, &id)
         .await
         .stringify_err()
 }

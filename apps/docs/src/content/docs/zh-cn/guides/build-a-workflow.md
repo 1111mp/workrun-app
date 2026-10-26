@@ -143,6 +143,8 @@ category, priority, recommendation
 
 如果结果不符合预期，按这个顺序排查：先看 App 的 stdout/stderr 和 `normalized_feedback`，再确认 Agent 的模型与 Schema，随后检查两个节点是否发布了所需键，最后核对 If/Else 的条件和出口连线。将这三组输入保存下来，它们就是第一批[评测用例](/zh-cn/quality/evaluations/)。
 
+也可以通过对话修改已保存的工作流。更新保存后，从对话中的 **查看变更** 对照字段和流程图，检查本次修改。操作示例见[通过对话修改，并查看变更](/zh-cn/guides/conversational-workflows/#6-通过对话修改并查看变更)。
+
 ## 分享或删除已保存的 Workflow
 
 在个人模式下，先保存修改，再打开 Workflow 详情页的 **更多（⋯）** 菜单，选择 **导出**。选择 ZIP 或 TAR 并检查包内容。包内会包含主 Workflow 定义、Process App、Agent 和 CodeAct 使用的 Tool App，以及递归引用的子 Workflow。重复依赖只打包一次；缺失依赖或子 Workflow 循环引用会阻止导出。

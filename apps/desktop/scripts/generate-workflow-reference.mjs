@@ -1,12 +1,32 @@
-// Generate every packaged reference from the validation contract, preventing
-// readable TypeScript and the runtime JSON Schema from drifting apart.
+// Generate runtime schemas and model references from the editor node types.
+// Metadata only adds semantic guidance, examples and validation refinements.
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+
+import {
+  workflowNodeSchemas,
+  constrainSchema,
+} from './workflow-node-schema.mjs';
 const base = new URL(
   '../src-tauri/src/module/assistant/workflow_agent/reference/',
   import.meta.url,
 );
-const contracts = JSON.parse(
-  readFileSync(new URL('../../../workflow/node-contracts.json', base), 'utf8'),
+const metadata = JSON.parse(
+  readFileSync(
+    new URL('../../../workflow/node-contract-metadata.json', base),
+    'utf8',
+  ),
+);
+const shapes = workflowNodeSchemas();
+if (Object.keys(metadata).sort().join() !== Object.keys(shapes).sort().join())
+  throw new Error('Workflow node directory differs from workflow.d.ts');
+const contracts = Object.fromEntries(
+  Object.entries(metadata).map(([kind, { dataConstraints, ...contract }]) => [
+    kind,
+    {
+      ...contract,
+      dataSchema: constrainSchema(shapes[kind], dataConstraints, kind),
+    },
+  ]),
 );
 const resources = new URL('../src-tauri/resources/assistant/', import.meta.url);
 const check = process.argv.includes('--check');
@@ -14,6 +34,9 @@ const check = process.argv.includes('--check');
 // removed role documents cannot remain in a release bundle.
 if (!check) rmSync(resources, { recursive: true, force: true });
 function writeOutput(url, content) {
+  // Packaged resources are rebuilt by prebuild and are not present in a clean
+  // checkout. Check the tracked runtime schema and reference sources instead.
+  if (check && url.href.startsWith(resources.href)) return;
   if (check) {
     if (readFileSync(url, 'utf8') !== content)
       throw new Error(`Stale workflow reference: ${url.pathname}`);
@@ -22,6 +45,10 @@ function writeOutput(url, content) {
     writeFileSync(url, content);
   }
 }
+writeOutput(
+  new URL('../../../workflow/node-contracts.json', base),
+  JSON.stringify(contracts, null, 2) + '\n',
+);
 function output(path, content) {
   writeOutput(new URL(path, base), content);
   if (path !== 'node_references.rs')
@@ -144,6 +171,7 @@ function type(schema) {
         .join('\n')}\n}`;
     }
     default:
+      if (!schema.type) return 'unknown';
       throw new Error(`Unsupported schema type: ${JSON.stringify(schema)}`);
   }
 }
@@ -166,7 +194,7 @@ for (const [kind, contract] of Object.entries(contracts)) {
     .split('_')
     .map((part) => part[0].toUpperCase() + part.slice(1))
     .join('');
-  const ts = `// Generated from JSON Schema. Runtime validation remains authoritative.\nexport interface ${name}NodeData ${type(contract.dataSchema)}\n`;
+  const ts = `// Generated from editor workflow.d.ts and runtime constraints; do not edit.\nexport interface ${name}NodeData ${type(contract.dataSchema)}\n`;
   const guide = `---\nname: workflow-node-${kind}\ndescription: ${contract.summary}\n---\n# ${contract.title} (${kind})\n\n${contract.guide}\n\n## Configuration\n\nTypeScript is a readable projection of the node data schema, not executable configuration. Numeric limits, uniqueness, additional-property rules and native semantics are validated by save_workflow_draft before writing. Use validate_workflow_draft separately only for a validation-only review. Request topic=node-schema with this node type only when the exact JSON Schema is needed.\n\n\`\`\`typescript\n${ts}\`\`\`\n\n## Connections\n\n${contract.sourceHandles.length ? `Allowed source handles: ${contract.sourceHandles.join(', ')}.` : 'No named source handles. Use an ordinary edge only if the node semantics above allow outgoing edges.'}\n\n## Example node\n\nReplace discovery placeholders with real resource IDs before validation.\n\n\`\`\`json\n${JSON.stringify(contract.example, null, 2)}\n\`\`\`\n`;
   output(`nodes/${kind}.d.ts`, ts);
   output(`nodes/${kind}.md`, guide);

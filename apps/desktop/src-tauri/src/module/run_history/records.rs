@@ -2,18 +2,23 @@ use super::*;
 
 impl RunHistoryStore {
     pub async fn create(record: CreateRunRecord) -> Result<()> {
+        Self::create_for_workspace(record, &crate::utils::dirs::active_workspace_id()).await
+    }
+
+    pub(crate) async fn create_for_workspace(record: CreateRunRecord, workspace: &str) -> Result<()> {
         validate_create(&record)?;
         let pool = DBManager::global().pool()?;
         let mut transaction = pool.begin().await?;
-        create_in_transaction(&mut transaction, &record).await?;
+        create_in_transaction_for_workspace(&mut transaction, &record, workspace).await?;
         transaction.commit().await?;
         Ok(())
     }
 }
 
-pub(crate) async fn create_in_transaction(
+pub(crate) async fn create_in_transaction_for_workspace(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     record: &CreateRunRecord,
+    workspace: &str,
 ) -> Result<()> {
     validate_create(record)?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -32,7 +37,7 @@ pub(crate) async fn create_in_transaction(
         .bind(record.runtime.to_string())
         .bind(&now)
         .bind(now)
-        .bind(crate::utils::dirs::active_workspace_id())
+        .bind(workspace)
         .execute(&mut **transaction)
         .await
         .context("failed to create run record")?;

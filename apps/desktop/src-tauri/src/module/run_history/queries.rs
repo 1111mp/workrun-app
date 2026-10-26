@@ -82,36 +82,13 @@ impl RunHistoryStore {
         let mut sql = QueryBuilder::<Sqlite>::new("SELECT ");
         let row = sql
             .push(RUN_RECORD_SUMMARY_COLUMNS)
-            .push(", input_json, output_view_json, target_snapshot_json, runtime_json FROM run_records WHERE id = ")
+            .push(", input_json, output_view_json, target_snapshot_json, runtime_json, last_sequence, (SELECT MAX(id) FROM run_spans WHERE run_id=run_records.id) AS last_span_id FROM run_records WHERE id = ")
             .push_bind(id)
             .build()
             .fetch_optional(&pool)
             .await?
             .ok_or_else(|| anyhow::anyhow!("run record was not found: {id}"))?;
         let summary = summary_from_row(&row)?;
-        let events =
-            sqlx::query("SELECT sequence, event_json, created_at FROM run_events WHERE run_id = ? ORDER BY sequence")
-                .bind(id)
-                .fetch_all(&pool)
-                .await?
-                .into_iter()
-                .map(|event| {
-                    Ok(StoredRunEvent {
-                        sequence: event.try_get("sequence")?,
-                        event: json_column(event.try_get("event_json")?)?,
-                        created_at: event.try_get("created_at")?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-        let spans = sqlx::query(
-            "SELECT id, run_id, parent_span_id, kind, status, node_id, node_name, provider, model, tool_name, started_at, ended_at, duration_ms, input_tokens, output_tokens, total_tokens, total_tokens_estimated, cache_read_tokens, cache_write_tokens, reasoning_tokens, audio_input_tokens, audio_output_tokens, estimated_cost_microusd, is_byok, error_code, error_message, attributes_json FROM run_spans WHERE run_id = ? ORDER BY started_at ASC, id ASC",
-        )
-        .bind(id)
-        .fetch_all(&pool)
-        .await?
-        .iter()
-        .map(run_span_from_row)
-        .collect::<Result<Vec<_>>>()?;
         Ok(RunRecord {
             summary,
             input: row
@@ -121,11 +98,64 @@ impl RunHistoryStore {
             output_view: json_column(row.try_get("output_view_json")?)?,
             target_snapshot: json_column(row.try_get("target_snapshot_json")?)?,
             runtime: json_column(row.try_get("runtime_json")?)?,
-            events,
-            spans,
+            last_sequence: row.try_get("last_sequence")?,
+            last_span_id: row.try_get("last_span_id")?,
+            events: Vec::new(),
+            spans: Vec::new(),
             execution_history: super::recovery::inspect_history(&pool, id).await?,
         })
     }
+    pub async fn last_event(id: &str, kind: &str) -> Result<Option<Value>> {
+        let pool = DBManager::global().pool()?;
+        let event:Option<String>=sqlx::query_scalar("SELECT event_json FROM run_events WHERE run_id=? AND json_extract(event_json,'$.type')=? ORDER BY sequence DESC LIMIT 1")
+            .bind(id).bind(kind).fetch_optional(&pool).await?;
+        event.map(json_column).transpose()
+    }
+
+    pub async fn events_page(id: &str, after: i64, through: i64) -> Result<RunEventPage> {
+        let pool = DBManager::global().pool()?;
+        events_page_in(&pool, id, after, through).await
+    }
+
+    pub async fn spans_page(id: &str, after: &str, through: &str) -> Result<RunSpanPage> {
+        let pool = DBManager::global().pool()?;
+        let rows = sqlx::query("SELECT * FROM run_spans WHERE run_id=? AND id>? AND id<=? ORDER BY id LIMIT 201")
+            .bind(id)
+            .bind(after)
+            .bind(through)
+            .fetch_all(&pool)
+            .await?;
+        let mut items = rows.iter().map(run_span_from_row).collect::<Result<Vec<_>>>()?;
+        let next_cursor = if items.len() > 200 {
+            items.pop();
+            items.last().map(|row| row.id.clone())
+        } else {
+            None
+        };
+        Ok(RunSpanPage { items, next_cursor })
+    }
+}
+
+async fn events_page_in(pool: &sqlx::SqlitePool, id: &str, after: i64, through: i64) -> Result<RunEventPage> {
+    let rows=sqlx::query("SELECT sequence,event_json,created_at FROM run_events WHERE run_id=? AND sequence>? AND sequence<=? ORDER BY sequence LIMIT 201")
+        .bind(id).bind(after).bind(through).fetch_all(pool).await?;
+    let mut items = rows
+        .into_iter()
+        .map(|row| {
+            Ok(StoredRunEvent {
+                sequence: row.try_get("sequence")?,
+                event: json_column(row.try_get("event_json")?)?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let next_cursor = if items.len() > 200 {
+        items.pop();
+        items.last().map(|row| row.sequence)
+    } else {
+        None
+    };
+    Ok(RunEventPage { items, next_cursor })
 }
 
 async fn list_timeline_from_pool(
@@ -933,5 +963,31 @@ mod follow_up_tests {
             .await
             .unwrap();
         assert_eq!(count, 10);
+    }
+    #[tokio::test]
+    async fn event_pages_are_bounded_and_ignore_events_after_snapshot_cursor() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE run_events(run_id TEXT,sequence INTEGER,event_json TEXT,created_at TEXT,PRIMARY KEY(run_id,sequence))").execute(&pool).await.unwrap();
+        for i in 0..450 {
+            sqlx::query("INSERT INTO run_events VALUES('run',?,'{}','now')")
+                .bind(i)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let first = events_page_in(&pool, "run", -1, 424).await.unwrap();
+        assert_eq!(first.items.len(), 200);
+        assert_eq!(first.next_cursor, Some(199));
+        let second = events_page_in(&pool, "run", 199, 424).await.unwrap();
+        let third = events_page_in(&pool, "run", second.next_cursor.unwrap(), 424)
+            .await
+            .unwrap();
+        assert_eq!(third.items.len(), 25);
+        assert!(third.next_cursor.is_none());
+        assert_eq!(third.items.last().unwrap().sequence, 424);
     }
 }

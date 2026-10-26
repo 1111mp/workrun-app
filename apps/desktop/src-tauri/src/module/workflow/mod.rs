@@ -1028,7 +1028,10 @@ pub(super) async fn compile_with_path(
     )?);
     let graph = graph
         .compile()?
-        .with_checkpointer_arc(Arc::clone(&state_checkpointer) as Arc<dyn Checkpointer>);
+        .with_checkpointer_arc(Arc::clone(&state_checkpointer) as Arc<dyn Checkpointer>)
+        // Checkpoints are recovery state, not an unbounded execution journal.
+        // Retain recent steps; run_events remains the durable history.
+        .with_checkpoint_retention(adk_rust::graph::checkpoint::RetentionPolicy::keep_last(20));
 
     Ok(CompiledWorkflow {
         graph,
@@ -1269,11 +1272,7 @@ pub(crate) fn validate_tool_value(schema: &Value, value: &Value, kind: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{feat, utils::dirs::PORTABLE_FLAG};
-    use std::sync::OnceLock;
     use std::{thread, time::Duration};
-
-    static SUBWORKFLOW_CATALOG_TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
     #[test]
     fn node_state_config_defaults_private_and_allowlists_global_keys() {
@@ -1905,21 +1904,26 @@ mod tests {
 
     #[tokio::test]
     async fn termination_in_a_subworkflow_stops_the_parent_workflow() {
-        let lock = SUBWORKFLOW_CATALOG_TEST_LOCK
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await;
-        PORTABLE_FLAG.get_or_init(|| true);
-        let child = feat::create_workflow(json!({
-            "nodes": [
-                {"id": "start", "type": "start", "data": {}},
-                {"id": "stop", "type": "terminate", "data": {}},
-                {"id": "end", "type": "end", "data": {}}
-            ],
-            "edges": [{"source": "start", "target": "stop"}],
-            "settings": {"name": "Stopping child", "inputSchema": {"fields": []}, "outputSchema": {"fields": []}}
-        }))
-        .await
+        let catalog = tempfile::tempdir().unwrap();
+        let child = crate::config::IWorkflow {
+            id: uuid::Uuid::now_v7().to_string(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            current_revision_id: None,
+            document: json!({
+                "nodes": [
+                    {"id": "start", "type": "start", "data": {}},
+                    {"id": "stop", "type": "terminate", "data": {}},
+                    {"id": "end", "type": "end", "data": {}}
+                ],
+                "edges": [{"source": "start", "target": "stop"}],
+                "settings": {"name": "Stopping child", "inputSchema": {"fields": []}, "outputSchema": {"fields": []}}
+            }),
+        };
+        std::fs::write(
+            catalog.path().join(format!("{}.json", child.id)),
+            serde_json::to_vec(&child).unwrap(),
+        )
         .unwrap();
 
         let parent: WorkflowDsl = serde_json::from_value(json!({
@@ -1937,14 +1941,17 @@ mod tests {
         }))
         .unwrap();
 
-        let result = compile(parent, &Default::default(), None)
-            .await
-            .unwrap()
-            .run_stream(State::new(), "nested-termination", false, None, |_| {})
-            .await
-            .unwrap();
+        let result = TEST_SUBWORKFLOW_CATALOG
+            .scope(catalog.path().to_path_buf(), async {
+                compile(parent, &Default::default(), None)
+                    .await
+                    .unwrap()
+                    .run_stream(State::new(), "nested-termination", false, None, |_| {})
+                    .await
+                    .unwrap()
+            })
+            .await;
 
-        drop(lock);
         assert_eq!(result.state["workflow"][WORKFLOW_TERMINATED_KEY], json!(true));
         assert_eq!(
             result.state["workflow"]["workflow.trace"][0]["type"],

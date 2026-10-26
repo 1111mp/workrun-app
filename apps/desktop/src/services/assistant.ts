@@ -11,6 +11,8 @@ export type WorkflowCall = {
   callId?: string;
 };
 export type AssistantMessage = {
+  turnId?: string;
+  interrupted?: boolean;
   notice?: 'plan_confirmation_required';
   id: string;
   role: 'user' | 'assistant' | 'tool';
@@ -92,7 +94,12 @@ export type WorkflowPlan = {
     | 'cancelled';
   dependencyIssues: string[];
   workflowId?: string | null;
-  outcome?: { summary?: string; status?: string } | null;
+  outcome?: {
+    summary?: string;
+    status?: string;
+    before_revision_id?: string | null;
+    after_revision_id?: string;
+  } | null;
   document: {
     goal: string;
     summary: string;
@@ -117,6 +124,7 @@ export type WorkflowPlan = {
   };
 };
 export type AssistantSession = {
+  history?: { hasMore: boolean; beforeSequence: number | null };
   workflowConfirmations?: AssistantWorkflowConfirmation[];
   pendingTool?: AssistantToolConfirmation | null;
   toolConfirmations?: AssistantToolConfirmation[];
@@ -233,3 +241,6 @@ export const getAssistantSnapshot = (id: string) =>
   invoke<AssistantEvent>('assistant_session_get', { id });
 export const getAssistantListSnapshot = () =>
   invoke<AssistantEvent>('assistant_session_list');
+
+export const getAssistantHistory = (id: string, beforeSequence: number) =>
+  invoke<AssistantSession>('assistant_session_history', { id, beforeSequence });

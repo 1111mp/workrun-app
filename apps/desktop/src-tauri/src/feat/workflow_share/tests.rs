@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{Draft, IProcessNodes, IWorkflows, ProcessNodeKind};
+use crate::config::{Draft, IProcessNodes, ProcessNodeKind};
 use std::sync::{Arc, atomic::AtomicBool};
 
 fn id() -> String {
@@ -8,6 +8,7 @@ fn id() -> String {
 
 fn workflow(id: &str, name: &str, nodes: Value) -> IWorkflow {
     IWorkflow {
+        current_revision_id: None,
         id: id.into(),
         created_at: "now".into(),
         updated_at: "now".into(),
@@ -363,16 +364,14 @@ async fn catalog_write_failure_rolls_back_both_snapshots_and_activated_sources()
     let paths = activated.paths.clone();
     assert!(paths.iter().all(|path| path.exists()));
     let apps = Draft::new(IProcessNodes::default());
-    let workflows = Draft::new(IWorkflows::default());
+    let workflows = super::super::workflow::repository::tests::repository().await;
+    workflows.close().await;
     let app_path = output.path().join("apps.json");
-    let workflow_path = output.path().join("workflow-is-a-directory");
-    std::fs::create_dir(&workflow_path).unwrap();
     let retain = Arc::new(AtomicBool::new(false));
     let result = commit_import(
         apps.clone(),
         workflows.clone(),
         app_path.clone(),
-        workflow_path,
         package.apps.values().cloned().collect(),
         Vec::new(),
         retain.clone(),
@@ -380,13 +379,7 @@ async fn catalog_write_failure_rolls_back_both_snapshots_and_activated_sources()
     .await;
     assert!(result.is_err());
     assert!(apps.data_arc().get_process_nodes().is_empty());
-    assert!(workflows.data_arc().workflows.is_empty());
-    assert!(
-        read_json::<IProcessNodes>(&app_path)
-            .unwrap()
-            .get_process_nodes()
-            .is_empty()
-    );
+    assert!(!app_path.exists());
     assert!(!retain.load(std::sync::atomic::Ordering::Acquire));
     drop(activated);
     assert!(paths.iter().all(|path| !path.exists()));
@@ -403,9 +396,13 @@ async fn successful_catalog_commit_keeps_existing_objects_and_adds_entire_bundle
     let old_app = app(source.path(), ProcessNodeKind::Workflow);
     let old_workflow = workflow(&id(), "Existing", json!([]));
     let apps = Draft::new(IProcessNodes::from_nodes(vec![old_app.clone()]));
-    let workflows = Draft::new(IWorkflows {
-        workflows: vec![old_workflow.clone()],
-    });
+    let workflows = super::super::workflow::repository::tests::repository().await;
+    let mut tx = workflows.begin().await.unwrap();
+    workflows
+        .save(&mut tx, old_workflow.clone(), false, "test", None, None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
     let app_map = package
         .apps
         .iter()
@@ -417,7 +414,6 @@ async fn successful_catalog_commit_keeps_existing_objects_and_adds_entire_bundle
         apps.clone(),
         workflows.clone(),
         output.path().join("apps.json"),
-        output.path().join("workflows.json"),
         package.apps.values().cloned().collect(),
         imported,
         Arc::new(AtomicBool::new(false)),
@@ -425,7 +421,36 @@ async fn successful_catalog_commit_keeps_existing_objects_and_adds_entire_bundle
     .await
     .unwrap();
     assert_eq!(apps.data_arc().get_process_nodes().len(), 4);
-    assert_eq!(workflows.data_arc().workflows.len(), 3);
+    assert_eq!(workflows.list().await.unwrap().len(), 3);
     assert!(apps.data_arc().get_process_node(&old_app.id).is_some());
-    assert!(workflows.data_arc().find_workflow(&old_workflow.id).is_some());
+    assert!(workflows.get(&old_workflow.id).await.is_ok());
+}
+
+#[tokio::test]
+async fn database_commit_failure_restores_app_catalog_and_publishes_no_workflows() {
+    let source = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let old_app = app(source.path(), ProcessNodeKind::Workflow);
+    let apps = Draft::new(IProcessNodes::from_nodes(vec![old_app.clone()]));
+    let workflows = super::super::workflow::repository::tests::repository().await;
+    super::super::workflow::repository::tests::fail_next_commit(&workflows).await;
+    let app_path = output.path().join("apps.json");
+    save_catalog(app_path.clone(), &*apps.data_arc()).await.unwrap();
+    let retain = Arc::new(AtomicBool::new(false));
+    let result = commit_import(
+        apps.clone(),
+        workflows.clone(),
+        app_path.clone(),
+        vec![app(source.path(), ProcessNodeKind::Workflow)],
+        vec![workflow(&id(), "Imported", json!([]))],
+        retain.clone(),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(workflows.list().await.unwrap().is_empty());
+    assert_eq!(apps.data_arc().get_process_nodes().len(), 1);
+    let saved: IProcessNodes = serde_json::from_slice(&std::fs::read(app_path).unwrap()).unwrap();
+    assert_eq!(saved.get_process_nodes().len(), 1);
+    assert!(saved.get_process_node(&old_app.id).is_some());
+    assert!(!retain.load(std::sync::atomic::Ordering::Acquire));
 }

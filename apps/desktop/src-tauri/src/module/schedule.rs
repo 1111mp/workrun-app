@@ -1,7 +1,6 @@
 //! Durable, local schedules for top-level executions.
 
 use crate::{
-    config::Config,
     core::db::DBManager,
     module::{
         run_manager::{self, ScheduleTrigger, StartAppRun, StartWorkflowRun},
@@ -117,6 +116,7 @@ pub struct ScheduleSummary {
 
 #[derive(Debug)]
 struct DueSchedule {
+    workspace: String,
     summary: ScheduleSummary,
     target_snapshot: Value,
     execution_recipe: Value,
@@ -126,34 +126,58 @@ pub struct ScheduleStore;
 
 impl ScheduleStore {
     pub async fn list_for_app(target_id: &str) -> Result<Vec<ScheduleSummary>> {
+        let workspace = crate::utils::dirs::active_workspace_id();
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, name, target_type, target_id, target_name, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, last_run_at FROM schedules WHERE target_type = 'app' AND target_id = ? ORDER BY next_run_at ASC, id ASC")
-            .bind(target_id)
-            .fetch_all(&pool)
+        Self::list_for_app_in(&pool, &workspace, target_id).await
+    }
+    async fn list_for_app_in(
+        pool: &sqlx::SqlitePool,
+        workspace: &str,
+        target_id: &str,
+    ) -> Result<Vec<ScheduleSummary>> {
+        let rows = sqlx::query("SELECT id, name, target_type, target_id, target_name, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, last_run_at FROM schedules WHERE workspace_id=? AND target_type = 'app' AND target_id = ? ORDER BY next_run_at ASC, id ASC")
+            .bind(workspace).bind(target_id)
+            .fetch_all(pool)
             .await?;
         rows.iter().map(schedule_summary).collect()
     }
 
     pub async fn list_for_workflow(target_id: &str) -> Result<Vec<ScheduleSummary>> {
+        let workspace = crate::utils::dirs::active_workspace_id();
         let pool = DBManager::global().pool()?;
-        let rows = sqlx::query("SELECT id, name, target_type, target_id, target_name, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, last_run_at FROM schedules WHERE target_type = 'workflow' AND target_id = ? ORDER BY next_run_at ASC, id ASC")
-            .bind(target_id)
-            .fetch_all(&pool)
+        Self::list_for_workflow_in(&pool, &workspace, target_id).await
+    }
+    async fn list_for_workflow_in(
+        pool: &sqlx::SqlitePool,
+        workspace: &str,
+        target_id: &str,
+    ) -> Result<Vec<ScheduleSummary>> {
+        let rows = sqlx::query("SELECT id, name, target_type, target_id, target_name, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, last_run_at FROM schedules WHERE workspace_id=? AND target_type = 'workflow' AND target_id = ? ORDER BY next_run_at ASC, id ASC")
+            .bind(workspace).bind(target_id)
+            .fetch_all(pool)
             .await?;
         rows.iter().map(schedule_summary).collect()
     }
 
     pub async fn save_app(request: AppScheduleRequest) -> Result<ScheduleSummary> {
+        let workspace = crate::utils::dirs::active_workspace_id();
+        let pool = DBManager::global().pool()?;
+        Self::save_app_in(&pool, &workspace, request).await
+    }
+    async fn save_app_in(
+        pool: &sqlx::SqlitePool,
+        workspace: &str,
+        request: AppScheduleRequest,
+    ) -> Result<ScheduleSummary> {
         validate_app_request(&request)?;
         let next_run_at = next_run(&request.cron_expression, &request.timezone, Utc::now())?;
         let now = Utc::now().to_rfc3339();
         let id = request.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        let pool = DBManager::global().pool()?;
         // Persist the chosen editor mode separately from Cron: `0 9 * * *` may be
         // either a deliberate custom expression or the Daily preset.
         let execution_recipe = json!({ "editorMode": request.editor_mode }).to_string();
-        sqlx::query("INSERT INTO schedules (id, name, target_type, target_id, target_name, target_snapshot_json, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, created_at, updated_at) VALUES (?, ?, 'app', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, target_id = excluded.target_id, target_name = excluded.target_name, target_snapshot_json = excluded.target_snapshot_json, execution_recipe_json = excluded.execution_recipe_json, cron_expression = excluded.cron_expression, timezone = excluded.timezone, enabled = excluded.enabled, next_run_at = excluded.next_run_at, updated_at = excluded.updated_at")
-            .bind(&id)
+        let saved = sqlx::query("INSERT INTO schedules (workspace_id, id, name, target_type, target_id, target_name, target_snapshot_json, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, created_at, updated_at) VALUES (?, ?, ?, 'app', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, target_id = excluded.target_id, target_name = excluded.target_name, target_snapshot_json = excluded.target_snapshot_json, execution_recipe_json = excluded.execution_recipe_json, cron_expression = excluded.cron_expression, timezone = excluded.timezone, enabled = excluded.enabled, next_run_at = excluded.next_run_at, updated_at = excluded.updated_at WHERE schedules.workspace_id=excluded.workspace_id AND schedules.target_type=excluded.target_type")
+            .bind(workspace).bind(&id)
             .bind(&request.name)
             .bind(&request.target_id)
             .bind(&request.target_name)
@@ -165,8 +189,12 @@ impl ScheduleStore {
             .bind(next_run_at.to_rfc3339())
             .bind(&now)
             .bind(&now)
-            .execute(&pool)
+            .execute(pool)
             .await?;
+        anyhow::ensure!(
+            saved.rows_affected() == 1,
+            "Schedule belongs to another workspace or target type"
+        );
         notify_scheduler();
         Ok(ScheduleSummary {
             id,
@@ -185,6 +213,15 @@ impl ScheduleStore {
     }
 
     pub async fn save_workflow(request: WorkflowScheduleRequest) -> Result<ScheduleSummary> {
+        let workspace = crate::utils::dirs::active_workspace_id();
+        let pool = DBManager::global().pool()?;
+        Self::save_workflow_in(&pool, &workspace, request).await
+    }
+    async fn save_workflow_in(
+        pool: &sqlx::SqlitePool,
+        workspace: &str,
+        request: WorkflowScheduleRequest,
+    ) -> Result<ScheduleSummary> {
         validate_workflow_request(&request)?;
         let next_run_at = next_run(&request.cron_expression, &request.timezone, Utc::now())?;
         let now = Utc::now().to_rfc3339();
@@ -195,12 +232,15 @@ impl ScheduleStore {
             initial_state: request.initial_state,
             editor_mode: request.editor_mode.clone(),
         };
-        let pool = DBManager::global().pool()?;
-        sqlx::query("INSERT INTO schedules (id, name, target_type, target_id, target_name, target_snapshot_json, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, created_at, updated_at) VALUES (?, ?, 'workflow', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, target_id = excluded.target_id, target_name = excluded.target_name, target_snapshot_json = excluded.target_snapshot_json, execution_recipe_json = excluded.execution_recipe_json, cron_expression = excluded.cron_expression, timezone = excluded.timezone, enabled = excluded.enabled, next_run_at = excluded.next_run_at, last_error = NULL, updated_at = excluded.updated_at")
-            .bind(&id).bind(&request.name).bind(&request.target_id).bind(&request.target_name)
+        let saved = sqlx::query("INSERT INTO schedules (workspace_id, id, name, target_type, target_id, target_name, target_snapshot_json, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, created_at, updated_at) VALUES (?, ?, ?, 'workflow', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, target_id = excluded.target_id, target_name = excluded.target_name, target_snapshot_json = excluded.target_snapshot_json, execution_recipe_json = excluded.execution_recipe_json, cron_expression = excluded.cron_expression, timezone = excluded.timezone, enabled = excluded.enabled, next_run_at = excluded.next_run_at, last_error = NULL, updated_at = excluded.updated_at WHERE schedules.workspace_id=excluded.workspace_id AND schedules.target_type=excluded.target_type")
+            .bind(workspace).bind(&id).bind(&request.name).bind(&request.target_id).bind(&request.target_name)
             .bind(request.target_snapshot.to_string()).bind(serde_json::to_string(&recipe)?)
             .bind(&request.cron_expression).bind(&request.timezone).bind(request.enabled)
-            .bind(next_run_at.to_rfc3339()).bind(&now).bind(&now).execute(&pool).await?;
+            .bind(next_run_at.to_rfc3339()).bind(&now).bind(&now).execute(pool).await?;
+        anyhow::ensure!(
+            saved.rows_affected() == 1,
+            "Schedule belongs to another workspace or target type"
+        );
         notify_scheduler();
         Ok(ScheduleSummary {
             id,
@@ -219,21 +259,32 @@ impl ScheduleStore {
     }
 
     pub async fn delete(id: &str) -> Result<()> {
+        let workspace = crate::utils::dirs::active_workspace_id();
         let pool = DBManager::global().pool()?;
-        sqlx::query("DELETE FROM schedules WHERE id = ?")
+        Self::delete_in(&pool, &workspace, id).await
+    }
+    async fn delete_in(pool: &sqlx::SqlitePool, workspace: &str, id: &str) -> Result<()> {
+        let changed = sqlx::query("DELETE FROM schedules WHERE workspace_id=? AND id = ?")
+            .bind(workspace)
             .bind(id)
-            .execute(&pool)
+            .execute(pool)
             .await?;
+        anyhow::ensure!(changed.rows_affected() == 1, "Schedule was not found in this workspace");
         notify_scheduler();
         Ok(())
     }
 
     pub async fn set_enabled(id: &str, enabled: bool) -> Result<()> {
+        let workspace = crate::utils::dirs::active_workspace_id();
         let pool = DBManager::global().pool()?;
+        Self::set_enabled_in(&pool, &workspace, id, enabled).await
+    }
+    async fn set_enabled_in(pool: &sqlx::SqlitePool, workspace: &str, id: &str, enabled: bool) -> Result<()> {
         let next_run_at = if enabled {
-            let row = sqlx::query("SELECT cron_expression, timezone FROM schedules WHERE id = ?")
+            let row = sqlx::query("SELECT cron_expression, timezone FROM schedules WHERE workspace_id=? AND id = ?")
+                .bind(workspace)
                 .bind(id)
-                .fetch_optional(&pool)
+                .fetch_optional(pool)
                 .await?
                 .ok_or_else(|| anyhow!("schedule was not found"))?;
             let expression: String = row.try_get("cron_expression")?;
@@ -244,15 +295,16 @@ impl ScheduleStore {
         } else {
             None
         };
-        sqlx::query(
-            "UPDATE schedules SET enabled = ?, next_run_at = COALESCE(?, next_run_at), updated_at = ? WHERE id = ?",
+        let changed=sqlx::query(
+            "UPDATE schedules SET enabled = ?, next_run_at = COALESCE(?, next_run_at), updated_at = ? WHERE workspace_id=? AND id = ?",
         )
         .bind(enabled)
         .bind(next_run_at)
         .bind(Utc::now().to_rfc3339())
-        .bind(id)
-        .execute(&pool)
+        .bind(workspace).bind(id)
+        .execute(pool)
         .await?;
+        anyhow::ensure!(changed.rows_affected() == 1, "Schedule was not found in this workspace");
         notify_scheduler();
         Ok(())
     }
@@ -269,21 +321,32 @@ pub fn start_scheduler() {
     // A watch channel retains the latest version, so that wake-up cannot be lost.
     let _ = SCHEDULE_CHANGES.set(sender);
     AsyncHandler::spawn(move || async move {
-        if let Err(error) = skip_missed_schedules().await {
-            log::error!("failed to skip missed scheduled runs during startup: {error:#}");
-        }
         run_scheduler(changes).await;
     });
 }
 
-fn notify_scheduler() {
+pub(crate) fn notify_scheduler() {
     if let Some(sender) = SCHEDULE_CHANGES.get() {
         sender.send_modify(|version| *version = version.wrapping_add(1));
     }
 }
 
 async fn run_scheduler(mut changes: tokio::sync::watch::Receiver<u64>) {
+    let mut previous_workspace = None;
     loop {
+        let workspace = crate::utils::dirs::active_workspace_id();
+        if previous_workspace.as_ref() != Some(&workspace) {
+            // Inactive workspace periods are missed occurrences, just like
+            // desktop downtime. Never replay their backlog on workspace switch.
+            if let Err(error) = skip_missed_schedules(&workspace).await {
+                log::error!("failed to skip missed schedules: {error:#}");
+                if !wait_for_change_or_timeout(&mut changes, SCHEDULE_ERROR_RETRY).await {
+                    return;
+                }
+                continue;
+            }
+            previous_workspace = Some(workspace);
+        }
         if let Err(error) = trigger_due_schedules().await {
             log::error!("failed to process scheduled runs: {error:#}");
             if !wait_for_change_or_timeout(&mut changes, SCHEDULE_ERROR_RETRY).await {
@@ -336,20 +399,20 @@ async fn wait_for_change_or_timeout(changes: &mut tokio::sync::watch::Receiver<u
 async fn next_enabled_run_at() -> Result<Option<DateTime<Utc>>> {
     let pool = DBManager::global().pool()?;
     let next_run_at: Option<String> = sqlx::query_scalar(
-        "SELECT next_run_at FROM schedules WHERE enabled = 1 ORDER BY next_run_at ASC, id ASC LIMIT 1",
+        "SELECT next_run_at FROM schedules WHERE workspace_id=? AND enabled = 1 ORDER BY next_run_at ASC, id ASC LIMIT 1",
     )
-    .fetch_optional(&pool)
+    .bind(crate::utils::dirs::active_workspace_id()).fetch_optional(&pool)
     .await?;
     next_run_at.map(|value| parse_time(&value)).transpose()
 }
 
-async fn skip_missed_schedules() -> Result<()> {
+async fn skip_missed_schedules(workspace: &str) -> Result<()> {
     let pool = DBManager::global().pool()?;
     let now = Utc::now();
     let rows = sqlx::query(
-        "SELECT id, cron_expression, timezone, next_run_at FROM schedules WHERE enabled = 1 AND next_run_at <= ?",
+        "SELECT id, cron_expression, timezone, next_run_at FROM schedules WHERE workspace_id=? AND enabled = 1 AND next_run_at <= ?",
     )
-    .bind(now.to_rfc3339())
+    .bind(workspace).bind(now.to_rfc3339())
     .fetch_all(&pool)
     .await?;
 
@@ -363,11 +426,11 @@ async fn skip_missed_schedules() -> Result<()> {
         // Do not turn desktop downtime into a burst of delayed App or Workflow runs.
         // The conditional update preserves a schedule edited while startup was in flight.
         sqlx::query(
-            "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ? AND enabled = 1 AND next_run_at = ?",
+            "UPDATE schedules SET next_run_at = ?, updated_at = ? WHERE id = ? AND workspace_id=? AND enabled = 1 AND next_run_at = ?",
         )
         .bind(next_run_at.to_rfc3339())
         .bind(now.to_rfc3339())
-        .bind(id)
+        .bind(id).bind(workspace)
         .bind(scheduled_for)
         .execute(&pool)
         .await?;
@@ -377,10 +440,12 @@ async fn skip_missed_schedules() -> Result<()> {
 
 async fn trigger_due_schedules() -> Result<()> {
     let pool = DBManager::global().pool()?;
-    let rows = sqlx::query("SELECT id, name, target_type, target_id, target_name, target_snapshot_json, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, last_run_at FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC, id ASC")
-        .bind(Utc::now().to_rfc3339()).fetch_all(&pool).await?;
+    let workspace = crate::utils::dirs::active_workspace_id();
+    let rows = sqlx::query("SELECT id, name, target_type, target_id, target_name, target_snapshot_json, execution_recipe_json, cron_expression, timezone, enabled, next_run_at, last_run_at FROM schedules WHERE workspace_id=? AND enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC, id ASC")
+        .bind(&workspace).bind(Utc::now().to_rfc3339()).fetch_all(&pool).await?;
     for row in rows {
         let due = DueSchedule {
+            workspace: workspace.clone(),
             summary: schedule_summary(&row)?,
             target_snapshot: serde_json::from_str(row.try_get::<&str, _>("target_snapshot_json")?)
                 .context("scheduled target snapshot is invalid")?,
@@ -393,6 +458,9 @@ async fn trigger_due_schedules() -> Result<()> {
 }
 
 async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Result<()> {
+    if crate::utils::dirs::active_workspace_id() != due.workspace {
+        return Ok(());
+    }
     let scheduled_for = due.summary.next_run_at.clone();
     let next = next_run(
         &due.summary.cron_expression,
@@ -402,15 +470,15 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
     // Advance before enqueueing. Restart recovery intentionally skips missed
     // occurrences, rather than surprising users with a burst of delayed Apps.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let changed = sqlx::query("UPDATE schedules SET next_run_at = ?, last_run_at = ?, updated_at = ? WHERE id = ? AND enabled = 1 AND next_run_at = ?")
-        .bind(next.to_rfc3339()).bind(&scheduled_for).bind(Utc::now().to_rfc3339()).bind(&due.summary.id).bind(&scheduled_for)
+    let changed = sqlx::query("UPDATE schedules SET next_run_at = ?, last_run_at = ?, updated_at = ? WHERE id = ? AND workspace_id=? AND enabled = 1 AND next_run_at = ?")
+        .bind(next.to_rfc3339()).bind(&scheduled_for).bind(Utc::now().to_rfc3339()).bind(&due.summary.id).bind(&due.workspace).bind(&scheduled_for)
         .execute(&mut *tx).await?;
     if changed.rows_affected() == 0 {
         tx.commit().await?;
         return Ok(());
     }
-    let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_records WHERE target_type = ? AND target_id = ? AND status IN ('queued', 'running', 'waiting_for_input'))")
-        .bind(match due.summary.target_type { ScheduleTargetType::App => "app", ScheduleTargetType::Workflow => "workflow" })
+    let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_records WHERE workspace_id=? AND target_type = ? AND target_id = ? AND status IN ('queued', 'running', 'waiting_for_input'))")
+        .bind(&due.workspace).bind(match due.summary.target_type { ScheduleTargetType::App => "app", ScheduleTargetType::Workflow => "workflow" })
         .bind(&due.summary.target_id).fetch_one(&mut *tx).await?;
     let occurrence_id = Uuid::new_v4().to_string();
     sqlx::query("INSERT OR IGNORE INTO schedule_occurrences (id, schedule_id, scheduled_for, status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)")
@@ -429,22 +497,30 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
     };
     match due.summary.target_type {
         ScheduleTargetType::App => {
-            run_manager::start_app(StartAppRun {
-                run_id: run_id.clone(),
-                target_id: due.summary.target_id,
-                target_name: due.summary.target_name,
-                output_view: json!({"isRunning": true, "node": due.target_snapshot}),
-                target_snapshot: due.target_snapshot,
-                schedule_trigger: Some(trigger),
-                deeplink_trigger: None,
-            })
+            run_manager::start_app_in_workspace(
+                StartAppRun {
+                    run_id: run_id.clone(),
+                    target_id: due.summary.target_id,
+                    target_name: due.summary.target_name,
+                    output_view: json!({"isRunning": true, "node": due.target_snapshot}),
+                    target_snapshot: due.target_snapshot,
+                    schedule_trigger: Some(trigger),
+                    deeplink_trigger: None,
+                },
+                &due.workspace,
+            )
             .await?
         },
         ScheduleTargetType::Workflow => {
             let recipe: WorkflowExecutionRecipe = serde_json::from_value(due.execution_recipe)?;
             let resolved = async {
-                let resolved =
-                    resolve_workflow_recipe(&due.summary.target_id, due.target_snapshot, recipe.source).await?;
+                let resolved = resolve_workflow_recipe(
+                    &due.workspace,
+                    &due.summary.target_id,
+                    due.target_snapshot,
+                    recipe.source,
+                )
+                .await?;
                 validate_scheduled_input(&resolved.0, &recipe.input)?;
                 Ok::<_, anyhow::Error>(resolved)
             }
@@ -456,10 +532,10 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                     // after a schedule is saved. Pause once instead of producing an
                     // unbounded stream of failed unattended attempts.
                     let message = error.to_string();
-                    sqlx::query("UPDATE schedules SET enabled = 0, last_error = ?, updated_at = ? WHERE id = ?")
+                    sqlx::query("UPDATE schedules SET enabled = 0, last_error = ?, updated_at = ? WHERE id = ? AND workspace_id=?")
                         .bind(&message)
                         .bind(Utc::now().to_rfc3339())
-                        .bind(&trigger.schedule_id)
+                        .bind(&trigger.schedule_id).bind(&due.workspace)
                         .execute(pool)
                         .await?;
                     sqlx::query(
@@ -473,24 +549,27 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                     return Ok(());
                 },
             };
-            run_manager::start_workflow(StartWorkflowRun {
-                chat_session_id: None,
-                chat_turn_id: None,
-                run_id: run_id.clone(),
-                target_id: due.summary.target_id,
-                target_name: due.summary.target_name,
-                input: recipe.input.clone(),
-                target_snapshot,
-                release_id,
-                release_version,
-                dsl,
-                initial_state: recipe.initial_state,
-                thread_id: Uuid::new_v4().to_string(),
-                evaluation_profile: None,
-                evaluation_result_id: None,
-                schedule_trigger: Some(trigger),
-                deeplink_trigger: None,
-            })
+            run_manager::start_workflow_in_workspace(
+                StartWorkflowRun {
+                    chat_session_id: None,
+                    chat_turn_id: None,
+                    run_id: run_id.clone(),
+                    target_id: due.summary.target_id,
+                    target_name: due.summary.target_name,
+                    input: recipe.input.clone(),
+                    target_snapshot,
+                    release_id,
+                    release_version,
+                    dsl,
+                    initial_state: recipe.initial_state,
+                    thread_id: Uuid::new_v4().to_string(),
+                    evaluation_profile: None,
+                    evaluation_result_id: None,
+                    schedule_trigger: Some(trigger),
+                    deeplink_trigger: None,
+                },
+                &due.workspace,
+            )
             .await?;
         },
     }
@@ -533,6 +612,7 @@ fn validate_workflow_request(request: &WorkflowScheduleRequest) -> Result<()> {
 }
 
 async fn resolve_workflow_recipe(
+    workspace: &str,
     workflow_id: &str,
     stored_snapshot: Value,
     source: WorkflowScheduleSource,
@@ -544,10 +624,9 @@ async fn resolve_workflow_recipe(
             release_version,
         } => Ok((dsl, stored_snapshot, Some(release_id), Some(release_version))),
         WorkflowScheduleSource::LatestLocal => {
-            let workflows = Config::workflows().await.data_arc();
-            let workflow = workflows
-                .find_workflow(workflow_id)
-                .ok_or_else(|| anyhow!("scheduled Workflow no longer exists"))?;
+            let workflow = crate::feat::WorkflowRepository::new(DBManager::global().pool()?, workspace.to_owned())
+                .get(workflow_id)
+                .await?;
             let dsl = workflow_dsl_from_document(workflow_id, &workflow.document)?;
             Ok((dsl, workflow.document, None, None))
         },
@@ -747,5 +826,84 @@ mod tests {
         let woke_for_change = wait_for_change_or_timeout(&mut changes, Duration::from_secs(60)).await;
 
         assert!(woke_for_change);
+    }
+    #[tokio::test]
+    async fn schedules_are_isolated_even_when_targets_or_request_ids_overlap() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../resources/migrations/20260904083536_create_run_history.up.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let request = |id: &str| AppScheduleRequest {
+            id: Some(id.into()),
+            name: "Daily".into(),
+            target_id: "same-app".into(),
+            target_name: "App".into(),
+            target_snapshot: json!({}),
+            cron_expression: "0 9 * * *".into(),
+            timezone: "UTC".into(),
+            enabled: true,
+            editor_mode: None,
+        };
+        ScheduleStore::save_app_in(&pool, "personal", request("personal-schedule"))
+            .await
+            .unwrap();
+        ScheduleStore::save_app_in(&pool, "team:default", request("team-schedule"))
+            .await
+            .unwrap();
+        assert_eq!(
+            ScheduleStore::list_for_app_in(&pool, "personal", "same-app")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            ScheduleStore::list_for_app_in(&pool, "team:default", "same-app")
+                .await
+                .unwrap()[0]
+                .id,
+            "team-schedule"
+        );
+        assert!(
+            ScheduleStore::save_app_in(&pool, "team:default", request("personal-schedule"))
+                .await
+                .is_err()
+        );
+        assert!(
+            ScheduleStore::set_enabled_in(&pool, "team:default", "personal-schedule", false)
+                .await
+                .is_err()
+        );
+        assert!(
+            ScheduleStore::delete_in(&pool, "team:default", "personal-schedule")
+                .await
+                .is_err()
+        );
+        ScheduleStore::set_enabled_in(&pool, "personal", "personal-schedule", false)
+            .await
+            .unwrap();
+        assert!(
+            !ScheduleStore::list_for_app_in(&pool, "personal", "same-app")
+                .await
+                .unwrap()[0]
+                .enabled
+        );
+        ScheduleStore::delete_in(&pool, "personal", "personal-schedule")
+            .await
+            .unwrap();
+        assert_eq!(
+            ScheduleStore::list_for_app_in(&pool, "team:default", "same-app")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

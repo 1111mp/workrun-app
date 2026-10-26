@@ -46,6 +46,8 @@ async function mount(extra: Partial<RunRecord> = {}) {
     outputView: {},
     events: [],
     spans: [],
+    lastSequence: -1,
+    lastSpanId: null,
     ...extra,
   };
   vi.mocked(inspectRunRecord).mockResolvedValue(record);

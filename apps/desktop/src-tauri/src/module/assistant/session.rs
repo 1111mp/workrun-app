@@ -77,16 +77,8 @@ fn ensure_workspace(workspace: &str) -> Result<()> {
 pub async fn save(pool: &SqlitePool, workspace: &str, session: &Value) -> Result<()> {
     let id = session["id"].as_str().context("session ID is missing")?;
     uuid::Uuid::parse_str(id).context("invalid session ID")?;
-    let data = serde_json::to_string(session)?;
-    if data.len() > 4 * 1024 * 1024 {
-        bail!("conversation is too large; start a new conversation");
-    }
+    super::storage::save(pool, workspace, session).await?;
     let updated_at = chrono::Utc::now().to_rfc3339();
-    let result=sqlx::query("INSERT INTO assistant_sessions (id, workspace_id, session_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET session_json = excluded.session_json, updated_at = excluded.updated_at WHERE assistant_sessions.workspace_id = excluded.workspace_id")
-        .bind(id).bind(workspace).bind(data).bind(&updated_at).execute(pool).await?;
-    if result.rows_affected() != 1 {
-        bail!("conversation belongs to another workspace");
-    }
     super::events::snapshot(workspace, session);
     super::events::list_change(
         workspace,
@@ -96,14 +88,7 @@ pub async fn save(pool: &SqlitePool, workspace: &str, session: &Value) -> Result
     Ok(())
 }
 pub async fn get(pool: &SqlitePool, workspace: &str, id: &str) -> Result<Value> {
-    let source: String =
-        sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id = ? AND workspace_id = ?")
-            .bind(id)
-            .bind(workspace)
-            .fetch_optional(pool)
-            .await?
-            .context("conversation was not found in this workspace")?;
-    let mut session: Value = serde_json::from_str(&source)?;
+    let mut session = super::storage::load(pool, workspace, id, None, !running(workspace, id)).await?;
     // A process restart loses inference, but never the run receipt. Active native
     // workers survive renderer reloads and must not be marked interrupted.
     if !running(workspace, id) && matches!(session["status"].as_str(), Some("thinking" | "running")) {
@@ -119,33 +104,6 @@ pub async fn get(pool: &SqlitePool, workspace: &str, id: &str) -> Result<Value> 
         {
             let old = plan.as_ref().unwrap();
             plan=Some(store.transition(id,&old.id,old.version,"failed",Some(json!({"status":"failed","summary":"Workflow configuration was interrupted. Inspect existing operations before requesting another attempt."})))?);
-        }
-        // Older conversations kept only the latest plan. Recover proposal
-        // positions from native revision records and exact conversation hashes.
-        if !session["workflowPlans"].is_array()
-            && let Some(current) = &plan
-        {
-            let mut turns = std::collections::HashMap::new();
-            let mut contents = Vec::new();
-            for message in session["messages"].as_array().context("Messages missing")? {
-                contents.push(serde_json::from_value(message["content"].clone())?);
-                if message["role"] == "user" {
-                    let normalized = super::protocol::normalize_assistant_contents(contents.clone())?;
-                    turns.insert(super::tool_execution::digest(&normalized)?, message["id"].clone());
-                }
-            }
-            let mut entries = Vec::new();
-            for version in 1..=current.version {
-                if let Ok(revision) = store.revision(id, version)
-                    && let Some(turn) = turns.get(&revision.created_turn_key)
-                {
-                    entries.push(json!({"turnId":turn,"plan":revision}));
-                }
-            }
-            if let Some(turn) = current.approved_turn_key.as_ref().and_then(|key| turns.get(key)) {
-                entries.push(json!({"turnId":turn,"plan":current}));
-            }
-            session["workflowPlans"] = json!(entries);
         }
         let tasks = super::task_runtime::TaskRuntime::open(&dirs::app_home_dir()?).await?;
         session["workflowPlan"] = if let Some(plan) = plan {
@@ -169,6 +127,24 @@ pub async fn get(pool: &SqlitePool, workspace: &str, id: &str) -> Result<Value> 
     }
     Ok(session)
 }
+/// UI history is independent of the complete protocol context used by native turns.
+pub async fn history(pool: &SqlitePool, workspace: &str, id: &str, before: i64) -> Result<Value> {
+    let mut session = super::storage::load(pool, workspace, id, Some(before), !running(workspace, id)).await?;
+    if before == i64::MAX
+        && !running(workspace, id)
+        && matches!(session["status"].as_str(), Some("thinking" | "running"))
+    {
+        // Interrupted native gates may need their full protocol context once to
+        // reconcile durable tool/plan receipts, never to execute them again.
+        return Ok(super::storage::window(&get(pool, workspace, id).await?));
+    }
+    if !running(workspace, id) && matches!(session["status"].as_str(), Some("thinking" | "running")) {
+        session["status"] = json!("error");
+        session["error"] = json!("Assistant response was interrupted. Continue to retry the response.");
+    }
+    Ok(session)
+}
+
 /// Attach pending interactions to the user turn that actually proposed them.
 /// Their placement must survive reloads and later unrelated conversation turns.
 async fn refresh_tool_feedback(root: &std::path::Path, session: &mut Value) -> Result<()> {
@@ -178,6 +154,9 @@ async fn refresh_tool_feedback(root: &std::path::Path, session: &mut Value) -> R
         let mut contents = Vec::new();
         let mut turn_id = Value::Null;
         for message in session["messages"].as_array().context("Messages missing")? {
+            if message["interrupted"] == true {
+                continue;
+            }
             contents.push(serde_json::from_value(message["content"].clone())?);
             if message["role"] == "user"
                 && super::tool_execution::digest(&super::protocol::normalize_assistant_contents(contents.clone())?)?
@@ -200,6 +179,17 @@ async fn refresh_tool_feedback(root: &std::path::Path, session: &mut Value) -> R
     Ok(())
 }
 
+fn push_message(session: &mut Value, message: Value) -> Result<()> {
+    // Reject before mutating runtime state so the error snapshot can still be
+    // committed even when a provider returns an oversized response at once.
+    super::storage::encode_message(&message)?;
+    session["messages"]
+        .as_array_mut()
+        .context("Messages missing")?
+        .push(message);
+    Ok(())
+}
+
 async fn commit(pool: &SqlitePool, workspace: &str, session: &Value) -> Result<()> {
     save(pool, workspace, session).await
 }
@@ -212,29 +202,30 @@ pub async fn delete(pool: &SqlitePool, workspace: &str, id: &str) -> Result<()> 
     {
         bail!("Only an idle conversation can be deleted");
     }
-    sqlx::query("DELETE FROM assistant_sessions WHERE id = ? AND workspace_id = ?")
-        .bind(id)
-        .bind(workspace)
-        .execute(pool)
+    crate::feat::WorkflowRepository::new(pool.clone(), workspace.into())
+        .delete_session(id)
         .await?;
     super::events::list_change(workspace, id, Value::Null);
     Ok(())
 }
 
 pub async fn renderer_save(session: Value) -> Result<()> {
+    super::storage::with_writer(Default::default(), renderer_save_inner(session)).await
+}
+async fn renderer_save_inner(session: Value) -> Result<()> {
     let pool = DBManager::global().pool()?;
     let workspace = dirs::active_workspace_id();
     let _lease = acquire(&workspace, session["id"].as_str().context("session ID is missing")?)?;
     // Renderer writes are limited to empty sessions, model selection and feedback. It
     // cannot forge messages, execution state or overwrite a running native turn.
-    let old =
-        sqlx::query_scalar::<_, String>("SELECT session_json FROM assistant_sessions WHERE id=? AND workspace_id=?")
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM assistant_sessions WHERE id=? AND workspace_id=?)")
             .bind(session["id"].as_str())
             .bind(&workspace)
-            .fetch_optional(&pool)
+            .fetch_one(&pool)
             .await?;
-    if let Some(old) = old {
-        let mut old: Value = serde_json::from_str(&old)?;
+    if exists {
+        let mut old = super::storage::load(&pool, &workspace, session["id"].as_str().unwrap(), None, true).await?;
         if !matches!(old["status"].as_str(), Some("idle" | "error" | "awaiting_feedback")) {
             bail!("Only an idle conversation can be edited");
         }
@@ -317,19 +308,15 @@ pub struct TurnRequest {
 }
 
 pub async fn start(request: TurnRequest) -> Result<Value> {
+    super::storage::with_writer(Default::default(), start_inner(request)).await
+}
+async fn start_inner(request: TurnRequest) -> Result<Value> {
     let workspace = dirs::active_workspace_id();
     let pool = DBManager::global().pool()?;
     let lease = acquire(&workspace, &request.session_id)?;
     // Read before spawning and acknowledge the durable state. No task is owned by
     // the Tauri invocation future, Channel, component, or webview lifetime.
-    let source: String =
-        sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id=? AND workspace_id=?")
-            .bind(&request.session_id)
-            .bind(&workspace)
-            .fetch_optional(&pool)
-            .await?
-            .context("Conversation not found")?;
-    let mut session: Value = serde_json::from_str(&source)?;
+    let mut session = super::storage::load(&pool, &workspace, &request.session_id, None, true).await?;
     let mut input = None;
     let mut drive_needed = true;
     match request.action {
@@ -350,7 +337,10 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
                     serde_json::to_string(&attachments)?
                 )
             };
-            session["messages"].as_array_mut().context("messages missing")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,"artifacts":attachments,"content":{"role":"user","parts":[{"text":content}]}}));
+            push_message(
+                &mut session,
+                json!({"id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,"artifacts":attachments,"content":{"role":"user","parts":[{"text":content}]}}),
+            )?;
             session["steps"] = json!(0);
             session["status"] = json!("thinking");
         },
@@ -394,7 +384,10 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
             let content = format!(
                 "User selected {decision} for workflow plan {plan_id} version {version}. Approval authorizes creation only, never execution."
             );
-            session["messages"].as_array_mut().context("Messages missing")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,"content":{"role":"user","parts":[{"text":content}]}}));
+            push_message(
+                &mut session,
+                json!({"id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,"content":{"role":"user","parts":[{"text":content}]}}),
+            )?;
             let history = session["messages"]
                 .as_array()
                 .unwrap()
@@ -472,7 +465,10 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
             let content = format!(
                 "User selected {decision} for frozen tool operation {operation_id}. This applies only to that exact tool and its displayed arguments."
             );
-            session["messages"].as_array_mut().unwrap().push(json!({"id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,"content":{"role":"user","parts":[{"text":content}]}}));
+            push_message(
+                &mut session,
+                json!({"id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,"content":{"role":"user","parts":[{"text":content}]}}),
+            )?;
             let history = session["messages"]
                 .as_array()
                 .unwrap()
@@ -546,11 +542,12 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
     }
     session["error"] = Value::Null;
     commit(&pool, &workspace, &session).await?;
-    let acknowledged = session.clone();
+    let acknowledged = super::storage::window(&session);
     if !drive_needed {
         return Ok(acknowledged);
     }
-    tauri::async_runtime::spawn(async move {
+    let writer = super::storage::writer(&workspace, &session)?;
+    tauri::async_runtime::spawn(super::storage::with_writer(writer, async move {
         let _lease = lease;
         let control = OWNERS.lock().get(&_lease.0).unwrap().clone();
         let partial = Mutex::new(None);
@@ -568,7 +565,7 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
             session["error"] = json!(error.to_string());
             let _ = commit(&pool, &workspace, &session).await;
         }
-    });
+    }));
     Ok(acknowledged)
 }
 
@@ -588,10 +585,10 @@ async fn finish_stopped(
             .iter()
             .any(|message| message["id"] == id)
     {
-        session["messages"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"id":id,"role":"assistant","text":text,"content":{"role":"model","parts":[{"text":text}]}}));
+        push_message(
+            session,
+            json!({"id":id,"role":"assistant","text":text,"content":{"role":"model","parts":[{"text":text}]}}),
+        )?;
     }
     if let Some(run_id) = session["activeCall"]["runId"].as_str().map(str::to_owned) {
         // Dispatch persists its identity before queue creation. Cancellation can
@@ -684,6 +681,8 @@ async fn drive(
             .as_array()
             .context("messages missing")?
             .iter()
+            // A crash checkpoint is visible history, not a completed protocol reply.
+            .filter(|message| message["interrupted"] != true)
             .map(|message| serde_json::from_value(message["content"].clone()))
             .collect::<std::result::Result<_, _>>()?;
         let message_id = uuid::Uuid::new_v4().to_string();
@@ -780,32 +779,50 @@ async fn drive(
             purpose: "conversation".into(),
             ..Default::default()
         };
-        let reply = crate::module::model_usage::scope(
-            usage_context,
-            runtime.run_with_discovery(
-                model.as_ref(),
-                &definition.provider,
-                AssistantRequest {
-                    context: super::protocol::AssistantContext {
-                        session_id: session["id"].as_str().map(str::to_owned),
-                        model_profile_id: Some(model_id.to_owned()),
-                        artifacts: session["messages"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .filter(|message| matches!(message["role"].as_str(), Some("user" | "assistant")))
-                            .flat_map(|message| message["artifacts"].as_array().into_iter().flatten())
-                            .map(|reference| serde_json::from_value(reference.clone()))
-                            .collect::<std::result::Result<Vec<_>, _>>()?,
+        let reply = {
+            let inference = crate::module::model_usage::scope(
+                usage_context,
+                runtime.run_with_discovery(
+                    model.as_ref(),
+                    &definition.provider,
+                    AssistantRequest {
+                        context: super::protocol::AssistantContext {
+                            session_id: session["id"].as_str().map(str::to_owned),
+                            model_profile_id: Some(model_id.to_owned()),
+                            artifacts: session["messages"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .filter(|message| matches!(message["role"].as_str(), Some("user" | "assistant")))
+                                .flat_map(|message| message["artifacts"].as_array().into_iter().flatten())
+                                .map(|reference| serde_json::from_value(reference.clone()))
+                                .collect::<std::result::Result<Vec<_>, _>>()?,
+                        },
+                        contents,
+                        capabilities: vec![],
                     },
-                    contents,
-                    capabilities: vec![],
-                },
-                &emit,
-                &catalog,
-            ),
-        )
-        .await;
+                    &emit,
+                    &catalog,
+                ),
+            );
+            tokio::pin!(inference);
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+            let mut checkpointed = None;
+            loop {
+                tokio::select! {
+                    result = &mut inference => break result,
+                    _ = interval.tick() => {
+                        let current = partial.lock().clone();
+                        if current != checkpointed {
+                            if let Some((id,text)) = &current {
+                                super::storage::checkpoint(pool, workspace, session["id"].as_str().unwrap(), id, text).await?;
+                            }
+                            checkpointed = current;
+                        }
+                    }
+                }
+            }
+        };
         if !session["activities"].is_array() {
             session["activities"] = json!([]);
         }
@@ -846,6 +863,12 @@ async fn drive(
         refresh_tool_feedback(&dirs::app_home_dir()?, session).await?;
         // Persist thinking and public progress even when the model phase fails.
         commit(pool, workspace, session).await?;
+        if reply.is_err() {
+            let current = partial.lock().clone();
+            if let Some((id, text)) = current {
+                super::storage::checkpoint(pool, workspace, session["id"].as_str().unwrap(), &id, &text).await?;
+            }
+        }
         let reply = reply?;
         ensure_workspace(workspace)?;
         if let Some(pause) = &reply.pause {
@@ -853,10 +876,10 @@ async fn drive(
             commit(pool, workspace, session).await?;
             return Ok(());
         }
-        session["messages"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"id":message_id,"role":"assistant","text":reply.text,"content":reply.content,"artifacts":reply.artifacts}));
+        push_message(
+            session,
+            json!({"id":message_id,"role":"assistant","text":reply.text,"content":reply.content,"artifacts":reply.artifacts}),
+        )?;
         if let Some(call) = reply.call {
             let steps = session["steps"].as_u64().unwrap_or(0);
             if steps >= 1 {
@@ -1047,13 +1070,13 @@ fn restart_workflow_selection(session: &mut Value, id: &str, text: &str) -> Resu
     // Finish the rejected signed call before starting a genuine user-feedback
     // turn. It grants no approval to any replacement workflow.
     decide_workflow_run(session, id, "reselect")?;
-    session["messages"]
-        .as_array_mut()
-        .context("messages missing")?
-        .push(json!({
+    push_message(
+        session,
+        json!({
             "id":uuid::Uuid::new_v4().to_string(),"role":"user","text":text,
             "content":{"role":"user","parts":[{"text":text}]}
-        }));
+        }),
+    )?;
     session["steps"] = json!(0);
     session["status"] = json!("thinking");
     Ok(())
@@ -1082,12 +1105,9 @@ impl WorkflowRuns for NativeRuns {
     }
     async fn inspect(&self, id: &str) -> Result<RunObservation> {
         let record = RunHistoryStore::inspect(id).await?;
-        let state = record
-            .events
-            .iter()
-            .rev()
-            .find(|event| event.event["type"] == "done")
-            .map(|event| event.event["state"].clone())
+        let state = RunHistoryStore::last_event(id, "done")
+            .await?
+            .map(|event| event["state"].clone())
             .unwrap_or(Value::Null);
         Ok(RunObservation {
             status: record.summary.status,
@@ -1193,7 +1213,10 @@ async fn wait_with(pool: &SqlitePool, workspace: &str, session: &mut Value, runs
 }
 fn apply_pause(session: &mut Value, message_id: &str, pause: &Value) -> Result<()> {
     if pause["reason"] == "confirmation_required" {
-        session["messages"].as_array_mut().context("Messages missing")?.push(json!({"id":message_id,"role":"assistant","text":"","notice":"plan_confirmation_required","content":{"role":"model","parts":[{"text":"Native state: this plan has not been approved and no Workflow has been created. User confirmation is required before creation. The run request did not revise the plan or execute anything."}]}}));
+        push_message(
+            session,
+            json!({"id":message_id,"role":"assistant","text":"","notice":"plan_confirmation_required","content":{"role":"model","parts":[{"text":"Native state: this plan has not been approved and its proposed workflow changes have not been saved. User confirmation is required before saving this plan. The run request did not revise the plan or execute anything."}]}}),
+        )?;
     }
     // A review checkpoint is the response. Do not append an empty or generated
     // assistant message after the card, including when a delivery is retried.
@@ -1222,7 +1245,11 @@ fn append_tool_receipt(session: &mut Value, feedback: &Value, result: &Value) ->
 
 fn append_result(session: &mut Value, response: Value, text: &str) -> Result<()> {
     let call = session["activeCall"].clone();
-    session["messages"].as_array_mut().context("messages missing")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"role":"tool","text":text,"runId":call["runId"],"workflowName":call["workflow"]["document"]["settings"]["name"],"artifacts":response["artifacts"],"content":{"role":"function","parts":[{"functionResponse":{"name":call["toolName"],"response":response},"id":call["callId"]}]}}));
+    let mut message = json!({"id":uuid::Uuid::new_v4().to_string(),"role":"tool","text":text,"runId":call["runId"],"workflowName":call["workflow"]["document"]["settings"]["name"],"artifacts":response["artifacts"],"content":{"role":"function","parts":[{"functionResponse":{"name":call["toolName"],"response":response},"id":call["callId"]}]}});
+    if super::storage::encode_message(&message).is_err() {
+        message["content"]["parts"][0]["functionResponse"]["response"] = json!({"status":text,"runId":call["runId"],"outputOmitted":true,"summary":"Output exceeds the message limit. Inspect the run record or its artifacts for the complete output."});
+    }
+    push_message(session, message)?;
     session["activeCall"] = Value::Null;
     session["status"] = json!("thinking");
     Ok(())
@@ -1382,12 +1409,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../../resources/migrations/20261016100000_assistant_sessions.up.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
+        super::super::storage::test_schema(&pool).await;
         pool
     }
     #[tokio::test]
@@ -1502,7 +1524,7 @@ mod tests {
         async fn start(&self, request: StartWorkflowRun) -> Result<()> {
             use std::sync::atomic::Ordering;
             self.starts.fetch_add(1, Ordering::SeqCst);
-            let saved: String = sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id=?")
+            let saved: String = sqlx::query_scalar("SELECT state_json FROM assistant_sessions WHERE id=?")
                 .bind(&self.session_id)
                 .fetch_one(&self.pool)
                 .await?;
@@ -1683,5 +1705,24 @@ mod tests {
         wait_with(&pool, "personal", &mut session, runs.as_ref()).await.unwrap();
         assert_eq!(runs.starts.load(Ordering::SeqCst), 1);
         assert_eq!(session["messages"][0]["runId"], run_id);
+    }
+    #[tokio::test]
+    async fn oversized_reply_does_not_poison_the_terminal_error_snapshot() {
+        let pool = pool().await;
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut session = json!({"id":id,"messages":[],"status":"thinking"});
+        save(&pool, "personal", &session).await.unwrap();
+        assert!(
+            push_message(
+                &mut session,
+                json!({"id":"large","role":"assistant","text":"x".repeat(4*1024*1024)})
+            )
+            .is_err()
+        );
+        session["status"] = json!("error");
+        save(&pool, "personal", &session).await.unwrap();
+        let restored = get(&pool, "personal", &id).await.unwrap();
+        assert_eq!(restored["status"], "error");
+        assert!(restored["messages"].as_array().unwrap().is_empty());
     }
 }

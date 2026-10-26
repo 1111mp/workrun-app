@@ -731,6 +731,7 @@ fn remap_documents(
         let id = workflow_map.get(id).context("Missing Workflow mapping")?.clone();
         validate_document(&document, Some(&id))?;
         workflows.push(IWorkflow {
+            current_revision_id: None,
             id,
             document,
             created_at: now.clone(),
@@ -801,15 +802,12 @@ async fn save_catalog<T: Serialize>(path: PathBuf, data: &T) -> Result<()> {
 
 async fn commit_import(
     apps_catalog: crate::config::Draft<crate::config::IProcessNodes>,
-    workflows_catalog: crate::config::Draft<crate::config::IWorkflows>,
+    repository: super::workflow::repository::WorkflowRepository,
     app_path: PathBuf,
-    workflow_path: PathBuf,
     apps: Vec<IProcessNode>,
     workflows: Vec<IWorkflow>,
     retain: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<()> {
-    // Hold both catalog update permits until all disk writes succeed. Draft claims
-    // alone do not protect against the existing with_data_modify writers.
+) -> Result<Vec<IWorkflow>> {
     apps_catalog
         .with_data_modify(|mut app_data| async move {
             let original = app_data.clone();
@@ -817,25 +815,29 @@ async fn commit_import(
                 app_data.add_process_node(app);
             }
             validate_process_node_catalog(&app_data)?;
-            workflows_catalog
-                .with_data_modify(|mut workflow_data| async move {
-                    for workflow in workflows {
-                        workflow_data.add_workflow(workflow);
-                    }
-                    save_catalog(app_path.clone(), &app_data).await?;
-                    if let Err(error) = save_catalog(workflow_path, &workflow_data).await {
-                        if let Err(rollback) = save_catalog(app_path, &original).await {
-                            retain.store(true, std::sync::atomic::Ordering::Release);
-                            return Err(error.context(format!(
-                                "App catalog rollback failed; source retained for recovery: {rollback}"
-                            )));
-                        }
-                        return Err(error);
-                    }
-                    Ok((workflow_data, app_data))
-                })
-                .await
-                .map(|app_data| (app_data, ()))
+            let mut tx = repository.begin().await?;
+            let mut saved = Vec::with_capacity(workflows.len());
+            for workflow in workflows {
+                saved.push(
+                    repository
+                        .save(&mut tx, workflow, false, "import", None, None)
+                        .await?
+                        .workflow(),
+                );
+            }
+            // Apps still use a file catalog. Keep its update permit and restore it
+            // if the workflow transaction fails; activated sources follow that result.
+            save_catalog(app_path.clone(), &app_data).await?;
+            if let Err(error) = repository.commit(tx).await {
+                if let Err(rollback) = save_catalog(app_path, &original).await {
+                    retain.store(true, std::sync::atomic::Ordering::Release);
+                    return Err(error.context(format!(
+                        "App catalog rollback failed; source retained for recovery: {rollback}"
+                    )));
+                }
+                return Err(error);
+            }
+            Ok((app_data, saved))
         })
         .await
 }
@@ -991,15 +993,14 @@ pub async fn workflow_share_import(
         })
         .collect();
     let app_path = crate::utils::dirs::process_node_catalog_path()?;
-    let workflow_path = crate::utils::dirs::workflow_catalog_path()?;
+    let repository = super::workflow::repository::WorkflowRepository::active()?;
     let mut activated =
         AsyncHandler::spawn_blocking(move || activate_apps(package.staging.path(), &package.apps)).await??;
     let retain = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let result = commit_import(
         Config::process_nodes().await,
-        Config::workflows().await,
+        repository,
         app_path,
-        workflow_path,
         apps,
         workflows,
         retain.clone(),
@@ -1007,9 +1008,12 @@ pub async fn workflow_share_import(
     .await;
     activated.retain = result.is_ok() || retain.load(std::sync::atomic::Ordering::Acquire);
     AsyncHandler::spawn_blocking(move || drop(activated)).await?;
-    result?;
+    let saved = result?;
     Ok(WorkflowShareImportResult {
-        workflow,
+        workflow: saved
+            .into_iter()
+            .find(|saved| saved.id == workflow.id)
+            .context("Missing imported root Workflow")?,
         apps: dependencies,
         pending,
     })
@@ -1094,42 +1098,44 @@ pub async fn workflow_share_configure(
     version: String,
 ) -> Result<IWorkflow> {
     ensure_personal()?;
-    let path = crate::utils::dirs::workflow_catalog_path()?;
+    let repository = super::workflow::repository::WorkflowRepository::active()?;
     let preview = workflow_share_configuration_preview(id.clone(), version.clone()).await?;
     validate_bindings(&preview.manifest.requirements, &bindings).await?;
-    Config::workflows()
-        .await
-        .with_data_modify(|mut data| async move {
-            let (preview, documents) = configuration_plan(&id, data.get_workflows(), version)?;
-            if preview.fingerprint != fingerprint {
-                bail!("Workflow changed since configuration preview; reopen it");
-            }
-            let workflow_map = documents.keys().map(|id| (id.clone(), id.clone())).collect();
-            let mut app_map = BTreeMap::new();
-            for document in documents.values() {
-                for node in document_nodes(document)? {
-                    for reference in references(node)? {
-                        if reference.kind != ReferenceKind::Workflow
-                            && !reference.id.starts_with(IMPORT_PREFIX)
-                            && !reference.id.starts_with("mcp:")
-                        {
-                            app_map.insert(reference.id.clone(), reference.id);
-                        }
-                    }
+    let mut tx = repository.begin().await?;
+    let (preview, documents) = configuration_plan(&id, repository.list_in(&mut tx).await?, version)?;
+    if preview.fingerprint != fingerprint {
+        bail!("Workflow changed since configuration preview; reopen it");
+    }
+    let workflow_map = documents.keys().map(|id| (id.clone(), id.clone())).collect();
+    let mut app_map = BTreeMap::new();
+    for document in documents.values() {
+        for node in document_nodes(document)? {
+            for reference in references(node)? {
+                if reference.kind != ReferenceKind::Workflow
+                    && !reference.id.starts_with(IMPORT_PREFIX)
+                    && !reference.id.starts_with("mcp:")
+                {
+                    app_map.insert(reference.id.clone(), reference.id);
                 }
             }
-            let mut updated = remap_documents(&documents, &app_map, &workflow_map, &bindings)?;
-            validate_bound_skills(&updated)?;
-            record_pending_requirements(&mut updated, &preview.manifest.requirements)?;
-            for workflow in &mut updated {
-                workflow.created_at = data.find_workflow(&workflow.id).context("Missing Workflow")?.created_at;
-                data.replace_workflow(workflow.clone());
-            }
-            save_catalog(path, &data).await?;
-            let root = updated.into_iter().find(|workflow| workflow.id == id).unwrap();
-            Ok((data, root))
-        })
-        .await
+        }
+    }
+    let mut updated = remap_documents(&documents, &app_map, &workflow_map, &bindings)?;
+    validate_bound_skills(&updated)?;
+    record_pending_requirements(&mut updated, &preview.manifest.requirements)?;
+    let mut root = None;
+    for mut workflow in updated {
+        workflow.updated_at = Utc::now().to_rfc3339();
+        let saved = repository
+            .save(&mut tx, workflow, true, "configuration", None, None)
+            .await?
+            .workflow();
+        if saved.id == id {
+            root = Some(saved);
+        }
+    }
+    repository.commit(tx).await?;
+    root.context("Missing root Workflow")
 }
 
 fn pending_value(value: &Value) -> bool {

@@ -69,6 +69,8 @@ const record = (status: RunRecord['status']): RunRecord => ({
   targetSnapshot: { settings: { mode: 'task' }, nodes: [] },
   events: [],
   spans: [],
+  lastSequence: -1,
+  lastSpanId: null,
   runtime: {},
   outputView: {},
 });

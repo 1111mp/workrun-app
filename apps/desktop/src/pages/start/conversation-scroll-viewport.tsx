@@ -57,6 +57,7 @@ export function ConversationScrollViewport({
     <MessageScrollerViewport
       {...props}
       ref={viewport}
+      data-conversation-scroll-viewport
       onScroll={(event) => {
         props.onScroll?.(event);
         if (restoring.current) return;

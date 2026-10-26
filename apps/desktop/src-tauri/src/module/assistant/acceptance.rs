@@ -24,7 +24,7 @@ impl WorkflowRuns for GraphRuns {
         tokio::sync::broadcast::channel(1).1
     }
     async fn start(&self, request: crate::module::run_manager::StartWorkflowRun) -> Result<()> {
-        let persisted: String = sqlx::query_scalar("SELECT session_json FROM assistant_sessions WHERE id=?")
+        let persisted: String = sqlx::query_scalar("SELECT state_json FROM assistant_sessions WHERE id=?")
             .bind(&self.session_id)
             .fetch_one(&self.pool)
             .await?;
@@ -105,11 +105,7 @@ async fn acceptance(model: &dyn Llm, amount: f64) -> Result<Value> {
         .max_connections(1)
         .connect("sqlite::memory:")
         .await?;
-    sqlx::raw_sql(include_str!(
-        "../../../resources/migrations/20261016100000_assistant_sessions.up.sql"
-    ))
-    .execute(&pool)
-    .await?;
+    super::storage::test_schema(&pool).await;
     sqlx::query("CREATE TABLE run_records(id TEXT PRIMARY KEY,workspace_id TEXT)")
         .execute(&pool)
         .await?;

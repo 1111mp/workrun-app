@@ -11,23 +11,9 @@ Stops this workflow and all parent workflows, unlike ordinary end. Successors mu
 TypeScript is a readable projection of the node data schema, not executable configuration. Numeric limits, uniqueness, additional-property rules and native semantics are validated by save_workflow_draft before writing. Use validate_workflow_draft separately only for a validation-only review. Request topic=node-schema with this node type only when the exact JSON Schema is needed.
 
 ```typescript
-// Generated from JSON Schema. Runtime validation remains authoritative.
+// Generated from editor workflow.d.ts and runtime constraints; do not edit.
 export interface TerminateNodeData {
-  "name"?: string;
   "label"?: string;
-  "description"?: string;
-  "state"?: {
-    "access"?: {
-      /** {"uniqueItems":true} */
-      "readers"?: Array<string>;
-      /** {"uniqueItems":true} */
-      "rawReaders"?: Array<string>;
-    };
-    /** {"uniqueItems":true} */
-    "globalKeys"?: Array<string>;
-    /** {"uniqueItems":true} */
-    "sensitiveFields"?: Array<string>;
-  };
 }
 ```
 

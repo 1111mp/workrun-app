@@ -11,31 +11,30 @@ true and false are independent conditions, evaluated in that order; if neither m
 TypeScript is a readable projection of the node data schema, not executable configuration. Numeric limits, uniqueness, additional-property rules and native semantics are validated by save_workflow_draft before writing. Use validate_workflow_draft separately only for a validation-only review. Request topic=node-schema with this node type only when the exact JSON Schema is needed.
 
 ```typescript
-// Generated from JSON Schema. Runtime validation remains authoritative.
+// Generated from editor workflow.d.ts and runtime constraints; do not edit.
 export interface IfElseNodeData {
-  "name"?: string;
-  "label"?: string;
-  "description"?: string;
   "state"?: {
     "access"?: {
       /** {"uniqueItems":true} */
       "readers"?: Array<string>;
-      /** {"uniqueItems":true} */
+      /** {"description":"Readers that may receive this node's original, unredacted namespace.","uniqueItems":true} */
       "rawReaders"?: Array<string>;
     };
-    /** {"uniqueItems":true} */
+    /** {"description":"Keys emitted by this node that should be published to shared global State.","uniqueItems":true} */
     "globalKeys"?: Array<string>;
-    /** {"uniqueItems":true} */
+    /** {"description":"Dot-separated output paths always redacted in this node's visible State.","uniqueItems":true} */
     "sensitiveFields"?: Array<string>;
   };
+  "label"?: string;
+  /** {"description":"Conditions evaluated independently for the two outgoing branches."} */
   "conditions": {
     "true": {
-      "label"?: string;
+      "label": string;
       /** {"minLength":1} */
       "condition": string;
     };
     "false": {
-      "label"?: string;
+      "label": string;
       /** {"minLength":1} */
       "condition": string;
     };

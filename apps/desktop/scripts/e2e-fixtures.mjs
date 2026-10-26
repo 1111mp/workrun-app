@@ -26,7 +26,6 @@ export async function createWorkspace(root, workflow) {
   }
   // Native IPC initializes its catalogs before the onboarding UI is completed.
   for (const [relativePath, catalog] of [
-    ['personal/workflow.json', { workflows: [] }],
     ['personal/process-nodes/catalog.json', { nodes }],
     ['personal/mcp-servers/catalog.json', { servers: [] }],
   ]) {

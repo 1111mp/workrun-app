@@ -44,6 +44,7 @@ import { artifactReferences, type ArtifactRef } from '@/services/artifact';
 import type { AssistantMessage } from '@/services/assistant';
 import { getModelCatalog } from '@/services/cmd';
 import { useWorkrunStore } from '@/stores';
+import { loadAssistantHistory } from '@/stores/assistant.runtime';
 import { useAssistantStore } from '@/stores/assistant.store';
 
 import { AssistantMessageActions } from './assistant-message-actions';
@@ -125,6 +126,7 @@ function AssistantChat({ scope }: { scope: string }) {
   const id = params.get('session') ?? undefined;
   const config = useWorkrunStore((state) => state.config);
   const [draft, setDraft] = useState('');
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [files, setFiles] = useState<ArtifactRef[]>([]);
   const [chosenModel, setChosenModel] = useState('');
   const modelPreferenceKey = `assistant:last-model:${scope}`;
@@ -399,6 +401,42 @@ function AssistantChat({ scope }: { scope: string }) {
                   positionKey={`${scope}:${id ?? 'new'}`}
                 >
                   <MessageScrollerContent className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] px-6 py-5'>
+                    {session?.history?.hasMore && (
+                      <div className='flex justify-center py-3'>
+                        <Button
+                          variant='ghost'
+                          disabled={loadingHistory}
+                          onClick={async (event) => {
+                            const viewport = event.currentTarget.closest(
+                              '[data-conversation-scroll-viewport]',
+                            ) as HTMLElement | null;
+                            const height = viewport?.scrollHeight ?? 0;
+                            const top = viewport?.scrollTop ?? 0;
+                            setLoadingHistory(true);
+                            try {
+                              await loadAssistantHistory(session.id, scope);
+                              requestAnimationFrame(() => {
+                                if (viewport)
+                                  viewport.scrollTop =
+                                    top + viewport.scrollHeight - height;
+                              });
+                            } catch {
+                              toast.error(t('assistant.history.loadError'), {
+                                toasterId: 'global',
+                              });
+                            } finally {
+                              setLoadingHistory(false);
+                            }
+                          }}
+                        >
+                          {t(
+                            loadingHistory
+                              ? 'assistant.history.loading'
+                              : 'assistant.history.loadEarlier',
+                          )}
+                        </Button>
+                      </div>
+                    )}
                     {groups.map((group) => (
                       <MessageScrollerItem
                         key={group.id}
@@ -457,7 +495,9 @@ function AssistantChat({ scope }: { scope: string }) {
                                           decision,
                                           t(
                                             decision === 'approve'
-                                              ? 'assistant.plan.approveMessage'
+                                              ? entry.plan.document.target_id
+                                                ? 'assistant.plan.approveRevisionMessage'
+                                                : 'assistant.plan.approveMessage'
                                               : 'assistant.plan.cancelMessage',
                                             { version: entry.plan.version },
                                           ),

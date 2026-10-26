@@ -473,7 +473,16 @@ impl NativeTurn<'_> {
                         ]))?;
                         uuid::Uuid::parse_str(&digest[..32])?.to_string()
                     };
-                    let record = json!({"id":id,"kind":if planning{"workflow_planning"}else{"workflow_authoring"},"sessionId":self.context.session_id,"modelProfileId":self.context.model_profile_id,"planId":self.plan.as_ref().map(|p|&p["id"]),"planVersion":self.plan.as_ref().map(|p|&p["version"]),"task":self.task,"status":"running","calls":[],"startedAt":chrono::Utc::now().to_rfc3339()});
+                    let mut record = json!({"id":id,"kind":if planning{"workflow_planning"}else{"workflow_authoring"},"sessionId":self.context.session_id,"modelProfileId":self.context.model_profile_id,"planId":self.plan.as_ref().map(|p|&p["id"]),"planVersion":self.plan.as_ref().map(|p|&p["version"]),"task":self.task,"status":"running","calls":[],"startedAt":chrono::Utc::now().to_rfc3339()});
+                    if !planning && let Some(target_id) = self.task["target_id"].as_str() {
+                        let base = self
+                            .discovery
+                            .context("Native discovery unavailable")?
+                            .authoring("get_workflow_draft", &json!({"draft_id":target_id}))
+                            .await?;
+                        ensure!(base["document"].is_object(), "Revision target document is unavailable");
+                        record["baseDocument"] = base["document"].clone();
+                    }
                     self.discovery
                         .context("Native discovery unavailable")?
                         .record_operation(&record)
@@ -620,6 +629,12 @@ impl NativeTurn<'_> {
                 planning_agent::plans::validate_graph(plan, &document)?;
                 ensure!(self.saved.is_none(), "Workflow already saved for this handoff");
                 args["operation_id"] = record["id"].clone();
+                // Conversation ownership comes from native context, never model arguments.
+                args["session_id"] = json!(self.context.session_id.as_deref().context("Conversation is missing")?);
+                args.as_object_mut().unwrap().remove("expected_document");
+                if let Some(document) = record.get("baseDocument") {
+                    args["expected_document"] = document.clone();
+                }
                 args.as_object_mut()
                     .context("Tool arguments must be an object")?
                     .remove("target_id");
@@ -819,7 +834,7 @@ impl NativeTurn<'_> {
                 json!({"status":"failed","summary":parsed.get("summary").cloned().unwrap_or(json!("No plan proposal was saved")),"error":error,"executed":false})
             }
         } else if let Some(saved) = &self.saved {
-            json!({"status":"completed","workflow_id":saved["capability_id"],"validation":saved["validation"],"summary":parsed.get("summary").cloned().unwrap_or(json!("Workflow saved and validated")),"assumptions":parsed["assumptions"],"executed":false})
+            json!({"status":"completed","workflow_id":saved["capability_id"],"before_revision_id":saved["before_revision_id"],"after_revision_id":saved["after_revision_id"],"validation":saved["validation"],"summary":parsed.get("summary").cloned().unwrap_or(json!("Workflow saved and validated")),"assumptions":parsed["assumptions"],"executed":false})
         } else if error.is_none()
             && parsed["status"] == "needs_clarification"
             && parsed["questions"]
