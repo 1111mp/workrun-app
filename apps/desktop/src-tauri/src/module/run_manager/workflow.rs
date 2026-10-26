@@ -79,7 +79,7 @@ pub(crate) async fn start_workflow_in_workspace(mut request: StartWorkflowRun, w
     if let Some(schema) = request.dsl.get("inputSchema") {
         crate::module::artifact::validate_input(schema, &request.initial_state)?;
     }
-    let store = crate::module::artifact::ArtifactStore::active()?;
+    let store = crate::module::artifact::ArtifactStore::for_workspace(workspace)?;
     let references = crate::module::artifact::references(&request.initial_state)?;
     tokio::task::spawn_blocking(move || -> Result<()> {
         for reference in references {

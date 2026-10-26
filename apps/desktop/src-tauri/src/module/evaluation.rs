@@ -489,7 +489,7 @@ impl EvaluationStore {
         refresh_run_aggregate(&pool, &evaluation_run_id, &now).await?;
         // Evaluation batches are native-owned. Once a workflow becomes
         // terminal, launch the next durable Case even if the editor is closed.
-        Self::start_next_case(&evaluation_run_id).await?;
+        Self::advance_batch(&pool, &evaluation_run_id).await?;
         Ok(())
     }
 
@@ -811,7 +811,7 @@ impl EvaluationStore {
         };
         // The batch exists before execution begins, so closing the editor
         // cannot strand a newly created evaluation in the queued state.
-        Self::start_next_case(&summary.id).await?;
+        Self::advance_batch(&pool, &summary.id).await?;
         Ok(summary)
     }
 
@@ -825,87 +825,26 @@ impl EvaluationStore {
         let pool = DBManager::global().pool()?;
         ensure_evaluation_scope(&pool, "run", source_run_id).await?;
         let summary = retry_failed_cases_in_pool(&pool, source_run_id, id).await?;
-        Self::start_next_case(&summary.id).await?;
+        Self::advance_batch(&pool, &summary.id).await?;
         Ok(summary)
     }
 
     pub async fn claim_next_case(evaluation_run_id: &str) -> Result<Option<ClaimedEvaluationCase>> {
-        if evaluation_run_id.trim().is_empty() {
-            bail!("evaluation run id is required");
-        }
         let pool = DBManager::global().pool()?;
-        ensure_evaluation_scope(&pool, "run", evaluation_run_id).await?;
-        let mut transaction = pool.begin().await?;
-        let run = sqlx::query(
-            "SELECT workflow_id, workflow_snapshot_json FROM evaluation_runs WHERE id = ? AND status IN ('queued', 'running')",
-        )
-        .bind(evaluation_run_id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some(run) = run else {
-            transaction.commit().await?;
-            return Ok(None);
-        };
-        let result = sqlx::query(
-            "SELECT id, evaluation_case_id, case_snapshot_json FROM evaluation_case_results WHERE evaluation_run_id = ? AND execution_status = 'queued' ORDER BY created_at ASC, id ASC LIMIT 1",
-        )
-        .bind(evaluation_run_id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let Some(result) = result else {
-            transaction.commit().await?;
-            return Ok(None);
-        };
-        let now = chrono::Utc::now().to_rfc3339();
-        let result_id: String = result.try_get("id")?;
-        let updated = sqlx::query(
-            "UPDATE evaluation_case_results SET execution_status = 'running', updated_at = ? WHERE id = ? AND execution_status = 'queued'",
-        )
-        .bind(&now)
-        .bind(&result_id)
-        .execute(&mut *transaction)
-        .await?;
-        if updated.rows_affected() == 0 {
-            transaction.commit().await?;
-            return Ok(None);
-        }
-        sqlx::query("UPDATE evaluation_runs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'")
-            .bind(&now)
-            .bind(evaluation_run_id)
-            .execute(&mut *transaction)
-            .await?;
-        let claimed = ClaimedEvaluationCase {
-            result_id,
-            evaluation_run_id: evaluation_run_id.to_string(),
-            evaluation_case_id: result.try_get("evaluation_case_id")?,
-            workflow_id: run.try_get("workflow_id")?,
-            workflow_snapshot: serde_json::from_str(&run.try_get::<String, _>("workflow_snapshot_json")?)?,
-            case_snapshot: serde_json::from_str(&result.try_get::<String, _>("case_snapshot_json")?)?,
-        };
-        transaction.commit().await?;
-        Ok(Some(claimed))
+        claim_next_case_in_pool(&pool, &crate::utils::dirs::active_workspace_id(), evaluation_run_id).await
     }
 
     pub async fn start_next_case(evaluation_run_id: &str) -> Result<Option<ClaimedEvaluationCase>> {
-        // Claiming is durable so two coordinators cannot run the same case. A
-        // malformed historical fixture must therefore become a Case error,
-        // rather than leaving the claimed Case running forever.
-        loop {
-            let Some(claimed) = Self::claim_next_case(evaluation_run_id).await? else {
-                return Ok(None);
-            };
-            match Self::start_claimed_case(&claimed).await {
-                Ok(()) => return Ok(Some(claimed)),
-                Err(error) => {
-                    let message = error.to_string();
-                    log::warn!(
-                        "failed to start evaluation case {}: {message:#}",
-                        claimed.evaluation_case_id
-                    );
-                    Self::fail_case_start(&claimed, &message).await?;
-                },
-            }
-        }
+        let pool = DBManager::global().pool()?;
+        ensure_evaluation_scope(&pool, "run", evaluation_run_id).await?;
+        Self::advance_batch(&pool, evaluation_run_id).await
+    }
+
+    async fn advance_batch(pool: &sqlx::SqlitePool, evaluation_run_id: &str) -> Result<Option<ClaimedEvaluationCase>> {
+        advance_batch_in_pool(pool, evaluation_run_id, |claimed, workspace| async move {
+            Self::start_claimed_case(&claimed, &workspace).await
+        })
+        .await
     }
 
     pub async fn cancel_run(evaluation_run_id: &str) -> Result<()> {
@@ -926,7 +865,7 @@ impl EvaluationStore {
         Ok(())
     }
 
-    async fn start_claimed_case(claimed: &ClaimedEvaluationCase) -> Result<()> {
+    async fn start_claimed_case(claimed: &ClaimedEvaluationCase, workspace: &str) -> Result<()> {
         let snapshot: EvaluationWorkflowSnapshot = serde_json::from_value(claimed.workflow_snapshot.clone())
             .context("evaluation workflow snapshot is invalid")?;
         if snapshot.target_name.trim().is_empty() {
@@ -935,13 +874,6 @@ impl EvaluationStore {
         let profile: EvaluationExecutionProfile = serde_json::from_value(claimed.case_snapshot.fixture.clone())
             .context("evaluation case fixture is invalid")?;
         let workflow_run_id = uuid::Uuid::new_v4().to_string();
-        let pool = DBManager::global().pool()?;
-        let workspace: String = sqlx::query_scalar(
-            "SELECT s.workspace_id FROM evaluation_suites s JOIN evaluation_runs r ON r.suite_id=s.id WHERE r.id=?",
-        )
-        .bind(&claimed.evaluation_run_id)
-        .fetch_one(&pool)
-        .await?;
         run_manager::start_workflow_in_workspace(
             StartWorkflowRun {
                 chat_session_id: None,
@@ -964,7 +896,7 @@ impl EvaluationStore {
                 schedule_trigger: None,
                 deeplink_trigger: None,
             },
-            &workspace,
+            workspace,
         )
         .await?;
         let pool = DBManager::global().pool()?;
@@ -975,11 +907,6 @@ impl EvaluationStore {
             .execute(&pool)
             .await?;
         Ok(())
-    }
-
-    async fn fail_case_start(claimed: &ClaimedEvaluationCase, reason: &str) -> Result<()> {
-        let pool = DBManager::global().pool()?;
-        fail_case_start_in_pool(&pool, &claimed.evaluation_run_id, &claimed.result_id, reason).await
     }
 
     pub async fn list_case_results(evaluation_run_id: &str, after: Option<&str>) -> Result<EvaluationCaseResultPage> {
@@ -1384,6 +1311,106 @@ fn case_results_from_rows(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<Eval
             })
         })
         .collect()
+}
+
+async fn evaluation_batch_workspace(pool: &sqlx::SqlitePool, id: &str) -> Result<String> {
+    sqlx::query_scalar(
+        "SELECT s.workspace_id FROM evaluation_suites s JOIN evaluation_runs r ON r.suite_id=s.id WHERE r.id=?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .context("Evaluation batch was not found")
+}
+
+async fn claim_next_case_in_pool(
+    pool: &sqlx::SqlitePool,
+    workspace: &str,
+    evaluation_run_id: &str,
+) -> Result<Option<ClaimedEvaluationCase>> {
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let run = sqlx::query(
+            "SELECT r.workflow_id,r.workflow_snapshot_json,r.status FROM evaluation_runs r JOIN evaluation_suites s ON s.id=r.suite_id WHERE r.id=? AND s.workspace_id=?",
+        )
+        .bind(evaluation_run_id).bind(workspace)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    let run = run.context("Evaluation record was not found in this workspace")?;
+    if !matches!(run.try_get::<&str, _>("status")?, "queued" | "running") {
+        transaction.commit().await?;
+        return Ok(None);
+    }
+    let result = sqlx::query(
+            "SELECT id, evaluation_case_id, case_snapshot_json FROM evaluation_case_results WHERE evaluation_run_id = ? AND execution_status = 'queued' ORDER BY created_at ASC, id ASC LIMIT 1",
+        )
+        .bind(evaluation_run_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    let Some(result) = result else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let result_id: String = result.try_get("id")?;
+    let updated = sqlx::query(
+            "UPDATE evaluation_case_results SET execution_status = 'running', updated_at = ? WHERE id = ? AND execution_status = 'queued'",
+        )
+        .bind(&now)
+        .bind(&result_id)
+        .execute(&mut *transaction)
+        .await?;
+    if updated.rows_affected() == 0 {
+        transaction.commit().await?;
+        return Ok(None);
+    }
+    sqlx::query("UPDATE evaluation_runs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'queued'")
+        .bind(&now)
+        .bind(evaluation_run_id)
+        .execute(&mut *transaction)
+        .await?;
+    let claimed = ClaimedEvaluationCase {
+        result_id,
+        evaluation_run_id: evaluation_run_id.to_string(),
+        evaluation_case_id: result.try_get("evaluation_case_id")?,
+        workflow_id: run.try_get("workflow_id")?,
+        workflow_snapshot: serde_json::from_str(&run.try_get::<String, _>("workflow_snapshot_json")?)?,
+        case_snapshot: serde_json::from_str(&result.try_get::<String, _>("case_snapshot_json")?)?,
+    };
+    transaction.commit().await?;
+    Ok(Some(claimed))
+}
+
+async fn advance_batch_in_pool<F, Fut>(
+    pool: &sqlx::SqlitePool,
+    evaluation_run_id: &str,
+    mut dispatch: F,
+) -> Result<Option<ClaimedEvaluationCase>>
+where
+    F: FnMut(ClaimedEvaluationCase, String) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    // Completion callbacks outlive the visible workspace. Use the batch's
+    // durable owner; only the IPC entry points authorize against the UI scope.
+    let workspace = evaluation_batch_workspace(pool, evaluation_run_id).await?;
+    // Claiming is durable so two coordinators cannot run the same case. A
+    // malformed historical fixture must therefore become a Case error,
+    // rather than leaving the claimed Case running forever.
+    loop {
+        let Some(claimed) = claim_next_case_in_pool(pool, &workspace, evaluation_run_id).await? else {
+            return Ok(None);
+        };
+        match dispatch(claimed.clone(), workspace.clone()).await {
+            Ok(()) => return Ok(Some(claimed)),
+            Err(error) => {
+                let message = error.to_string();
+                log::warn!(
+                    "failed to start evaluation case {}: {message:#}",
+                    claimed.evaluation_case_id
+                );
+                fail_case_start_in_pool(pool, &claimed.evaluation_run_id, &claimed.result_id, &message).await?;
+            },
+        }
+    }
 }
 
 async fn workflow_run_metrics(pool: &sqlx::SqlitePool, workflow_run_id: &str) -> Result<WorkflowRunMetrics> {
@@ -3223,5 +3250,105 @@ mod tests {
         assert_eq!(next.items.len(), 25);
         assert!(next.next_cursor.is_none());
         assert_ne!(first.items.last().unwrap().id, next.items[0].id);
+    }
+    #[tokio::test]
+    async fn native_batches_keep_advancing_across_workspace_switches_without_authorizing_foreign_ipc() {
+        for (owner, other) in [("personal", "team:default"), ("team:default", "personal")] {
+            let pool = sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlx::raw_sql(include_str!(
+                "../../resources/migrations/20260904083536_create_run_history.up.sql"
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+            let now = "2026-10-26T00:00:00Z";
+            sqlx::query("INSERT INTO evaluation_suites(workspace_id,id,workflow_id,name,created_at,updated_at) VALUES(?,'suite','workflow','Suite',?,?)")
+                .bind(owner).bind(now).bind(now).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO evaluation_runs(id,suite_id,workflow_id,status,workflow_snapshot_json,workflow_fingerprint,suite_snapshot_json,execution_profile_json,started_at,created_at,updated_at,total_cases) VALUES('batch','suite','workflow','running','{\"frozen\":true}','fingerprint','{}','{}',?,?,?,3)")
+                .bind(now).bind(now).bind(now).execute(&pool).await.unwrap();
+            for position in 0..3 {
+                let id = format!("case-{position}");
+                sqlx::query("INSERT INTO evaluation_cases(id,suite_id,name,position,created_at,updated_at) VALUES(?,'suite','Case',?,?,?)")
+                    .bind(&id).bind(position).bind(now).bind(now).execute(&pool).await.unwrap();
+                let case = EvaluationCaseSummary {
+                    id: id.clone(),
+                    suite_id: "suite".into(),
+                    name: "Case".into(),
+                    description: String::new(),
+                    position,
+                    enabled: true,
+                    archived: false,
+                    target_agent_id: None,
+                    input: json!({}),
+                    expectation: json!({}),
+                    fixture: json!({}),
+                    created_at: now.into(),
+                    updated_at: now.into(),
+                };
+                sqlx::query("INSERT INTO evaluation_case_results(id,evaluation_run_id,evaluation_case_id,case_snapshot_json,execution_status,verdict,created_at,updated_at) VALUES(?,'batch',?,?,?, ?,?,?)")
+                    .bind(&id).bind(&id).bind(serde_json::to_string(&case).unwrap())
+                    .bind(if position==0 {"completed"}else{"queued"}).bind(if position==0 {"passed"}else{"pending"})
+                    .bind(now).bind(now).execute(&pool).await.unwrap();
+            }
+            // Simulate the visible workspace through the same scoped claim path
+            // used by IPC, without mutating process-global state in parallel tests.
+            assert!(claim_next_case_in_pool(&pool, other, "batch").await.is_err());
+            assert!(ensure_evaluation_scope_in(&pool, other, "run", "batch").await.is_err());
+            let second = advance_batch_in_pool(&pool, "batch", |claimed, workspace| {
+                assert_eq!(workspace, owner);
+                assert_eq!(claimed.evaluation_case_id, "case-1");
+                assert_eq!(claimed.workflow_snapshot, json!({"frozen":true}));
+                std::future::ready(Ok(()))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            sqlx::query("UPDATE evaluation_case_results SET execution_status='completed',verdict='passed' WHERE id=?")
+                .bind(&second.result_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            refresh_run_aggregate(&pool, "batch", now).await.unwrap();
+            // Returning to the owner's workspace restores IPC access and does
+            // not change the workspace passed to the native dispatcher.
+            ensure_evaluation_scope_in(&pool, owner, "run", "batch").await.unwrap();
+            let third = advance_batch_in_pool(&pool, "batch", |claimed, workspace| {
+                assert_eq!(workspace, owner);
+                assert_eq!(claimed.evaluation_case_id, "case-2");
+                std::future::ready(Ok(()))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            sqlx::query("UPDATE evaluation_case_results SET execution_status='completed',verdict='passed' WHERE id=?")
+                .bind(&third.result_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            refresh_run_aggregate(&pool, "batch", now).await.unwrap();
+            let aggregate: (String, i64) =
+                sqlx::query_as("SELECT status,passed_cases FROM evaluation_runs WHERE id='batch'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(aggregate, ("completed".into(), 3));
+            assert!(
+                advance_batch_in_pool(&pool, "batch", |_, _| std::future::ready(Ok(())))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            sqlx::raw_sql("UPDATE evaluation_runs SET status='cancelled' WHERE id='batch'; UPDATE evaluation_case_results SET execution_status='queued',verdict='pending' WHERE id='case-2';").execute(&pool).await.unwrap();
+            assert!(
+                advance_batch_in_pool(&pool, "batch", |_, _| std::future::ready(Ok(())))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 }
