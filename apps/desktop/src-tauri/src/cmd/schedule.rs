@@ -4,6 +4,11 @@ use crate::{
 };
 
 #[tauri::command]
+pub async fn schedule_set_team_session(server_url: String, token: Option<String>) {
+    crate::module::schedule::set_team_session(server_url, token);
+}
+
+#[tauri::command]
 pub async fn app_schedule_list(app_id: String) -> CmdResult<Vec<ScheduleSummary>> {
     ScheduleStore::list_for_app(&app_id).await.stringify_err()
 }

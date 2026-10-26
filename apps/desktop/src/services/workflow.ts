@@ -212,6 +212,7 @@ export type WorkflowSchedule = {
   lastRunAt?: string;
   editorMode?: 'daily' | 'weekdays' | 'weekly' | 'custom';
   input?: Record<string, unknown>;
+  source?: WorkflowScheduleRequest['source'];
 };
 
 export type WorkflowScheduleRequest = {
@@ -225,6 +226,7 @@ export type WorkflowScheduleRequest = {
   enabled: boolean;
   source:
     | { kind: 'latest_local' }
+    | { kind: 'latest_published' }
     | {
         kind: 'published_release';
         dsl: unknown;

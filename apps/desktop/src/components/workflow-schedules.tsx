@@ -29,6 +29,7 @@ import {
   Input,
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -191,7 +192,22 @@ function WorkflowScheduleDialog({
   }, [document.settings.name, schedule]);
 
   const [draft, setDraft] = useState(initial);
-  const inputs = document.settings.inputSchema.fields;
+  const [releaseId, setReleaseId] = useState<string>(() =>
+    schedule?.source?.kind === 'latest_published'
+      ? 'latest_published'
+      : schedule?.source?.kind === 'published_release'
+        ? schedule.source.releaseId
+        : (release?.id ?? ''),
+  );
+  const selectedRelease =
+    releases.data?.find((item) => item.id === releaseId) ??
+    (releaseId === 'latest_published'
+      ? (releases.data?.[0] ?? release)
+      : releaseId === release?.id
+        ? release
+        : undefined);
+  const targetSnapshot = selectedRelease?.document ?? document;
+  const inputs = targetSnapshot.settings.inputSchema.fields;
   const [inputValues, setInputValues] = useState<ScheduleInputValues>(() =>
     initialInputValues(inputs, schedule?.input),
   );
@@ -203,28 +219,25 @@ function WorkflowScheduleDialog({
     [cron, draft.timezone, i18n.language],
   );
 
-  const [releaseId, setReleaseId] = useState<string>(release?.id ?? '');
-
-  const selectedRelease =
-    releases.data?.find((item) => item.id === releaseId) ?? release;
-  const targetSnapshot = selectedRelease?.document ?? document;
   const source: WorkflowScheduleRequest['source'] = isTeamMode()
-    ? selectedRelease
-      ? {
-          kind: 'published_release',
-          dsl:
-            selectedRelease.id === release?.id
-              ? dsl
-              : toWorkflowDsl(
-                  workflowId,
-                  selectedRelease.document.nodes,
-                  selectedRelease.document.edges,
-                  selectedRelease.document.settings,
-                ),
-          releaseId: selectedRelease.id,
-          releaseVersion: selectedRelease.version,
-        }
-      : { kind: 'latest_local' }
+    ? releaseId === 'latest_published'
+      ? { kind: 'latest_published' }
+      : selectedRelease
+        ? {
+            kind: 'published_release',
+            dsl:
+              selectedRelease.id === release?.id
+                ? dsl
+                : toWorkflowDsl(
+                    workflowId,
+                    selectedRelease.document.nodes,
+                    selectedRelease.document.edges,
+                    selectedRelease.document.settings,
+                  ),
+            releaseId: selectedRelease.id,
+            releaseVersion: selectedRelease.version,
+          }
+        : { kind: 'latest_local' }
     : { kind: 'latest_local' };
   const configuredInput = scheduleInput(inputs, inputValues);
 
@@ -234,7 +247,7 @@ function WorkflowScheduleDialog({
         id: schedule?.id,
         name: draft.name,
         targetId: workflowId,
-        targetName: document.settings.name,
+        targetName: targetSnapshot.settings.name,
         targetSnapshot,
         cronExpression: cron,
         timezone: draft.timezone,
@@ -462,10 +475,16 @@ function WorkflowScheduleDialog({
                     {t('workflowEditor.schedules.release')}
                   </FieldLabel>
                   <Select
-                    items={(releases.data ?? []).map((item) => ({
-                      value: item.id,
-                      label: item.version,
-                    }))}
+                    items={[
+                      {
+                        value: 'latest_published',
+                        label: t('workflowEditor.schedules.latestPublished'),
+                      },
+                      ...(releases.data ?? []).map((item) => ({
+                        value: item.id,
+                        label: item.version,
+                      })),
+                    ]}
                     value={releaseId}
                     onValueChange={(value) => setReleaseId(value ?? '')}
                   >
@@ -479,11 +498,16 @@ function WorkflowScheduleDialog({
                       />
                     </SelectTrigger>
                     <SelectContent>
-                      {(releases.data ?? []).map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.version}
+                      <SelectGroup>
+                        <SelectItem value='latest_published'>
+                          {t('workflowEditor.schedules.latestPublished')}
                         </SelectItem>
-                      ))}
+                        {(releases.data ?? []).map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.version}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                   <FieldDescription>

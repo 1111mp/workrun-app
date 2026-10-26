@@ -58,11 +58,15 @@ pub enum WorkflowScheduleSource {
     /// Resolve from the local catalog at dispatch time so scheduled personal
     /// workflows follow the author's latest saved definition.
     LatestLocal,
+    /// Fetch the current published release at dispatch; never use an author draft.
+    LatestPublished,
     /// Team releases are immutable; retain all coordinates needed to replay
     /// the published definition without consulting a mutable draft.
     PublishedRelease {
         dsl: Value,
+        #[serde(rename = "releaseId", alias = "release_id")]
         release_id: String,
+        #[serde(rename = "releaseVersion", alias = "release_version")]
         release_version: String,
     },
 }
@@ -112,6 +116,8 @@ pub struct ScheduleSummary {
     pub editor_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<WorkflowScheduleSource>,
 }
 
 #[derive(Debug)]
@@ -209,6 +215,7 @@ impl ScheduleStore {
             last_run_at: None,
             editor_mode: request.editor_mode,
             input: None,
+            source: None,
         })
     }
 
@@ -222,6 +229,9 @@ impl ScheduleStore {
         workspace: &str,
         request: WorkflowScheduleRequest,
     ) -> Result<ScheduleSummary> {
+        if matches!(request.source, WorkflowScheduleSource::LatestPublished) && !workspace.starts_with("team:") {
+            bail!("Following published releases requires a Team workspace");
+        }
         validate_workflow_request(&request)?;
         let next_run_at = next_run(&request.cron_expression, &request.timezone, Utc::now())?;
         let now = Utc::now().to_rfc3339();
@@ -255,6 +265,7 @@ impl ScheduleStore {
             last_run_at: None,
             editor_mode: request.editor_mode,
             input: Some(recipe.input),
+            source: Some(recipe.source),
         })
     }
 
@@ -513,6 +524,7 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
         },
         ScheduleTargetType::Workflow => {
             let recipe: WorkflowExecutionRecipe = serde_json::from_value(due.execution_recipe)?;
+            let follows_latest = matches!(recipe.source, WorkflowScheduleSource::LatestPublished);
             let resolved = async {
                 let resolved = resolve_workflow_recipe(
                     &due.workspace,
@@ -528,11 +540,12 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
             let (dsl, target_snapshot, release_id, release_version) = match resolved {
                 Ok(resolved) => resolved,
                 Err(error) => {
-                    // A local workflow may be deleted or become structurally invalid
-                    // after a schedule is saved. Pause once instead of producing an
-                    // unbounded stream of failed unattended attempts.
+                    // Following releases also depends on network/session availability.
+                    // Skip a failed occurrence and resolve again next time; fixed/local
+                    // definitions retain their existing pause-on-invalid behavior.
                     let message = error.to_string();
-                    sqlx::query("UPDATE schedules SET enabled = 0, last_error = ?, updated_at = ? WHERE id = ? AND workspace_id=?")
+                    sqlx::query("UPDATE schedules SET enabled = CASE WHEN ? THEN enabled ELSE 0 END, last_error = ?, updated_at = ? WHERE id = ? AND workspace_id=?")
+                        .bind(follows_latest)
                         .bind(&message)
                         .bind(Utc::now().to_rfc3339())
                         .bind(&trigger.schedule_id).bind(&due.workspace)
@@ -555,7 +568,11 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                     chat_turn_id: None,
                     run_id: run_id.clone(),
                     target_id: due.summary.target_id,
-                    target_name: due.summary.target_name,
+                    target_name: dsl
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&due.summary.target_name)
+                        .to_owned(),
                     input: recipe.input.clone(),
                     target_snapshot,
                     release_id,
@@ -611,6 +628,80 @@ fn validate_workflow_request(request: &WorkflowScheduleRequest) -> Result<()> {
     next_run(&request.cron_expression, &request.timezone, Utc::now()).map(|_| ())
 }
 
+// Session credentials stay in memory and are refreshed/cleared by the auth handler.
+// Binding them to the server prevents a configuration change from leaking a token.
+static TEAM_SESSION: parking_lot::RwLock<Option<(String, String)>> = parking_lot::RwLock::new(None);
+
+pub fn set_team_session(server_url: String, token: Option<String>) {
+    *TEAM_SESSION.write() = token.filter(|token| !token.is_empty()).map(|token| (server_url, token));
+}
+
+async fn fetch_latest_published(workspace: &str, workflow_id: &str) -> Result<(Value, String)> {
+    anyhow::ensure!(
+        workspace.starts_with("team:"),
+        "Published releases require a Team workspace"
+    );
+    let config = crate::config::BaseConfig::workrun().await.data_arc();
+    let server = &config
+        .team
+        .as_ref()
+        .context("Team server is not configured")?
+        .server_url;
+    let token = TEAM_SESSION
+        .read()
+        .as_ref()
+        .filter(|(base, _)| base == server)
+        .map(|(_, token)| token.clone())
+        .context("Sign in to resolve the latest published Workflow")?;
+    let published = fetch_published_from_server(server, &token, workflow_id).await?;
+    Ok((published, token))
+}
+
+async fn fetch_published_from_server(server: &str, token: &str, workflow_id: &str) -> Result<Value> {
+    let mut url =
+        tauri_plugin_http::reqwest::Url::parse(&format!("{}/api/v1/workflow/team/", server.trim_end_matches('/')))?;
+    url.set_query(None);
+    url.set_fragment(None);
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("Invalid Team server URL"))?
+        .pop_if_empty()
+        .push(workflow_id);
+    let response = tauri_plugin_http::reqwest::Client::builder()
+        .redirect(tauri_plugin_http::reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()?
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?;
+    let envelope: Value = response.json().await?;
+    anyhow::ensure!(
+        envelope["errorCode"].as_i64() == Some(0),
+        "Failed to fetch the latest published Workflow"
+    );
+    Ok(envelope["payload"].clone())
+}
+
+fn published_workflow_recipe(
+    workflow_id: &str,
+    published: Value,
+) -> Result<(Value, Value, Option<String>, Option<String>)> {
+    let release_id = published["releaseId"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .context("Workflow has no published release")?
+        .to_owned();
+    let version = published["version"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .context("Published Workflow has no version")?
+        .to_owned();
+    let document = published["document"].clone();
+    let dsl = workflow_dsl_from_document(workflow_id, &document)?;
+    Ok((dsl, document, Some(release_id), Some(version)))
+}
+
 async fn resolve_workflow_recipe(
     workspace: &str,
     workflow_id: &str,
@@ -618,6 +709,23 @@ async fn resolve_workflow_recipe(
     source: WorkflowScheduleSource,
 ) -> Result<(Value, Value, Option<String>, Option<String>)> {
     match source {
+        WorkflowScheduleSource::LatestPublished => {
+            let (published, token) = fetch_latest_published(workspace, workflow_id).await?;
+            let (_, document, release_id, version) = published_workflow_recipe(workflow_id, published.clone())?;
+            anyhow::ensure!(
+                crate::utils::dirs::active_workspace_id() == workspace,
+                "Workspace changed"
+            );
+            // New releases may pin new Team Apps. Reuse native dependency preparation
+            // so the runtime receives installed local IDs, while history keeps the publication.
+            let catalog = crate::module::assistant::catalog::Catalog::load(Some(&token)).await?;
+            let dsl = catalog.prepare(&published).await?;
+            anyhow::ensure!(
+                crate::utils::dirs::active_workspace_id() == workspace,
+                "Workspace changed"
+            );
+            Ok((dsl, document, release_id, version))
+        },
         WorkflowScheduleSource::PublishedRelease {
             dsl,
             release_id,
@@ -650,6 +758,7 @@ fn workflow_dsl_from_document(workflow_id: &str, document: &Value) -> Result<Val
         "mode": settings.get("mode").cloned().unwrap_or_else(|| json!("task")),
         "inputSchema": settings.get("inputSchema").cloned().unwrap_or_else(|| json!({"fields": []})),
         "outputSchema": settings.get("outputSchema").cloned().unwrap_or_else(|| json!({"fields": []})),
+        "sessionStateFields": settings.get("sessionStateFields").cloned().unwrap_or_else(|| json!([])),
         "nodes": document.get("nodes").cloned().unwrap_or_else(|| json!([])),
         "edges": document.get("edges").cloned().unwrap_or_else(|| json!([])),
     });
@@ -749,6 +858,11 @@ fn schedule_summary(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduleSummary> {
         editor_mode: recipe
             .as_ref()
             .and_then(|value| value.get("editorMode").and_then(Value::as_str).map(ToOwned::to_owned)),
+        source: recipe
+            .as_ref()
+            .and_then(|value| value.get("source"))
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()?,
         input: recipe
             .as_ref()
             .and_then(|value| value.get("input"))
@@ -760,6 +874,81 @@ fn schedule_summary(row: &sqlx::sqlite::SqliteRow) -> Result<ScheduleSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn published_fixture(version: &str) -> Value {
+        json!({
+            "releaseId": format!("release-{version}"), "version": version,
+            "document": {
+                "settings": { "name": version, "mode": "task", "inputSchema": { "fields": [] }, "outputSchema": { "fields": [] } },
+                "nodes": [{ "id": "start", "type": "start", "data": {} }], "edges": []
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn following_release_fetches_again_and_records_the_actual_version() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for version in ["1.0.0", "2.0.0"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = [0; 4096];
+                let count = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..count]).to_lowercase();
+                assert!(request.starts_with("get /api/v1/workflow/team/workflow-1 "));
+                assert!(request.contains("authorization: bearer test-session"));
+                let body = json!({"errorCode": 0, "payload": published_fixture(version)}).to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        for version in ["1.0.0", "2.0.0"] {
+            let published = fetch_published_from_server(&server, "test-session", "workflow-1")
+                .await
+                .unwrap();
+            let (dsl, document, release_id, release_version) =
+                published_workflow_recipe("workflow-1", published).unwrap();
+            assert_eq!(dsl["name"], version);
+            assert_eq!(document["settings"]["name"], version);
+            assert_eq!(release_id.as_deref(), Some(format!("release-{version}").as_str()));
+            assert_eq!(release_version.as_deref(), Some(version));
+        }
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn pinned_release_uses_its_snapshot_and_following_is_team_only() {
+        let source: WorkflowScheduleSource = serde_json::from_value(json!({
+            "kind": "published_release", "dsl": {"name": "pinned"},
+            "releaseId": "release-1", "releaseVersion": "1.0.0"
+        }))
+        .unwrap();
+        let resolved = resolve_workflow_recipe("team:default", "workflow-1", json!({"saved": true}), source)
+            .await
+            .unwrap();
+        assert_eq!(resolved.0["name"], "pinned");
+        assert_eq!(resolved.1, json!({"saved": true}));
+        assert_eq!(resolved.3.as_deref(), Some("1.0.0"));
+        assert!(
+            resolve_workflow_recipe(
+                "personal",
+                "workflow-1",
+                json!({}),
+                WorkflowScheduleSource::LatestPublished
+            )
+            .await
+            .is_err()
+        );
+        // Existing snake_case recipes remain readable after exposing camelCase to the UI.
+        assert!(
+            serde_json::from_value::<WorkflowScheduleSource>(json!({
+                "kind": "published_release", "dsl": {}, "release_id": "old", "release_version": "1"
+            }))
+            .is_ok()
+        );
+        assert!(published_workflow_recipe("workflow-1", json!({"document": {}})).is_err());
+    }
 
     #[test]
     fn calculates_the_next_run_in_the_schedule_timezone() {
@@ -905,5 +1094,31 @@ mod tests {
                 .len(),
             1
         );
+        let workflow_request = WorkflowScheduleRequest {
+            id: None,
+            name: "Following".into(),
+            target_id: "workflow-1".into(),
+            target_name: "Workflow".into(),
+            target_snapshot: published_fixture("1.0.0")["document"].clone(),
+            cron_expression: "0 9 * * *".into(),
+            timezone: "UTC".into(),
+            enabled: true,
+            source: WorkflowScheduleSource::LatestPublished,
+            input: json!({}),
+            initial_state: json!({}),
+            editor_mode: None,
+        };
+        assert!(
+            ScheduleStore::save_workflow_in(&pool, "personal", workflow_request.clone())
+                .await
+                .is_err()
+        );
+        ScheduleStore::save_workflow_in(&pool, "team:default", workflow_request)
+            .await
+            .unwrap();
+        let saved = ScheduleStore::list_for_workflow_in(&pool, "team:default", "workflow-1")
+            .await
+            .unwrap();
+        assert!(matches!(saved[0].source, Some(WorkflowScheduleSource::LatestPublished)));
     }
 }
