@@ -347,3 +347,34 @@ async fn unchanged_manual_saves_are_deduplicated_and_history_is_bounded() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn manual_save_rejects_a_revision_changed_after_the_renderer_checked_it() {
+    let repository = repository().await;
+    let id = Uuid::now_v7().to_string();
+    let base = save(&repository, candidate(&id, "Initial"), false, None, None)
+        .await
+        .unwrap();
+    let assistant = repository
+        .update(&id, candidate(&id, "Assistant update").document, Some(&base.id))
+        .await
+        .unwrap();
+    let stale = repository
+        .update(&id, candidate(&id, "Stale editor update").document, Some(&base.id))
+        .await;
+    assert!(stale.unwrap_err().to_string().contains("Workflow changed"));
+    assert_eq!(repository.get(&id).await.unwrap().document, assistant.document);
+    assert_eq!(
+        repository.get(&id).await.unwrap().current_revision_id,
+        assistant.current_revision_id
+    );
+    let confirmed = repository
+        .update(
+            &id,
+            candidate(&id, "Explicitly confirmed update").document,
+            assistant.current_revision_id.as_deref(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(confirmed.document["settings"]["name"], "Explicitly confirmed update");
+}

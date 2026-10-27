@@ -7,7 +7,9 @@ import { fetchApi } from '@/services/fetch-api';
 import configurationExamplesSource from '../../src-tauri/src/module/assistant/workflow_agent/reference/configuration-examples.json?raw';
 import {
   deleteWorkflow,
+  getExecutableWorkflow,
   getWorkflow,
+  updateWorkflow,
   toWorkflowDocument,
   toWorkflowDsl,
   workflowDocumentFromSnapshot,
@@ -34,7 +36,9 @@ describe('workflowDocumentFromSnapshot', () => {
 
 vi.mock('@tauri-apps/api/core', () => ({ Channel: class {}, invoke: vi.fn() }));
 vi.mock('@/lib/constant', () => ({ isTeamMode: vi.fn() }));
-vi.mock('@/services/fetch-api', () => ({ fetchApi: { delete: vi.fn() } }));
+vi.mock('@/services/fetch-api', () => ({
+  fetchApi: { delete: vi.fn(), get: vi.fn() },
+}));
 
 describe('deleteWorkflow', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -122,4 +126,53 @@ it('saves legacy Agent display names in the canonical name field without rewriti
     instruction: 'Keep this instruction',
   });
   expect(document.nodes[0].data).toHaveProperty('label', '销售指标计算');
+});
+
+describe('getExecutableWorkflow', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reads the latest saved definition in personal mode', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(false);
+    await getExecutableWorkflow('workflow-1');
+    expect(invoke).toHaveBeenCalledWith('get_workflow', { id: 'workflow-1' });
+    expect(fetchApi.get).not.toHaveBeenCalled();
+  });
+
+  it('uses the published endpoint even for a Team author', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    await getExecutableWorkflow('workflow-1');
+    expect(fetchApi.get).toHaveBeenCalledExactlyOnceWith(
+      '/workflow/team/workflow-1',
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to an author draft when no release is available', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(fetchApi.get).mockRejectedValueOnce(
+      new Error('No published release'),
+    );
+    await expect(getExecutableWorkflow('workflow-1')).rejects.toThrow(
+      'No published release',
+    );
+    expect(fetchApi.get).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+it('passes the checked revision to the native personal save without changing legacy callers', async () => {
+  vi.clearAllMocks();
+  vi.mocked(isTeamMode).mockReturnValue(false);
+  const document = configurationExamples[0].document;
+  await updateWorkflow('one', document, 'revision-1');
+  expect(invoke).toHaveBeenLastCalledWith('update_workflow', {
+    id: 'one',
+    document,
+    expectedRevisionId: 'revision-1',
+  });
+  await updateWorkflow('one', document);
+  expect(invoke).toHaveBeenLastCalledWith('update_workflow', {
+    id: 'one',
+    document,
+  });
 });

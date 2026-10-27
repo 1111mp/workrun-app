@@ -5,6 +5,36 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 
+import zh from '@/locales/zh_CN.json';
+import type { WorkflowDocument } from '@/services/workflow';
+import type { WorkflowEditDraft } from '@/services/workflow-edit-draft';
+
+const drafts = vi.hoisted(() => ({
+  localized: false,
+  record: null as WorkflowEditDraft | null,
+  saved: null as WorkflowDocument | null,
+  expectedRevision: undefined as string | undefined,
+}));
+vi.mock('@/services/workflow-edit-draft', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/workflow-edit-draft')>()),
+  readWorkflowEditDraft: async () => drafts.record,
+  writeWorkflowEditDraft: async (
+    _id: string,
+    document: WorkflowDocument,
+    baseRevisionId: string | null,
+  ) => {
+    drafts.record = {
+      document,
+      baseRevisionId,
+      savedAt: new Date().toISOString(),
+    };
+    return drafts.record;
+  },
+  removeWorkflowEditDraft: async () => {
+    drafts.record = null;
+  },
+}));
+
 vi.mock('@/components', async () => import('@/components/workflow-editor'));
 vi.mock('@/components/run-center', () => ({ RunCenter: () => null }));
 vi.mock('@/components/run-event-tracker', () => ({
@@ -23,14 +53,37 @@ vi.mock('@/services/assistant', async (importOriginal) => ({
 }));
 vi.mock('@/hooks', () => ({ useUnsavedChangesGuard: () => {} }));
 vi.mock('@/lib/auth-client', () => ({ createTeamAuthClient: vi.fn() }));
-vi.mock('@/lib/constant', () => ({ isTeamMode: () => false }));
+vi.mock('@/lib/constant', () => ({
+  isTeamMode: () => false,
+  isPersonalMode: () => true,
+}));
 vi.mock('@tauri-apps/api/event', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tauri-apps/api/event')>()),
   listen: async () => () => {},
 }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, parameters?: Record<string, string>) => {
+      if (!drafts.localized) return key;
+      const value = key
+        .split('.')
+        .reduce<unknown>(
+          (value, part) =>
+            value && typeof value === 'object'
+              ? (value as Record<string, unknown>)[part]
+              : undefined,
+          zh,
+        );
+      return typeof value === 'string'
+        ? value.replace(
+            /{{(\w+)}}/g,
+            (_, name: string) => parameters?.[name] ?? '',
+          )
+        : key;
+    },
+    i18n: { language: 'zh-CN' },
+  }),
 }));
 vi.mock('@/services/cmd', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/cmd')>()),
@@ -47,8 +100,18 @@ vi.mock('@/services/workflow', async (importOriginal) => {
     ...actual,
     getWorkflow: async () => ({
       id: 'weather',
-      document: actual.createWorkflowDocument(),
+      currentRevisionId: drafts.saved ? 'revision-2' : 'revision-1',
+      document: drafts.saved ?? actual.createWorkflowDocument(),
     }),
+    updateWorkflow: async (
+      _id: string,
+      document: WorkflowDocument,
+      expectedRevision?: string,
+    ) => {
+      drafts.saved = document;
+      drafts.expectedRevision = expectedRevision;
+      return { id: 'weather', currentRevisionId: 'revision-2', document };
+    },
     listChatSessions: async () => [],
     listChatSessionHistory: async () => [],
     listChatSessionTurns: async () => [],
@@ -91,6 +154,10 @@ import { useWorkflowRunStore } from '@/stores/workflow-run.store';
 import { WorkflowRoute as Component } from './workflow-route';
 
 beforeEach(() => {
+  drafts.localized = false;
+  drafts.record = null;
+  drafts.saved = null;
+  drafts.expectedRevision = undefined;
   vi.stubGlobal('OS_PLATFORM', 'darwin');
   const store = useWorkflowRunStore.getState();
   store.resetRunView();
@@ -221,3 +288,92 @@ it.each([
     }
   },
 );
+
+it('stashes personal edits, restores them on reentry, and saves with the checked revision', async () => {
+  drafts.localized = true;
+  await page.viewport(1280, 900);
+  const mount = async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const router = createMemoryRouter(
+      [
+        {
+          Component: () => (
+            <WorkspaceFrame accountMenu={null}>
+              <Outlet />
+            </WorkspaceFrame>
+          ),
+          children: [{ path: '/workflows/:id', Component }],
+        },
+      ],
+      { initialEntries: ['/workflows/weather'] },
+    );
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <ConfirmProvider>
+          <RouterProvider router={router} />
+        </ConfirmProvider>
+      </QueryClientProvider>,
+    );
+    return {
+      screen,
+      close: async () => {
+        await screen.unmount();
+        router.dispose();
+        client.clear();
+      },
+    };
+  };
+  const first = await mount();
+  try {
+    const name = first.screen.getByRole('textbox', {
+      name: '工作流名称',
+      exact: true,
+    });
+    await name.fill('Temporary workflow edits');
+    const stash = first.screen.getByRole('button', {
+      name: '暂存编辑',
+      exact: true,
+    });
+    await expect.element(stash).toBeEnabled();
+    await stash.click();
+    await expect
+      .element(first.screen.getByText(/点击保存后才会用于后续执行/))
+      .toBeVisible();
+    expect(drafts.saved).toBeNull();
+    expect(drafts.record?.document.settings.name).toBe(
+      'Temporary workflow edits',
+    );
+    await page.screenshot({
+      path: '.vitest/attachments/workflow-edit-stashed.png',
+    });
+  } finally {
+    await first.close();
+  }
+  const second = await mount();
+  try {
+    const name = second.screen.getByRole('textbox', {
+      name: '工作流名称',
+      exact: true,
+    });
+    await expect.element(name).toHaveValue('Untitled workflow');
+    await second.screen
+      .getByRole('button', {
+        name: '恢复编辑',
+        exact: true,
+      })
+      .click();
+    await expect.element(name).toHaveValue('Temporary workflow edits');
+    await second.screen
+      .getByRole('button', { name: '保存', exact: true })
+      .click();
+    await expect
+      .poll(() => drafts.saved?.settings.name)
+      .toBe('Temporary workflow edits');
+    await expect.poll(() => drafts.record).toBeNull();
+    expect(drafts.expectedRevision).toBe('revision-1');
+  } finally {
+    await second.close();
+  }
+});

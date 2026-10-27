@@ -1193,8 +1193,16 @@ pub(crate) async fn validate_imported_workflow_dependencies(dsl: &crate::module:
                     if seen.len() > MAX_WORKFLOWS {
                         bail!("Workflow dependency limit exceeded");
                     }
-                    let child = super::get_workflow(id).await?;
-                    pending.push(document_nodes(&child.document)?.clone());
+                    let document = if crate::utils::dirs::is_team_workspace() {
+                        let workspace = crate::utils::dirs::active_workspace_id();
+                        crate::module::published_workflow::fetch_latest_published(&workspace, id)
+                            .await?
+                            .0["document"]
+                            .clone()
+                    } else {
+                        super::get_workflow(id).await?.document
+                    };
+                    pending.push(document_nodes(&document)?.clone());
                 }
             }
         }

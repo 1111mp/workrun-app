@@ -703,6 +703,28 @@
     }
   },
   "workflowEditor": {
+    "editDraft": {
+      "different": "编辑已于 {{time}} 暂存，当前画布与该暂存内容不同。",
+      "stash": "暂存编辑",
+      "stashAndLeave": "暂存并离开",
+      "stashed": "编辑已暂存到当前设备，已保存的工作流未改变。",
+      "stashFailed": "无法暂存编辑",
+      "available": "当前设备有 {{time}} 暂存的编辑，可恢复后继续。",
+      "protected": "编辑已于 {{time}} 暂存，点击保存后才会用于后续执行。",
+      "restore": "恢复编辑",
+      "discard": "丢弃暂存",
+      "resolveFirst": "请先恢复或丢弃已有暂存。",
+      "restoreTitle": "恢复暂存编辑？",
+      "restoreDescription": "将替换当前画布，包括本次打开页面后所做的修改。",
+      "discardTitle": "丢弃暂存编辑？",
+      "discardDescription": "将删除当前设备上的暂存。如果已恢复暂存，画布及后续修改也将还原为已保存的定义。",
+      "baseChanged": "此工作流在暂存编辑开始后已被修改，请在恢复后检查内容再保存。",
+      "conflictTitle": "已保存的工作流已发生变化",
+      "conflictDescription": "其他编辑窗口或助手更新了此工作流。保存当前编辑将覆盖该定义，并影响后续执行。",
+      "overwrite": "覆盖已保存的工作流",
+      "loadFailed": "无法读取当前设备上的暂存编辑，仍可使用已保存的工作流。",
+      "cleanupFailed": "工作流已保存，但旧暂存未能清除，请丢弃后再恢复编辑。"
+    },
     "loading": "正在加载工作流…",
     "unsavedChanges": {
       "title": "离开编辑页面？",

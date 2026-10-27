@@ -8,6 +8,8 @@ export type ConfirmOptions = {
   content?: ReactNode;
   confirmText?: string;
   cancelText?: string;
+  alternativeText?: string;
+  onAlternative?: () => void | Promise<void>;
   actionVariant?: VariantProps<typeof buttonVariants>['variant'];
   onConfirm?: () => void | Promise<void>;
 };

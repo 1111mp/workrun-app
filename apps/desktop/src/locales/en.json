@@ -715,6 +715,28 @@
     }
   },
   "workflowEditor": {
+    "editDraft": {
+      "different": "Edits were stashed at {{time}}. The current canvas differs from that stash.",
+      "stash": "Stash edits",
+      "stashAndLeave": "Stash and leave",
+      "stashed": "Edits stashed on this device. Saved workflows are unchanged.",
+      "stashFailed": "Could not stash edits",
+      "available": "Stashed edits from {{time}} are available on this device.",
+      "protected": "Edits stashed at {{time}}. Save to apply them to future runs.",
+      "restore": "Restore edits",
+      "discard": "Discard stash",
+      "resolveFirst": "Restore or discard the existing stash first.",
+      "restoreTitle": "Restore stashed edits?",
+      "restoreDescription": "This replaces the current canvas, including edits made since opening this page.",
+      "discardTitle": "Discard stashed edits?",
+      "discardDescription": "This removes the stash from this device. If restored, the canvas and subsequent edits will return to the saved definition.",
+      "baseChanged": "The saved workflow has changed since these edits were started. Review the restored content before saving.",
+      "conflictTitle": "The saved workflow has changed",
+      "conflictDescription": "Another editor or the assistant updated this workflow. Saving your current edits will overwrite that definition and affect future runs.",
+      "overwrite": "Overwrite saved workflow",
+      "loadFailed": "Could not read stashed edits on this device. The saved workflow is still available.",
+      "cleanupFailed": "Workflow saved, but its old stash could not be removed. Discard it before restoring again."
+    },
     "loading": "Loading workflow…",
     "unsavedChanges": {
       "title": "Leave the editor?",

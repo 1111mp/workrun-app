@@ -265,6 +265,10 @@ pub fn run() {
             cmd::workflow_catalog::create_workflow,
             cmd::workflow_catalog::get_workflow,
             cmd::workflow_catalog::get_workflow_revision,
+            cmd::workflow_catalog::get_workflow_edit_draft,
+            cmd::workflow_catalog::save_workflow_edit_draft,
+            cmd::workflow_catalog::import_workflow_edit_draft,
+            cmd::workflow_catalog::remove_workflow_edit_draft,
             cmd::workflow_catalog::update_workflow,
             cmd::workflow_catalog::delete_workflow,
             // Python runtime

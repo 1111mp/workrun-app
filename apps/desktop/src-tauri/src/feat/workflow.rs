@@ -1,8 +1,10 @@
+mod edit_draft;
 pub(crate) mod repository;
 mod revisions;
 use crate::config::IWorkflow;
 use anyhow::{Result, bail};
 use chrono::Utc;
+pub use edit_draft::*;
 use repository::WorkflowRepository;
 pub use revisions::WorkflowRevision;
 use serde_json::Value;
@@ -88,10 +90,10 @@ pub async fn get_workflow(id: &str) -> Result<IWorkflow> {
     WorkflowRepository::active()?.get(id).await
 }
 
-pub async fn update_workflow(id: &str, document: Value) -> Result<IWorkflow> {
-    save_document(id, document, true, "manual", None, None, None)
+pub async fn update_workflow(id: &str, document: Value, expected_revision_id: Option<&str>) -> Result<IWorkflow> {
+    WorkflowRepository::active()?
+        .update(id, document, expected_revision_id)
         .await
-        .map(|r| r.workflow())
 }
 
 pub async fn delete_workflow(id: &str) -> Result<()> {

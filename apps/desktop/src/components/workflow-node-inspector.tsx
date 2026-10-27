@@ -55,7 +55,7 @@ import {
 import type { RemoteAuthentication } from '@/services/remote-agent';
 import { listSkills, type SkillSummary } from '@/services/skill';
 import { listTools, type ToolDefinition } from '@/services/tool';
-import { getWorkflows } from '@/services/workflow';
+import { getWorkflowCapabilities } from '@/services/workflow';
 
 type WorkflowNodeInspectorProps = {
   node: Node | null;
@@ -702,8 +702,8 @@ function WorkflowNodeInspector({
     enabled: node?.type === 'agent',
   });
   const workflows = useQuery({
-    queryKey: ['workflows'],
-    queryFn: getWorkflows,
+    queryKey: ['workflows', 'executable'],
+    queryFn: getWorkflowCapabilities,
     enabled: node?.type === 'subworkflow',
   });
 

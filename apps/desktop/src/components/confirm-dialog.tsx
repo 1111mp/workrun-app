@@ -78,14 +78,15 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     current.resolve(value);
   };
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (alternative = false) => {
     const current = activeRequest.current;
     if (!current || running.current) return;
     running.current = true;
     setPending(true);
     setError(undefined);
     try {
-      await current.options.onConfirm?.();
+      if (alternative) await current.options.onAlternative?.();
+      else await current.options.onConfirm?.();
       if (activeRequest.current === current) handleClose(true);
     } catch (failure) {
       // A failed action stays open for retry; it never resolves as confirmed.
@@ -155,6 +156,15 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             <AlertDialogCancel disabled={pending}>
               {options.cancelText ?? t('confirm.cancel')}
             </AlertDialogCancel>
+            {options.alternativeText && options.onAlternative ? (
+              <AlertDialogAction
+                variant='outline'
+                disabled={pending}
+                onClick={() => void handleConfirm(true)}
+              >
+                {options.alternativeText}
+              </AlertDialogAction>
+            ) : null}
             <AlertDialogAction
               variant={options.actionVariant}
               disabled={pending}

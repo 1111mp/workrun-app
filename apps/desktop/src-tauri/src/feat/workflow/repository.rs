@@ -64,6 +64,44 @@ impl WorkflowRepository {
         Ok(revision(row)?.workflow())
     }
 
+    /// Check the version under the same writer lock as the save. A renderer's
+    /// earlier read cannot protect against an assistant update during confirmation.
+    pub async fn update(&self, id: &str, document: Value, expected_revision_id: Option<&str>) -> Result<IWorkflow> {
+        let mut tx = self.begin().await?;
+        if let Some(expected) = expected_revision_id {
+            let current: Option<String> = sqlx::query_scalar(
+                "SELECT current_revision_id FROM workflows WHERE workspace_id=? AND id=? AND deleted_at IS NULL",
+            )
+            .bind(&self.workspace)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            ensure!(
+                current.as_deref() == Some(expected),
+                "Workflow changed while this update was being prepared. Read the latest workflow and try saving again."
+            );
+        }
+        let now = Utc::now().to_rfc3339();
+        let saved = self
+            .save(
+                &mut tx,
+                IWorkflow {
+                    id: id.into(),
+                    created_at: now.clone(),
+                    updated_at: now,
+                    document,
+                    current_revision_id: None,
+                },
+                true,
+                "manual",
+                None,
+                None,
+            )
+            .await?;
+        self.commit(tx).await?;
+        Ok(saved.workflow())
+    }
+
     pub async fn revision(&self, id: &str) -> Result<WorkflowRevision> {
         revision(
             sqlx::query("SELECT * FROM workflow_revisions WHERE workspace_id=? AND id=?")

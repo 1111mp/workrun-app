@@ -1,0 +1,2 @@
+DROP TRIGGER workflow_edit_drafts_delete_with_workflow;
+DROP TABLE workflow_edit_drafts;

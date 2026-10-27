@@ -156,13 +156,15 @@ export class WorkflowService {
           workflow.ownerId instanceof Types.ObjectId &&
           workflow.ownerId.equals(ownerId);
         const release = workflow.latestReleaseId;
-        if (!editable && !release) return null;
-        const displayUpdatedAt = editable
+        const publishedView = query.view === 'published';
+        if ((publishedView || !editable) && !release) return null;
+        const useEditable = editable && !publishedView;
+        const displayUpdatedAt = useEditable
           ? workflow.updatedAt
           : release.publishedAt;
         return {
           id: workflow.id,
-          document: editable ? workflow.document : release.document,
+          document: useEditable ? workflow.document : release.document,
           editable,
           status: workflow.status,
           latestRelease: release

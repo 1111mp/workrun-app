@@ -30,6 +30,66 @@ describe('WorkflowService', () => {
     );
   });
 
+  it('uses only release contracts in executable overview, including for the owner', async () => {
+    const draft = {
+      nodes: [],
+      edges: [],
+      settings: { name: 'Unpublished name' },
+    };
+    const released = {
+      nodes: [],
+      edges: [],
+      settings: { name: 'Released name' },
+    };
+    const workflow = {
+      id: 'published-workflow',
+      ownerId: new Types.ObjectId(ownerId),
+      document: draft,
+      status: 'published',
+      updatedAt: new Date('2026-10-27'),
+      latestReleaseId: {
+        document: released,
+        version: '1.0.0',
+        publishedAt: new Date('2026-10-26'),
+      },
+    };
+    const populate = vi.fn().mockReturnThis();
+    model.find.mockReturnValue({
+      populate,
+      lean: vi.fn().mockResolvedValue([
+        workflow,
+        {
+          ...workflow,
+          id: 'draft-only',
+          status: 'draft',
+          latestReleaseId: null,
+        },
+      ]),
+    });
+
+    const executable = await service.findOverview(ownerId, {
+      view: 'published',
+      query: 'Released',
+    });
+    expect(executable.items).toHaveLength(1);
+    expect(executable.items[0]).toMatchObject({
+      document: released,
+      editable: true,
+    });
+    expect(executable.items[0].displayUpdatedAt).toEqual(
+      new Date('2026-10-26'),
+    );
+    expect(
+      (
+        await service.findOverview(ownerId, {
+          view: 'published',
+          query: 'Unpublished',
+        })
+      ).items,
+    ).toEqual([]);
+    expect((await service.findOverview(ownerId)).items).toHaveLength(2);
+  });
+
   it('creates a workflow owned by the authenticated user', async () => {
     model.create.mockResolvedValue({ id: 'workflow-1' });
 

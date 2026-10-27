@@ -11,6 +11,8 @@ export type UnsavedChangesGuardOptions = {
   description?: string;
   confirmText?: string;
   cancelText?: string;
+  alternativeText?: string;
+  onAlternative?: () => void | Promise<void>;
 };
 
 /** Requires a React Router data router and ConfirmProvider. Guards in-app navigation. */
@@ -20,11 +22,14 @@ export function useUnsavedChangesGuard({
   description,
   confirmText,
   cancelText,
+  alternativeText,
+  onAlternative,
 }: UnsavedChangesGuardOptions) {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const blocker = useBlocker(hasUnsavedChanges);
   const confirming = useRef(false);
+  const settledBlocker = useRef<typeof blocker | null>(null);
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -35,7 +40,15 @@ export function useUnsavedChangesGuard({
   }, []);
 
   const resolveNavigation = useEffectEvent((leave: boolean) => {
-    if (!mounted.current || blocker.state !== 'blocked') return;
+    if (
+      !mounted.current ||
+      blocker.state !== 'blocked' ||
+      settledBlocker.current === blocker
+    )
+      return;
+    // An async save can both clean the document and resolve its dialog in the
+    // same commit. Either path may release navigation, but never both.
+    settledBlocker.current = blocker;
     // A second navigation can replace the destination while the dialog is
     // open. Apply the answer to the current blocker, not its old closure.
     if (leave || !hasUnsavedChanges) blocker.proceed();
@@ -49,7 +62,7 @@ export function useUnsavedChangesGuard({
     }
     // Saving a new workflow can navigate before the clean state is committed.
     if (!hasUnsavedChanges) {
-      blocker.proceed();
+      resolveNavigation(true);
       return;
     }
     if (confirming.current) return;
@@ -60,6 +73,8 @@ export function useUnsavedChangesGuard({
       description: description ?? t('unsavedChanges.description'),
       cancelText: cancelText ?? t('unsavedChanges.stay'),
       confirmText: confirmText ?? t('unsavedChanges.leave'),
+      alternativeText,
+      onAlternative,
     }).then((leave) => {
       resolveNavigation(leave);
     });
@@ -72,5 +87,7 @@ export function useUnsavedChangesGuard({
     description,
     confirmText,
     cancelText,
+    alternativeText,
+    onAlternative,
   ]);
 }

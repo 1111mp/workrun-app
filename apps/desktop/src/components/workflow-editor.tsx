@@ -61,7 +61,7 @@ import { WorkflowSchedules } from '@/components/workflow-schedules';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { WorkflowConfigureButton } from '@/components/workflow-share-dialog';
 import { useUnsavedChangesGuard } from '@/hooks';
-import { isTeamMode } from '@/lib/constant';
+import { isPersonalMode, isTeamMode } from '@/lib/constant';
 import { getModelCatalog } from '@/services/cmd';
 import {
   getEvaluationQualityGate,
@@ -103,11 +103,13 @@ import {
   WorkflowStoreProvider,
 } from '@/stores';
 
+import { useWorkflowEditDraft } from './workflow-editor/use-workflow-edit-draft';
 import { useWorkflowRun } from './workflow-editor/use-workflow-run';
 import { useWorkflowRunRecord } from './workflow-editor/use-workflow-run-record';
 import { useWorkflowRunSnapshot } from './workflow-editor/use-workflow-run-snapshot';
 import { WorkflowBackButton } from './workflow-editor/workflow-back-button';
 import { WorkflowCanvas } from './workflow-editor/workflow-canvas';
+import { WorkflowEditDraftNotice } from './workflow-editor/workflow-edit-draft-notice';
 import { WorkflowEditorToolbar } from './workflow-editor/workflow-editor-toolbar';
 
 type WorkflowEditorProps = {
@@ -250,7 +252,15 @@ function WorkflowEditorContent({
   // Compare the same serialized shape: loaded JSON can have a different key
   // order or React Flow measurements that toWorkflowDocument strips out.
   const [savedDocument, setSavedDocument] = useState(workflowDocumentSnapshot);
+  const [savedRevisionId, setSavedRevisionId] = useState(
+    activeWorkflow?.currentRevisionId,
+  );
   const isDirty = workflowDocumentSnapshot !== savedDocument;
+  // Personal schedules execute the saved definition, so their input form must
+  // not inherit a restored stash or other unsaved canvas changes.
+  const automationDocument = isPersonalMode()
+    ? (JSON.parse(savedDocument) as WorkflowDocument)
+    : (latestPublishedRelease?.document ?? workflowDocument);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
   const localReleaseMatchesDraft = Boolean(
     latestPublishedRelease &&
@@ -352,12 +362,34 @@ function WorkflowEditorContent({
   });
 
   const { t } = useTranslation();
+  const editDraft = useWorkflowEditDraft({
+    enabled:
+      isPersonalMode() &&
+      !readOnly &&
+      !autoStartRun &&
+      !liveRun &&
+      !historicalRun &&
+      !historicalChatSessionId,
+    workflowId: activeWorkflow?.id,
+    document: workflowDocument,
+    savedDocument,
+    savedRevisionId,
+    onRestore: (document) => workflowStore.getState().replaceWorkflow(document),
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const saving = useRef(false);
   useUnsavedChangesGuard({
-    hasUnsavedChanges: !readOnly && isDirty,
+    hasUnsavedChanges:
+      !readOnly &&
+      (editDraft.enabled ? editDraft.hasUnprotectedChanges : isDirty),
     title: t('workflowEditor.unsavedChanges.title'),
     description: t('workflowEditor.unsavedChanges.description'),
     confirmText: t('workflowEditor.unsavedChanges.leave'),
     cancelText: t('workflowEditor.unsavedChanges.stay'),
+    alternativeText: editDraft.canStash
+      ? t('workflowEditor.editDraft.stashAndLeave')
+      : undefined,
+    onAlternative: editDraft.canStash ? editDraft.stash : undefined,
   });
 
   const candidateEvaluations = candidateEvaluationRuns.data ?? [];
@@ -755,12 +787,23 @@ function WorkflowEditorContent({
   }, [workflowStore]);
 
   const saveWorkflow = async () => {
+    if (saving.current) return;
+    saving.current = true;
+    setIsSaving(true);
     try {
+      const confirmation = await editDraft.confirmSave();
+      if (!confirmation) return;
       const saved = activeWorkflow
-        ? await updateWorkflow(activeWorkflow.id, workflowDocument)
+        ? await updateWorkflow(
+            activeWorkflow.id,
+            workflowDocument,
+            confirmation.expectedRevisionId,
+          )
         : await (creatingWorkflow.current ?? createWorkflow(workflowDocument));
       if (!activeWorkflow) setCreatedWorkflow(saved);
       setSavedDocument(workflowDocumentSnapshot);
+      setSavedRevisionId(saved.currentRevisionId);
+      await editDraft.clearAfterSave(saved.currentRevisionId);
       void queryClient.invalidateQueries({ queryKey: ['workflows'] });
       toast.success(
         activeWorkflow
@@ -778,6 +821,9 @@ function WorkflowEditorContent({
         toasterId: 'global',
         description: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      saving.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -901,7 +947,12 @@ function WorkflowEditorContent({
           ) : undefined
         }
         header={
-          <WorkflowEditorToolbar readOnly={readOnly}>
+          <WorkflowEditorToolbar
+            readOnly={readOnly}
+            notice={
+              <WorkflowEditDraftNotice draft={editDraft} disabled={isSaving} />
+            }
+          >
             <div
               data-tauri-drag-region={OS_PLATFORM !== 'win32'}
               className='flex flex-1 items-center gap-2 px-4'
@@ -1009,6 +1060,7 @@ function WorkflowEditorContent({
                   id={activeWorkflow.id}
                   disabled={isDirty}
                   onConfigured={(updated) => {
+                    setSavedRevisionId(updated.currentRevisionId);
                     workflowStore.getState().replaceWorkflow(updated.document);
                     setSavedDocument(
                       JSON.stringify(
@@ -1032,10 +1084,40 @@ function WorkflowEditorContent({
                   {t('workflowEditor.moreSettings')}
                 </Button>
               ) : null}
+              {editDraft.enabled ? (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  disabled={!editDraft.canStash || isSaving}
+                  onClick={async () => {
+                    try {
+                      await editDraft.stash();
+                      toast.success(t('workflowEditor.editDraft.stashed'), {
+                        toasterId: 'global',
+                      });
+                    } catch (error) {
+                      toast.error(t('workflowEditor.editDraft.stashFailed'), {
+                        toasterId: 'global',
+                        description:
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                      });
+                    }
+                  }}
+                >
+                  {t('workflowEditor.editDraft.stash')}
+                </Button>
+              ) : null}
               {!readOnly ? (
                 <Button
                   size='sm'
-                  disabled={Boolean(activeWorkflow) && !isDirty}
+                  disabled={
+                    isSaving ||
+                    editDraft.loading ||
+                    editDraft.busy ||
+                    (Boolean(activeWorkflow) && !isDirty)
+                  }
                   onClick={() => void saveWorkflow()}
                 >
                   <SaveIcon data-icon='inline-start' />
@@ -1105,26 +1187,13 @@ function WorkflowEditorContent({
               activeWorkflow ? (
                 <WorkflowSchedules
                   workflowId={activeWorkflow.id}
-                  document={
-                    isTeamMode() && latestPublishedRelease
-                      ? latestPublishedRelease.document
-                      : workflowDocument
-                  }
-                  dsl={
-                    latestPublishedRelease
-                      ? toWorkflowDsl(
-                          activeWorkflow.id,
-                          latestPublishedRelease.document.nodes,
-                          latestPublishedRelease.document.edges,
-                          latestPublishedRelease.document.settings,
-                        )
-                      : toWorkflowDsl(
-                          activeWorkflow.id,
-                          nodes,
-                          edges,
-                          workflowSettings,
-                        )
-                  }
+                  document={automationDocument}
+                  dsl={toWorkflowDsl(
+                    activeWorkflow.id,
+                    automationDocument.nodes,
+                    automationDocument.edges,
+                    automationDocument.settings,
+                  )}
                   release={isTeamMode() ? latestPublishedRelease : undefined}
                 />
               ) : undefined

@@ -30,10 +30,16 @@ function WorkflowPage() {
   const [searchParams] = useSearchParams();
   const historyRunId = searchParams.get('runId');
   const historyChatSessionId = searchParams.get('chatSessionId');
-  const isPublishedView = searchParams.get('catalog') === 'true';
   const workspace = useWorkrunStore(
     (state) => state.config?.workspace_mode ?? 'personal',
   );
+
+  // A run launched outside the authoring canvas must not execute a Team draft.
+  const isPublishedView =
+    searchParams.get('catalog') === 'true' ||
+    (workspace === 'team' &&
+      (searchParams.get('run') === 'true' ||
+        searchParams.get('live') === 'true'));
 
   const activeRun = useQuery({
     queryKey: ['workflow-entry-active-run', workspace, id, location.key],

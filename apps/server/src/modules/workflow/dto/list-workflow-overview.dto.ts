@@ -26,6 +26,10 @@ export class ListWorkflowOverviewDto {
   status?: 'draft' | 'published';
 
   @IsOptional()
+  @IsIn(['published'])
+  view?: 'published';
+
+  @IsOptional()
   @IsString()
   version?: string;
 }

@@ -70,6 +70,7 @@ export type WorkflowOverviewQuery = {
   query?: string;
   owner?: 'all' | 'mine' | 'others';
   status?: 'draft' | 'published';
+  view?: 'published';
   version?: string;
 };
 
@@ -462,7 +463,11 @@ export async function getWorkflowCapabilities() {
   const items: StoredWorkflow[] = [];
   let cursor: string | undefined;
   do {
-    const page = await getWorkflowOverview({ pageSize: 100, cursor });
+    const page = await getWorkflowOverview({
+      pageSize: 100,
+      cursor,
+      view: 'published',
+    });
     items.push(...page.items);
     cursor = page.nextCursor;
   } while (cursor);
@@ -492,13 +497,26 @@ export function getWorkflow(id: string) {
   return invoke<StoredWorkflow>('get_workflow', { id });
 }
 
-export function updateWorkflow(id: string, document: WorkflowDocument) {
+/** Resolve execution independently of authoring so Team drafts stay private to trial runs. */
+export function getExecutableWorkflow(id: string) {
+  return isTeamMode() ? getPublishedWorkflow(id) : getWorkflow(id);
+}
+
+export function updateWorkflow(
+  id: string,
+  document: WorkflowDocument,
+  expectedRevisionId?: string,
+) {
   if (isTeamMode()) {
     return fetchApi.patch<StoredWorkflow>(`/workflow/${id}`, {
       document,
     });
   }
-  return invoke<StoredWorkflow>('update_workflow', { id, document });
+  return invoke<StoredWorkflow>('update_workflow', {
+    id,
+    document,
+    ...(expectedRevisionId ? { expectedRevisionId } : {}),
+  });
 }
 
 export function deleteWorkflow(id: string) {

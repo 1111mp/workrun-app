@@ -122,11 +122,12 @@ function WorkflowCard({
         <div className='ml-auto flex items-center gap-1.5'>
           <Button
             size='sm'
+            disabled={isTeamMode() && !workflow.latestRelease}
             nativeButton={false}
             render={
               <Link
                 to={
-                  readOnly
+                  isTeamMode() || readOnly
                     ? `/workflows/${workflow.id}?catalog=true&run=true`
                     : `/workflows/${workflow.id}?run=true`
                 }

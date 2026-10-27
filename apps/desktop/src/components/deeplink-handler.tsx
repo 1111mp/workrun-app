@@ -33,6 +33,7 @@ import {
 import { inspectRunRecord } from '@/services/run-history';
 import {
   compileWorkflow,
+  getExecutableWorkflow,
   getWorkflow,
   toWorkflowDsl,
 } from '@/services/workflow';
@@ -58,7 +59,10 @@ export function DeeplinkHandler() {
   });
   const workflow = useQuery({
     queryKey: ['deeplink-workflow', incoming?.id],
-    queryFn: () => getWorkflow(link!.targetId),
+    queryFn: () =>
+      link!.action === 'run'
+        ? getExecutableWorkflow(link!.targetId)
+        : getWorkflow(link!.targetId),
     enabled:
       link?.targetType === 'workflows' && !incoming?.runId && !incoming?.error,
     retry: false,

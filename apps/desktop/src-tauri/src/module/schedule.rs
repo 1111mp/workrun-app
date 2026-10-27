@@ -232,6 +232,9 @@ impl ScheduleStore {
         if matches!(request.source, WorkflowScheduleSource::LatestPublished) && !workspace.starts_with("team:") {
             bail!("Following published releases requires a Team workspace");
         }
+        if workspace.starts_with("team:") && matches!(request.source, WorkflowScheduleSource::LatestLocal) {
+            bail!("Team schedules require a published Workflow");
+        }
         validate_workflow_request(&request)?;
         let next_run_at = next_run(&request.cron_expression, &request.timezone, Utc::now())?;
         let now = Utc::now().to_rfc3339();
@@ -628,60 +631,10 @@ fn validate_workflow_request(request: &WorkflowScheduleRequest) -> Result<()> {
     next_run(&request.cron_expression, &request.timezone, Utc::now()).map(|_| ())
 }
 
-// Session credentials stay in memory and are refreshed/cleared by the auth handler.
-// Binding them to the server prevents a configuration change from leaking a token.
-static TEAM_SESSION: parking_lot::RwLock<Option<(String, String)>> = parking_lot::RwLock::new(None);
-
-pub fn set_team_session(server_url: String, token: Option<String>) {
-    *TEAM_SESSION.write() = token.filter(|token| !token.is_empty()).map(|token| (server_url, token));
-}
-
-async fn fetch_latest_published(workspace: &str, workflow_id: &str) -> Result<(Value, String)> {
-    anyhow::ensure!(
-        workspace.starts_with("team:"),
-        "Published releases require a Team workspace"
-    );
-    let config = crate::config::BaseConfig::workrun().await.data_arc();
-    let server = &config
-        .team
-        .as_ref()
-        .context("Team server is not configured")?
-        .server_url;
-    let token = TEAM_SESSION
-        .read()
-        .as_ref()
-        .filter(|(base, _)| base == server)
-        .map(|(_, token)| token.clone())
-        .context("Sign in to resolve the latest published Workflow")?;
-    let published = fetch_published_from_server(server, &token, workflow_id).await?;
-    Ok((published, token))
-}
-
-async fn fetch_published_from_server(server: &str, token: &str, workflow_id: &str) -> Result<Value> {
-    let mut url =
-        tauri_plugin_http::reqwest::Url::parse(&format!("{}/api/v1/workflow/team/", server.trim_end_matches('/')))?;
-    url.set_query(None);
-    url.set_fragment(None);
-    url.path_segments_mut()
-        .map_err(|_| anyhow!("Invalid Team server URL"))?
-        .pop_if_empty()
-        .push(workflow_id);
-    let response = tauri_plugin_http::reqwest::Client::builder()
-        .redirect(tauri_plugin_http::reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
-        .build()?
-        .get(url)
-        .bearer_auth(token)
-        .send()
-        .await?
-        .error_for_status()?;
-    let envelope: Value = response.json().await?;
-    anyhow::ensure!(
-        envelope["errorCode"].as_i64() == Some(0),
-        "Failed to fetch the latest published Workflow"
-    );
-    Ok(envelope["payload"].clone())
-}
+use super::published_workflow::fetch_latest_published;
+#[cfg(test)]
+use super::published_workflow::fetch_published_from_server;
+pub use super::published_workflow::set_team_session;
 
 fn published_workflow_recipe(
     workflow_id: &str,
@@ -732,6 +685,10 @@ async fn resolve_workflow_recipe(
             release_version,
         } => Ok((dsl, stored_snapshot, Some(release_id), Some(release_version))),
         WorkflowScheduleSource::LatestLocal => {
+            anyhow::ensure!(
+                !workspace.starts_with("team:"),
+                "Team schedules require a published Workflow"
+            );
             let workflow = crate::feat::WorkflowRepository::new(DBManager::global().pool()?, workspace.to_owned())
                 .get(workflow_id)
                 .await?;
@@ -939,6 +896,18 @@ mod tests {
             )
             .await
             .is_err()
+        );
+        assert!(
+            resolve_workflow_recipe(
+                "team:default",
+                "workflow-1",
+                json!({}),
+                WorkflowScheduleSource::LatestLocal
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("published Workflow")
         );
         // Existing snake_case recipes remain readable after exposing camelCase to the UI.
         assert!(

@@ -148,3 +148,32 @@ it('does not prompt for the navigation performed in the same update as saving', 
   expect(router.state.location.pathname).toBe('/workflows/saved');
   expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
 });
+
+it('stashes before completing navigation through the alternative action', async () => {
+  const stash = vi.fn();
+  const router = setup(true, {
+    alternativeText: 'Stash and leave',
+    onAlternative: stash,
+  });
+  await act(async () => {
+    await router.navigate('/other');
+  });
+  fireEvent.click(await screen.findByText('Stash and leave'));
+  await screen.findByText('Other page');
+  expect(stash).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the page and edits when stashing on leave fails', async () => {
+  const stash = vi.fn().mockRejectedValueOnce(new Error('Storage full'));
+  const router = setup(true, {
+    alternativeText: 'Stash and leave',
+    onAlternative: stash,
+  });
+  await act(async () => {
+    await router.navigate('/other');
+  });
+  fireEvent.click(await screen.findByText('Stash and leave'));
+  await screen.findByText('Storage full');
+  expect(router.state.location.pathname).toBe('/edit');
+  fireEvent.click(screen.getByText('unsavedChanges.stay'));
+});

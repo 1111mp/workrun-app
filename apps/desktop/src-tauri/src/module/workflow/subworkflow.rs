@@ -406,6 +406,14 @@ fn extract_outputs(state: &adk_rust::graph::State, output_keys: Vec<String>) -> 
 }
 
 pub async fn workflow_dsl(id: &str) -> Result<WorkflowDsl> {
+    // Child invocations share the published boundary of other Team entry points.
+    // Saved child invocations are restored before this resolver is called.
+    if crate::utils::dirs::is_team_workspace() {
+        let workspace = crate::utils::dirs::active_workspace_id();
+        let (published, token) = crate::module::published_workflow::fetch_latest_published(&workspace, id).await?;
+        let catalog = crate::module::assistant::catalog::Catalog::load(Some(&token)).await?;
+        return serde_json::from_value(Box::pin(catalog.prepare(&published)).await?).map_err(Into::into);
+    }
     let workflow = feat::get_workflow(id).await?;
     let settings = workflow.document.get("settings").cloned().unwrap_or_default();
     serde_json::from_value(json!({

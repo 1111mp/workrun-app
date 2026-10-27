@@ -7,6 +7,7 @@ pub mod ipc;
 pub mod mcp_server;
 pub mod model_usage;
 pub mod process_node;
+pub(crate) mod published_workflow;
 pub mod python_runtime;
 pub mod run_history;
 pub mod run_manager;

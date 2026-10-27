@@ -96,11 +96,8 @@ impl Catalog {
         }
         if let Some(api) = &self.team {
             let encoded = encoded(id);
-            // Both endpoints enforce server-side ownership/publication ACLs.
-            match api.get(&format!("/workflow/{encoded}")).await {
-                Ok(workflow) => Ok(workflow),
-                Err(_) => api.get(&format!("/workflow/team/{encoded}")).await,
-            }
+            // Execution must use a release even when the caller owns the workflow.
+            api.get(&format!("/workflow/team/{encoded}")).await
         } else {
             Ok(serde_json::to_value(feat::get_workflow(id).await?)?)
         }
@@ -542,7 +539,7 @@ impl super::tools::WorkflowDiscovery for Catalog {
         {
             let page = api
                 .get(&format!(
-                    "/workflow/overview?pageSize={limit}&query={}&cursor={}",
+                    "/workflow/overview?view=published&pageSize={limit}&query={}&cursor={}",
                     encoded(args["query"].as_str().unwrap_or("")),
                     encoded(cursor)
                 ))
@@ -621,7 +618,7 @@ impl super::tools::WorkflowDiscovery for Catalog {
             let cursor = args.get("cursor").and_then(Value::as_str).unwrap_or("");
             let page = api
                 .get(&format!(
-                    "/workflow/overview?pageSize={limit}&query={}&cursor={}",
+                    "/workflow/overview?view=published&pageSize={limit}&query={}&cursor={}",
                     encoded(query),
                     encoded(cursor)
                 ))
@@ -690,6 +687,41 @@ mod tests {
         );
         sort_capability_summaries(&mut contracts, &workflows, false);
         assert_eq!(contracts[0].id, "00");
+    }
+
+    #[tokio::test]
+    async fn team_execution_never_requests_the_author_draft() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for status in ["200 OK", "404 Not Found"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = [0; 4096];
+                let count = stream.read(&mut bytes).unwrap();
+                let request = String::from_utf8_lossy(&bytes[..count]);
+                assert!(request.starts_with("GET /api/v1/workflow/team/workflow-1 "));
+                let body = json!({"errorCode":0,"payload":{"id":"workflow-1","releaseId":"release-1"}}).to_string();
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let root = tempfile::tempdir().unwrap();
+        let catalog = Catalog {
+            workflows: vec![],
+            team: Some(TeamApi {
+                base,
+                token: "test".into(),
+                client: Client::new(),
+            }),
+            root: root.path().into(),
+            workspace_id: "team:test".into(),
+        };
+        assert_eq!(catalog.resolve("workflow-1").await.unwrap()["releaseId"], "release-1");
+        assert!(catalog.resolve("workflow-1").await.is_err());
+        server.join().unwrap();
     }
 
     #[tokio::test]

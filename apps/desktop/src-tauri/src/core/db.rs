@@ -89,6 +89,21 @@ impl DBManager {
 mod tests {
     use super::*;
 
+    #[test]
+    fn applied_edit_draft_migration_retains_its_original_checksum() {
+        use sha2::{Digest, Sha384};
+        // This version was already applied by development installations. Even
+        // formatting changes would prevent their next startup; evolve it with
+        // a new migration instead of rewriting these bytes.
+        let checksum = Sha384::digest(include_bytes!(
+            "../../resources/migrations/20261027100000_workflow_edit_drafts.up.sql"
+        ));
+        assert_eq!(
+            hex::encode(checksum),
+            "f15be8ff5b9ba07a6032d00449a5329108857d560a833f6c79c6a7f845c85978bf9aac7206d7e7fce8976d79b990b29c"
+        );
+    }
+
     #[tokio::test]
     async fn consolidated_migrations_initialize_revert_and_reapply_without_legacy_steps() {
         let pool = SqlitePoolOptions::new()
@@ -102,7 +117,10 @@ mod tests {
             .fetch_all(&pool)
             .await
             .unwrap();
-        assert_eq!(versions, vec![20260904083536, 20261005100000, 20261016100000]);
+        assert_eq!(
+            versions,
+            vec![20260904083536, 20261005100000, 20261016100000, 20261027100000]
+        );
         assert!(
             sqlx::query("SELECT state_json,title,model_id,status,created_at FROM assistant_sessions")
                 .fetch_all(&pool)
