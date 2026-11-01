@@ -267,7 +267,14 @@ impl NativeTurn<'_> {
         if agent == "workflow_planner" {
             ensure!(self.operation.is_some(), "Planner has no authorized handoff");
             let conversation = super::planning_context::conversation(self.history);
-            request.contents.insert(1.min(request.contents.len()),Content::new("user").with_text(json!({"task":self.task,"current_plan":self.plan,"conversation":conversation,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
+            let mut context = json!({"task":self.task,"current_plan":self.plan,"conversation":conversation,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id});
+            if let Some(evidence) = super::repair::evidence(self.handoff_contents.as_deref().unwrap_or(self.history)) {
+                context["execution_evidence"] = evidence;
+            }
+            request.contents.insert(
+                1.min(request.contents.len()),
+                Content::new("user").with_text(context.to_string()),
+            );
         } else if agent == "workflow_author" {
             ensure!(self.operation.is_some(), "Workflow agent has no authorized handoff");
             // Load a revision's current definition once, without a discovery LLM round trip.
@@ -622,6 +629,15 @@ impl NativeTurn<'_> {
                 "Specialist tool is not permitted"
             );
             let discovery = self.discovery.context("Native authoring unavailable")?;
+            if name == "save_workflow_plan" {
+                // The planner cannot choose a repair baseline. Only the native
+                // diagnostic from this handoff may bind it to a matching target.
+                let document: Value =
+                    serde_json::from_str(args["document_json"].as_str().unwrap_or("")).unwrap_or(Value::Null);
+                let repair = super::repair::evidence(self.handoff_contents.as_deref().unwrap_or(self.history))
+                    .and_then(|evidence| super::repair::plan_context(&evidence, document["target_id"].as_str()));
+                args["repair"] = serde_json::to_value(repair)?;
+            }
             let record = self.operation.as_mut().context("Missing authorized handoff")?;
             if name == "save_workflow_draft" {
                 let plan = self.plan.as_ref().context("Approved plan is missing")?;
@@ -694,7 +710,13 @@ impl NativeTurn<'_> {
                 && value["validation"]["valid"] == true
                 && value["capability_id"].is_string()
             {
-                self.saved = Some(value.clone());
+                let mut saved = value.clone();
+                if !saved["definitionDigest"].is_string() {
+                    saved["definitionDigest"] = json!(super::tool_execution::digest(
+                        &workflow_agent::authoring::parse_document(&args)?
+                    )?);
+                }
+                self.saved = Some(saved);
             }
             record["calls"][index]["status"] = json!(if value.get("error").is_some() {
                 "failed"
@@ -713,6 +735,22 @@ impl NativeTurn<'_> {
             return Ok(value);
         }
         match name {
+            "inspect_execution" if args["detail"] == "verification" => {
+                super::repair::authorize(self.history, &args)?;
+                args["_repair"] = super::repair::receipt_context(self.history, args["run_id"].as_str().unwrap())
+                    .unwrap_or(Value::Null);
+                self.discovery
+                    .context("Stored execution comparison is unavailable")?
+                    .execution_verification(&args)
+                    .await
+            },
+            "inspect_execution" if args["detail"] == "diagnostic" => {
+                super::repair::authorize(self.history, &args)?;
+                self.discovery
+                    .context("Stored execution diagnostics are unavailable")?
+                    .execution_diagnostics(args["run_id"].as_str().unwrap(), args["node_id"].as_str())
+                    .await
+            },
             "call_workspace_tool" => {
                 ensure!(
                     self.registry.workspace_tools_allowed,
@@ -834,7 +872,7 @@ impl NativeTurn<'_> {
                 json!({"status":"failed","summary":parsed.get("summary").cloned().unwrap_or(json!("No plan proposal was saved")),"error":error,"executed":false})
             }
         } else if let Some(saved) = &self.saved {
-            json!({"status":"completed","workflow_id":saved["capability_id"],"before_revision_id":saved["before_revision_id"],"after_revision_id":saved["after_revision_id"],"validation":saved["validation"],"summary":parsed.get("summary").cloned().unwrap_or(json!("Workflow saved and validated")),"assumptions":parsed["assumptions"],"executed":false})
+            json!({"status":"completed","workflow_id":saved["capability_id"],"before_revision_id":saved["before_revision_id"],"after_revision_id":saved["after_revision_id"],"definitionDigest":saved["definitionDigest"],"validation":saved["validation"],"summary":parsed.get("summary").cloned().unwrap_or(json!("Workflow saved and validated")),"assumptions":parsed["assumptions"],"executed":false})
         } else if error.is_none()
             && parsed["status"] == "needs_clarification"
             && parsed["questions"]

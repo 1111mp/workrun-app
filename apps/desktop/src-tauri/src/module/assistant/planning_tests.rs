@@ -51,12 +51,13 @@ pub(super) async fn operate(
             "Unauthorized attachment"
         );
         let old = store.current(session)?;
-        let plan = store.save(
+        let plan = store.save_with_repair(
             session,
             turn,
             args["base_version"].as_u64().context("Missing base version")? as u32,
             document,
             vec![],
+            serde_json::from_value(args.get("repair").cloned().unwrap_or(Value::Null))?,
         )?;
         tasks.suspend(&plan).await?;
         if let Some(old) = old.filter(|p| matches!(p.status.as_str(), "ready" | "needs_clarification")) {

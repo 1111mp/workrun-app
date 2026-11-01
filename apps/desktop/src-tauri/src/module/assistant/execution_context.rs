@@ -74,6 +74,7 @@ fn deduplicate_reads(contents: &mut [Content]) {
                 || !matches!(
                     name,
                     "read_skill"
+                        | "inspect_execution"
                         | "get_workflow_reference"
                         | "get_workflow_draft"
                         | "get_workflow_plan"

@@ -35,6 +35,11 @@ impl MainSkills {
     pub fn builtin() -> Self {
         let mut entries = CORE_SKILLS.to_vec();
         entries.push(crate::module::assistant::skills::WORKRUN_CAPABILITIES);
+        entries.push((
+            "workflow-repair",
+            "Diagnose failed or incorrect runs, propose minimal repairs and verify reruns",
+            "main_agent/skills/workflow-repair.md",
+        ));
         Self(SkillCatalog::resources(&entries, CORE_SKILLS.len()))
     }
     pub fn load(selected: &[String]) -> Result<Self> {

@@ -63,6 +63,12 @@ pub trait WorkflowDiscovery: Send + Sync {
     async fn inspect_operations(&self, _session_id: &str) -> Result<Value> {
         Ok(json!({"items":[]}))
     }
+    async fn execution_diagnostics(&self, _run: &str, _node: Option<&str>) -> Result<Value> {
+        bail!("Stored execution diagnostics are unavailable")
+    }
+    async fn execution_verification(&self, _args: &Value) -> Result<Value> {
+        bail!("Stored execution comparison is unavailable")
+    }
     async fn record_turn(&self, _record: &Value) -> Result<()> {
         Ok(())
     }

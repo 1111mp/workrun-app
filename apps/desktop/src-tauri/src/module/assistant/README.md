@@ -257,6 +257,50 @@ Conversation grouping reserves a card-only assistant slot for every interaction
 turn. Later user messages do not require an artificial assistant answer to keep
 earlier cards in the timeline.
 
+## Workflow diagnosis and repair
+
+The optional `workflow-repair` Skill is loaded for execution failures or reported
+incorrect results, never preloaded into ordinary turns. It guides read-only diagnosis,
+minimal revision planning, existing plan/run confirmations and comparison after a
+new run. Environment failures and missing user inputs need no speculative graph edit.
+Two unsuccessful attempts or repeated failure without new evidence should end the
+model-guided repair conversation; this is guidance, not a new autonomous retry worker.
+
+`inspect_execution(detail=diagnostic, run_id)` reads bounded durable errors and node
+spans only for a run already recorded in the current conversation and workspace.
+An optional `node_id` selects that node's historical definition, connected edges and
+visible terminal output, falling back to a completed node's result event when a run
+failed before emitting its final state. It never reads raw inputs or encrypted checkpoints. Missing
+output and truncated previews remain explicit. The editable definition is compared
+with the run snapshot; a Team draft change is not a published-release change.
+
+Only the latest diagnostic result read in the current turn accompanies planner
+handoff as `execution_evidence`. Existing plan fields carry the fault, intended change
+and verification criteria through approval/authoring. No extra model phase, repair
+agent, background execution, database table or UI confirmation is introduced.
+
+After a confirmed rerun, `inspect_execution(detail=verification, run_id,
+baseline_run_id)` compares two conversation-authorized runs of the same workflow.
+It returns bounded execution checks, whether input/definition changed, an optional
+node completion check and up to six selected JSON Pointers into validated outputs.
+It never includes full definitions, raw inputs or unrequested reports. Removed or
+skipped nodes and unavailable output remain unverified; explicit null is a value.
+Native checks establish execution/schema facts only. The optional repair Skill
+compares them with the approved criteria and reports resolved, still failing or
+unverified with evidence. No generic business-rule engine or automatic retry is added.
+
+Repair proposals persist a native `repair` reference (workflow, baseline run and
+optional node) alongside the existing immutable plan version. Proposal feedback
+preserves it; a new repair after saving requires fresh diagnostic evidence. Model
+arguments cannot select this reference. Successful authoring records the saved
+definition digest in the ordinary plan outcome. The first subsequent run confirmation
+for that saved repair freezes its plan ID/version, baseline and digest in activeCall;
+the terminal receipt retains them, including when large output is omitted. Reloading
+restores the existing gate/run identity and grants no action. Later ordinary runs
+do not inherit an already-used repair version. Verification reads the receipt's
+native association and reports baseline/definition mismatches; the exact historical
+plan remains readable even after later repairs. No additional task store is used.
+
 ## Native capability knowledge
 
 The optional `workrun-capabilities` Skill is shared by main, planning and authoring

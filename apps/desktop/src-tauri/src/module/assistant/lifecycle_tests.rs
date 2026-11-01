@@ -50,6 +50,30 @@ impl Workspace {
 }
 #[async_trait::async_trait]
 impl tools::WorkflowDiscovery for Workspace {
+    async fn execution_verification(&self, args: &Value) -> Result<Value> {
+        anyhow::ensure!(
+            args["run_id"] == "repaired-run" && args["baseline_run_id"] == "failed-run",
+            "Wrong comparison pair"
+        );
+        *self.reads.lock().unwrap() += 1;
+        if args["_repair"].is_object() {
+            anyhow::ensure!(
+                args["_repair"]["planId"] == "saved-repair" && args["_repair"]["planVersion"] == 2,
+                "Comparison must use the persisted receipt association"
+            );
+        }
+        Ok(
+            json!({"workflowId":self.id,"baseline":{"runId":"failed-run","runCheck":"failed"},
+            "current":{"runId":"repaired-run","runCheck":"passed"},"outcomeCheck":"unverified","readOnly":true}),
+        )
+    }
+    async fn execution_diagnostics(&self, run: &str, node: Option<&str>) -> Result<Value> {
+        anyhow::ensure!(run == "failed-run", "Unexpected diagnostic run");
+        Ok(
+            json!({"runId":run,"workflowId":self.id,"snapshotDigest":"historical-definition",
+            "status":"failed","node":node,"error":"A required output was not published","definitionChanged":true}),
+        )
+    }
     async fn list(&self, args: &Value) -> Result<Value> {
         if let Some(query) = args["query"].as_str() {
             let contract = capability::Contract::workflow(&self.entry())?;
@@ -114,6 +138,124 @@ fn context(session: &str) -> protocol::AssistantContext {
         session_id: Some(session.into()),
         ..Default::default()
     }
+}
+
+#[tokio::test]
+async fn repair_diagnosis_hands_native_evidence_to_existing_plan_review_without_writes_or_execution() {
+    let workspace = Workspace::new();
+    let sid = uuid::Uuid::new_v4().to_string();
+    let history = vec![
+        Content::new("user").with_text("Run the existing workflow"),
+        tests::call("execute_capability", json!({"capability_id":workspace.id,"bindings":[]})),
+        serde_json::from_value(json!({"role":"function","parts":[{"functionResponse":{"name":"execute_capability","response":{"runId":"failed-run","status":"failed","error":"Missing output"}},"id":"call-43"}]})).unwrap(),
+        Content::new("user").with_text("Fix the workflow; do not rerun"),
+    ];
+    let mut document = planning_tests::document();
+    document["target_id"] = json!(workspace.id);
+    let scripted = tests::ScriptedModel::new(vec![
+        Content::new("model").with_text(json!({"intent":"authoring","actionQuote":"Fix the workflow","authoringQuote":"Fix the workflow","summary":"Repair the existing workflow"}).to_string()),
+        tests::call("read_skill", json!({"name":"workflow-repair"})),
+        tests::call("inspect_execution", json!({"run_id":"failed-run","detail":"diagnostic"})),
+        tests::call("transfer_to_agent", json!({"agent_name":"workflow_planner"})),
+        tests::call("save_workflow_plan", json!({"base_version":0,"document_json":document.to_string(),"repair":{"workflowId":workspace.id,"baselineRunId":"forged-run"}})),
+    ]);
+    let reply = tests::runtime()
+        .run_with_discovery(
+            &scripted,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: context(&sid),
+                contents: history,
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &workspace,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    assert!(workspace.writes.lock().unwrap().is_empty());
+    let plan = Store::new(workspace.root.path()).current(&sid).unwrap().unwrap();
+    assert_eq!(plan.status, "ready");
+    assert_eq!(plan.document.target_id.as_deref(), Some(workspace.id.as_str()));
+    assert_eq!(plan.repair.as_ref().unwrap().baseline_run_id, "failed-run");
+    assert_eq!(
+        Store::new(workspace.root.path())
+            .revision(&sid, plan.version)
+            .unwrap()
+            .repair
+            .unwrap()
+            .baseline_run_id,
+        "failed-run"
+    );
+    let requests = scripted.requests.lock().unwrap();
+    let planner = requests
+        .iter()
+        .find(|request| request.tools.contains_key("save_workflow_plan"))
+        .unwrap();
+    let contents = serde_json::to_string(&planner.contents).unwrap();
+    assert!(contents.contains("execution_evidence"));
+    assert!(contents.contains("historical-definition"));
+    assert!(contents.contains("definitionChanged"));
+    assert!(!planner.tools.contains_key("execute_capability"));
+}
+
+#[tokio::test]
+async fn repair_verification_is_read_only_and_needs_no_new_model_phase() {
+    let workspace = Workspace::new();
+    let mut history = vec![];
+    for (index, run) in ["failed-run", "repaired-run"].into_iter().enumerate() {
+        let id = format!("run-{index}");
+        history.push(Content::new("user").with_text("Run the workflow"));
+        let mut call = tests::call(
+            "execute_capability",
+            json!({"capability_id":workspace.id,"bindings":[]}),
+        );
+        if let Part::FunctionCall { id: call_id, .. } = &mut call.parts[0] {
+            *call_id = Some(id.clone());
+        }
+        history.push(call);
+        history.push(serde_json::from_value(json!({"role":"function","parts":[{"functionResponse":{"name":"execute_capability","response":{"runId":run,"status":if index==0 {"failed"} else {"completed"},"repair":if index==1 {json!({"planId":"saved-repair","planVersion":2,"baselineRunId":"failed-run"})}else{Value::Null}}},"id":id}]})).unwrap());
+    }
+    history.push(Content::new("user").with_text("Check whether the repair worked; do not change or run anything"));
+    let model = tests::ScriptedModel::new(vec![
+        Content::new("model").with_text(
+            json!({"intent":"explanation","actionQuote":"","authoringQuote":"","summary":"Check the repair result"})
+                .to_string(),
+        ),
+        tests::call(
+            "inspect_execution",
+            json!({"detail":"verification","run_id":"repaired-run","baseline_run_id":"failed-run","_repair":{"planId":"forged","planVersion":99}}),
+        ),
+        Content::new("model").with_text("Execution succeeded; the requested outcome remains unverified."),
+    ]);
+    let reply = tests::runtime()
+        .run_with_discovery(
+            &model,
+            &ModelProvider::Gemini,
+            AssistantRequest {
+                context: context(&uuid::Uuid::new_v4().to_string()),
+                contents: history,
+                capabilities: vec![],
+            },
+            &|_| Ok(()),
+            &workspace,
+        )
+        .await
+        .unwrap();
+    assert!(reply.call.is_none());
+    assert!(workspace.writes.lock().unwrap().is_empty());
+    assert_eq!(*workspace.reads.lock().unwrap(), 1);
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3); // Existing intent, comparison read and delivery; no verifier agent.
+    let delivery = requests.last().unwrap();
+    assert!(!delivery.tools.contains_key("execute_capability"));
+    assert!(!delivery.tools.contains_key("transfer_to_agent"));
+    assert!(
+        serde_json::to_string(&delivery.contents)
+            .unwrap()
+            .contains("outcomeCheck")
+    );
 }
 
 #[tokio::test]

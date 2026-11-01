@@ -10,6 +10,7 @@ mod orchestration;
 mod planning_agent;
 mod planning_context;
 mod protocol;
+mod repair;
 mod resources;
 mod sdk;
 pub mod session;

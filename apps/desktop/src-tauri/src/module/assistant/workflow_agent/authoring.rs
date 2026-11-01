@@ -380,7 +380,7 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
             // completed and must not encourage another full-document submission.
             validation.as_object_mut().unwrap().remove("next");
             Ok(
-                json!({"capability_id":workflow.id,"draft_id":workflow.id,"before_revision_id":revision.parent_revision_id,"after_revision_id":revision.id,"validation":validation,"published":false,"executed":false,"next":"Saving is complete. Return the saved identity and pending checks; do not save again or execute."}),
+                json!({"capability_id":workflow.id,"draft_id":workflow.id,"before_revision_id":revision.parent_revision_id,"after_revision_id":revision.id,"definitionDigest":crate::module::assistant::tool_execution::digest(&workflow.document)?,"validation":validation,"published":false,"executed":false,"next":"Saving is complete. Return the saved identity and pending checks; do not save again or execute."}),
             )
         },
         "list_authoring_resources" => match args["kind"].as_str().unwrap_or("models") {

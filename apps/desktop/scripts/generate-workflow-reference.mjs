@@ -73,6 +73,7 @@ for (const role of ['main_agent', 'workflow_agent', 'planning_agent']) {
           'capability-orchestration',
           'execution-collaboration',
           'result-delivery',
+          'workflow-repair',
         ].map((name) => `skills/${name}.md`),
       ]
     : role === 'workflow_agent'
