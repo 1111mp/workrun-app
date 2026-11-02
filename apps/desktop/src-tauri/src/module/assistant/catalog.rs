@@ -301,6 +301,47 @@ impl Catalog {
 
 #[async_trait::async_trait]
 impl super::tools::WorkflowDiscovery for Catalog {
+    async fn execution_verification(&self, args: &Value) -> Result<Value> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        let pool = crate::core::db::DBManager::global().pool()?;
+        let result = super::repair::verify(&pool, &self.workspace_id, args).await?;
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        Ok(result)
+    }
+    async fn execution_diagnostics(&self, run: &str, node: Option<&str>) -> Result<Value> {
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        let pool = crate::core::db::DBManager::global().pool()?;
+        let mut result = super::repair::inspect(&pool, &self.workspace_id, run, node).await?;
+        let id = result["workflowId"].as_str().context("Run target is missing")?;
+        // Compare against the editable definition, not the published release used by execution.
+        match feat::get_workflow(id).await {
+            Ok(current) => {
+                let current = serde_json::to_value(current)?;
+                let digest = super::tool_execution::digest(&current["document"])?;
+                result["definitionChanged"] = json!(result["snapshotDigest"] != digest);
+                result["currentDigest"] = json!(digest);
+                if result["definitionChanged"] == true
+                    && let Some(node) = node
+                {
+                    let definition = &current["document"];
+                    let current_node = definition["nodes"]
+                        .as_array()
+                        .and_then(|nodes| nodes.iter().find(|item| item["id"] == node));
+                    result["currentNode"] = super::repair::bounded(current_node.unwrap_or(&Value::Null), 6000);
+                    let edges = definition["edges"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|edge| edge["source"] == node || edge["target"] == node)
+                        .collect::<Vec<_>>();
+                    result["currentEdges"] = super::repair::bounded(&json!(edges), 2000);
+                }
+            },
+            Err(_) => result["currentDefinitionAvailable"] = json!(false),
+        }
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+        Ok(result)
+    }
     async fn direct(
         &self,
         name: &str,
@@ -393,12 +434,13 @@ impl super::tools::WorkflowDiscovery for Catalog {
             let issues = self.plan_dependencies(&document, artifacts).await?;
             anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
             let previous = store.current(session)?;
-            let plan = store.save(
+            let plan = store.save_with_repair(
                 session,
                 turn,
                 u32::try_from(args["base_version"].as_u64().context("Plan base version is missing")?)?,
                 document,
                 issues,
+                serde_json::from_value(args.get("repair").cloned().unwrap_or(Value::Null))?,
             )?;
             tasks.suspend(&plan).await?;
             if let Some(old) = previous.filter(|p| matches!(p.status.as_str(), "ready" | "needs_clarification")) {

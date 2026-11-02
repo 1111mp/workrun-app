@@ -1000,6 +1000,15 @@ fn update_run_confirmation(session: &mut Value, status: &str) -> Result<()> {
 }
 
 fn require_run_confirmation(session: &mut Value, input: &Value) -> Result<bool> {
+    if !session["activeCall"]["confirmation"].is_object()
+        && let Some(context) = super::repair::run_context(
+            &session["workflowPlan"],
+            session["activeCall"]["workflowId"].as_str().unwrap_or_default(),
+            session["messages"].as_array().map(Vec::as_slice).unwrap_or(&[]),
+        )
+    {
+        session["activeCall"]["repair"] = context;
+    }
     session["activeCall"]["input"] = input.clone();
     let snapshot = run_snapshot(session, input)?;
     let prior = &session["activeCall"]["confirmation"];
@@ -1243,11 +1252,17 @@ fn append_tool_receipt(session: &mut Value, feedback: &Value, result: &Value) ->
     Ok(())
 }
 
-fn append_result(session: &mut Value, response: Value, text: &str) -> Result<()> {
+fn append_result(session: &mut Value, mut response: Value, text: &str) -> Result<()> {
     let call = session["activeCall"].clone();
+    if call["repair"].is_object() {
+        response["repair"] = call["repair"].clone();
+    }
     let mut message = json!({"id":uuid::Uuid::new_v4().to_string(),"role":"tool","text":text,"runId":call["runId"],"workflowName":call["workflow"]["document"]["settings"]["name"],"artifacts":response["artifacts"],"content":{"role":"function","parts":[{"functionResponse":{"name":call["toolName"],"response":response},"id":call["callId"]}]}});
     if super::storage::encode_message(&message).is_err() {
         message["content"]["parts"][0]["functionResponse"]["response"] = json!({"status":text,"runId":call["runId"],"outputOmitted":true,"summary":"Output exceeds the message limit. Inspect the run record or its artifacts for the complete output."});
+        if call["repair"].is_object() {
+            message["content"]["parts"][0]["functionResponse"]["response"]["repair"] = call["repair"].clone();
+        }
     }
     push_message(session, message)?;
     session["activeCall"] = Value::Null;
@@ -1258,6 +1273,128 @@ fn append_result(session: &mut Value, response: Value, text: &str) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn repair_confirmation_and_run_links_survive_reload_and_two_repairs_without_redispatch() {
+        use std::sync::atomic::Ordering;
+        let (pool, mut session, runs) = dispatch_fixture(false).await;
+        session["activeCall"]["workflowId"] = json!("report");
+        let plan_id = uuid::Uuid::new_v4().to_string();
+        let digest = super::super::tool_execution::digest(&session["activeCall"]["workflow"]["document"]).unwrap();
+        let first_plan = json!({"id":plan_id,"version":1,"status":"saved","document":{"target_id":"report"},
+            "repair":{"workflowId":"report","baselineRunId":"original-run","nodeId":"step"},
+            "outcome":{"workflow_id":"report","definitionDigest":digest}});
+        session["workflowPlan"] = first_plan.clone();
+        let input = json!({"period":"week"});
+        assert!(!require_run_confirmation(&mut session, &input).unwrap());
+        let frozen = session["activeCall"]["repair"].clone();
+        commit(&pool, "personal", &session).await.unwrap();
+        let id = session["id"].as_str().unwrap().to_owned();
+        let mut restored = get(&pool, "personal", &id).await.unwrap();
+        assert_eq!(restored["activeCall"]["repair"], frozen);
+        drive(
+            &pool,
+            "personal",
+            &mut restored,
+            None,
+            Some(input.clone()),
+            &Mutex::new(None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.starts.load(Ordering::SeqCst), 0);
+        // A later current plan must not rewrite an already displayed run's association.
+        restored["workflowPlan"]["version"] = json!(99);
+        let confirmation = restored["activeCall"]["confirmation"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        decide_workflow_run(&mut restored, &confirmation, "approve").unwrap();
+        assert!(require_run_confirmation(&mut restored, &input).unwrap());
+        assert_eq!(restored["activeCall"]["repair"], frozen);
+        runs.complete.store(true, Ordering::SeqCst);
+        dispatch(
+            &pool,
+            "personal",
+            &mut restored,
+            input.clone(),
+            json!({}),
+            runs.as_ref(),
+        )
+        .await
+        .unwrap();
+        let mut reopened = get(&pool, "personal", &id).await.unwrap();
+        let receipt = &reopened["messages"][0]["content"]["parts"][0]["functionResponse"]["response"];
+        assert_eq!(receipt["repair"], frozen);
+        let first_run = receipt["runId"].clone();
+        assert!(reopened["activeCall"].is_null());
+        assert_eq!(runs.starts.load(Ordering::SeqCst), 1);
+
+        // An ordinary later run must not reopen the already-used repair version.
+        reopened["workflowPlan"] = first_plan.clone();
+        reopened["activeCall"] = json!({"workflowId":"report","toolName":"execute_workflow","callId":"ordinary","workflow":session["activeCall"]["workflow"]});
+        assert!(!require_run_confirmation(&mut reopened, &input).unwrap());
+        assert!(!reopened["activeCall"]["repair"].is_object());
+        let confirmation = reopened["activeCall"]["confirmation"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        decide_workflow_run(&mut reopened, &confirmation, "cancel").unwrap();
+
+        let mut second_plan = first_plan;
+        second_plan["version"] = json!(2);
+        second_plan["repair"]["baselineRunId"] = first_run;
+        reopened["workflowPlan"] = second_plan;
+        reopened["activeCall"] = json!({"workflowId":"report","toolName":"execute_workflow","callId":"second","workflow":session["activeCall"]["workflow"]});
+        assert!(!require_run_confirmation(&mut reopened, &input).unwrap());
+        commit(&pool, "personal", &reopened).await.unwrap();
+        let mut second = get(&pool, "personal", &id).await.unwrap();
+        drive(
+            &pool,
+            "personal",
+            &mut second,
+            None,
+            Some(input.clone()),
+            &Mutex::new(None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.starts.load(Ordering::SeqCst), 1);
+        let confirmation = second["activeCall"]["confirmation"]["id"].as_str().unwrap().to_owned();
+        decide_workflow_run(&mut second, &confirmation, "approve").unwrap();
+        assert!(require_run_confirmation(&mut second, &input).unwrap());
+        dispatch(&pool, "personal", &mut second, input, json!({}), runs.as_ref())
+            .await
+            .unwrap();
+        let final_session = get(&pool, "personal", &id).await.unwrap();
+        let receipts = final_session["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message["content"]["parts"][0]["functionResponse"]["response"].as_object())
+            .filter(|response| response.get("runId").is_some_and(Value::is_string))
+            .collect::<Vec<_>>();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[0]["repair"]["planVersion"], 1);
+        assert_eq!(receipts[0]["repair"]["baselineRunId"], "original-run");
+        assert_eq!(receipts[1]["repair"]["planVersion"], 2);
+        assert_eq!(receipts[1]["repair"]["baselineRunId"], receipts[0]["runId"]);
+        assert_eq!(runs.starts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn oversized_run_receipt_retains_repair_association() {
+        let repair = json!({"planId":"plan","planVersion":2,"baselineRunId":"original"});
+        let mut session = json!({"messages":[],"activeCall":{"runId":"rerun","toolName":"execute_capability","callId":"call","repair":repair}});
+        append_result(
+            &mut session,
+            json!({"runId":"rerun","status":"completed","output":"x".repeat(4*1024*1024)}),
+            "completed",
+        )
+        .unwrap();
+        let response = &session["messages"][0]["content"]["parts"][0]["functionResponse"]["response"];
+        assert_eq!(response["outputOmitted"], true);
+        assert_eq!(response["repair"], repair);
+    }
     #[tokio::test]
     async fn workflow_run_confirmation_survives_reload_and_continue_cannot_dispatch() {
         let (pool, mut session, runs) = dispatch_fixture(false).await;

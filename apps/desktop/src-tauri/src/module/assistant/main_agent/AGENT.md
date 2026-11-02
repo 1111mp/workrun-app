@@ -82,3 +82,7 @@ restrictions or decisions to the user, not internal boolean names or false permi
 errors. Report saves only after native saving succeeds. Assess actual outputs against
 the goal using result-delivery; never claim correctness from completion, hide a failed
 check, or silently repair/rerun a definition without authorization.
+
+For a failed run, failed output check, user-reported incorrect result or repair verification, read
+workflow-repair on demand; batch it with the initial diagnostic read when possible.
+Diagnosis is read-only; requests to explain a failure never authorize edits or reruns.

@@ -151,6 +151,8 @@ pub struct Plan {
     pub approved_turn_key: Option<String>,
     pub workflow_id: Option<String>,
     pub outcome: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair: Option<super::super::repair::RepairContext>,
 }
 // Mutations run under the native conversation lease (including restart recovery).
 pub struct Store {
@@ -188,6 +190,17 @@ impl Store {
         Ok(())
     }
     pub fn save(&self, session: &str, turn: &str, base: u32, document: Document, issues: Vec<String>) -> Result<Plan> {
+        self.save_with_repair(session, turn, base, document, issues, None)
+    }
+    pub fn save_with_repair(
+        &self,
+        session: &str,
+        turn: &str,
+        base: u32,
+        document: Document,
+        issues: Vec<String>,
+        repair: Option<super::super::repair::RepairContext>,
+    ) -> Result<Plan> {
         let old = self.current(session)?;
         ensure!(
             old.as_ref().map_or(0, |p| p.version) == base,
@@ -198,6 +211,26 @@ impl Store {
                 .is_none_or(|p| !matches!(p.status.as_str(), "approved" | "building")),
             "Cannot revise an approved or building plan"
         );
+        let repair = repair.or_else(|| {
+            old.as_ref()
+                .filter(|old| {
+                    matches!(old.status.as_str(), "ready" | "needs_clarification" | "failed")
+                        && old.document.target_id == document.target_id
+                })
+                .and_then(|old| old.repair.clone())
+        });
+        if let Some(repair) = &repair {
+            ensure!(
+                document.target_id.as_deref() == Some(repair.workflow_id.as_str())
+                    && !repair.baseline_run_id.is_empty()
+                    && repair.baseline_run_id.len() <= 256
+                    && repair
+                        .node_id
+                        .as_ref()
+                        .is_none_or(|id| !id.is_empty() && id.len() <= 256),
+                "Invalid native repair context"
+            );
+        }
         let plan = Plan {
             id: old
                 .as_ref()
@@ -217,6 +250,7 @@ impl Store {
             approved_turn_key: None,
             workflow_id: None,
             outcome: None,
+            repair,
         };
         self.write(session, &format!("v{}.json", plan.version), &plan)?;
         self.write(session, "current.json", &plan)?;

@@ -96,6 +96,14 @@ impl SkillCatalog {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn repair_guidance_is_discoverable_without_expanding_ordinary_turn_instructions() {
+        let main = super::super::main_agent::skills::MainSkills::builtin();
+        let repair = main.read("workflow-repair").unwrap();
+        assert!(main.summaries().to_string().contains("workflow-repair"));
+        assert!(!main.mandatory_instructions().unwrap().contains(&repair));
+        assert_eq!(main.read_for_model("workflow-repair").unwrap()["content"], repair);
+    }
+    #[test]
     fn main_and_author_keep_required_instructions_without_duplicate_tool_bodies() {
         let main = super::super::main_agent::skills::MainSkills::builtin();
         let author = super::super::workflow_agent::skills::catalog();
