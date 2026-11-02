@@ -62,6 +62,7 @@
   --workrun-glow-violet: oklch(0.84 0.08 305 / 15%);
   --workrun-glow-cyan: oklch(0.83 0.075 210 / 20%);
   --workrun-surface: oklch(0.99 0.003 265);
+  --workrun-chrome: oklch(0.94 0.012 265);
   --workrun-panel: oklch(1 0 0 / 85%);
   --workrun-panel-hover: oklch(1 0 0);
   --workrun-shadow: 0 8px 30px oklch(0.35 0.05 265 / 5%);
@@ -79,6 +80,7 @@
   --workrun-glow-violet: oklch(0.38 0.09 305 / 18%);
   --workrun-glow-cyan: oklch(0.4 0.065 225 / 24%);
   --workrun-surface: oklch(0.16 0.012 265);
+  --workrun-chrome: oklch(0.235 0.023 265);
   --workrun-panel: oklch(0.225 0.014 265 / 85%);
   --workrun-panel-hover: oklch(0.25 0.019 265);
   --workrun-shadow: 0 8px 30px oklch(0.08 0.02 265 / 16%);
@@ -119,10 +121,35 @@
   background: transparent;
 }
 
-/* SidebarInset owns its spacing, radius and shadow. Only theme its surface. */
+/* Editor and auxiliary shells retain their shared surface treatment. */
 .workrun-shell .workrun-surface {
   background-color: var(--workrun-surface);
   background-image: inherit;
+}
+
+/* Only the app navigation uses contrasting chrome. Paint the gradient once
+   across header, page and run center to avoid separate horizontal bands. */
+.workrun-navigation {
+  background: var(--workrun-chrome);
+}
+
+.workrun-navigation > .workrun-surface {
+  background-image:
+    radial-gradient(
+      ellipse 100% 65% at 50% 0%,
+      var(--workrun-glow-blue),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 100% 65% at 50% 100%,
+      var(--workrun-glow-cyan),
+      transparent
+    );
+  box-shadow: none;
+}
+
+.workrun-navigation .workrun-library {
+  background: transparent;
 }
 
 .workrun-topbar {

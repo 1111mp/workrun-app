@@ -152,14 +152,14 @@ function Location() {
     </output>
   );
 }
-async function setup(width = 1100) {
+async function setup(width = 1100, initialEntry = '/start?session=s1') {
   await page.viewport(width, 800);
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/start?session=s1']}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <ConfirmProvider>
           <SidebarProvider>
             <AppSidebar accountMenu={null} />
@@ -173,6 +173,48 @@ async function setup(width = 1100) {
     </QueryClientProvider>,
   );
 }
+
+it.each([
+  ['/start', '首页'],
+  ['/', '首页'],
+  ['/workflows', '工作流'],
+  ['/apps', '应用'],
+  ['/runs?status=completed', '运行历史'],
+])(
+  'preserves the current location when clicking %s navigation',
+  async (path, name) => {
+    const screen = await setup(1100, path);
+    const location = screen.getByTestId('location');
+    const initialKey = location.element().getAttribute('data-location-key');
+
+    await screen.getByRole('link', { name, exact: true }).click();
+
+    await expect.element(location).toHaveTextContent(path);
+    await expect
+      .element(location)
+      .toHaveAttribute('data-location-key', initialKey!);
+  },
+);
+
+it('still navigates between pages and keeps New task on the current home page', async () => {
+  const screen = await setup(1100, '/workflows');
+  const location = screen.getByTestId('location');
+  await screen.getByRole('link', { name: '首页', exact: true }).click();
+  await expect.element(location).toHaveTextContent('/start');
+  const initialKey = location.element().getAttribute('data-location-key');
+
+  await screen.getByRole('link', { name: '新任务', exact: true }).click();
+
+  expect(location.element().getAttribute('data-location-key')).toBe(initialKey);
+});
+
+it('opens a new task from an existing conversation', async () => {
+  const screen = await setup();
+  await screen.getByRole('link', { name: '新任务', exact: true }).click();
+  await expect
+    .element(screen.getByTestId('location'))
+    .toHaveTextContent('/start');
+});
 
 it('keeps icon anchors and row heights stable throughout repeated collapse and expansion', async () => {
   api.longHistory = true;

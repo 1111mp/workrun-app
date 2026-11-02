@@ -42,7 +42,14 @@ import {
   Settings2Icon,
   UploadIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
@@ -120,6 +127,8 @@ type WorkflowEditorProps = {
   historicalRun?: RunRecord;
   liveRun?: boolean;
   historicalChatSessionId?: string;
+  runEntryBlocked?: boolean;
+  entryNotice?: ReactNode;
 };
 
 type ObservabilityPeriod = '7d' | '30d' | 'all';
@@ -153,6 +162,8 @@ function WorkflowEditor({
   historicalRun,
   liveRun,
   historicalChatSessionId,
+  runEntryBlocked = false,
+  entryNotice,
 }: WorkflowEditorProps) {
   const [draftDocument] = useState<WorkflowDocument>(() =>
     createWorkflowDocument(),
@@ -171,6 +182,8 @@ function WorkflowEditor({
         historicalRun={historicalRun}
         liveRun={liveRun}
         historicalChatSessionId={historicalChatSessionId}
+        runEntryBlocked={runEntryBlocked}
+        entryNotice={entryNotice}
       />
     </WorkflowStoreProvider>
   );
@@ -184,6 +197,8 @@ function WorkflowEditorContent({
   historicalRun,
   liveRun,
   historicalChatSessionId,
+  runEntryBlocked = false,
+  entryNotice,
 }: WorkflowEditorProps) {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [publishOpen, setPublishOpen] = useState(false);
@@ -364,6 +379,7 @@ function WorkflowEditorContent({
   const { t } = useTranslation();
   const editDraft = useWorkflowEditDraft({
     enabled:
+      !runEntryBlocked &&
       isPersonalMode() &&
       !readOnly &&
       !autoStartRun &&
@@ -534,6 +550,7 @@ function WorkflowEditorContent({
     activeWorkflow?.releaseId,
     activeWorkflow?.version,
     isTeamMode() && !activeWorkflow ? createWorkflowForTeamRun : undefined,
+    runEntryBlocked,
   );
   const liveRunRecord = useWorkflowRunRecord(
     workflowRun.runId,
@@ -753,10 +770,10 @@ function WorkflowEditorContent({
   }, [historicalChatSessionId, openHistoricalChatSession]);
 
   useEffect(() => {
-    if (!autoStartRun || autoStartHandled.current) return;
+    if (!autoStartRun || autoStartHandled.current || runEntryBlocked) return;
     autoStartHandled.current = true;
     workflowRun.startRun();
-  }, [autoStartRun, workflowRun]);
+  }, [autoStartRun, workflowRun, runEntryBlocked]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -950,7 +967,13 @@ function WorkflowEditorContent({
           <WorkflowEditorToolbar
             readOnly={readOnly}
             notice={
-              <WorkflowEditDraftNotice draft={editDraft} disabled={isSaving} />
+              <>
+                {entryNotice}
+                <WorkflowEditDraftNotice
+                  draft={editDraft}
+                  disabled={isSaving}
+                />
+              </>
             }
           >
             <div

@@ -38,6 +38,8 @@ vi.mock('@/components', () => ({
     readOnly,
     allowRun,
     assistantDraft,
+    runEntryBlocked,
+    entryNotice,
   }: {
     historicalRun?: {
       id: string;
@@ -47,13 +49,19 @@ vi.mock('@/components', () => ({
     readOnly?: boolean;
     allowRun?: boolean;
     assistantDraft?: boolean;
+    runEntryBlocked?: boolean;
+    entryNotice?: import('react').ReactNode;
   }) => (
-    <output
-      data-document={JSON.stringify(workflow)}
-      data-read-only={String(readOnly)}
-      data-allow-run={String(allowRun)}
-      data-assistant-draft={String(assistantDraft)}
-    >{`${historicalRun?.id ?? 'none'}:${liveRun}`}</output>
+    <>
+      {entryNotice}
+      <output
+        data-run-blocked={String(runEntryBlocked)}
+        data-document={JSON.stringify(workflow)}
+        data-read-only={String(readOnly)}
+        data-allow-run={String(allowRun)}
+        data-assistant-draft={String(assistantDraft)}
+      >{`${historicalRun?.id ?? 'none'}:${liveRun}`}</output>
+    </>
   ),
 }));
 vi.mock('@/stores', () => ({
@@ -309,7 +317,13 @@ it.each(['workflow', 'run'] as const)(
           ),
         ).toBeDefined(),
       );
-      expect(rendered.container.querySelector('output')).toBeNull();
+      const earlyEditor = rendered.container.querySelector('output');
+      if (delayed === 'workflow') {
+        expect(earlyEditor).toBeNull();
+      } else {
+        expect(earlyEditor).not.toBeNull();
+        expect(earlyEditor?.getAttribute('data-run-blocked')).toBe('true');
+      }
       expect(outputStore.setRunPanelOpen).not.toHaveBeenCalled();
       await act(async () => {
         release();
@@ -319,6 +333,13 @@ it.each(['workflow', 'run'] as const)(
           'old:true',
         ),
       );
+      if (earlyEditor)
+        expect(rendered.container.querySelector('output')).toBe(earlyEditor);
+      expect(
+        rendered.container
+          .querySelector('output')
+          ?.getAttribute('data-run-blocked'),
+      ).toBe('false');
       expect(outputStore.setRunPanelOpen).toHaveBeenCalledExactlyOnceWith(true);
       expect(outputStore.setShowRunOutput).toHaveBeenCalledExactlyOnceWith(
         true,
@@ -339,3 +360,55 @@ it.each(['workflow', 'run'] as const)(
     }
   },
 );
+
+it('shows the canvas while active-run discovery is pending and retries a failed discovery in place', async () => {
+  vi.clearAllMocks();
+  vi.mocked(getWorkflow).mockResolvedValue({ id: 'weather' } as Awaited<
+    ReturnType<typeof getWorkflow>
+  >);
+  let fail!: (error: Error) => void;
+  vi.mocked(listActiveRuns).mockImplementationOnce(
+    () =>
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+  );
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const rendered = renderComponent(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/workflows/weather']}>
+        <Routes>
+          <Route path='/workflows/:id' element={<Component />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  try {
+    await waitFor(() =>
+      expect(rendered.container.querySelector('output')).not.toBeNull(),
+    );
+    const canvas = rendered.container.querySelector('output')!;
+    expect(canvas.dataset.runBlocked).toBe('true');
+    await act(async () => fail(new Error('read failed')));
+    await waitFor(() =>
+      expect(
+        rendered.container.querySelector('[role="status"]')?.textContent,
+      ).toContain('workflowEditor.entryRunFailed'),
+    );
+    expect(canvas.dataset.runBlocked).toBe('true');
+    vi.mocked(listActiveRuns).mockResolvedValue([]);
+    await act(async () =>
+      rendered
+        .getByRole('button', { name: 'workflowEditor.entryRunRetry' })
+        .click(),
+    );
+    await waitFor(() => expect(canvas.dataset.runBlocked).toBe('false'));
+    expect(rendered.container.querySelector('output')).toBe(canvas);
+    expect(rendered.container.querySelector('[role="status"]')).toBeNull();
+  } finally {
+    rendered.unmount();
+    client.clear();
+  }
+});

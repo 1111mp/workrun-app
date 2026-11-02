@@ -118,6 +118,7 @@ function useWorkflowRun(
   releaseId?: string,
   releaseVersion?: string,
   ensureWorkflowId?: () => Promise<string>,
+  entryBlocked = false,
 ) {
   const { t } = useTranslation();
   const workspace = useWorkrunStore(
@@ -295,7 +296,7 @@ function useWorkflowRun(
   };
 
   const beginWorkflowRun = async (input: Record<string, unknown>) => {
-    if (starting.current || hasActiveRun) return;
+    if (entryBlocked || starting.current || hasActiveRun) return;
     starting.current = true;
     setIsStarting(true);
     try {
@@ -609,7 +610,8 @@ function useWorkflowRun(
   };
 
   const startRun = () => {
-    if (hasActiveRun || isStarting || activeRuns.isLoading) return;
+    if (entryBlocked || hasActiveRun || isStarting || activeRuns.isLoading)
+      return;
     if (settings.mode === 'chat') {
       const activeSession = store.activeChatSession;
       if (activeSession?.workflowId === workflowId) {
@@ -631,7 +633,11 @@ function useWorkflowRun(
   return {
     hasActiveRun,
     runStartDisabled:
-      hasActiveRun || isStarting || activeRuns.isLoading || activeRuns.isError,
+      entryBlocked ||
+      hasActiveRun ||
+      isStarting ||
+      activeRuns.isLoading ||
+      activeRuns.isError,
     isRunning: store.runStatus === 'running',
     runStatus: store.runStatus,
     startRun,

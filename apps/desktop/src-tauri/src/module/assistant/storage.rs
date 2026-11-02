@@ -90,6 +90,7 @@ fn metadata(session: &Value) -> Result<Value> {
             "pendingToolDecision",
             "workflowPlan",
             "responsePhaseId",
+            "reasoningEffort",
             "error",
             "steps",
         ]

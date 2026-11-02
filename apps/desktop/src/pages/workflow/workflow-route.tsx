@@ -1,15 +1,14 @@
 import { lazy, Suspense } from 'react';
 
+import {
+  loadNewWorkflowPage,
+  loadWorkflowPage,
+} from '@/lib/workflow-page-loader';
+
 import { WorkflowPageSkeleton } from './workflow-page-skeleton';
 
-const WorkflowPage = lazy(() =>
-  import('@/pages/workflow').then(({ Component }) => ({ default: Component })),
-);
-const NewWorkflowPage = lazy(() =>
-  import('@/pages/workflows/new').then(({ Component }) => ({
-    default: Component,
-  })),
-);
+const WorkflowPage = lazy(loadWorkflowPage);
+const NewWorkflowPage = lazy(loadNewWorkflowPage);
 
 // route.lazy waits for the whole editor module before committing navigation.
 // Keep these shells eager so every entry can navigate and show loading feedback

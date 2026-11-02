@@ -41,7 +41,7 @@ export function WorkspaceFrame({
         <SidebarProvider
           open={sidebarOpen}
           onOpenChange={setSidebarOpen}
-          className='workrun-shell h-dvh min-h-0 overflow-hidden'
+          className='workrun-shell workrun-navigation h-dvh min-h-0 overflow-hidden'
         >
           <AppSidebar accountMenu={accountMenu} />
           <SidebarInset className='workrun-surface min-h-0 min-w-0 overflow-hidden'>

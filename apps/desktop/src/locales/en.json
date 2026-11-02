@@ -715,6 +715,9 @@
     }
   },
   "workflowEditor": {
+    "entryRunLoading": "Loading run state. Running will be available when loading completes…",
+    "entryRunFailed": "Could not load run state. Retry before running the workflow.",
+    "entryRunRetry": "Retry",
     "editDraft": {
       "different": "Edits were stashed at {{time}}. The current canvas differs from that stash.",
       "stash": "Stash edits",

@@ -46,7 +46,7 @@ function active(status: RunRecordSummary['status']): RunRecordSummary {
   };
 }
 
-async function mount(runs: RunRecordSummary[]) {
+async function mount(runs: RunRecordSummary[], entryBlocked = false) {
   vi.clearAllMocks();
   useWorkflowRunStore.getState().resetRunView();
   vi.mocked(listActiveRuns).mockResolvedValue(runs);
@@ -56,10 +56,20 @@ async function mount(runs: RunRecordSummary[]) {
   client.setQueryData(['run-history', 'active', 'personal'], runs);
   const rendered = renderHook(
     () =>
-      useWorkflowRun('weather', [], [], {
-        mode: 'task',
-        inputSchema: { fields: [] },
-      } as unknown as WorkflowSettings),
+      useWorkflowRun(
+        'weather',
+        [],
+        [],
+        {
+          mode: 'task',
+          inputSchema: { fields: [] },
+        } as unknown as WorkflowSettings,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        entryBlocked,
+      ),
     {
       wrapper: ({ children }) => (
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -273,4 +283,19 @@ it('does not launch after navigation while App preparation is pending', async ()
   });
   expect(stop).toHaveBeenCalledOnce();
   expect(startBackgroundWorkflowRun).not.toHaveBeenCalled();
+});
+
+it('blocks both launch paths while entry run reconstruction is pending', async () => {
+  const view = await mount([], true);
+  try {
+    expect(view.hook.runStartDisabled).toBe(true);
+    await act(async () => {
+      view.hook.startRun();
+      view.hook.startWorkflowRun({});
+    });
+    expect(startBackgroundWorkflowRun).not.toHaveBeenCalled();
+    expect(listActiveRuns).not.toHaveBeenCalled();
+  } finally {
+    await view.close();
+  }
 });

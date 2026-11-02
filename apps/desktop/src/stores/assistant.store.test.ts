@@ -863,3 +863,18 @@ it('prepends older messages and preserves live state and loaded history across b
   ]);
   expect(current(session.id).history?.hasMore).toBe(true);
 });
+
+it('persists reasoning effort on creation and updates without replacing history', async () => {
+  const session = await createAssistantSession('model', 'Work', scope, 'high');
+  expect(current(session.id).reasoningEffort).toBe('high');
+  await sendAssistantMessage(session.id, 'Hello', scope);
+  const messages = current(session.id).messages;
+  await setAssistantModel(session.id, 'other', scope, 'low');
+  expect(current(session.id).reasoningEffort).toBe('low');
+  expect(current(session.id).messages).toEqual(messages);
+  expect((host.saved.get(session.id) as AssistantSession).reasoningEffort).toBe(
+    'low',
+  );
+  await setAssistantModel(session.id, 'model', scope);
+  expect(current(session.id).reasoningEffort).toBeNull();
+});

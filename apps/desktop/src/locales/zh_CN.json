@@ -703,6 +703,9 @@
     }
   },
   "workflowEditor": {
+    "entryRunLoading": "正在加载运行状态，完成后可运行流程…",
+    "entryRunFailed": "运行状态加载失败，请重试后运行流程。",
+    "entryRunRetry": "重试",
     "editDraft": {
       "different": "编辑已于 {{time}} 暂存，当前画布与该暂存内容不同。",
       "stash": "暂存编辑",

@@ -35,6 +35,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate } from 'react-router';
 
 import { useConfirm } from '@/lib/confirm-context';
+import { preloadWorkflowPage } from '@/lib/workflow-page-loader';
 import { runDetailsPath } from '@/services/run-center';
 import { deleteRunRecord, listRunHistoryPage } from '@/services/run-history';
 import { useWorkrunStore } from '@/stores';
@@ -130,7 +131,25 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
               tooltip={t('start.newTask')}
               aria-label={t('start.newTask')}
               render={
-                <Link to='/start' state={{ reset: key }} viewTransition />
+                <Link
+                  to='/start'
+                  state={{ reset: key }}
+                  viewTransition
+                  onClick={(event) => {
+                    if (
+                      (pathname === '/start' || pathname === '/') &&
+                      !currentSessionId &&
+                      event.button === 0 &&
+                      !event.metaKey &&
+                      !event.ctrlKey &&
+                      !event.shiftKey &&
+                      !event.altKey
+                    ) {
+                      event.preventDefault();
+                      setOpenMobile(false);
+                    }
+                  }}
+                />
               }
             >
               <SquarePen />
@@ -152,7 +171,37 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                       !new URLSearchParams(search).get('session')
                     : pathname === to || pathname.startsWith(`${to}/`)
                 }
-                render={<Link to={to} viewTransition />}
+                render={
+                  <Link
+                    to={to}
+                    onMouseEnter={() => {
+                      if (to === '/workflows') preloadWorkflowPage();
+                    }}
+                    onFocus={() => {
+                      if (to === '/workflows') preloadWorkflowPage();
+                    }}
+                    viewTransition
+                    onClick={(event) => {
+                      const isCurrentPage =
+                        to === '/start'
+                          ? (pathname === '/start' || pathname === '/') &&
+                            !currentSessionId
+                          : pathname === to;
+                      if (
+                        isCurrentPage &&
+                        event.button === 0 &&
+                        !event.metaKey &&
+                        !event.ctrlKey &&
+                        !event.shiftKey &&
+                        !event.altKey
+                      ) {
+                        // Preserve the location key so the current page stays mounted.
+                        event.preventDefault();
+                        setOpenMobile(false);
+                      }
+                    }}
+                  />
+                }
               >
                 <Icon />
                 <span>{label}</span>
@@ -246,6 +295,14 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                   render={
                     <Link
                       to={runDetailsPath(run)}
+                      onMouseEnter={() => {
+                        if (run.targetType === 'workflow')
+                          preloadWorkflowPage();
+                      }}
+                      onFocus={() => {
+                        if (run.targetType === 'workflow')
+                          preloadWorkflowPage();
+                      }}
                       // Selecting another App run only changes the drawer, not the page.
                       viewTransition={
                         run.targetType !== 'app' || pathname !== '/apps'

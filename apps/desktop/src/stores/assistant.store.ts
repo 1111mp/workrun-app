@@ -30,6 +30,7 @@ type AssistantState = {
     modelId: string,
     title: string,
     scope: string,
+    reasoningEffort?: ReasoningEffort,
   ) => Promise<AssistantSession>;
   loadAssistantSession: (
     id: string,
@@ -54,6 +55,7 @@ type AssistantState = {
     id: string,
     modelId: string,
     scope: string,
+    reasoningEffort?: ReasoningEffort,
   ) => Promise<void>;
   setAssistantFeedback: (
     id: string,
@@ -107,12 +109,14 @@ export const useAssistantStore = create<AssistantState>()(
       modelId: string,
       title: string,
       scope: string,
+      reasoningEffort?: ReasoningEffort,
     ) {
       ensureWorkspace(scope);
       const session: AssistantSession = {
         id: crypto.randomUUID(),
         title: title.slice(0, 72),
         modelId,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         messages: [],
         status: 'idle',
         steps: 0,
@@ -175,7 +179,12 @@ export const useAssistantStore = create<AssistantState>()(
       if (latest(id).status === 'needs_input')
         await act(id, scope, { kind: 'decline' });
     },
-    async setAssistantModel(id: string, modelId: string, scope: string) {
+    async setAssistantModel(
+      id: string,
+      modelId: string,
+      scope: string,
+      reasoningEffort?: ReasoningEffort,
+    ) {
       ensureWorkspace(scope);
       const session = latest(id);
       if (
@@ -185,7 +194,11 @@ export const useAssistantStore = create<AssistantState>()(
         throw new Error(
           'Wait for the current response before changing its model.',
         );
-      const updated = { ...session, modelId };
+      const updated = {
+        ...session,
+        modelId,
+        reasoningEffort: reasoningEffort ?? null,
+      };
       await saveAssistantSession(updated);
       ensureWorkspace(scope);
     },

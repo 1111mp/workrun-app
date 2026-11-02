@@ -163,3 +163,22 @@ async fn draft_and_final_message_use_the_same_encoded_size_limit() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[tokio::test]
+async fn reasoning_effort_survives_session_reload_and_can_be_cleared() {
+    let pool = pool().await;
+    let mut session = session(2);
+    session["reasoningEffort"] = json!("high");
+    save(&pool, "personal", &session).await.unwrap();
+    let restored = load(&pool, "personal", session["id"].as_str().unwrap(), None, false)
+        .await
+        .unwrap();
+    assert_eq!(restored["reasoningEffort"], "high");
+    assert_eq!(restored["messages"], session["messages"]);
+    session["reasoningEffort"] = Value::Null;
+    save(&pool, "personal", &session).await.unwrap();
+    let restored = load(&pool, "personal", session["id"].as_str().unwrap(), None, false)
+        .await
+        .unwrap();
+    assert!(restored["reasoningEffort"].is_null());
+}

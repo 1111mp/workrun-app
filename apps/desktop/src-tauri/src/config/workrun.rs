@@ -47,6 +47,28 @@ pub struct ModelDefinition {
     pub model: String,
 }
 
+impl ModelDefinition {
+    /// Only advertise effort levels our provider adapter actually forwards.
+    pub fn effort_options(&self) -> &'static [&'static str] {
+        match self.provider {
+            ModelProvider::OpenAi | ModelProvider::OpenAiStrict if self.model.starts_with("gpt-5") => {
+                &["low", "medium", "high"]
+            },
+            ModelProvider::Anthropic
+                if matches!(
+                    self.model.as_str(),
+                    "claude-sonnet-5" | "claude-opus-5" | "claude-fable-5"
+                ) =>
+            {
+                &["low", "medium", "high"]
+            },
+            ModelProvider::Gemini if self.model.starts_with("gemini-3") => &["low", "high"],
+            ModelProvider::DeepSeek if self.model.starts_with("deepseek-v4") => &["high", "max"],
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProviderHeader {
     pub name: String,
@@ -455,5 +477,27 @@ mod header_tests {
         assert!(credential.request_headers().is_err());
         credential.headers.clear();
         assert!(credential.request_headers().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod effort_tests {
+    use super::*;
+
+    #[test]
+    fn effort_options_do_not_confuse_haiku_4_5_with_claude_5() {
+        let catalog = model_catalog();
+        let options = |name: &str| {
+            catalog
+                .iter()
+                .find(|model| model.model == name)
+                .unwrap()
+                .effort_options()
+        };
+        assert!(options("claude-haiku-4-5").is_empty());
+        assert_eq!(options("claude-sonnet-5"), &["low", "medium", "high"]);
+        assert_eq!(options("claude-opus-5"), &["low", "medium", "high"]);
+        assert_eq!(options("deepseek-v4-flash"), &["high", "max"]);
+        assert_eq!(options("gemini-3.1-pro-preview"), &["low", "high"]);
     }
 }

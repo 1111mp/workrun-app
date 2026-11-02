@@ -11,6 +11,7 @@ import type { WorkflowEditDraft } from '@/services/workflow-edit-draft';
 
 const drafts = vi.hoisted(() => ({
   localized: false,
+  runGate: undefined as Promise<void> | undefined,
   record: null as WorkflowEditDraft | null,
   saved: null as WorkflowDocument | null,
   expectedRevision: undefined as string | undefined,
@@ -133,16 +134,19 @@ vi.mock('@/services/run-history', async (importOriginal) => ({
       },
     ],
   }),
-  inspectRunRecord: async (id: string) => ({
-    id,
-    targetType: 'workflow',
-    targetId: 'weather',
-    runtime: { threadId: 'thread-old' },
-    events: [],
-    spans: [],
-    input: {},
-    status: 'completed',
-  }),
+  inspectRunRecord: async (id: string) => {
+    await drafts.runGate;
+    return {
+      id,
+      targetType: 'workflow',
+      targetId: 'weather',
+      runtime: { threadId: 'thread-old' },
+      events: [],
+      spans: [],
+      input: {},
+      status: 'completed',
+    };
+  },
 }));
 
 import { ConfirmProvider } from '@/components/confirm-dialog';
@@ -155,6 +159,7 @@ import { WorkflowRoute as Component } from './workflow-route';
 
 beforeEach(() => {
   drafts.localized = false;
+  drafts.runGate = undefined;
   drafts.record = null;
   drafts.saved = null;
   drafts.expectedRevision = undefined;
@@ -375,5 +380,51 @@ it('stashes personal edits, restores them on reentry, and saves with the checked
     expect(drafts.expectedRevision).toBe('revision-1');
   } finally {
     await second.close();
+  }
+});
+
+it('allows editing the canvas before run history finishes without remounting it', async () => {
+  drafts.localized = true;
+  let release!: () => void;
+  drafts.runGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.viewport(1280, 900);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const router = createMemoryRouter([{ path: '/workflows/:id', Component }], {
+    initialEntries: ['/workflows/weather?runId=old'],
+  });
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <ConfirmProvider>
+        <RouterProvider router={router} />
+      </ConfirmProvider>
+    </QueryClientProvider>,
+  );
+  try {
+    const name = screen.getByRole('textbox', {
+      name: '工作流名称',
+      exact: true,
+    });
+    await expect.element(name).toBeVisible();
+    const original = name.element();
+    await expect
+      .element(screen.getByText(zh.workflowEditor.entryRunLoading))
+      .toBeVisible();
+    await name.fill('Edited before history loaded');
+    await expect
+      .element(screen.getByRole('button', { name: '运行', exact: true }))
+      .toBeDisabled();
+    release();
+    await expect.element(screen.getByRole('dialog')).toBeVisible();
+    await expect.element(name).toHaveValue('Edited before history loaded');
+    expect(name.element()).toBe(original);
+  } finally {
+    release();
+    await screen.unmount();
+    router.dispose();
+    client.clear();
   }
 });

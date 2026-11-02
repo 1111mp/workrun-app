@@ -39,6 +39,7 @@ import { toast } from 'sonner';
 
 import { WorkflowImportButton } from '@/components/workflow-share-dialog';
 import { isTeamMode } from '@/lib/constant';
+import { preloadWorkflowPage } from '@/lib/workflow-page-loader';
 import {
   clearLegacyWorkflowDocument,
   createWorkflow,
@@ -58,7 +59,12 @@ function WorkflowCard({
   const { settings } = workflow.document;
   const inputCount = settings.inputSchema.fields.length;
   return (
-    <Card size='sm' className='workrun-library-card h-full'>
+    <Card
+      size='sm'
+      className='workrun-library-card h-full'
+      onMouseEnter={() => preloadWorkflowPage()}
+      onFocus={() => preloadWorkflowPage()}
+    >
       <CardHeader className='workrun-library-card-header'>
         <div className='flex min-w-0 items-center gap-3'>
           <div className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-700 dark:text-violet-300'>
@@ -273,7 +279,14 @@ function WorkflowsPage() {
           <Button
             size='sm'
             nativeButton={false}
-            render={<Link to='/workflows/new' viewTransition />}
+            render={
+              <Link
+                onMouseEnter={() => preloadWorkflowPage(true)}
+                onFocus={() => preloadWorkflowPage(true)}
+                to='/workflows/new'
+                viewTransition
+              />
+            }
           >
             <PlusIcon data-icon='inline-start' />
             {t('workflows.create')}
@@ -321,7 +334,13 @@ function WorkflowsPage() {
             <EmptyContent>
               <Button
                 nativeButton={false}
-                render={<Link to='/workflows/new' />}
+                render={
+                  <Link
+                    onMouseEnter={() => preloadWorkflowPage(true)}
+                    onFocus={() => preloadWorkflowPage(true)}
+                    to='/workflows/new'
+                  />
+                }
               >
                 <PlusIcon data-icon='inline-start' />
                 {t('workflows.create')}

@@ -22,11 +22,14 @@ type ModelProvider =
   | 'groq'
   | 'ollama';
 
+type ReasoningEffort = 'low' | 'medium' | 'high' | 'max';
+
 type ModelDefinition = {
   id: string;
   name: string;
   provider: ModelProvider;
   model: string;
+  effortOptions?: ReasoningEffort[];
 };
 
 type ProviderHeader = { name: string; value: string };

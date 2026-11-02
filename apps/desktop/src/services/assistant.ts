@@ -136,6 +136,7 @@ export type AssistantSession = {
   id: string;
   title: string;
   modelId: string;
+  reasoningEffort?: ReasoningEffort | null;
   messages: AssistantMessage[];
   status:
     | 'idle'

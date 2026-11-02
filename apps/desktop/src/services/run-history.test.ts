@@ -57,3 +57,46 @@ it('reconstructs events and spans from bounded pages using the inspection snapsh
   expect(record.spans.map((span) => span.id)).toEqual(['b', 'a']);
   expect(invoke).toHaveBeenCalledTimes(5);
 });
+
+it('starts span reads before slow event reads finish and waits for both streams', async () => {
+  let releaseEvents!: (value: unknown) => void;
+  let releaseSpans!: (value: unknown) => void;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === 'run_history_inspect')
+      return {
+        id: 'run',
+        lastSequence: 0,
+        lastSpanId: 'a',
+        events: [],
+        spans: [],
+      };
+    if (command === 'run_history_events_page')
+      return new Promise((resolve) => {
+        releaseEvents = resolve;
+      });
+    if (command === 'run_history_spans_page')
+      return new Promise((resolve) => {
+        releaseSpans = resolve;
+      });
+    throw new Error(`Unexpected command ${command}`);
+  });
+  let finished = false;
+  const pending = inspectRunRecord('run').then((record) => {
+    finished = true;
+    return record;
+  });
+  await vi.waitFor(() => {
+    expect(releaseEvents).toBeDefined();
+    expect(releaseSpans).toBeDefined();
+  });
+  releaseSpans({ items: [{ id: 'a', startedAt: 'now' }], nextCursor: null });
+  await Promise.resolve();
+  expect(finished).toBe(false);
+  releaseEvents({
+    items: [{ sequence: 0, event: {}, createdAt: 'now' }],
+    nextCursor: null,
+  });
+  const record = await pending;
+  expect(record.events).toHaveLength(1);
+  expect(record.spans).toHaveLength(1);
+});

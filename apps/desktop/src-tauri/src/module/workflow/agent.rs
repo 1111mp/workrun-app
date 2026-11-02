@@ -282,6 +282,21 @@ pub(crate) fn create_model_with_thinking(
     config: &IWorkrun,
     include_thoughts: bool,
 ) -> Result<Arc<dyn Llm>> {
+    create_model_with_effort(model, config, include_thoughts, None)
+}
+
+pub(crate) fn create_model_with_effort(
+    model: &ModelDefinition,
+    config: &IWorkrun,
+    include_thoughts: bool,
+    effort: Option<&str>,
+) -> Result<Arc<dyn Llm>> {
+    if let Some(effort) = effort {
+        anyhow::ensure!(
+            model.effort_options().contains(&effort),
+            "Unsupported reasoning effort for this model"
+        );
+    }
     let credential = config.credential_for(&model.provider);
     let headers = credential
         .map(|credential| credential.request_headers())
@@ -299,7 +314,12 @@ pub(crate) fn create_model_with_thinking(
         ModelProvider::Gemini => {
             let gemini = GeminiModel::new(api_key, &model.model)?;
             Arc::new(if include_thoughts {
-                gemini.with_thinking_config(conversation_thinking_config(&model.model))
+                gemini.with_thinking_config(if let Some(effort) = effort {
+                    conversation_thinking_config(&model.model)
+                        .with_thinking_level(serde_json::from_value(serde_json::json!(effort))?)
+                } else {
+                    conversation_thinking_config(&model.model)
+                })
             } else {
                 gemini
             })
@@ -310,6 +330,11 @@ pub(crate) fn create_model_with_thinking(
                 Some(url) => OpenAIConfig::compatible(api_key, url, &model.model),
                 None => OpenAIConfig::new(api_key, &model.model),
             };
+            let config = if let Some(effort) = effort {
+                config.with_reasoning_effort(serde_json::from_value(serde_json::json!(effort))?)
+            } else {
+                config
+            };
             if headers.is_empty() {
                 Arc::new(OpenAIClient::new(config)?)
             } else {
@@ -317,6 +342,9 @@ pub(crate) fn create_model_with_thinking(
                     .with_provider_name("openai");
                 if let Some(url) = base_url {
                     compatible = compatible.with_base_url(url);
+                }
+                if let Some(effort) = effort {
+                    compatible = compatible.with_reasoning_effort(serde_json::from_value(serde_json::json!(effort))?);
                 }
                 Arc::new(HeaderOpenAi(
                     adk_rust::model::openai::OpenAICompatible::new(compatible)?.with_default_headers(headers)?,
@@ -328,12 +356,26 @@ pub(crate) fn create_model_with_thinking(
                 Some(url) => AnthropicConfig::new(api_key, &model.model).with_base_url(url),
                 None => AnthropicConfig::new(api_key, &model.model),
             };
+            let config = if let Some(effort) = effort {
+                config
+                    .with_thinking_mode(adk_rust::model::anthropic::ThinkingMode::Adaptive)
+                    .with_effort(serde_json::from_value(serde_json::json!(effort))?)
+            } else {
+                config
+            };
             Arc::new(AnthropicClient::new(config)?.with_default_headers(headers))
         },
         ModelProvider::DeepSeek => {
             let config = match base_url {
                 Some(url) => DeepSeekConfig::new(api_key, &model.model).with_base_url(url),
                 None => DeepSeekConfig::new(api_key, &model.model),
+            };
+            let config = if let Some(effort) = effort {
+                config
+                    .with_thinking(true)
+                    .with_reasoning_effort(serde_json::from_value(serde_json::json!(effort))?)
+            } else {
+                config
             };
             Arc::new(DeepSeekClient::new(config)?)
         },
@@ -1063,11 +1105,14 @@ mod usage_snapshot_tests {
     #[tokio::test]
     async fn model_provider_options_reach_requests() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for (provider, include_thoughts) in [
-            (ModelProvider::OpenAi, false),
-            (ModelProvider::Anthropic, false),
-            (ModelProvider::DeepSeek, false),
-            (ModelProvider::DeepSeek, true),
+        for (provider, include_thoughts, effort) in [
+            (ModelProvider::OpenAi, false, None),
+            (ModelProvider::Anthropic, false, None),
+            (ModelProvider::DeepSeek, false, None),
+            (ModelProvider::DeepSeek, true, None),
+            (ModelProvider::OpenAi, true, Some("high")),
+            (ModelProvider::Anthropic, true, Some("low")),
+            (ModelProvider::DeepSeek, true, Some("max")),
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
@@ -1120,15 +1165,25 @@ mod usage_snapshot_tests {
                 provider_credentials: vec![credential],
                 ..Default::default()
             };
-            let model = create_model_with_thinking(
+            let model_name = if effort.is_none() {
+                "test-model"
+            } else if anthropic {
+                "claude-sonnet-5"
+            } else if deepseek {
+                "deepseek-v4-pro"
+            } else {
+                "gpt-5.6"
+            };
+            let model = create_model_with_effort(
                 &ModelDefinition {
                     id: "test".into(),
                     name: "test".into(),
                     provider,
-                    model: "test-model".into(),
+                    model: model_name.into(),
                 },
                 &config,
                 include_thoughts,
+                effort,
             )
             .unwrap();
             let request = adk_rust::LlmRequest::new("test-model", vec![Content::new("user").with_text("hello")]);
@@ -1136,14 +1191,24 @@ mod usage_snapshot_tests {
             let response = responses.next().await.unwrap().unwrap();
             assert_eq!(response.content.unwrap().parts[0].text(), Some("ok"));
             let request = server.await.unwrap().to_lowercase();
-            if deepseek {
+            let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            if let Some(effort) = effort {
+                if anthropic {
+                    assert_eq!(body["output_config"]["effort"], effort);
+                    assert_eq!(body["thinking"]["type"], "adaptive");
+                } else {
+                    assert_eq!(body["reasoning_effort"], effort);
+                }
+            }
+            if deepseek && effort.is_none() {
                 let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
                 assert!(body.get("thinking").is_none_or(Value::is_null));
                 assert!(body.get("reasoning_effort").is_none_or(Value::is_null));
                 assert_eq!(body["model"], "test-model");
                 assert_eq!(body["stream"], false);
                 assert_eq!(body["messages"].as_array().unwrap().len(), 1);
-            } else {
+            }
+            if !deepseek {
                 assert!(request.contains("x-tenant-id: team-test\r\n"));
             }
             if anthropic {

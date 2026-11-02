@@ -10,7 +10,7 @@ use crate::{
     module::{
         run_history::RunHistoryStore,
         run_manager::{self, StartWorkflowRun},
-        workflow::agent::create_model_with_thinking,
+        workflow::agent::create_model_with_effort,
     },
     utils::dirs,
 };
@@ -213,6 +213,19 @@ pub async fn renderer_save(session: Value) -> Result<()> {
     super::storage::with_writer(Default::default(), renderer_save_inner(session)).await
 }
 async fn renderer_save_inner(session: Value) -> Result<()> {
+    let definition = model_catalog()
+        .into_iter()
+        .find(|model| Some(model.id.as_str()) == session["modelId"].as_str())
+        .context("Select a valid assistant model")?;
+    if !session["reasoningEffort"].is_null() {
+        let effort = session["reasoningEffort"]
+            .as_str()
+            .context("Invalid reasoning effort")?;
+        anyhow::ensure!(
+            definition.effort_options().contains(&effort),
+            "Unsupported reasoning effort for this model"
+        );
+    }
     let pool = DBManager::global().pool()?;
     let workspace = dirs::active_workspace_id();
     let _lease = acquire(&workspace, session["id"].as_str().context("session ID is missing")?)?;
@@ -236,6 +249,7 @@ async fn renderer_save_inner(session: Value) -> Result<()> {
             }
             old["modelId"] = json!(model_id);
         }
+        old["reasoningEffort"] = session["reasoningEffort"].clone();
         let requested = session["messages"].as_array().context("messages are missing")?;
         for message in old["messages"].as_array_mut().context("stored messages are invalid")? {
             if message["role"] == "assistant"
@@ -674,7 +688,7 @@ async fn drive(
             .into_iter()
             .find(|definition| definition.id == model_id)
             .context("Select a valid assistant model")?;
-        let model = create_model_with_thinking(&definition, &config, true)?;
+        let model = create_model_with_effort(&definition, &config, true, session["reasoningEffort"].as_str())?;
         let runtime = AssistantRuntime::load(&dirs::app_home_dir()?)?;
         let catalog = Catalog::load(team_token).await?;
         let contents = session["messages"]

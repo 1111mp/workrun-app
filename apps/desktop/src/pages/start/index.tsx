@@ -15,12 +15,6 @@ import {
   MessageScrollerContent,
   MessageScrollerItem,
   MessageScrollerProvider,
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Skeleton,
 } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
@@ -49,6 +43,7 @@ import { useAssistantStore } from '@/stores/assistant.store';
 
 import { AssistantMessageActions } from './assistant-message-actions';
 import { AssistantMessageText } from './assistant-message-text';
+import { AssistantModelSelector } from './assistant-model-selector';
 import { AssistantToolConfirmationCard } from './assistant-tool-confirmation';
 import { groupAssistantMessages } from './assistant-turn';
 import { AssistantTurnThinking } from './assistant-turn-activity';
@@ -129,6 +124,7 @@ function AssistantChat({ scope }: { scope: string }) {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [files, setFiles] = useState<ArtifactRef[]>([]);
   const [chosenModel, setChosenModel] = useState('');
+  const [chosenEffort, setChosenEffort] = useState<ReasoningEffort | null>();
   const modelPreferenceKey = `assistant:last-model:${scope}`;
   const [lastModel] = useState(() => {
     try {
@@ -240,6 +236,20 @@ function AssistantChat({ scope }: { scope: string }) {
         ),
     )?.id ||
     '';
+  const requestedEffort =
+    chosenEffort === undefined
+      ? modelId === session?.modelId
+        ? session.reasoningEffort
+        : undefined
+      : chosenEffort;
+  // A pending catalog is not evidence that a saved effort is unsupported.
+  const effort =
+    models.data === undefined ||
+    models.data
+      .find((model) => model.id === modelId)
+      ?.effortOptions?.includes(requestedEffort as ReasoningEffort)
+      ? (requestedEffort ?? undefined)
+      : undefined;
   const busy =
     creating || session?.status === 'thinking' || session?.status === 'running';
   const active = session?.activeCall;
@@ -262,9 +272,13 @@ function AssistantChat({ scope }: { scope: string }) {
           modelId,
           draft.trim() || t('assistant.fileTask'),
           scope,
+          effort,
         ));
-      if (current.modelId !== modelId)
-        await setAssistantModel(current.id, modelId, scope);
+      if (
+        current.modelId !== modelId ||
+        (current.reasoningEffort ?? undefined) !== effort
+      )
+        await setAssistantModel(current.id, modelId, scope, effort);
       const text = draft.trim();
       const attachments = files;
       setDraft('');
@@ -832,48 +846,23 @@ function AssistantChat({ scope }: { scope: string }) {
         )}
         <WorkflowChatComposer
           toolbarActions={
-            <Select
-              value={modelId || null}
-              onValueChange={(value) => {
-                if (!value) return;
+            <AssistantModelSelector
+              models={models.data ?? []}
+              modelId={modelId}
+              effort={effort}
+              disabled={Boolean(busy || active)}
+              onEffortChange={(value) => setChosenEffort(value ?? null)}
+              onModelChange={(value) => {
                 setChosenModel(value);
-                // Keep new-chat defaults separate from each conversation's model.
+                // A model change must not carry an incompatible effort into its request.
+                setChosenEffort(null);
                 try {
                   localStorage.setItem(modelPreferenceKey, value);
                 } catch {
-                  // Model selection still works when local storage is unavailable.
+                  // Selection still works when local storage is unavailable.
                 }
               }}
-            >
-              <SelectTrigger
-                className='max-w-40 border-none! bg-transparent! focus-visible:ring-0 sm:max-w-64'
-                aria-label={t('assistant.model')}
-              >
-                <SelectValue placeholder={t('assistant.selectModel')}>
-                  {models.data?.find((model) => model.id === modelId)?.name}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent className='max-h-[min(24rem,var(--available-height))] w-max max-w-[min(22rem,calc(100vw-2rem))] min-w-(--anchor-width)'>
-                <SelectGroup>
-                  {models.data?.map((model) => (
-                    <SelectItem
-                      key={model.id}
-                      value={model.id}
-                      className='[&>span:first-child]:min-w-0 [&>span:first-child]:shrink [&>span:first-child]:whitespace-normal'
-                    >
-                      <span className='flex min-w-0 flex-col gap-0.5'>
-                        <span className='wrap-anywhere whitespace-normal'>
-                          {model.name}
-                        </span>
-                        <span className='text-muted-foreground text-xs'>
-                          {model.provider}
-                        </span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+            />
           }
           fileInputs={[{ ...attachmentsField, label: t('assistant.files') }]}
           filesForInput={() => files}

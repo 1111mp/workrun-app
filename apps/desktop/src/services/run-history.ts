@@ -323,34 +323,42 @@ export async function inspectRunRecord(id: string) {
   const record = await invoke<RunRecord>('run_history_inspect', { id });
   // Reconstructing a graph requires its event sequence. Read bounded pages up
   // to the snapshot cursor so a live stream cannot make this loop grow forever.
-  let after = -1;
-  do {
-    const page = await invoke<{
-      items: RunEvent[];
-      nextCursor: number | null;
-    }>('run_history_events_page', {
-      id,
-      after,
-      through: record.lastSequence,
-    });
-    record.events.push(...page.items);
-    if (page.nextCursor === null) break;
-    after = page.nextCursor;
-  } while (after < record.lastSequence);
-  let spanAfter = '';
-  for (;;) {
-    const page = await invoke<{
-      items: RunSpan[];
-      nextCursor: string | null;
-    }>('run_history_spans_page', {
-      id,
-      after: spanAfter,
-      through: record.lastSpanId ?? '',
-    });
-    record.spans.push(...page.items);
-    if (page.nextCursor === null) break;
-    spanAfter = page.nextCursor;
-  }
+  // Both streams use the same frozen snapshot cursor and are independent.
+  // Keep pages ordered within each stream while reading the streams in parallel.
+  await Promise.all([
+    (async () => {
+      let after = -1;
+      do {
+        const page = await invoke<{
+          items: RunEvent[];
+          nextCursor: number | null;
+        }>('run_history_events_page', {
+          id,
+          after,
+          through: record.lastSequence,
+        });
+        record.events.push(...page.items);
+        if (page.nextCursor === null) break;
+        after = page.nextCursor;
+      } while (after < record.lastSequence);
+    })(),
+    (async () => {
+      let spanAfter = '';
+      for (;;) {
+        const page = await invoke<{
+          items: RunSpan[];
+          nextCursor: string | null;
+        }>('run_history_spans_page', {
+          id,
+          after: spanAfter,
+          through: record.lastSpanId ?? '',
+        });
+        record.spans.push(...page.items);
+        if (page.nextCursor === null) break;
+        spanAfter = page.nextCursor;
+      }
+    })(),
+  ]);
   record.spans.sort(
     (left, right) =>
       left.startedAt.localeCompare(right.startedAt) ||

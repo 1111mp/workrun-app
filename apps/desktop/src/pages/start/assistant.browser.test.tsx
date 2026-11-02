@@ -36,6 +36,7 @@ const host = vi.hoisted(() => {
     inspect: vi.fn(),
     saved,
     compactCatalog: false,
+    catalogGate: undefined as Promise<void> | undefined,
     snapshotGate: undefined as Promise<void> | undefined,
     listeners,
     sequences,
@@ -64,11 +65,17 @@ vi.mock('@/stores', () => ({
   useRunWorkspaceStore: { getState: () => ({ openRun: vi.fn() }) },
 }));
 vi.mock('@/services/cmd', () => ({
-  getModelCatalog: async () =>
-    host.compactCatalog
+  getModelCatalog: async () => {
+    await host.catalogGate;
+    return host.compactCatalog
       ? [
           { id: 'model', name: 'Gemini 3.5 Flash Lite', provider: 'gemini' },
-          { id: 'other', name: 'GPT-5.6', provider: 'open_ai' },
+          {
+            id: 'other',
+            name: 'GPT-5.6',
+            provider: 'open_ai',
+            effortOptions: ['low', 'medium', 'high'],
+          },
         ]
       : [
           { id: 'model', name: 'Test model', provider: 'ollama' },
@@ -82,7 +89,8 @@ vi.mock('@/services/cmd', () => ({
             name: '支持长上下文与复杂推理任务的工作助手模型预览版本',
             provider: 'open_ai',
           },
-        ],
+        ];
+  },
 }));
 vi.mock('@/services/process-node', () => ({
   prepareWorkflowProcessApps: async (dsl: unknown) => dsl,
@@ -322,6 +330,7 @@ beforeEach(() => {
   host.saved.clear();
   host.listeners.clear();
   host.compactCatalog = false;
+  host.catalogGate = undefined;
   host.snapshotGate = undefined;
   useAssistantStore.setState({ sessions: {}, scopes: {}, streams: {} });
   host.start.mockResolvedValue(undefined);
@@ -449,9 +458,9 @@ it('remembers the selected model when opening a new conversation', async () => {
     </QueryClientProvider>
   );
   const screen = await render(chat('first'));
-  const selector = screen.getByRole('combobox', { name: '主控模型' });
+  const selector = screen.getByRole('button', { name: '主控模型' });
   await selector.click();
-  await screen.getByRole('option', { name: /GPT-5.6/ }).click();
+  await screen.getByRole('menuitemradio', { name: /GPT-5.6/ }).click();
   await screen.rerender(chat('new'));
   await expect.poll(() => selector.element().textContent).toContain('GPT-5.6');
 });
@@ -529,16 +538,18 @@ it.each([1280, 390])(
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    await screen.getByRole('combobox', { name: '主控模型' }).click();
+    await screen.getByRole('button', { name: '主控模型' }).click();
     await expect
       .element(
-        screen.getByRole('option', { name: /Gemini 3.5 Flash Lite Preview/ }),
+        screen.getByRole('menuitemradio', {
+          name: /Gemini 3.5 Flash Lite Preview/,
+        }),
       )
       .toBeVisible();
     const option = screen
-      .getByRole('option', { name: /Gemini 3.5 Flash Lite Preview/ })
+      .getByRole('menuitemradio', { name: /Gemini 3.5 Flash Lite Preview/ })
       .element();
-    const popupElement = option.closest('[data-slot="select-content"]')!;
+    const popupElement = option.closest('[data-slot="dropdown-menu-content"]')!;
     await expect
       .poll(() => popupElement.getBoundingClientRect().width)
       .toBeGreaterThanOrEqual(Math.min(351, width - 33));
@@ -554,12 +565,12 @@ it.each([1280, 390])(
       .element();
     expect(longName.scrollWidth).toBeLessThanOrEqual(longName.clientWidth + 1);
     await screen
-      .getByRole('option', { name: /Gemini 3.5 Flash Lite Preview/ })
+      .getByRole('menuitemradio', { name: /Gemini 3.5 Flash Lite Preview/ })
       .click();
     await expect
       .poll(
         () =>
-          screen.getByRole('combobox', { name: '主控模型' }).element()
+          screen.getByRole('button', { name: '主控模型' }).element()
             .textContent,
       )
       .toContain('Gemini 3.5 Flash Lite Preview');
@@ -585,11 +596,15 @@ it('sizes the model menu to short model names instead of filling its maximum wid
   const composer = textbox.element().closest('[data-slot="input-group"]')!;
   expect(getComputedStyle(composer).cursor).toBe('text');
   expect(getComputedStyle(textbox.element()).cursor).toBe('text');
-  const trigger = screen.getByRole('combobox', { name: '主控模型' });
+  const trigger = screen.getByRole('button', { name: '主控模型' });
   await trigger.click();
-  const option = screen.getByRole('option', { name: /Gemini 3.5 Flash Lite/ });
+  const option = screen.getByRole('menuitemradio', {
+    name: /Gemini 3.5 Flash Lite/,
+  });
   await expect.element(option).toBeVisible();
-  const popup = option.element().closest('[data-slot="select-content"]')!;
+  const popup = option
+    .element()
+    .closest('[data-slot="dropdown-menu-content"]')!;
   await expect
     .poll(() => popup.getBoundingClientRect().width)
     .toBeLessThan(280);
@@ -1148,9 +1163,9 @@ it('switches the model for the next message in an existing conversation', async 
   await textbox.fill('第一条');
   await screen.getByRole('button', { name: '发送', exact: true }).click();
   await expect.element(textbox).toBeEnabled();
-  const selector = screen.getByRole('combobox', { name: '主控模型' });
+  const selector = screen.getByRole('button', { name: '主控模型' });
   await selector.click();
-  await screen.getByRole('option', { name: /GPT-5.6/ }).click();
+  await screen.getByRole('menuitemradio', { name: /GPT-5.6/ }).click();
   await textbox.fill('第二条');
   await screen.getByRole('button', { name: '发送', exact: true }).click();
   await expect.poll(() => host.reply.mock.calls.length).toBe(2);
@@ -1796,4 +1811,189 @@ it('loads an earlier history page without losing recent messages or the reading 
       .getByRole('button', { name: zh.assistant.history.loadEarlier })
       .elements(),
   ).toHaveLength(0);
+});
+
+it('selects reasoning effort, persists it with the message, and clears it for an unsupported model', async () => {
+  host.compactCatalog = true;
+  await page.viewport(1280, 900);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/start']}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await screen.getByRole('button', { name: '主控模型', exact: true }).click();
+  await screen
+    .getByRole('menuitemradio', { name: 'GPT-5.6', exact: true })
+    .click();
+  await screen.getByRole('button', { name: 'Effort', exact: true }).click();
+  await expect
+    .element(
+      screen.getByRole('menuitemradio', { name: 'Default', exact: true }),
+    )
+    .toHaveAttribute('aria-checked', 'true');
+  await screen
+    .getByRole('menuitemradio', { name: 'High', exact: true })
+    .click();
+  await expect
+    .element(screen.getByRole('button', { name: 'Effort', exact: true }))
+    .toHaveTextContent('High');
+  await screen.getByRole('button', { name: 'Effort', exact: true }).click();
+  await expect
+    .element(screen.getByRole('menuitemradio', { name: 'High', exact: true }))
+    .toHaveAttribute('aria-checked', 'true');
+  await screen
+    .getByRole('menuitemradio', { name: 'High', exact: true })
+    .click();
+  await screen.getByRole('textbox').fill('Use this model and effort');
+  await screen.getByRole('button', { name: '发送', exact: true }).click();
+  await expect
+    .poll(() => [...host.saved.values()][0]?.reasoningEffort)
+    .toBe('high');
+  await expect
+    .element(screen.getByRole('button', { name: '主控模型', exact: true }))
+    .toBeEnabled();
+  await screen.getByRole('button', { name: '主控模型', exact: true }).click();
+  await screen
+    .getByRole('menuitemradio', { name: 'Gemini 3.5 Flash Lite', exact: true })
+    .click();
+  await expect
+    .element(screen.getByRole('button', { name: 'Effort', exact: true }))
+    .not.toBeInTheDocument();
+});
+
+it.each([1280, 390])(
+  'anchors a long model menu to its trigger at %spx instead of its selected row',
+  async (width) => {
+    const { AssistantModelSelector } =
+      await import('./assistant-model-selector');
+    await page.viewport(width, 900);
+    const models: ModelDefinition[] = Array.from(
+      { length: 30 },
+      (_, index) => ({
+        id: `model-${index}`,
+        name: `Configured model ${index}`,
+        model: `gpt-5-model-${index}`,
+        provider: 'open_ai',
+        effortOptions: ['low', 'medium', 'high'],
+      }),
+    );
+    const screen = await render(
+      <div className='flex h-dvh items-end justify-end p-4'>
+        <AssistantModelSelector
+          models={models}
+          modelId='model-29'
+          onModelChange={() => {}}
+          onEffortChange={() => {}}
+        />
+      </div>,
+    );
+    const trigger = screen.getByRole('button', {
+      name: '主控模型',
+      exact: true,
+    });
+    await trigger.click();
+    const item = screen.getByRole('menuitemradio', {
+      name: 'Configured model 29',
+      exact: true,
+    });
+    await expect.element(item).toBeVisible();
+    const popup = item
+      .element()
+      .closest('[data-slot="dropdown-menu-content"]')!;
+    await expect
+      .poll(() => popup.getBoundingClientRect().bottom)
+      .toBeLessThanOrEqual(trigger.element().getBoundingClientRect().top);
+    const bounds = popup.getBoundingClientRect();
+    expect(bounds.bottom).toBeGreaterThanOrEqual(
+      trigger.element().getBoundingClientRect().top - 8,
+    );
+    expect(bounds.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(width);
+    await page.screenshot({
+      path: `.vitest/attachments/model-selector-${width}.png`,
+    });
+  },
+);
+
+it('opens the model menu below its trigger when there is room', async () => {
+  const { AssistantModelSelector } = await import('./assistant-model-selector');
+  await page.viewport(1280, 900);
+  const screen = await render(
+    <div className='flex justify-center pt-16'>
+      <AssistantModelSelector
+        models={[
+          { id: 'test', name: 'Test model', model: 'test', provider: 'ollama' },
+        ]}
+        modelId='test'
+        onModelChange={() => {}}
+        onEffortChange={() => {}}
+      />
+    </div>,
+  );
+  const trigger = screen.getByRole('button', { name: '主控模型', exact: true });
+  await trigger.click();
+  const item = screen.getByRole('menuitemradio', {
+    name: 'Test model',
+    exact: true,
+  });
+  await expect.element(item).toBeVisible();
+  const popup = item.element().closest('[data-slot="dropdown-menu-content"]')!;
+  await expect
+    .poll(() => popup.getBoundingClientRect().top)
+    .toBeGreaterThanOrEqual(trigger.element().getBoundingClientRect().bottom);
+  expect(popup.getAttribute('data-side')).toBe('bottom');
+});
+
+it('preserves a restored effort when sending before model capabilities finish loading', async () => {
+  host.compactCatalog = true;
+  let release!: () => void;
+  host.catalogGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  host.saved.set('history', {
+    id: 'history',
+    title: 'Saved effort',
+    modelId: 'other',
+    reasoningEffort: 'high',
+    status: 'idle',
+    steps: 0,
+    messages: [],
+  });
+  host.reply.mockResolvedValue({
+    text: 'Done',
+    content: { role: 'model', parts: [{ text: 'Done' }] },
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/start?session=history']}>
+        <div className='h-dvh'>
+          <StartPage />
+        </div>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  try {
+    await expect.element(screen.getByRole('textbox')).toBeEnabled();
+    await screen.getByRole('textbox').fill('Keep my saved effort');
+    await screen.getByRole('button', { name: '发送', exact: true }).click();
+    await expect
+      .poll(() => host.saved.get('history')?.messages.length)
+      .toBeGreaterThan(0);
+    expect(host.saved.get('history')?.reasoningEffort).toBe('high');
+  } finally {
+    release();
+    await screen.unmount();
+    client.clear();
+  }
 });
