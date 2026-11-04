@@ -1,13 +1,48 @@
 ---
 title: Schedule Apps and Workflows
-description: Run a local App or Workflow on a durable, timezone-aware Cron schedule.
+description: Create and manage one-time or recurring App and Workflow schedules through conversation, with explicit time zones.
 ---
 
-Schedules let Workrun start an App or Workflow at defined times without requiring you to start each run manually. They are stored locally and resume scheduling when Workrun is opened again.
+Open **Scheduled tasks** in the sidebar to arrange App or Workflow runs through conversation. You can create one-time or recurring tasks without starting each run manually. They are stored locally and resume scheduling when Workrun is opened again.
 
 > Schedules run only while the Workrun desktop app is open. They are not a hosted background service; keep Workrun running for time-critical automation.
 
-## Create and manage a schedule
+## Start from Scheduled tasks
+
+![Scheduled tasks entry page with the sidebar entry, conversation composer, and Task list tab.](/media/schedules/03-scheduled-tasks-entry.png)
+
+The screenshots below show the Chinese interface.
+
+### Arrange a task through conversation
+
+1. Select **Scheduled tasks** in the sidebar and choose a configured model.
+2. Describe the App or Workflow, its timing, and the required inputs. For example: “Run the project report Workflow every Friday at 5 PM in Asia/Shanghai,” or “Run the data sync App once on November 10, 2026 at 9 AM in Asia/Shanghai.” Use a future date that matches your needs.
+3. Answer any follow-up questions about the target, timing, or inputs.
+4. Review the confirmation card: check the target, run inputs, time zone, and execution time. Recurring tasks also preview upcoming occurrences.
+5. Select **Create task** and wait for **Saved** before treating the task as scheduled. To make adjustments, continue the conversation and confirm the revised proposal.
+
+An assistant reply or a pending proposal does not mean a task has been saved. Stopping a reply does not undo changes you already confirmed.
+
+![A conversation scheduling the User Info App daily at 10 AM, with a saved confirmation card and an active task card.](/media/schedules/04-create-schedule-conversation.png)
+
+This example asks to run the User Info App every day at 10 AM. After confirmation, the task runs at 10:00 in `Asia/Shanghai`. The saved task card shows its next execution time; select **View task** to inspect its details.
+
+### Inspect and manage scheduled tasks
+
+Switch to **Task list** to search tasks and filter by **All tasks**, **Active**, **Paused**, or **Needs attention**. Open a task to inspect its timing, run inputs, and recent runs; select **View result** to inspect a run.
+
+You can also continue the conversation: “Move the project report to Fridays at 6 PM,” “Pause the data sync task,” or “Show the latest execution results.” Changes, pauses, resumptions, and deletions proposed through conversation require you to review and confirm the card. Task details also provide editing, pause, resume, and delete controls.
+
+Deleting a task stops future triggers and retains existing run records. Pausing a task does not stop a run that has already started. Use **Conversation history** to revisit an earlier conversation, or select **Scheduled tasks** in the sidebar again to start a new one.
+
+## One-time and recurring tasks
+
+- **One-time tasks** run once at a specified date and time. Check the full date, time, and time zone before confirming; inspect the task's status and run records afterward.
+- **Recurring tasks** repeat according to a frequency or Cron rule and show their next run time. Pause a task to suspend future runs.
+
+One-time tasks do not require Cron. The App and Workflow settings below configure recurring tasks.
+
+## Configure recurring tasks from an App or Workflow
 
 ### App schedule
 
@@ -43,7 +78,7 @@ This recording creates a Workflow schedule, supplies its scheduled inputs, and s
 
 The **Every day**, **Every weekday**, and **Every week** choices build the expression for you. Choose **Custom Cron** when you need a different pattern.
 
-Workrun accepts exactly five space-separated Cron fields:
+Recurring tasks accept exactly five space-separated Cron fields:
 
 | Position | Field        | Allowed example      |
 | -------- | ------------ | -------------------- |
@@ -77,6 +112,6 @@ Scheduled Workflows must be able to complete unattended. Workrun rejects a sched
 - Schedule changes take effect immediately; the scheduler wakes after you save, edit, pause, resume, or delete a schedule.
 - A due run is recorded in normal run history, so use the run panel and traces to inspect its output or failure.
 - Workrun prevents overlapping runs for the same App or Workflow. If that target is already queued, running, or waiting for input, it records the occurrence as skipped and advances to the next matching time.
-- On startup, any occurrences missed while Workrun was closed are advanced to the next future occurrence. Workrun does not replay a backlog of missed runs.
+- On startup, recurring occurrences missed while Workrun was closed are advanced to the next future occurrence. Workrun does not replay a backlog of missed runs, and missed one-time tasks are not replayed either.
 
 For schedules that perform writes, sends, or other external side effects, make the App or Workflow safe to run more than once and choose a frequency longer than its usual execution time. Review the target's permissions and test it manually before enabling the schedule.
