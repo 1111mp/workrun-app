@@ -86,6 +86,22 @@ impl Catalog {
             workspace_id: dirs::active_workspace_id(),
         })
     }
+    #[cfg(test)]
+    pub(crate) fn empty_scheduling_catalog() -> Self {
+        Self {
+            workflows: vec![],
+            team: None,
+            root: std::path::PathBuf::new(),
+            workspace_id: dirs::active_workspace_id(),
+        }
+    }
+
+    /// Read-only catalog access shared with the independent scheduling agent.
+    pub async fn schedule_targets(&self, args: &Value) -> Result<Value> {
+        use super::tools::WorkflowDiscovery;
+        self.list_capabilities(args).await
+    }
+
     pub fn capabilities(&self) -> Vec<Capability> {
         self.workflows.iter().filter_map(capability).collect()
     }

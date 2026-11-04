@@ -13,8 +13,10 @@ import {
 } from '@workspace/ui/components';
 import { DownloadIcon, WrapTextIcon } from 'lucide-react';
 import { Children, isValidElement, type ReactNode, useState } from 'react';
+import type { ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 import Markdown, { type Components } from 'react-markdown';
+import { Link, useInRouterContext, useLocation } from 'react-router';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -112,15 +114,64 @@ function MessageCodeBlock({
   );
 }
 
-const components: Components = {
-  a: ({ node: _node, ...props }) => (
+const messageLinkClassName = 'text-primary underline underline-offset-3';
+
+function RouterMessageLink(props: ComponentProps<'a'>) {
+  const location = useLocation();
+  let destination: string | undefined;
+  try {
+    const url = new URL(props.href ?? '', window.location.origin);
+    // Absolute links to this app have the same navigation semantics as relative ones.
+    if (
+      url.origin === window.location.origin &&
+      /^\/(?:workflows|apps|schedules)(?:[/?#]|$)/.test(url.pathname)
+    )
+      destination = `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    /* Invalid and external URLs remain ordinary Markdown links. */
+  }
+  if (destination)
+    return (
+      <Link
+        className={messageLinkClassName}
+        to={destination}
+        state={
+          /^\/(?:start|schedules)(?:[/?#]|$)/.test(location.pathname)
+            ? {
+                assistantReturnTo: `${location.pathname}${location.search}${location.hash}`,
+              }
+            : undefined
+        }
+      >
+        {props.children}
+      </Link>
+    );
+  return (
     <a
       {...props}
-      className='text-primary underline underline-offset-3'
+      className={messageLinkClassName}
       target='_blank'
       rel='noreferrer'
     />
-  ),
+  );
+}
+
+function MessageLink(props: ComponentProps<'a'>) {
+  const inRouter = useInRouterContext();
+  return inRouter ? (
+    <RouterMessageLink {...props} />
+  ) : (
+    <a
+      {...props}
+      className={messageLinkClassName}
+      target='_blank'
+      rel='noreferrer'
+    />
+  );
+}
+
+const components: Components = {
+  a: ({ node: _node, ...props }) => <MessageLink {...props} />,
   blockquote: ({ children }) => (
     <blockquote className='text-muted-foreground border-border border-l-2 pl-3'>
       {children}

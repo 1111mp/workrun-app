@@ -196,21 +196,25 @@ it.each([
   },
 );
 
-it('still navigates between pages and keeps New task on the current home page', async () => {
+it('still navigates between pages and keeps New chat on the current home page', async () => {
   const screen = await setup(1100, '/workflows');
   const location = screen.getByTestId('location');
   await screen.getByRole('link', { name: '首页', exact: true }).click();
   await expect.element(location).toHaveTextContent('/start');
   const initialKey = location.element().getAttribute('data-location-key');
 
-  await screen.getByRole('link', { name: '新任务', exact: true }).click();
+  await screen
+    .getByRole('link', { name: zh.start.newTask, exact: true })
+    .click();
 
   expect(location.element().getAttribute('data-location-key')).toBe(initialKey);
 });
 
-it('opens a new task from an existing conversation', async () => {
+it('opens a new conversation from an existing conversation', async () => {
   const screen = await setup();
-  await screen.getByRole('link', { name: '新任务', exact: true }).click();
+  await screen
+    .getByRole('link', { name: zh.start.newTask, exact: true })
+    .click();
   await expect
     .element(screen.getByTestId('location'))
     .toHaveTextContent('/start');
@@ -496,3 +500,22 @@ it.each(['row', 'menu'] as const)(
     }
   },
 );
+
+it('opens a fresh scheduled-task conversation from both the list and an existing scheduled conversation', async () => {
+  const screen = await setup(
+    1100,
+    '/schedules?view=tasks&conversation=old-session',
+  );
+  const location = screen.getByTestId('location');
+  await screen
+    .getByRole('link', { name: zh.navigation.schedules, exact: true })
+    .click();
+  await expect.poll(() => location.element().textContent).toBe('/schedules');
+  const firstKey = location.element().getAttribute('data-location-key');
+  await screen
+    .getByRole('link', { name: zh.navigation.schedules, exact: true })
+    .click();
+  await expect
+    .poll(() => location.element().getAttribute('data-location-key'))
+    .not.toBe(firstKey);
+});

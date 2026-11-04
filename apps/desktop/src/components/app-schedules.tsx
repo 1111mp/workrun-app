@@ -41,9 +41,11 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
 import { previewCron } from '@/lib/cron';
+import { scheduleState } from '@/lib/schedule-time';
 import {
   deleteSchedule,
   listAppSchedules,
@@ -131,11 +133,22 @@ function ScheduleDescription({
   schedule: AppSchedule;
   language: string;
 }) {
+  const { t } = useTranslation();
   const preview = previewCron(
     schedule.cronExpression,
     schedule.timezone,
     language,
   );
+  if (schedule.scheduleKind === 'once')
+    return (
+      <>
+        {new Date(schedule.runAt ?? schedule.nextRunAt).toLocaleString(
+          language,
+          { timeZone: schedule.timezone },
+        )}{' '}
+        · {t('schedules.once')}
+      </>
+    );
   return <>{preview.valid ? preview.description : schedule.cronExpression}</>;
 }
 
@@ -170,14 +183,17 @@ function ScheduleRow({
       </div>
       <div className='min-w-0'>
         <div className='flex flex-wrap items-center gap-2'>
-          <h3 className='truncate text-sm font-semibold'>{schedule.name}</h3>
+          <Link
+            to={`/schedules?${new URLSearchParams({ task: schedule.id })}`}
+            className='truncate text-sm font-semibold underline-offset-4 hover:underline'
+          >
+            {schedule.name}
+          </Link>
           <Badge
             variant={schedule.enabled ? 'secondary' : 'outline'}
             className='h-5 rounded-full px-2 text-[10px] font-medium'
           >
-            {schedule.enabled
-              ? t('apps.schedules.active')
-              : t('apps.schedules.paused')}
+            {t(scheduleState(schedule))}
           </Badge>
         </div>
         <p className='text-muted-foreground mt-1 truncate text-sm'>
@@ -189,7 +205,11 @@ function ScheduleRow({
           <span>
             {schedule.enabled
               ? t('apps.schedules.next', { time: nextRun })
-              : t('apps.schedules.schedulingPaused')}
+              : t(
+                  schedule.finishedAt
+                    ? scheduleState(schedule)
+                    : 'apps.schedules.schedulingPaused',
+                )}
           </span>
         </div>
       </div>
@@ -201,6 +221,7 @@ function ScheduleRow({
                 ? t('apps.schedules.pause')
                 : t('apps.schedules.resume')
             }
+            disabled={Boolean(schedule.finishedAt)}
             checked={schedule.enabled}
             onCheckedChange={onToggle}
           />
@@ -277,6 +298,8 @@ function ScheduleDialog({
         editorMode: draft.frequency,
       }),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      void queryClient.invalidateQueries({ queryKey: ['schedule'] });
       void queryClient.invalidateQueries({
         queryKey: ['app-schedules', app.definition.id],
       });
@@ -464,6 +487,7 @@ export function AppSchedules({
   app: ProcessNode;
   readOnly?: boolean;
 }) {
+  const navigate = useNavigate();
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<AppSchedule>();
@@ -474,9 +498,13 @@ export function AppSchedules({
     queryFn: () => listAppSchedules(app.definition.id),
   });
   const refresh = () =>
-    queryClient.invalidateQueries({
-      queryKey: ['app-schedules', app.definition.id],
-    });
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+      queryClient.invalidateQueries({ queryKey: ['schedule'] }),
+      queryClient.invalidateQueries({
+        queryKey: ['app-schedules', app.definition.id],
+      }),
+    ]);
   const setEnabled = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       setScheduleEnabled(id, enabled),
@@ -533,7 +561,13 @@ export function AppSchedules({
             onToggle={(enabled) =>
               setEnabled.mutate({ id: schedule.id, enabled })
             }
-            onEdit={() => setEditing(schedule)}
+            onEdit={() =>
+              schedule.scheduleKind === 'once'
+                ? navigate(
+                    `/schedules?${new URLSearchParams({ task: schedule.id })}`,
+                  )
+                : setEditing(schedule)
+            }
             onDelete={() => setDeleting(schedule)}
           />
         ))}

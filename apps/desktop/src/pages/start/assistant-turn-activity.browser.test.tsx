@@ -5,7 +5,7 @@ import { page } from 'vitest/browser';
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
-import { AssistantTurnActivity } from './assistant-turn-activity';
+import { AssistantTurnActivity } from '@/components/assistant-turn-activity';
 
 it('shows the latest public summary and expands the bounded activity history', async () => {
   const screen = await render(

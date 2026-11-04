@@ -34,7 +34,6 @@
     "closeTask": "Close {{name}}",
     "pin": "Pin",
     "unpin": "Unpin",
-
     "historyTitle_one": "Execution history · {{count}} attempt",
     "historyTitle_other": "Execution history · {{count}} attempts",
     "historyTitle": "Execution history · {{count}} attempts",
@@ -109,6 +108,7 @@
     "signOutFailed": "Couldn't sign out. Check your connection and try again.",
     "settings": "Settings",
     "checkForUpdates": "Check for updates",
+    "schedules": "Scheduled tasks",
     "checkingForUpdates": "Checking for updates…"
   },
   "jsonEditor": {
@@ -779,7 +779,6 @@
     "remoteAuth": {
       "enterUrl": "Enter a valid service URL first. Credentials bound to other origins are shown but cannot be selected.",
       "originMismatch": "These credentials belong to other service origins. Use the matching scheme, host and port, or create a credential for this service.",
-
       "title": "Authentication",
       "mode": "Authentication method",
       "none": "None",
@@ -1013,13 +1012,11 @@
       "remotePathsDescription": "One visible State path per line. A2A v1.0.1 sends inline file bytes; maximum 10 files and 20 MiB in total. Leave empty to send text only.",
       "remoteTimeout": "Request timeout (seconds)",
       "remoteTimeoutDescription": "Includes discovery, remote processing and file transfer. Default 120; range 1–600.",
-
       "closePreview": "Close preview",
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out",
       "loading": "Loading",
       "previewError": "Unable to preview this file",
-
       "openPdf": "Open PDF in the default application",
       "preview": "Preview file",
       "required": "Please choose a file",
@@ -1413,7 +1410,10 @@
         "Layout": "Layout"
       },
       "items": {
-        "agent": { "label": "Agent", "description": "Run a local ADK agent" },
+        "agent": {
+          "label": "Agent",
+          "description": "Run a local ADK agent"
+        },
         "codeact_agent": {
           "label": "CodeAct Agent",
           "description": "Compose tools with Python"
@@ -1430,7 +1430,10 @@
           "label": "Subworkflow",
           "description": "Run another saved workflow"
         },
-        "end": { "label": "End", "description": "Workflow exit point" },
+        "end": {
+          "label": "End",
+          "description": "Workflow exit point"
+        },
         "terminate": {
           "label": "Terminate workflow",
           "description": "End this workflow and every parent workflow"
@@ -1534,7 +1537,6 @@
       "restartTitle": "Restart Workrun to apply OTLP changes?",
       "restartDescription": "The OTLP endpoint has been saved. Restart Workrun now to apply the new telemetry configuration."
     },
-
     "general": {
       "title": "General",
       "language": "Language",
@@ -1542,7 +1544,6 @@
       "launchAtLogin": "Launch at Login",
       "startMinimized": "Start Minimized"
     },
-
     "appearance": {
       "title": "Appearance",
       "theme": "Theme",
@@ -1550,7 +1551,6 @@
       "dark": "Dark",
       "light": "Light"
     },
-
     "log": {
       "title": "Log",
       "level": "Log Level",
@@ -1569,7 +1569,6 @@
         "4": "Retain 90 Days"
       }
     },
-
     "models": {
       "title": "Models",
       "description": "Set credentials for each provider. You can also use a custom endpoint for compatible APIs or a remote Ollama host. Changes are saved automatically.",
@@ -1599,7 +1598,6 @@
       "groq": "API key for Groq",
       "ollama": "Ollama endpoint"
     },
-
     "skills": {
       "title": "Skills",
       "registry": "Agent capability registry",
@@ -1661,7 +1659,6 @@
       "emptyTitle": "No skills yet",
       "emptyDescription": "Create a reusable skill, then attach it from an Agent node."
     },
-
     "about": {
       "title": "About",
       "checkForUpdates": "Check for Updates",
@@ -1670,7 +1667,6 @@
       "versionCopied": "Version copied to clipboard"
     }
   },
-
   "evaluations": {
     "title": "Evaluation suites",
     "description": "Save repeatable inputs, assertions, and safety fixtures for this workflow.",
@@ -2033,7 +2029,6 @@
       "workspaceSettings": "Workspace settings"
     }
   },
-
   "notFound": {
     "title": "404 - Not Found",
     "description": "The page you're looking for doesn't exist.",
@@ -2041,7 +2036,6 @@
     "needHelp": "Need help?",
     "contactSupport": "Contact support"
   },
-
   "updater": {
     "available": "Update available",
     "upToDate": "You're using the latest version",
@@ -2058,7 +2052,6 @@
     "downloadFailed": "Failed to download update",
     "installFailed": "Update installation failed. Please try again."
   },
-
   "unsavedChanges": {
     "title": "Leave this page?",
     "description": "You have unsaved changes. Leaving will discard them. You can continue editing and save before leaving.",
@@ -2092,7 +2085,7 @@
     "appsHint": "Explore apps and tools to get your task started.",
     "workflowHint": "Run an existing workflow or refine your next one.",
     "home": "Home",
-    "newTask": "New task",
+    "newTask": "New chat",
     "personalWorkspace": "Personal workspace",
     "teamWorkspace": "Team workspace",
     "recentRuns": "Recent runs",
@@ -2374,5 +2367,129 @@
       "authentication": "Authentication",
       "data": "Configuration"
     }
+  },
+  "schedules": {
+    "title": "Scheduled tasks",
+    "new": "New scheduled task",
+    "search": "Search tasks",
+    "filter": "Filter tasks",
+    "all": "All tasks",
+    "active": "Active",
+    "paused": "Paused",
+    "attention": "Needs attention",
+    "loading": "Loading…",
+    "retry": "Retry",
+    "noMatches": "No matching tasks",
+    "emptyList": "No scheduled tasks yet",
+    "conversations": "Conversation history",
+    "deleteConversation": "Delete conversation",
+    "localNotice": "Runs only while Workrun desktop is open. Missed occurrences are not replayed.",
+    "hero": "What would you like to schedule?",
+    "heroDescription": "Describe a task to run an App or Workflow on a schedule.",
+    "exampleWeekly": "Generate a report every Friday",
+    "exampleDaily": "Run an App every day at 9 AM",
+    "exampleManage": "Show my scheduled tasks",
+    "thinking": "Working on your schedule…",
+    "interrupted": "The last response was interrupted. Continue describing your request; only confirmed, saved configurations schedule work.",
+    "composer": "Scheduled task message",
+    "modifyPlaceholder": "Change the time, adjust inputs, or ask about recent results…",
+    "createPlaceholder": "For example: run the project report every Friday at 5 PM…",
+    "stop": "Stop response",
+    "send": "Send",
+    "selectModel": "Select a configured model to start a conversation.",
+    "edit": "Edit task",
+    "pause": "Pause task",
+    "resume": "Resume task",
+    "delete": "Delete task",
+    "next": "Next run",
+    "input": "Run inputs",
+    "recentRuns": "Recent runs",
+    "noRuns": "No runs yet",
+    "viewResult": "View result",
+    "name": "Task name",
+    "cron": "Time rule (Cron)",
+    "timezone": "Timezone",
+    "inputObject": "Run inputs must be a JSON object",
+    "invalidTime": "Check the five-field Cron expression and timezone",
+    "cancel": "Cancel",
+    "preview": "Preview changes",
+    "taskCard": "Scheduled task confirmation",
+    "deleteNotice": "Permanently removes future scheduling. Existing run records are retained.",
+    "pauseNotice": "Pauses future scheduling. An execution already in progress will continue.",
+    "saved": "Action saved",
+    "viewTask": "View task",
+    "originalProposal": "View original proposal",
+    "taskDeleted": "This scheduled task has been deleted.",
+    "openTaskFailed": "Could not open this task. Please try again.",
+    "answer": "Enter or add to your answer",
+    "continue": "Continue",
+    "operation": {
+      "create": "Schedule a task",
+      "update": "Update scheduled task",
+      "pause": "Pause scheduled task",
+      "resume": "Resume scheduled task",
+      "delete": "Delete scheduled task"
+    },
+    "cardStatus": {
+      "waiting": "Awaiting confirmation",
+      "saved": "Saved",
+      "cancelled": "Cancelled",
+      "superseded": "Superseded"
+    },
+    "confirm": {
+      "create": "Create task",
+      "update": "Save changes",
+      "pause": "Confirm pause",
+      "resume": "Confirm resume",
+      "delete": "Confirm deletion"
+    },
+    "list": "Task list",
+    "scheduled": "Scheduled tasks",
+    "listDescription": "Review schedules and results, or adjust a task through conversation.",
+    "localHint": "Keep Workrun open · Missed tasks are not replayed",
+    "noConversations": "No conversations yet",
+    "progress": {
+      "understanding": "Understanding your scheduling request",
+      "responding": "Preparing a response",
+      "list_targets": "Finding available Apps and Workflows",
+      "get_target": "Checking the execution target and inputs",
+      "list_schedules": "Reading scheduled tasks",
+      "get_schedule": "Reading task details and recent runs",
+      "preview_change": "Validating the schedule and task configuration",
+      "ask_questions": "Preparing questions for missing information"
+    },
+    "timeRule": "Time rule",
+    "source": {
+      "latest_local": "Runs the latest saved Workflow",
+      "latest_published": "Follows the latest published release",
+      "published_release": "Runs the pinned published release"
+    },
+    "status": {
+      "queued": "Queued",
+      "skipped": "Skipped",
+      "running": "Running",
+      "completed": "Completed",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "interrupted": "Interrupted",
+      "waiting_for_input": "Waiting for input"
+    },
+    "once": "Once",
+    "recurring": "Repeating",
+    "runAt": "Execution time",
+    "scheduleKind": "Schedule type",
+    "onceNotice": "Runs once at the selected time. Keep Workrun open; missed tasks are not replayed.",
+    "finish": {
+      "triggered": "Triggered",
+      "missed": "Missed",
+      "skipped": "Skipped",
+      "failed": "Could not start"
+    },
+    "ended": "Ended",
+    "chat": "Chat",
+    "navigation": "Scheduled task views",
+    "toolbarNew": "New task",
+    "detailsNeeded": "Task details needed"
   }
 }

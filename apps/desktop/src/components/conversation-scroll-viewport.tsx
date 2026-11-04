@@ -2,7 +2,7 @@ import {
   MessageScrollerViewport,
   useMessageScroller,
 } from '@workspace/ui/components';
-import { useEffect, useRef, type ComponentProps } from 'react';
+import { useLayoutEffect, useRef, type ComponentProps } from 'react';
 
 type Position = { messageId?: string; offset: number; top: number };
 // Keep reading positions in this renderer only, isolated by workspace and session.
@@ -17,40 +17,33 @@ export function ConversationScrollViewport({
   const saved = useRef(positions.get(positionKey));
   const restoring = useRef(Boolean(saved.current));
 
-  useEffect(() => {
-    // Wait for the scroller's initial layout before restoring a message anchor.
-    // Anchoring also tolerates messages arriving while the reader is away.
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
-        const element = viewport.current;
-        const position = saved.current;
-        if (element && position) {
-          if (
-            position.messageId &&
-            scrollToMessage(position.messageId, {
-              align: 'start',
-              behavior: 'instant',
-              scrollMargin: 0,
-            })
-          ) {
-            const anchor = Array.from(
-              element.querySelectorAll<HTMLElement>('[data-message-id]'),
-            ).find((item) => item.dataset.messageId === position.messageId);
-            // The scroller's alignment includes content padding; correct from
-            // the actual position rather than assuming the anchor is at zero.
-            if (anchor)
-              element.scrollTop +=
-                anchor.getBoundingClientRect().top -
-                element.getBoundingClientRect().top -
-                position.offset;
-          } else {
-            element.scrollTop = position.top;
-          }
-        }
-        restoring.current = false;
-      });
-    });
-    return () => cancelAnimationFrame(frame);
+  useLayoutEffect(() => {
+    // Item refs and child layout are ready here. Restoring before paint also marks
+    // the scroller's default jump handled, so a cached conversation never flashes at its end first.
+    const element = viewport.current;
+    const position = saved.current;
+    if (element && position) {
+      if (
+        position.messageId &&
+        scrollToMessage(position.messageId, {
+          align: 'start',
+          behavior: 'instant',
+          scrollMargin: 0,
+        })
+      ) {
+        const anchor = Array.from(
+          element.querySelectorAll<HTMLElement>('[data-message-id]'),
+        ).find((item) => item.dataset.messageId === position.messageId);
+        if (anchor)
+          element.scrollTop +=
+            anchor.getBoundingClientRect().top -
+            element.getBoundingClientRect().top -
+            position.offset;
+      } else {
+        element.scrollTop = position.top;
+      }
+    }
+    restoring.current = false;
   }, [scrollToMessage]);
 
   return (

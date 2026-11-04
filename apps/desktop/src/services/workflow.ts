@@ -200,7 +200,7 @@ export function archiveChatSession(id: string) {
   return invoke('chat_session_archive', { id });
 }
 
-export type WorkflowSchedule = {
+export type WorkflowSchedule = import('@/lib/schedule-time').ScheduleTiming & {
   id: string;
   name: string;
   targetType: 'workflow';

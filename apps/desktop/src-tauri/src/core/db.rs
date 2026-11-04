@@ -119,7 +119,27 @@ mod tests {
             .unwrap();
         assert_eq!(
             versions,
-            vec![20260904083536, 20261005100000, 20261016100000, 20261027100000]
+            vec![
+                20260904083536,
+                20261005100000,
+                20261016100000,
+                20261027100000,
+                20261104100000,
+                20261104110000
+            ]
+        );
+        assert!(
+            sqlx::query("SELECT state_json FROM schedule_agent_sessions")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            sqlx::query("SELECT schedule_kind,run_at,finished_at,finish_reason FROM schedules")
+                .fetch_all(&pool)
+                .await
+                .is_ok()
         );
         assert!(
             sqlx::query("SELECT state_json,title,model_id,status,created_at FROM assistant_sessions")
@@ -130,6 +150,18 @@ mod tests {
         );
         migrator.undo(&pool, 20261005100000).await.unwrap();
         assert!(
+            sqlx::query("SELECT * FROM schedule_agent_sessions")
+                .fetch_all(&pool)
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("SELECT schedule_kind FROM schedules")
+                .fetch_all(&pool)
+                .await
+                .is_err()
+        );
+        assert!(
             sqlx::query("SELECT * FROM assistant_sessions")
                 .fetch_all(&pool)
                 .await
@@ -137,6 +169,12 @@ mod tests {
         );
         assert!(sqlx::query("SELECT * FROM run_records").fetch_all(&pool).await.is_ok());
         migrator.run(&pool).await.unwrap();
+        assert!(
+            sqlx::query("SELECT schedule_kind,run_at,finished_at,finish_reason FROM schedules")
+                .fetch_all(&pool)
+                .await
+                .is_ok()
+        );
         assert!(
             sqlx::query("SELECT * FROM assistant_messages")
                 .fetch_all(&pool)

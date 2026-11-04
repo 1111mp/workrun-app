@@ -48,10 +48,12 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
 import { isTeamMode } from '@/lib/constant';
 import { previewCron } from '@/lib/cron';
+import { scheduleState } from '@/lib/schedule-time';
 import {
   deleteWorkflowSchedule,
   listWorkflowReleases,
@@ -258,6 +260,8 @@ function WorkflowScheduleDialog({
         editorMode: draft.frequency,
       }),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      void queryClient.invalidateQueries({ queryKey: ['schedule'] });
       void queryClient.invalidateQueries({
         queryKey: ['workflow-schedules', workflowId],
       });
@@ -620,6 +624,7 @@ export function WorkflowSchedules({
   dsl: unknown;
   release?: WorkflowRelease;
 }) {
+  const navigate = useNavigate();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
@@ -633,14 +638,20 @@ export function WorkflowSchedules({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       setWorkflowScheduleEnabled(id, enabled),
     onSuccess: () =>
-      void queryClient.invalidateQueries({
-        queryKey: ['workflow-schedules', workflowId],
-      }),
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['schedules'] }),
+        queryClient.invalidateQueries({ queryKey: ['schedule'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['workflow-schedules', workflowId],
+        }),
+      ]),
   });
   const remove = useMutation({
     mutationFn: deleteWorkflowSchedule,
     onSuccess: () => {
       setDeleting(undefined);
+      void queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      void queryClient.invalidateQueries({ queryKey: ['schedule'] });
       void queryClient.invalidateQueries({
         queryKey: ['workflow-schedules', workflowId],
       });
@@ -673,17 +684,21 @@ export function WorkflowSchedules({
                 <CalendarClockIcon className='text-primary size-4 shrink-0' />
                 <div className='min-w-0 flex-1'>
                   <div className='flex items-center gap-2'>
-                    <p className='truncate text-sm font-medium'>
+                    <Link
+                      className='truncate text-sm font-medium underline-offset-4 hover:underline'
+                      to={`/schedules?${new URLSearchParams({ task: schedule.id })}`}
+                    >
                       {schedule.name}
-                    </p>
+                    </Link>
                     <Badge variant={schedule.enabled ? 'secondary' : 'outline'}>
-                      {schedule.enabled
-                        ? t('workflowEditor.schedules.active')
-                        : t('workflowEditor.schedules.paused')}
+                      {t(scheduleState(schedule))}
                     </Badge>
                   </div>
                   <p className='text-muted-foreground mt-0.5 truncate font-mono text-xs'>
-                    {schedule.cronExpression} · {schedule.timezone}
+                    {schedule.scheduleKind === 'once'
+                      ? `${new Date(schedule.runAt ?? schedule.nextRunAt).toLocaleString(undefined, { timeZone: schedule.timezone })} · ${t('schedules.once')}`
+                      : schedule.cronExpression}{' '}
+                    · {schedule.timezone}
                   </p>
                 </div>
                 <Switch
@@ -693,6 +708,7 @@ export function WorkflowSchedules({
                       : 'workflowEditor.schedules.resume',
                     { name: schedule.name },
                   )}
+                  disabled={Boolean(schedule.finishedAt)}
                   checked={schedule.enabled}
                   onCheckedChange={(value) =>
                     enabled.mutate({ id: schedule.id, enabled: value })
@@ -705,7 +721,13 @@ export function WorkflowSchedules({
                   aria-label={t('workflowEditor.schedules.edit', {
                     name: schedule.name,
                   })}
-                  onClick={() => setEditing(schedule)}
+                  onClick={() =>
+                    schedule.scheduleKind === 'once'
+                      ? navigate(
+                          `/schedules?${new URLSearchParams({ task: schedule.id })}`,
+                        )
+                      : setEditing(schedule)
+                  }
                 >
                   <PencilIcon />
                 </Button>

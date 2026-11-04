@@ -34,7 +34,6 @@
     "closeTask": "关闭 {{name}}",
     "pin": "固定",
     "unpin": "取消固定",
-
     "historyTitle_one": "执行历史 · {{count}} 次尝试",
     "historyTitle_other": "执行历史 · {{count}} 次尝试",
     "historyTitle": "执行历史 · {{count}} 次尝试",
@@ -108,6 +107,7 @@
     "signOutFailed": "退出登录失败，请检查网络后重试。",
     "settings": "设置",
     "checkForUpdates": "检查更新",
+    "schedules": "定时任务",
     "checkingForUpdates": "正在检查更新…"
   },
   "jsonEditor": {
@@ -767,7 +767,6 @@
     "remoteAuth": {
       "enterUrl": "请先填写有效的服务 URL。其他源地址的凭据会显示，但不可选择。",
       "originMismatch": "这些凭据绑定了其他服务源地址。请使用匹配的协议、主机和端口，或为当前服务新建凭据。",
-
       "title": "认证",
       "mode": "认证方式",
       "none": "无认证",
@@ -1000,13 +999,11 @@
       "remotePathsDescription": "每行一个可见 State 路径。通过 A2A v1.0.1 发送实际文件内容，最多 10 个文件、合计 20 MiB。留空仅发送文本。",
       "remoteTimeout": "请求超时（秒）",
       "remoteTimeoutDescription": "包含服务发现、远程处理和文件传输。默认 120，范围 1–600。",
-
       "closePreview": "关闭预览",
       "zoomIn": "放大",
       "zoomOut": "缩小",
       "loading": "加载中",
       "previewError": "无法预览此文件",
-
       "openPdf": "使用系统默认应用打开 PDF",
       "preview": "预览文件",
       "required": "请选择文件",
@@ -1399,7 +1396,10 @@
         "Layout": "布局"
       },
       "items": {
-        "agent": { "label": "智能体", "description": "运行本地 ADK 智能体" },
+        "agent": {
+          "label": "智能体",
+          "description": "运行本地 ADK 智能体"
+        },
         "codeact_agent": {
           "label": "CodeAct 智能体",
           "description": "使用 Python 组合工具"
@@ -1408,18 +1408,30 @@
           "label": "远程智能体",
           "description": "通过网络调用智能体"
         },
-        "process": { "label": "应用", "description": "运行本地流程节点应用" },
+        "process": {
+          "label": "应用",
+          "description": "运行本地流程节点应用"
+        },
         "subworkflow": {
           "label": "子工作流",
           "description": "运行另一已保存的工作流"
         },
-        "end": { "label": "结束", "description": "工作流退出点" },
+        "end": {
+          "label": "结束",
+          "description": "工作流退出点"
+        },
         "terminate": {
           "label": "终止工作流",
           "description": "结束此工作流及所有父工作流"
         },
-        "if_else": { "label": "条件分支", "description": "按条件路由执行" },
-        "switch": { "label": "多路分支", "description": "按分支条件路由执行" },
+        "if_else": {
+          "label": "条件分支",
+          "description": "按条件路由执行"
+        },
+        "switch": {
+          "label": "多路分支",
+          "description": "按分支条件路由执行"
+        },
         "human_review": {
           "label": "人工审核",
           "description": "暂停等待批准或拒绝"
@@ -1428,7 +1440,10 @@
           "label": "询问用户",
           "description": "暂停等待选择，并按回答分支"
         },
-        "group": { "label": "分组", "description": "将节点组织为可移动的布局" }
+        "group": {
+          "label": "分组",
+          "description": "将节点组织为可移动的布局"
+        }
       }
     }
   },
@@ -1508,7 +1523,6 @@
       "restartTitle": "重启 Workrun 以应用 OTLP 更改？",
       "restartDescription": "OTLP 端点已保存。现在重启 Workrun 以应用新的遥测配置。"
     },
-
     "general": {
       "title": "通用",
       "language": "语言",
@@ -1516,7 +1530,6 @@
       "launchAtLogin": "登录时启动",
       "startMinimized": "启动时最小化"
     },
-
     "appearance": {
       "title": "外观",
       "theme": "主题",
@@ -1524,7 +1537,6 @@
       "dark": "深色",
       "light": "浅色"
     },
-
     "log": {
       "title": "日志",
       "level": "日志级别",
@@ -1543,7 +1555,6 @@
         "4": "保留 90 天"
       }
     },
-
     "models": {
       "title": "模型",
       "description": "为每个提供商配置凭证；兼容 API 或远程 Ollama 可填写自定义端点，修改会自动保存。",
@@ -1572,7 +1583,6 @@
       "groq": "Groq API 密钥",
       "ollama": "Ollama 端点"
     },
-
     "skills": {
       "title": "技能",
       "registry": "Agent 能力注册表",
@@ -1634,7 +1644,6 @@
       "emptyTitle": "还没有技能",
       "emptyDescription": "创建可复用技能后，可在 Agent 节点中引用它。"
     },
-
     "about": {
       "title": "关于",
       "checkForUpdates": "检查更新",
@@ -1643,7 +1652,6 @@
       "versionCopied": "版本号已复制到剪贴板"
     }
   },
-
   "evaluations": {
     "title": "评测集",
     "description": "为当前工作流保存可重复运行的输入、断言和安全 fixture。",
@@ -2006,7 +2014,6 @@
       "workspaceSettings": "工作区设置"
     }
   },
-
   "notFound": {
     "title": "404 - 页面不存在",
     "description": "你访问的页面不存在。",
@@ -2014,7 +2021,6 @@
     "needHelp": "需要帮助？",
     "contactSupport": "联系支持"
   },
-
   "updater": {
     "available": "发现新版本",
     "upToDate": "当前已是最新版本",
@@ -2031,7 +2037,6 @@
     "downloadFailed": "更新下载失败",
     "installFailed": "更新安装失败，请重试。"
   },
-
   "unsavedChanges": {
     "title": "离开当前页面？",
     "description": "你有尚未保存的改动。离开后，这些改动将丢失。你可以继续编辑并保存后再离开。",
@@ -2065,7 +2070,7 @@
     "appsHint": "浏览可用应用与工具，直接开始任务。",
     "workflowHint": "运行已有流程，或继续完善你的编排。",
     "home": "首页",
-    "newTask": "新任务",
+    "newTask": "新对话",
     "personalWorkspace": "个人工作区",
     "teamWorkspace": "团队工作区",
     "recentRuns": "最近执行",
@@ -2347,5 +2352,129 @@
       "authentication": "身份验证",
       "data": "配置"
     }
+  },
+  "schedules": {
+    "title": "定时任务",
+    "new": "新建定时任务",
+    "search": "搜索任务",
+    "filter": "筛选任务",
+    "all": "全部任务",
+    "active": "启用中",
+    "paused": "已暂停",
+    "attention": "需处理",
+    "loading": "正在加载…",
+    "retry": "重试",
+    "noMatches": "没有符合条件的任务",
+    "emptyList": "暂无已安排的任务",
+    "conversations": "对话记录",
+    "deleteConversation": "删除对话",
+    "localNotice": "仅在 Workrun 桌面应用打开时执行；关闭期间错过的任务不会补跑。",
+    "hero": "想安排什么定时任务？",
+    "heroDescription": "用一句话描述，让应用或工作流按时运行。",
+    "exampleWeekly": "每周五生成项目周报",
+    "exampleDaily": "每天九点运行应用",
+    "exampleManage": "查看已安排的任务",
+    "thinking": "正在处理定时任务…",
+    "interrupted": "上次回复已中断。可以继续描述需求；任务仅以已确认保存的配置为准。",
+    "composer": "定时任务消息",
+    "modifyPlaceholder": "修改时间、调整输入，或询问最近的执行结果…",
+    "createPlaceholder": "例如：每周五下午五点运行项目周报…",
+    "stop": "停止回复",
+    "send": "发送",
+    "selectModel": "选择已配置的模型后开始对话。",
+    "edit": "编辑任务",
+    "pause": "暂停任务",
+    "resume": "恢复任务",
+    "delete": "删除任务",
+    "next": "下次执行",
+    "input": "运行输入",
+    "recentRuns": "最近运行",
+    "noRuns": "还没有运行记录",
+    "viewResult": "查看结果",
+    "name": "任务名称",
+    "cron": "时间规则（Cron）",
+    "timezone": "时区",
+    "inputObject": "运行输入必须是 JSON 对象",
+    "invalidTime": "请检查五字段 Cron 表达式和时区",
+    "cancel": "取消",
+    "preview": "预览修改",
+    "taskCard": "定时任务确认卡片",
+    "deleteNotice": "删除后不再触发后续运行，无法恢复；已有运行记录仍保留。",
+    "pauseNotice": "暂停后续调度；已经开始的运行会继续。",
+    "saved": "操作已保存",
+    "viewTask": "查看任务",
+    "originalProposal": "查看原提议",
+    "taskDeleted": "这个定时任务已被删除。",
+    "openTaskFailed": "暂时无法打开任务，请重试。",
+    "answer": "输入或补充你的回答",
+    "continue": "继续",
+    "operation": {
+      "create": "安排定时任务",
+      "update": "修改定时任务",
+      "pause": "暂停定时任务",
+      "resume": "恢复定时任务",
+      "delete": "删除定时任务"
+    },
+    "cardStatus": {
+      "waiting": "待确认",
+      "saved": "已保存",
+      "cancelled": "已取消",
+      "superseded": "已失效"
+    },
+    "confirm": {
+      "create": "创建任务",
+      "update": "保存修改",
+      "pause": "确认暂停",
+      "resume": "确认恢复",
+      "delete": "确认删除"
+    },
+    "list": "任务列表",
+    "scheduled": "已安排的任务",
+    "listDescription": "查看执行安排、运行结果，或通过对话调整任务。",
+    "localHint": "需要保持 Workrun 运行 · 错过的任务不会补跑",
+    "noConversations": "暂无对话记录",
+    "progress": {
+      "understanding": "正在理解任务需求",
+      "responding": "正在整理回复",
+      "list_targets": "正在查找可用应用和工作流",
+      "get_target": "正在检查执行目标与输入参数",
+      "list_schedules": "正在读取定时任务",
+      "get_schedule": "正在读取任务详情和运行记录",
+      "preview_change": "正在校验时间和任务配置",
+      "ask_questions": "正在整理需要补充的信息"
+    },
+    "timeRule": "执行时间",
+    "source": {
+      "latest_local": "运行最新保存的 Workflow",
+      "latest_published": "跟随最新发布版本",
+      "published_release": "运行固定的已发布版本"
+    },
+    "status": {
+      "queued": "已排队",
+      "skipped": "已跳过",
+      "running": "运行中",
+      "completed": "已完成",
+      "succeeded": "已成功",
+      "failed": "失败",
+      "cancelled": "已取消",
+      "interrupted": "已中断",
+      "waiting_for_input": "等待输入"
+    },
+    "once": "仅执行一次",
+    "recurring": "重复执行",
+    "runAt": "执行时间",
+    "scheduleKind": "执行方式",
+    "onceNotice": "按所选时间执行一次后结束；需要保持 Workrun 运行，错过后不会补跑。",
+    "finish": {
+      "triggered": "已触发",
+      "missed": "已错过",
+      "skipped": "已跳过",
+      "failed": "触发失败"
+    },
+    "ended": "已结束",
+    "chat": "对话",
+    "navigation": "定时任务视图",
+    "toolbarNew": "新建任务",
+    "detailsNeeded": "补充任务信息"
   }
 }

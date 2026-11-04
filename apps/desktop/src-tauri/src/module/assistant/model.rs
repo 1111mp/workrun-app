@@ -5,7 +5,7 @@ use adk_rust::prelude::{Content, Llm, LlmRequest, Part};
 use anyhow::Result;
 use futures::StreamExt;
 
-pub(super) fn content_text(content: &Content) -> String {
+pub(crate) fn content_text(content: &Content) -> String {
     content
         .parts
         .iter()
@@ -17,7 +17,7 @@ pub(super) fn content_text(content: &Content) -> String {
 }
 
 /// Tool-round narration is progress, not a prefix of the eventual answer.
-pub(super) async fn generate_answer(
+pub(crate) async fn generate_answer(
     model: &dyn Llm,
     request: LlmRequest,
     emit: &(dyn Fn(AssistantStreamEvent) -> Result<()> + Send + Sync),
@@ -44,7 +44,7 @@ pub(super) async fn generate_answer(
     Ok(content)
 }
 
-pub(super) fn instructed(provider: &ModelProvider, instruction: &str, history: &[Content]) -> Vec<Content> {
+pub(crate) fn instructed(provider: &ModelProvider, instruction: &str, history: &[Content]) -> Vec<Content> {
     // ADK 2.3 Gemini ignores role=system entirely. Its own LlmAgent uses a user
     // preamble. Keep that compatibility at this boundary, not in saved history.
     let role = if *provider == ModelProvider::Gemini {
@@ -57,7 +57,7 @@ pub(super) fn instructed(provider: &ModelProvider, instruction: &str, history: &
     contents
 }
 
-pub(super) async fn generate(
+pub(crate) async fn generate(
     model: &dyn Llm,
     mut request: LlmRequest,
     emit: &(dyn Fn(AssistantStreamEvent) -> Result<()> + Send + Sync),

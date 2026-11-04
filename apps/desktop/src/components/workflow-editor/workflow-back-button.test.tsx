@@ -17,34 +17,38 @@ function Destination() {
     </div>
   );
 }
-it('returns to the original conversation history entry', async () => {
-  render(
-    <MemoryRouter
-      initialEntries={[
-        {
-          pathname: '/start',
-          search: '?session=sales',
-          key: 'original-conversation',
-        },
-        {
-          pathname: '/workflows/report',
-          state: { assistantReturnTo: '/start?session=sales' },
-        },
-      ]}
-    >
-      <Routes>
-        <Route path='/start' element={<Destination />} />
-        <Route path='/workflows/:id' element={<WorkflowBackButton />} />
-      </Routes>
-    </MemoryRouter>,
-  );
-  await userEvent.click(
-    screen.getByRole('button', { name: 'workflowEditor.backToConversation' }),
-  );
-  expect(screen.getByTestId('destination')).toHaveTextContent(
-    '/start?session=sales:original-conversation',
-  );
-});
+it.each(['/start?session=sales', '/schedules?conversation=weather&task=once'])(
+  'returns to the original conversation history entry %s',
+  async (origin) => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: origin.split('?')[0],
+            search: '?' + origin.split('?')[1],
+            key: 'original-conversation',
+          },
+          {
+            pathname: '/workflows/report',
+            state: { assistantReturnTo: origin },
+          },
+        ]}
+      >
+        <Routes>
+          <Route path='/start' element={<Destination />} />
+          <Route path='/schedules' element={<Destination />} />
+          <Route path='/workflows/:id' element={<WorkflowBackButton />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'workflowEditor.backToConversation' }),
+    );
+    expect(screen.getByTestId('destination')).toHaveTextContent(
+      `${origin}:original-conversation`,
+    );
+  },
+);
 it('returns direct workflow entries to the workflow list', async () => {
   render(
     <MemoryRouter initialEntries={['/workflows/report']}>

@@ -156,7 +156,7 @@ export type BackgroundProcessNodeRunRequest = {
   targetSnapshot: unknown;
 };
 
-export type AppSchedule = {
+export type AppSchedule = import('@/lib/schedule-time').ScheduleTiming & {
   id: string;
   name: string;
   targetType: 'app' | 'workflow';
