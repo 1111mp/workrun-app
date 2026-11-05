@@ -154,7 +154,7 @@ export function TaskDialogContent({
         </Button>
       </DialogFooter>
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
+        <AlertDialogContent forceOverlay>
           <AlertDialogHeader>
             <AlertDialogTitle>
               {t('apps.schedules.deleteConfirmTitle')}

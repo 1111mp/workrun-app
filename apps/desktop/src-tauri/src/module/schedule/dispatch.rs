@@ -14,6 +14,7 @@ pub(super) struct ScheduleClaim {
     pub scheduled_for: String,
     pub occurrence_id: String,
     pub skipped: bool,
+    pub version: String,
 }
 
 impl<'a> ScheduleDispatcher<'a> {
@@ -52,13 +53,13 @@ impl<'a> ScheduleDispatcher<'a> {
         Ok(())
     }
 
-    pub async fn failed(&self, id: &str, occurrence: &str, message: &str) -> Result<()> {
+    pub async fn failed(&self, id: &str, occurrence: &str, version: &str, message: &str, pause: bool) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("UPDATE schedule_occurrences SET status='skipped',reason='The scheduled execution could not start.',error=? WHERE id=?")
             .bind(message).bind(occurrence).execute(&mut *tx).await?;
         // A concurrent reschedule must retain its fresh timing and state.
-        sqlx::query("UPDATE schedules SET last_error=?,finish_reason=CASE WHEN schedule_kind='once' THEN 'failed' ELSE finish_reason END WHERE workspace_id=? AND id=? AND last_run_at=(SELECT scheduled_for FROM schedule_occurrences WHERE id=?) AND (schedule_kind='recurring' OR finished_at IS NOT NULL)")
-            .bind(message).bind(self.workspace).bind(id).bind(occurrence).execute(&mut *tx).await?;
+        sqlx::query("UPDATE schedules SET updated_at=?,enabled=CASE WHEN ? THEN 0 ELSE enabled END,last_error=?,finish_reason=CASE WHEN schedule_kind='once' THEN 'failed' ELSE finish_reason END WHERE workspace_id=? AND id=? AND updated_at=?")
+            .bind(Utc::now().to_rfc3339()).bind(pause).bind(message).bind(self.workspace).bind(id).bind(version).execute(&mut *tx).await?;
         tx.commit().await?;
         super::ScheduleEvents::tasks(self.workspace);
         Ok(())
@@ -78,9 +79,10 @@ impl<'a> ScheduleDispatcher<'a> {
                 .next_for_save(parse_time(&scheduled_for)?, true)?
                 .to_rfc3339()
         };
+        let version = now.to_rfc3339();
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let changed = sqlx::query("UPDATE schedules SET next_run_at=?,last_run_at=?,updated_at=?,enabled=CASE WHEN ? THEN 0 ELSE enabled END,finished_at=CASE WHEN ? THEN ? ELSE finished_at END,finish_reason=CASE WHEN ? THEN 'triggered' ELSE finish_reason END WHERE workspace_id=? AND id=? AND enabled=1 AND next_run_at=?")
-            .bind(next).bind(&scheduled_for).bind(now.to_rfc3339()).bind(once).bind(once).bind(now.to_rfc3339()).bind(once).bind(self.workspace).bind(&summary.id).bind(&scheduled_for).execute(&mut *tx).await?;
+            .bind(next).bind(&scheduled_for).bind(&version).bind(once).bind(once).bind(now.to_rfc3339()).bind(once).bind(self.workspace).bind(&summary.id).bind(&scheduled_for).execute(&mut *tx).await?;
         if changed.rows_affected() == 0 {
             tx.commit().await?;
             return Ok(None);
@@ -104,6 +106,7 @@ impl<'a> ScheduleDispatcher<'a> {
             scheduled_for,
             occurrence_id,
             skipped,
+            version,
         }))
     }
 }
@@ -155,7 +158,13 @@ mod tests {
                 .is_none()
         );
         dispatcher
-            .failed(&summary.id, &claim.occurrence_id, "dispatch failed")
+            .failed(
+                &summary.id,
+                &claim.occurrence_id,
+                &claim.version,
+                "dispatch failed",
+                false,
+            )
             .await
             .unwrap();
         let row = sqlx::query("SELECT * FROM schedules").fetch_one(&pool).await.unwrap();
@@ -166,6 +175,76 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn current_recurring_failure_respects_pause_policy() {
+        for pause in [false, true] {
+            let (pool, _) = fixture().await;
+            sqlx::query("UPDATE schedules SET schedule_kind='recurring',run_at=NULL,cron_expression='0 10 * * *'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let row = sqlx::query("SELECT * FROM schedules").fetch_one(&pool).await.unwrap();
+            let summary = super::super::schedule_summary(&row).unwrap();
+            let dispatcher = ScheduleDispatcher::new(&pool, "personal");
+            let claim = dispatcher
+                .claim(&summary, parse_time(&summary.next_run_at).unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            dispatcher
+                .failed(
+                    &summary.id,
+                    &claim.occurrence_id,
+                    &claim.version,
+                    "dispatch failed",
+                    pause,
+                )
+                .await
+                .unwrap();
+            let row = sqlx::query("SELECT enabled,last_error FROM schedules")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(row.get::<bool, _>("enabled"), !pause);
+            assert_eq!(row.get::<String, _>("last_error"), "dispatch failed");
+        }
+    }
+
+    #[tokio::test]
+    async fn old_failure_keeps_rescheduled_task_and_records_occurrence_error() {
+        for pause in [false, true] {
+            let (pool, summary) = fixture().await;
+            let dispatcher = ScheduleDispatcher::new(&pool, "personal");
+            let claim = dispatcher
+                .claim(&summary, parse_time(&summary.next_run_at).unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            let future = "2026-11-06T02:00:00+00:00";
+            sqlx::query("UPDATE schedules SET enabled=1,run_at=?,next_run_at=?,finished_at=NULL,finish_reason=NULL,updated_at='rescheduled',last_error=NULL")
+                .bind(future).bind(future).execute(&pool).await.unwrap();
+            dispatcher
+                .failed(&summary.id, &claim.occurrence_id, &claim.version, "old failure", pause)
+                .await
+                .unwrap();
+            let row = sqlx::query("SELECT * FROM schedules").fetch_one(&pool).await.unwrap();
+            assert!(row.get::<bool, _>("enabled"));
+            assert_eq!(row.get::<String, _>("run_at"), future);
+            assert_eq!(row.get::<String, _>("next_run_at"), future);
+            assert_eq!(row.get::<String, _>("updated_at"), "rescheduled");
+            for field in ["finished_at", "finish_reason", "last_error"] {
+                assert!(row.get::<Option<String>, _>(field).is_none());
+            }
+            let occurrence = sqlx::query("SELECT status,error FROM schedule_occurrences WHERE id=?")
+                .bind(&claim.occurrence_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(occurrence.get::<String, _>("status"), "skipped");
+            assert_eq!(occurrence.get::<String, _>("error"), "old failure");
+        }
     }
 
     #[tokio::test]

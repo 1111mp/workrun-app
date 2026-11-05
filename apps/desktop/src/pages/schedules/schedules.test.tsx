@@ -287,31 +287,54 @@ it('uses its independent agent and waits for the native task card before saving'
   expect(api.createSchedulingSession).toHaveBeenCalledTimes(createsBefore);
 });
 
-it('preserves missing-input questions through reload and sends the selected answer', async () => {
-  const awaiting: SchedulingSession = {
-    ...session,
-    questions: [
-      { title: 'Which project?', options: ['Workrun', 'Other project'] },
-    ],
-  };
-  vi.mocked(api.getSchedulingSession).mockResolvedValue(awaiting);
-  vi.mocked(api.sendSchedulingMessage).mockResolvedValue({
-    ...session,
-    messages: [{ id: 'reply', role: 'assistant', text: 'Ready to preview' }],
-  });
-  mount('/schedules?conversation=session-1');
-  fireEvent.click(await screen.findByRole('button', { name: 'Workrun' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-  await waitFor(() =>
-    expect(api.sendSchedulingMessage).toHaveBeenCalledWith(
-      'session-1',
-      'model-1',
-      'Which project?\nWorkrun',
-      expect.any(Function),
-      undefined,
-    ),
-  );
-});
+it.each(['card', 'composer'] as const)(
+  'explains both clarification entry points and accepts an answer through the %s',
+  async (entry) => {
+    const awaiting: SchedulingSession = {
+      ...session,
+      questions: [
+        { title: 'Which project?', options: ['Workrun', 'Other project'] },
+      ],
+    };
+    vi.mocked(api.getSchedulingSession).mockResolvedValue(awaiting);
+    vi.mocked(api.sendSchedulingMessage).mockResolvedValue({
+      ...session,
+      messages: [{ id: 'reply', role: 'assistant', text: 'Ready to preview' }],
+    });
+    mount('/schedules?conversation=session-1');
+    expect(
+      await screen.findByText(en.schedules.answerHint),
+    ).toBeInTheDocument();
+    const composer = screen.getByPlaceholderText(
+      en.schedules.answerPlaceholder,
+    );
+    if (entry === 'card') {
+      fireEvent.click(screen.getByRole('button', { name: 'Workrun' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    } else {
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+      fireEvent.change(composer, {
+        target: { value: 'Use Workrun for the report' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    }
+    await waitFor(() =>
+      expect(api.sendSchedulingMessage).toHaveBeenCalledWith(
+        'session-1',
+        'model-1',
+        entry === 'card'
+          ? 'Which project?\nWorkrun'
+          : 'Use Workrun for the report',
+        expect.any(Function),
+        undefined,
+      ),
+    );
+    expect(await screen.findByText('Ready to preview')).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText(en.schedules.answerPlaceholder),
+    ).not.toBeInTheDocument();
+  },
+);
 
 it('keeps direct task errors in the dialog without creating conversation cards', async () => {
   vi.mocked(api.changeScheduledTask).mockRejectedValue(
@@ -346,7 +369,9 @@ it('keeps the first response busy across route creation and surfaces transport f
   await waitFor(() => expect(api.sendSchedulingMessage).toHaveBeenCalledOnce());
   // The initial session read can still be idle while provider authentication is pending.
   await waitFor(() =>
-    expect(screen.getByLabelText('Scheduled task message')).toBeDisabled(),
+    expect(
+      screen.getByRole('button', { name: en.schedules.stop }),
+    ).toBeInTheDocument(),
   );
   reject(new Error('Provider unavailable'));
   expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -520,7 +545,9 @@ it('keeps the sent message visible before session creation and through stale idl
   expect(
     await screen.findByText('Weather workflow 已找到。'),
   ).toBeInTheDocument();
-  expect(screen.getByLabelText('Scheduled task message')).toBeDisabled();
+  expect(
+    screen.getByRole('button', { name: en.schedules.stop }),
+  ).toBeInTheDocument();
   await act(async () =>
     receive({
       type: 'text_delta',
@@ -769,6 +796,41 @@ it('shows one-time task dates and reschedules finished tasks without a resume ac
   );
 });
 
+it.each([false, true])(
+  'preserves the exact one-time instant when renaming a task (finished: %s)',
+  async (finished) => {
+    const once: ScheduledTask = {
+      ...task,
+      scheduleKind: 'once',
+      cronExpression: '',
+      runAt: '2026-11-05T02:00:37.123+00:00',
+      enabled: !finished,
+      finishedAt: finished ? '2026-11-05T03:00:00Z' : null,
+      finishReason: finished ? 'triggered' : null,
+    };
+    vi.mocked(api.listSchedules).mockResolvedValue([once]);
+    vi.mocked(api.getSchedule).mockResolvedValue(once);
+    vi.mocked(api.changeScheduledTask).mockResolvedValue({
+      ...once,
+      name: 'Renamed',
+    });
+    mount('/schedules?task=task-1');
+    fireEvent.click(
+      await screen.findByRole('button', { name: en.schedules.edit }),
+    );
+    fireEvent.change(screen.getByLabelText(en.schedules.name), {
+      target: { value: 'Renamed' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: en.apps.schedules.save }),
+    );
+    await waitFor(() => expect(api.changeScheduledTask).toHaveBeenCalled());
+    const change = vi.mocked(api.changeScheduledTask).mock.calls[0]![0];
+    expect(change).toMatchObject({ name: 'Renamed', scheduleKind: 'once' });
+    expect(change).not.toHaveProperty('runAt');
+  },
+);
+
 it('keeps the current conversation and draft when switching to tasks and back', async () => {
   mount('/schedules?conversation=session-1');
   const composer = await screen.findByLabelText('Scheduled task message');
@@ -973,7 +1035,12 @@ it('does not show model thinking while cancelling a task card', async () => {
     false,
   );
   expect(screen.queryByTestId('assistant-thinking')).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  expect(
+    screen.getByRole('button', { name: en.schedules.cancelling }),
+  ).toBeDisabled();
+  expect(
+    screen.queryByRole('button', { name: en.schedules.stop }),
+  ).not.toBeInTheDocument();
   receipt.resolve({
     ...pending,
     pending: null,
@@ -1263,12 +1330,20 @@ it('keeps the historical rows while a native stop event precedes the command rec
   });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(api.sendSchedulingMessage).toHaveBeenCalled());
+  const composer = screen.getByLabelText('Scheduled task message');
+  expect(composer).toBeEnabled();
+  await userEvent.type(composer, 'Next request');
+  await userEvent.keyboard('{Enter}');
+  expect(api.sendSchedulingMessage).toHaveBeenCalledTimes(1);
+  expect(api.stopSchedulingResponse).not.toHaveBeenCalled();
+  expect(composer).toHaveValue('Next request');
   fireEvent.click(screen.getByRole('button', { name: en.schedules.stop }));
   expect(api.stopSchedulingResponse).toHaveBeenCalledWith(session.id);
   const stopped = {
     ...loaded,
     revision: 3,
     status: 'interrupted' as const,
+    error: 'Response stopped',
     messages: [
       ...loaded.messages,
       { id: 'u', role: 'user' as const, text: 'Stop this weather request' },
@@ -1292,6 +1367,15 @@ it('keeps the historical rows while a native stop event precedes the command rec
     ])?.revision,
   ).toBe(3);
   expect(screen.getAllByText('Stop this weather request')).toHaveLength(1);
+  expect(composer).toHaveValue('Next request');
+  vi.mocked(api.sendSchedulingMessage).mockResolvedValue(stopped);
+  await userEvent.click(await screen.findByRole('button', { name: 'Send' }));
+  await waitFor(() =>
+    expect(api.sendSchedulingMessage).toHaveBeenCalledTimes(2),
+  );
+  expect(vi.mocked(api.sendSchedulingMessage).mock.calls[1]?.[2]).toBe(
+    'Next request',
+  );
 });
 
 it('opens each task from a multi-task conversation in a dialog without replacing its history or draft', async () => {
@@ -1309,6 +1393,7 @@ it('opens each task from a multi-task conversation in a dialog without replacing
     })),
   };
   vi.mocked(api.getSchedulingSession).mockResolvedValue(saved);
+  vi.mocked(api.listSchedules).mockResolvedValue([task, second]);
   vi.mocked(api.getSchedule).mockImplementation(async (id) =>
     id === second.id ? second : task,
   );
@@ -1549,11 +1634,22 @@ it.each([
     );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByText('Task saved.')).toBeInTheDocument();
-    await waitFor(() =>
+    if (notice === en.schedules.taskDeleted) {
       expect(
-        screen.getByRole('link', { name: 'View task' }),
-      ).not.toHaveAttribute('aria-disabled', 'true'),
-    );
+        screen.queryByRole('link', { name: 'View task' }),
+      ).not.toBeInTheDocument();
+      expect(
+        within(screen.getByRole('region', { name: task.name })).getByRole(
+          'status',
+        ),
+      ).toHaveTextContent(en.apps.schedules.deleted);
+    } else {
+      await waitFor(() =>
+        expect(
+          screen.getByRole('link', { name: 'View task' }),
+        ).not.toHaveAttribute('aria-disabled', 'true'),
+      );
+    }
   },
 );
 
@@ -1587,12 +1683,12 @@ it.each(['pause', 'delete'] as const)(
     const original = savedTaskConversation();
     vi.mocked(api.getSchedulingSession).mockResolvedValue(original);
     const changed = { ...task, enabled: false, version: 'v2' };
-    vi.mocked(api.changeScheduledTask).mockResolvedValue(
-      operation === 'delete' ? null : changed,
-    );
-    vi.mocked(api.listSchedules).mockResolvedValue(
-      operation === 'delete' ? [] : [changed],
-    );
+    vi.mocked(api.changeScheduledTask).mockImplementation(async () => {
+      vi.mocked(api.listSchedules).mockResolvedValue(
+        operation === 'delete' ? [] : [changed],
+      );
+      return operation === 'delete' ? null : changed;
+    });
     mount('/schedules?conversation=session-1');
     await userEvent.click(
       await screen.findByRole('link', { name: 'View task' }),
@@ -1658,5 +1754,456 @@ it('shows a failed detail action inside the still-open dialog rather than behind
     expect(
       within(dialog).getByRole('button', { name: 'Pause task' }),
     ).toBeEnabled(),
+  );
+});
+
+function confirmationSession(
+  operation: api.ScheduleChange['operation'] = 'create',
+): SchedulingSession {
+  return {
+    ...session,
+    revision: 1,
+    pending: 'recovery-card',
+    messages: [
+      { id: 'request', role: 'user', text: 'Please arrange my report' },
+    ],
+    proposals: [
+      {
+        id: 'recovery-card',
+        operation,
+        status: 'waiting',
+        before: operation === 'create' ? null : task,
+        after: task,
+        messageIndex: 1,
+      },
+    ],
+  };
+}
+
+it.each(['native', 'transport'] as const)(
+  'keeps saved actions distinct from %s reply failures and retries only the reply',
+  async (failure) => {
+    const pending = confirmationSession();
+    const saved: SchedulingSession = {
+      ...pending,
+      revision: 2,
+      pending: null,
+      receiptPending: true,
+      proposals: [{ ...pending.proposals[0]!, status: 'saved' }],
+    };
+    const failed = { ...saved, error: 'Provider unavailable' };
+    const complete: SchedulingSession = {
+      ...saved,
+      revision: 4,
+      receiptPending: false,
+      messages: [
+        ...saved.messages,
+        {
+          id: 'reply',
+          role: 'assistant',
+          text: 'Task saved',
+          proposalId: 'recovery-card',
+        },
+      ],
+    };
+    vi.mocked(api.getSchedulingSession).mockResolvedValue(pending);
+    vi.mocked(api.decideScheduleChange).mockImplementation(async () => {
+      vi.mocked(api.getSchedulingSession).mockResolvedValue(failed);
+      return saved;
+    });
+    if (failure === 'native')
+      vi.mocked(api.replySchedulingReceipt).mockResolvedValueOnce(failed);
+    else
+      vi.mocked(api.replySchedulingReceipt).mockRejectedValueOnce(
+        new Error('Provider unavailable'),
+      );
+    mount('/schedules?conversation=session-1');
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create task' }),
+    );
+    expect(
+      await screen.findByText(en.schedules.savedReplyFailed),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: task.name })).toBeInTheDocument();
+    const draft = screen.getByLabelText(en.schedules.composer);
+    fireEvent.change(draft, { target: { value: 'Keep this draft' } });
+    vi.mocked(api.replySchedulingReceipt).mockImplementationOnce(async () => {
+      vi.mocked(api.getSchedulingSession).mockResolvedValue(complete);
+      return complete;
+    });
+    await userEvent.click(
+      await screen.findByRole('button', { name: en.schedules.retryReply }),
+    );
+    expect(await screen.findByText('Task saved')).toBeInTheDocument();
+    expect(api.replySchedulingReceipt).toHaveBeenCalledTimes(2);
+    expect(api.decideScheduleChange).toHaveBeenCalledTimes(1);
+    expect(api.sendSchedulingMessage).not.toHaveBeenCalled();
+    expect(draft).toHaveValue('Keep this draft');
+    expect(
+      screen.queryByText(en.schedules.savedReplyFailed),
+    ).not.toBeInTheDocument();
+  },
+);
+
+it.each([null, 'Interrupted provider'])(
+  'recovers an unanswered receipt after reload without saving again (error: %s)',
+  async (error) => {
+    const pending = confirmationSession();
+    const saved: SchedulingSession = {
+      ...pending,
+      pending: null,
+      receiptPending: true,
+      error,
+      proposals: [{ ...pending.proposals[0]!, status: 'saved' }],
+    };
+    vi.mocked(api.getSchedulingSession).mockResolvedValue(saved);
+    vi.mocked(api.replySchedulingReceipt).mockImplementation(async () => {
+      const complete: SchedulingSession = {
+        ...saved,
+        receiptPending: false,
+        error: null,
+        messages: [
+          ...saved.messages,
+          { id: 'done', role: 'assistant', text: 'Recovered reply' },
+        ],
+      };
+      vi.mocked(api.getSchedulingSession).mockResolvedValue(complete);
+      return complete;
+    });
+    mount('/schedules?conversation=session-1');
+    await userEvent.click(
+      await screen.findByRole('button', { name: en.schedules.retryReply }),
+    );
+    expect(await screen.findByText('Recovered reply')).toBeInTheDocument();
+    expect(api.decideScheduleChange).not.toHaveBeenCalled();
+    expect(api.sendSchedulingMessage).not.toHaveBeenCalled();
+  },
+);
+
+it('offers a new preview after a confirmation conflict and separates saving from model generation', async () => {
+  const pending = confirmationSession('update');
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(pending);
+  const decision = deferred<SchedulingSession>();
+  vi.mocked(api.decideScheduleChange).mockReturnValue(decision.promise);
+  vi.mocked(api.sendSchedulingMessage).mockResolvedValue({
+    ...pending,
+    error: null,
+  });
+  mount('/schedules?conversation=session-1');
+  await userEvent.click(
+    await screen.findByRole('button', { name: en.schedules.confirm.update }),
+  );
+  expect(
+    screen.getByRole('button', { name: en.schedules.actionProgress.update }),
+  ).toBeDisabled();
+  expect(
+    screen.queryByRole('button', { name: en.schedules.stop }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByTestId('assistant-thinking')).not.toBeInTheDocument();
+  await act(async () => decision.reject(new Error('Schedule changed')));
+  await userEvent.click(
+    await screen.findByRole('button', { name: en.schedules.repreview }),
+  );
+  await waitFor(() =>
+    expect(api.sendSchedulingMessage).toHaveBeenCalledWith(
+      'session-1',
+      'model-1',
+      en.schedules.repreviewRequest,
+      expect.any(Function),
+      undefined,
+    ),
+  );
+  expect(api.decideScheduleChange).toHaveBeenCalledTimes(1);
+});
+
+it('retries a failed send using its original text without clearing a newer draft', async () => {
+  vi.mocked(api.sendSchedulingMessage).mockRejectedValueOnce(
+    new Error('Offline'),
+  );
+  mount('/schedules?conversation=session-1');
+  const composer = await screen.findByLabelText(en.schedules.composer);
+  fireEvent.change(composer, { target: { value: 'Original request' } });
+  await userEvent.click(
+    screen.getByRole('button', { name: en.schedules.send }),
+  );
+  await screen.findByText(/Offline/);
+  fireEvent.change(composer, { target: { value: 'Next draft' } });
+  vi.mocked(api.sendSchedulingMessage).mockResolvedValueOnce({
+    ...session,
+    messages: [{ id: 'done', role: 'assistant', text: 'Retried successfully' }],
+  });
+  await userEvent.click(
+    await screen.findByRole('button', { name: en.schedules.retrySend }),
+  );
+  await waitFor(() =>
+    expect(api.sendSchedulingMessage).toHaveBeenCalledTimes(2),
+  );
+  expect(vi.mocked(api.sendSchedulingMessage).mock.calls[1]?.[2]).toBe(
+    'Original request',
+  );
+  expect(composer).toHaveValue('Next draft');
+});
+
+it('continues an interrupted request using current native context', async () => {
+  vi.mocked(api.getSchedulingSession).mockResolvedValue({
+    ...session,
+    status: 'interrupted',
+    messages: [{ id: 'user', role: 'user', text: 'Original request' }],
+  });
+  vi.mocked(api.sendSchedulingMessage).mockResolvedValue(session);
+  mount('/schedules?conversation=session-1');
+  await userEvent.click(
+    await screen.findByRole('button', { name: en.schedules.continueRequest }),
+  );
+  await waitFor(() =>
+    expect(api.sendSchedulingMessage).toHaveBeenCalledWith(
+      'session-1',
+      'model-1',
+      en.schedules.continueRequestText,
+      expect.any(Function),
+      undefined,
+    ),
+  );
+});
+
+it.each(['pause', 'resume'] as const)(
+  'uses the %s success message for a direct task action',
+  async (operation) => {
+    const current = { ...task, enabled: operation === 'pause' };
+    vi.mocked(api.getSchedule).mockResolvedValue(current);
+    vi.mocked(api.changeScheduledTask).mockResolvedValue({
+      ...current,
+      enabled: !current.enabled,
+    });
+    mount('/schedules?task=task-1');
+    await userEvent.click(
+      await screen.findByRole('button', { name: en.schedules[operation] }),
+    );
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        operation === 'pause'
+          ? en.schedules.taskPaused
+          : en.schedules.taskResumed,
+        { toasterId: 'global' },
+      ),
+    );
+  },
+);
+
+it('reconciles a lost confirmation receipt without repeating the task mutation', async () => {
+  const pending = confirmationSession();
+  const saved: SchedulingSession = {
+    ...pending,
+    revision: 2,
+    pending: null,
+    receiptPending: true,
+    proposals: [{ ...pending.proposals[0]!, status: 'saved' }],
+  };
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(pending);
+  vi.mocked(api.decideScheduleChange).mockImplementation(async () => {
+    vi.mocked(api.getSchedulingSession).mockResolvedValue(saved);
+    throw new Error('Lost confirmation receipt');
+  });
+  vi.mocked(api.replySchedulingReceipt).mockResolvedValue({
+    ...saved,
+    receiptPending: false,
+    messages: [
+      ...saved.messages,
+      { id: 'reply', role: 'assistant', text: 'Recovered saved task' },
+    ],
+  });
+  mount('/schedules?conversation=session-1');
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Create task' }),
+  );
+  await userEvent.click(
+    await screen.findByRole('button', { name: en.schedules.retryReply }),
+  );
+  expect(await screen.findByText('Recovered saved task')).toBeInTheDocument();
+  expect(api.decideScheduleChange).toHaveBeenCalledTimes(1);
+  expect(api.sendSchedulingMessage).not.toHaveBeenCalled();
+});
+
+it('does not regenerate a receipt reply that native storage already completed', async () => {
+  const pending = confirmationSession();
+  const saved: SchedulingSession = {
+    ...pending,
+    revision: 2,
+    pending: null,
+    receiptPending: true,
+    error: 'Lost reply',
+    proposals: [{ ...pending.proposals[0]!, status: 'saved' }],
+  };
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(saved);
+  mount('/schedules?conversation=session-1');
+  const retry = await screen.findByRole('button', {
+    name: en.schedules.retryReply,
+  });
+  vi.mocked(api.getSchedulingSession).mockResolvedValue({
+    ...saved,
+    revision: 3,
+    receiptPending: false,
+    error: null,
+    messages: [
+      ...saved.messages,
+      { id: 'reply', role: 'assistant', text: 'Already delivered' },
+    ],
+  });
+  await userEvent.click(retry);
+  expect(await screen.findByText('Already delivered')).toBeInTheDocument();
+  expect(api.replySchedulingReceipt).not.toHaveBeenCalled();
+  expect(api.decideScheduleChange).not.toHaveBeenCalled();
+});
+
+it('does not resend a request whose answer was committed before the transport failed', async () => {
+  vi.mocked(api.sendSchedulingMessage).mockRejectedValueOnce(
+    new Error('Lost response'),
+  );
+  mount('/schedules?conversation=session-1');
+  const composer = await screen.findByLabelText(en.schedules.composer);
+  fireEvent.change(composer, { target: { value: 'Original request' } });
+  await userEvent.click(
+    screen.getByRole('button', { name: en.schedules.send }),
+  );
+  const retry = await screen.findByRole('button', {
+    name: en.schedules.retrySend,
+  });
+  vi.mocked(api.getSchedulingSession).mockResolvedValue({
+    ...session,
+    revision: 10,
+    messages: [
+      { id: 'user', role: 'user', text: 'Original request' },
+      { id: 'answer', role: 'assistant', text: 'Already answered' },
+    ],
+  });
+  await userEvent.click(retry);
+  expect(await screen.findByText('Already answered')).toBeInTheDocument();
+  expect(api.sendSchedulingMessage).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('does not mistake an older identical request for delivery of a failed new send', async () => {
+  const loaded: SchedulingSession = {
+    ...session,
+    messages: [
+      { id: 'old-user', role: 'user', text: 'Same request' },
+      { id: 'old-answer', role: 'assistant', text: 'Old answer' },
+    ],
+  };
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(loaded);
+  vi.mocked(api.sendSchedulingMessage).mockRejectedValueOnce(
+    new Error('Offline'),
+  );
+  mount('/schedules?conversation=session-1');
+  await screen.findByText('Old answer');
+  fireEvent.change(screen.getByLabelText(en.schedules.composer), {
+    target: { value: 'Same request' },
+  });
+  await userEvent.click(
+    screen.getByRole('button', { name: en.schedules.send }),
+  );
+  const retry = await screen.findByRole('button', {
+    name: en.schedules.retrySend,
+  });
+  vi.mocked(api.sendSchedulingMessage).mockResolvedValue(loaded);
+  await userEvent.click(retry);
+  await waitFor(() =>
+    expect(api.sendSchedulingMessage).toHaveBeenCalledTimes(2),
+  );
+  expect(vi.mocked(api.sendSchedulingMessage).mock.calls[1]?.[2]).toBe(
+    'Same request',
+  );
+});
+
+it('updates saved result cards after an event reports task deletion without rewriting confirmation history', async () => {
+  const saved = savedTaskConversation();
+  saved.messages = [
+    { id: 'preview', role: 'assistant', text: 'Historical confirmation' },
+    ...saved.messages,
+  ];
+  saved.proposals[0]!.messageIndex = 1;
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(saved);
+  const client = mount('/schedules?conversation=session-1');
+  const result = await screen.findByRole('region', { name: task.name });
+  expect(within(result).getByText(en.schedules.active)).toBeInTheDocument();
+  client.setQueryData(['schedule', 'personal', task.id], task);
+  vi.mocked(api.listSchedules).mockResolvedValue([]);
+  act(() =>
+    nativeEvents.listeners.get('schedules-changed')!({
+      payload: { workspaceId: 'personal' },
+    }),
+  );
+  await waitFor(() =>
+    expect(within(result).getByRole('status')).toHaveTextContent(
+      en.apps.schedules.deleted,
+    ),
+  );
+  expect(
+    within(result).queryByText(en.schedules.active),
+  ).not.toBeInTheDocument();
+  expect(
+    within(result).queryByRole('link', { name: 'View task' }),
+  ).not.toBeInTheDocument();
+  expect(result).not.toHaveTextContent(en.schedules.next);
+  const preview = screen.getByRole('region', { name: en.schedules.taskCard });
+  expect(
+    within(preview).getByText(en.schedules.cardStatus.saved),
+  ).toBeInTheDocument();
+  expect(screen.getByText('Historical confirmation')).toBeInTheDocument();
+});
+
+it('shows deleted results when opening old history after the task is gone', async () => {
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(
+    savedTaskConversation(),
+  );
+  vi.mocked(api.listSchedules).mockResolvedValue([]);
+  mount('/schedules?conversation=session-1');
+  const result = await screen.findByRole('region', { name: task.name });
+  expect(within(result).getByRole('status')).toHaveTextContent(
+    en.apps.schedules.deleted,
+  );
+  expect(within(result).queryByRole('link')).not.toBeInTheDocument();
+  expect(api.getSchedule).not.toHaveBeenCalled();
+});
+
+it('does not infer task deletion from a failed task-list read', async () => {
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(
+    savedTaskConversation(),
+  );
+  vi.mocked(api.listSchedules).mockRejectedValue(
+    new Error('Database unavailable'),
+  );
+  mount('/schedules?conversation=session-1');
+  const result = await screen.findByRole('region', { name: task.name });
+  expect(within(result).getByText(en.schedules.active)).toBeInTheDocument();
+  expect(
+    within(result).getByRole('link', { name: 'View task' }),
+  ).toBeInTheDocument();
+});
+
+it('publishes a newly confirmed task before refreshing an initially empty list', async () => {
+  const pending = confirmationSession();
+  const saved: SchedulingSession = {
+    ...pending,
+    revision: 2,
+    proposals: [{ ...pending.proposals[0]!, status: 'saved' }],
+  };
+  vi.mocked(api.listSchedules)
+    .mockResolvedValueOnce([])
+    .mockReturnValue(new Promise(() => {}));
+  vi.mocked(api.getSchedulingSession).mockResolvedValue(pending);
+  vi.mocked(api.decideScheduleChange).mockResolvedValue(saved);
+  vi.mocked(api.replySchedulingReceipt).mockReturnValue(new Promise(() => {}));
+  mount('/schedules?conversation=session-1');
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Create task' }),
+  );
+  const result = await screen.findByRole('region', { name: task.name });
+  expect(within(result).getByText(en.schedules.active)).toBeInTheDocument();
+  expect(
+    within(result).getByRole('link', { name: 'View task' }),
+  ).toBeInTheDocument();
+  expect(within(result).getByRole('status')).not.toHaveTextContent(
+    en.apps.schedules.deleted,
   );
 });

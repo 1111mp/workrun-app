@@ -2475,6 +2475,28 @@
     "chat": "对话",
     "navigation": "定时任务视图",
     "toolbarNew": "新建任务",
+    "taskPaused": "任务已暂停",
+    "taskResumed": "任务已恢复",
+    "savedReplyFailed": "任务操作已保存，回复生成失败",
+    "replyIncomplete": "回复尚未完成，任务操作已经保存。",
+    "savedReplyHint": "任务修改已生效。可以仅重试回复，不会再次保存任务。",
+    "retryReply": "仅重试回复",
+    "retrySend": "重试发送",
+    "continueRequest": "继续请求",
+    "continueRequestText": "请继续处理我上一条请求。在准备修改前，请先检查当前任务和确认状态。",
+    "repreview": "重新生成预览",
+    "repreviewRequest": "请重新检查当前任务及执行目标，为我刚才要求的修改重新生成预览，等待确认，暂不保存任何修改。",
+    "updating": "正在更新任务…",
+    "cancelling": "正在取消…",
+    "actionProgress": {
+      "create": "正在保存…",
+      "update": "正在保存…",
+      "pause": "正在暂停…",
+      "resume": "正在恢复…",
+      "delete": "正在删除…"
+    },
+    "answerHint": "可选择选项或填写回答后点击「继续」；也可直接在底部输入框补充信息并发送。",
+    "answerPlaceholder": "直接补充回答或其他要求…",
     "detailsNeeded": "补充任务信息"
   }
 }

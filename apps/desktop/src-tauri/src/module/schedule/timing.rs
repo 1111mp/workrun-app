@@ -160,6 +160,24 @@ mod tests {
     }
 
     #[test]
+    fn metadata_edits_preserve_finished_once_precision_and_state() {
+        let now = DateTime::parse_from_rfc3339("2026-11-05T02:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut task = json!({"scheduleKind":"once","runAt":"2026-11-04T02:00:37.123+00:00","cronExpression":"","timezone":"Asia/Shanghai","enabled":false,"finishedAt":"2026-11-04T03:00:00Z","finishReason":"triggered"});
+        let original = task.clone();
+        ScheduleTiming::patch(
+            &mut task,
+            &json!({"operation":"update","scheduleKind":"once","timezone":"Asia/Shanghai","name":"Renamed"}),
+            now,
+        )
+        .unwrap();
+        for field in ["runAt", "finishedAt", "finishReason", "enabled"] {
+            assert_eq!(task[field], original[field]);
+        }
+    }
+
+    #[test]
     fn terminal_tasks_require_rescheduling_and_timezone_gaps_are_rejected() {
         let now = DateTime::parse_from_rfc3339("2026-11-04T02:00:00Z")
             .unwrap()

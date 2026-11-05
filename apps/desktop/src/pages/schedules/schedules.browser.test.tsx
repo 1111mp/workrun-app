@@ -17,7 +17,10 @@ vi.mock('@/components/run-event-tracker', () => ({
 
 import '@/styles/global.css';
 import type { ScheduledTask, SchedulingSession } from '@/services/schedules';
-import { changeScheduledTask } from '@/services/schedules';
+import {
+  changeScheduledTask,
+  sendSchedulingMessage,
+} from '@/services/schedules';
 
 import { Component } from './index';
 
@@ -29,6 +32,7 @@ const fixtures = vi.hoisted(() => ({
   taskGate: undefined as Promise<ScheduledTask> | undefined,
   taskSnapshot: undefined as ScheduledTask | undefined,
   decisionGate: undefined as Promise<SchedulingSession> | undefined,
+  replyGate: undefined as Promise<SchedulingSession> | undefined,
   listeners: new Map<string, (event: unknown) => void>(),
   empty: false,
   questions: false,
@@ -252,8 +256,17 @@ vi.mock('@/services/schedules', () => {
     proposeScheduleChange: vi.fn(),
     changeScheduledTask: vi.fn(),
     decideScheduleChange: async () => fixtures.decisionGate,
-    replySchedulingReceipt: async () =>
-      (await fixtures.decisionGate) || fixtures.snapshot || session,
+    replySchedulingReceipt: async (
+      _id: string,
+      receive: (event: import('@/services/schedules').SchedulingStream) => void,
+    ) => {
+      fixtures.receive = receive;
+      return (
+        (await (fixtures.replyGate ?? fixtures.decisionGate)) ||
+        fixtures.snapshot ||
+        session
+      );
+    },
     stopSchedulingResponse: vi.fn(),
   };
 });
@@ -320,10 +333,17 @@ for (const [theme, width, mode] of [
           page.getByRole('button', { name: zh.schedules.confirm.create }),
         )
         .toBeVisible();
-    if (mode === 'questions')
+    if (mode === 'questions') {
       await expect
         .element(page.getByRole('button', { name: zh.schedules.continue }))
         .toBeVisible();
+      await expect
+        .element(page.getByText(zh.schedules.answerHint))
+        .toBeVisible();
+      await expect
+        .element(page.getByPlaceholder(zh.schedules.answerPlaceholder))
+        .toBeVisible();
+    }
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
     const header = document.querySelector('header')!.getBoundingClientRect();
     const toolbar = document
@@ -496,6 +516,17 @@ for (const width of [1280, 390]) {
         page.getByRole('button', { name: zh.schedules.stop, exact: true }),
       )
       .toBeVisible();
+    const draft = page.getByRole('textbox', { name: zh.schedules.composer });
+    await expect.element(draft).toBeEnabled();
+    const sends = vi.mocked(sendSchedulingMessage).mock.calls.length;
+    await draft.fill('接下来改成每周执行');
+    draft
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    expect(vi.mocked(sendSchedulingMessage).mock.calls.length).toBe(sends);
+    await expect.element(draft).toHaveValue('接下来改成每周执行');
     const composer = document
       .querySelector('textarea')!
       .getBoundingClientRect();
@@ -520,6 +551,7 @@ for (const width of [1280, 390]) {
     await expect
       .element(page.getByRole('textbox', { name: zh.schedules.composer }))
       .toBeEnabled();
+    await expect.element(draft).toHaveValue('接下来改成每周执行');
     expect(
       document.querySelectorAll('[data-slot="message"][data-align="end"]'),
     ).toHaveLength(1);
@@ -648,6 +680,8 @@ function clearAudit(client: QueryClient) {
   fixtures.taskSnapshot = undefined;
   fixtures.taskGate = undefined;
   fixtures.decisionGate = undefined;
+  fixtures.replyGate = undefined;
+  fixtures.receive = undefined;
 }
 
 for (const width of [1280, 390]) {
@@ -1381,6 +1415,348 @@ for (const width of [1280, 390]) {
       await expect
         .element(page.getByRole('textbox', { name: zh.schedules.composer }))
         .toHaveValue('保留草稿');
+    } finally {
+      clearAudit(client);
+    }
+  });
+}
+
+for (const width of [1280, 390]) {
+  it(`keeps saved-task recovery readable and separate from the task action at ${width}px`, async () => {
+    const { client, viewport } = await mountAudit(width);
+    try {
+      const saved: SchedulingSession = {
+        ...auditSnapshot(),
+        revision: 2,
+        receiptPending: true,
+        error: '模型服务暂时不可用，请稍后重试。',
+        proposals: [
+          {
+            id: 'recovery',
+            operation: 'create',
+            status: 'saved',
+            before: null,
+            after: fixtures.taskSnapshot!,
+            messageIndex: 28,
+          },
+        ],
+      };
+      fixtures.snapshot = saved;
+      client.setQueryData(['scheduling-session', 'personal', saved.id], saved);
+      await frames();
+      viewport.scrollTop = viewport.scrollHeight;
+      await frames();
+      await expect
+        .element(page.getByText(zh.schedules.savedReplyFailed))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole('button', { name: zh.schedules.retryReply }))
+        .toBeEnabled();
+      await expect
+        .element(page.getByText(zh.schedules.savedReplyHint))
+        .toBeVisible();
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
+      await page.screenshot({
+        path: `.vitest/attachments/schedules-recovery-${width}.png`,
+      });
+    } finally {
+      clearAudit(client);
+    }
+  });
+}
+
+for (const width of [1280, 390]) {
+  it(`updates deleted task result cards without reviving stale details at ${width}px`, async () => {
+    const { client, viewport } = await mountAudit(width);
+    try {
+      const saved: SchedulingSession = {
+        ...auditSnapshot(),
+        revision: 2,
+        proposals: [
+          {
+            id: 'deleted-result',
+            operation: 'create',
+            status: 'saved',
+            before: null,
+            after: fixtures.taskSnapshot!,
+            messageIndex: 28,
+          },
+        ],
+      };
+      fixtures.snapshot = saved;
+      client.setQueryData(['scheduling-session', 'personal', saved.id], saved);
+      client.setQueryData(
+        ['schedule', 'personal', 'task-1'],
+        fixtures.taskSnapshot,
+      );
+      await expect
+        .element(page.getByRole('link', { name: zh.schedules.viewTask }))
+        .toBeVisible();
+      client.setQueryData(['schedules', 'personal'], []);
+      const card = page.getByRole('region', {
+        name: fixtures.taskSnapshot!.name,
+      });
+      await expect
+        .element(card.getByRole('status'))
+        .toHaveTextContent(zh.apps.schedules.deleted);
+      await expect.element(card.getByRole('link')).not.toBeInTheDocument();
+      await expect
+        .element(card.getByText(zh.schedules.active, { exact: true }))
+        .not.toBeInTheDocument();
+      expect(card.element().textContent).not.toContain(zh.schedules.next);
+      await frames();
+      viewport.scrollTop = viewport.scrollHeight;
+      await frames();
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
+      await page.screenshot({
+        path: `.vitest/attachments/schedules-deleted-${width}.png`,
+      });
+    } finally {
+      clearAudit(client);
+    }
+  });
+}
+
+for (const width of [1280, 390]) {
+  it(`keeps confirmation reply text and its DOM stable through native finalization at ${width}px`, async () => {
+    const { client, viewport } = await mountAudit(width);
+    try {
+      const proposal = {
+        id: 'stable-receipt',
+        operation: 'create' as const,
+        status: 'waiting' as const,
+        before: null,
+        after: fixtures.taskSnapshot!,
+        messageIndex: 28,
+      };
+      const pending: SchedulingSession = {
+        ...fixtures.snapshot!,
+        revision: 2,
+        proposals: [proposal],
+        pending: proposal.id,
+      };
+      fixtures.snapshot = pending;
+      pushSession();
+      const decision = gate<SchedulingSession>();
+      const reply = gate<SchedulingSession>();
+      fixtures.decisionGate = decision.promise;
+      fixtures.replyGate = reply.promise;
+      await page
+        .getByRole('button', { name: zh.schedules.confirm.create })
+        .click();
+      const saved: SchedulingSession = {
+        ...pending,
+        revision: 3,
+        pending: null,
+        receiptPending: true,
+        proposals: [{ ...proposal, status: 'saved' }],
+      };
+      fixtures.snapshot = saved;
+      decision.resolve(saved);
+      await expect.poll(() => Boolean(fixtures.receive)).toBe(true);
+      const answer = '日程已保存：User Info App 将在每天上午十点自动运行。';
+      fixtures.receive!({ type: 'phase_start', phaseId: 'receipt-stable' });
+      fixtures.receive!({
+        type: 'reasoning',
+        phaseId: 'receipt-stable',
+        id: 'receipt-thought',
+        text: '确认任务保存结果',
+        complete: true,
+        durationMs: 1000,
+      });
+      fixtures.receive!({
+        type: 'text_delta',
+        phaseId: 'receipt-stable',
+        text: answer,
+      });
+      await expect
+        .element(page.getByText(answer, { exact: true }))
+        .toBeVisible();
+      const text = page.getByText(answer, { exact: true }).element();
+      const result = page
+        .getByRole('region', { name: fixtures.taskSnapshot!.name, exact: true })
+        .element();
+      const message = text.closest('[data-message-id]');
+      const resultOffset =
+        result.getBoundingClientRect().top + viewport.scrollTop;
+      const samples = await captureFrames(
+        () => ({
+          textMounted: text.isConnected,
+          resultMounted: result.isConnected,
+          replyVisible: document.body.textContent!.includes(answer),
+          resultOffset: result.getBoundingClientRect().top + viewport.scrollTop,
+        }),
+        async () => {
+          // A status read can arrive before the final answer transaction and before the IPC return.
+          fixtures.snapshot = {
+            ...saved,
+            revision: 4,
+            status: 'interrupted',
+            receiptPending: true,
+          };
+          pushSession();
+          await expect
+            .poll(
+              () =>
+                client.getQueryData<SchedulingSession>([
+                  'scheduling-session',
+                  'personal',
+                  'audit-session',
+                ])?.revision,
+            )
+            .toBe(4);
+          await frames(4);
+          await expect
+            .element(page.getByText(zh.schedules.interrupted, { exact: true }))
+            .not.toBeInTheDocument();
+          const complete: SchedulingSession = {
+            ...saved,
+            revision: 5,
+            receiptPending: false,
+            messages: [
+              ...saved.messages,
+              {
+                id: 'final-receipt',
+                role: 'assistant',
+                text: answer,
+                proposalId: proposal.id,
+                reasoning: [
+                  {
+                    id: 'receipt-thought',
+                    phaseId: 'receipt-stable',
+                    turnId: 'receipt-stable',
+                    text: '确认任务保存结果',
+                    complete: true,
+                    durationMs: 1000,
+                  },
+                ],
+              },
+            ],
+          };
+          fixtures.snapshot = complete;
+          pushSession();
+          await expect
+            .poll(
+              () =>
+                client.getQueryData<SchedulingSession>([
+                  'scheduling-session',
+                  'personal',
+                  'audit-session',
+                ])?.revision,
+            )
+            .toBe(5);
+          await frames(4);
+          reply.resolve(complete);
+          await expect
+            .element(
+              page.getByRole('button', {
+                name: zh.schedules.send,
+                exact: true,
+              }),
+            )
+            .toBeVisible();
+          await frames(4);
+        },
+      );
+      expect(
+        samples.every(
+          (frame) =>
+            frame.textMounted &&
+            frame.resultMounted &&
+            frame.replyVisible &&
+            Math.abs(frame.resultOffset - resultOffset) < 1,
+        ),
+      ).toBe(true);
+      expect(page.getByText(answer, { exact: true }).element()).toBe(text);
+      expect(text.closest('[data-message-id]')).toBe(message);
+      expect(result.closest('[data-message-id]')).toBe(message);
+    } finally {
+      clearAudit(client);
+    }
+  });
+}
+
+for (const width of [1280, 390]) {
+  it(`covers task details with the nested deletion confirmation backdrop at ${width}px`, async () => {
+    const { client } = await mountAudit(width);
+    try {
+      const task = fixtures.taskSnapshot!;
+      const saved: SchedulingSession = {
+        ...auditSnapshot(),
+        revision: 2,
+        proposals: [
+          {
+            id: 'delete-overlay',
+            operation: 'create',
+            status: 'saved',
+            before: null,
+            after: task,
+            messageIndex: 28,
+          },
+        ],
+      };
+      fixtures.snapshot = saved;
+      client.setQueryData(['scheduling-session', 'personal', saved.id], saved);
+      await page.getByRole('link', { name: zh.schedules.viewTask }).click();
+      const details = page.getByRole('dialog');
+      await expect.element(details).toBeVisible();
+      await details
+        .getByRole('button', { name: zh.schedules.delete, exact: true })
+        .click();
+      const confirmation = page.getByRole('alertdialog');
+      await expect.element(confirmation).toBeVisible();
+      const overlay = document.querySelector<HTMLElement>(
+        '[data-slot="alert-dialog-overlay"]',
+      );
+      expect(overlay).not.toBeNull();
+      await expect
+        .poll(() => Number(getComputedStyle(overlay!).opacity))
+        .toBe(1);
+      const bounds = overlay!.getBoundingClientRect();
+      expect(bounds.left).toBe(0);
+      expect(bounds.top).toBe(0);
+      expect(bounds.width).toBe(width);
+      expect(bounds.height).toBe(900);
+      const behind = document.querySelector<HTMLElement>(
+        '[data-slot="dialog-content"]',
+      )!;
+      const rectangle = behind.getBoundingClientRect();
+      // Hit-test the detail header outside the centered confirmation, not merely z-index values.
+      const hit = document.elementFromPoint(
+        rectangle.left + 8,
+        rectangle.top + 8,
+      );
+      expect(hit).toBe(overlay);
+      expect(behind.contains(hit)).toBe(false);
+      await page.screenshot({
+        path: `.vitest/attachments/schedules-delete-overlay-${width}.png`,
+      });
+      await confirmation
+        .getByRole('button', { name: zh.common.cancel, exact: true })
+        .click();
+      await expect.element(confirmation).not.toBeInTheDocument();
+      await expect.element(details).toBeVisible();
+      await expect
+        .element(
+          details.getByRole('button', {
+            name: zh.schedules.delete,
+            exact: true,
+          }),
+        )
+        .toBeEnabled();
+      vi.mocked(changeScheduledTask).mockClear();
+      vi.mocked(changeScheduledTask).mockResolvedValue(null);
+      await details
+        .getByRole('button', { name: zh.schedules.delete, exact: true })
+        .click();
+      await page
+        .getByRole('alertdialog')
+        .getByRole('button', { name: zh.schedules.delete, exact: true })
+        .click();
+      await expect
+        .poll(() => vi.mocked(changeScheduledTask).mock.calls.length)
+        .toBe(1);
+      await expect.element(details).not.toBeInTheDocument();
     } finally {
       clearAudit(client);
     }

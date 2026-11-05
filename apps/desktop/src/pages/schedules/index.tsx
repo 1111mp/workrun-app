@@ -5,7 +5,6 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
-  Badge,
   Button,
   Dialog,
   Input,
@@ -68,7 +67,7 @@ import {
   readSchedulingSession,
   rememberSchedulingSession,
 } from './session-cache';
-import { TaskRule, time } from './task-components';
+import { TaskRule, TaskStatusBadge, time } from './task-components';
 import { TaskDialogContent } from './task-dialog';
 import { useScheduleEvents } from './use-schedule-events';
 
@@ -91,6 +90,7 @@ function SchedulesPage({ scope }: { scope: string }) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [error, setError] = useState('');
+  const [decisionFailure, setDecisionFailure] = useState('');
   const [editingTask, setEditingTask] = useState(false);
   const [taskError, setTaskError] = useState('');
   useScheduleEvents(scope);
@@ -249,6 +249,10 @@ function SchedulesPage({ scope }: { scope: string }) {
           previous?.map((item) => (item.id === updated.id ? updated : item)),
         );
       } else {
+        await client.cancelQueries({ queryKey: ['schedules', scope] });
+        client.setQueryData<ScheduledTask[]>(['schedules', scope], (previous) =>
+          previous?.filter((item) => item.id !== change.id),
+        );
         const next = new URLSearchParams(params);
         next.delete('task');
         setParams(next, { replace: true });
@@ -261,7 +265,11 @@ function SchedulesPage({ scope }: { scope: string }) {
         t(
           change.operation === 'delete'
             ? 'apps.schedules.deleted'
-            : 'apps.schedules.saved',
+            : change.operation === 'pause'
+              ? 'schedules.taskPaused'
+              : change.operation === 'resume'
+                ? 'schedules.taskResumed'
+                : 'apps.schedules.saved',
         ),
         { toasterId: 'global' },
       );
@@ -273,37 +281,90 @@ function SchedulesPage({ scope }: { scope: string }) {
     },
     onError: (e) => setTaskError(String(e)),
   });
+  const replyToReceipt = async (
+    saved: SchedulingSession,
+    proposalId: string,
+  ) => {
+    const key = ['scheduling-stream', scope, saved.id];
+    client.setQueryData<SchedulingView>(key, {
+      text: '',
+      activities: [],
+      pending: true,
+      baseMessageCount: saved.messages.length,
+      receiptRevision: saved.revision ?? 0,
+      proposalId,
+    });
+    try {
+      const response = await replySchedulingReceipt(saved.id, (event) =>
+        receiveSchedulingStream(client, scope, saved.id, event, t),
+      );
+      await remember(response);
+      client.setQueryData<SchedulingView>(key, {
+        text: '',
+        activities: [],
+        pending: false,
+        proposalId,
+        receiptFailed: Boolean(response.error),
+        error: response.error || undefined,
+      });
+    } catch (failure) {
+      // A reply failure cannot undo the already committed task action.
+      client.setQueryData<SchedulingView>(key, {
+        text: '',
+        activities: [],
+        pending: false,
+        proposalId,
+        receiptFailed: true,
+        error: String(failure),
+      });
+    }
+  };
+  const retryReceipt = useMutation({
+    mutationFn: async () => {
+      if (!session.data) return;
+      const proposal = session.data.proposals.findLast(
+        (p) => p.status === 'saved',
+      );
+      if (proposal) await replyToReceipt(session.data, proposal.id);
+    },
+  });
   const decide = useMutation({
-    mutationFn: ({ id, approve }: { id: string; approve: boolean }) =>
-      decideScheduleChange(sessionId, id, approve),
+    mutationFn: ({
+      id,
+      approve,
+      sessionId: idOfSession,
+    }: {
+      id: string;
+      approve: boolean;
+      sessionId: string;
+    }) => decideScheduleChange(idOfSession, id, approve),
     onSuccess: async (value, decision) => {
-      const saved = await remember(value);
       if (decision.approve) {
-        const key = ['scheduling-stream', scope, saved.id];
-        client.setQueryData<SchedulingView>(key, {
-          text: '',
-          activities: [],
-          pending: true,
-          baseMessageCount: saved.messages.length,
-          receiptRevision: saved.revision ?? 0,
-          proposalId: decision.id,
-        });
-        try {
-          const response = await replySchedulingReceipt(saved.id, (event) =>
-            receiveSchedulingStream(client, scope, saved.id, event, t),
+        const proposal = value.proposals.find(
+          (item) => item.id === decision.id,
+        );
+        if (proposal?.status === 'saved') {
+          // Publish the commit before rendering its card; an older list may not contain a new task yet.
+          await client.cancelQueries({ queryKey: ['schedules', scope] });
+          client.setQueryData<ScheduledTask[]>(
+            ['schedules', scope],
+            (previous) => {
+              if (!previous) return previous;
+              const remaining = previous.filter(
+                (item) => item.id !== proposal.after.id,
+              );
+              return proposal.operation === 'delete'
+                ? remaining
+                : [...remaining, proposal.after];
+            },
           );
-          await remember(response);
-        } catch (error) {
-          setError(String(error));
-        } finally {
-          client.setQueryData(key, {
-            text: '',
-            activities: [],
-            pending: false,
-          });
+          if (proposal.operation === 'delete')
+            client.setQueryData(['schedule', scope, proposal.after.id], null);
         }
       }
-      // A newly created task already has a confirmation card; opening its details is an explicit action.
+      const saved = await remember(value);
+      if (decision.approve) await replyToReceipt(saved, decision.id);
+      // A saved card already exposes details through an explicit action.
       if (taskId && saved.scheduleId !== taskId)
         setParams({
           conversation: saved.id,
@@ -311,7 +372,41 @@ function SchedulesPage({ scope }: { scope: string }) {
         });
       await refresh();
     },
-    onError: (e) => setError(String(e)),
+    onError: async (failure, decision) => {
+      // A lost IPC reply may follow a successful commit. Reconcile before offering another preview.
+      try {
+        const fresh = await readSchedulingSession(
+          client,
+          scope,
+          decision.sessionId,
+        );
+        await remember(fresh);
+        if (
+          fresh.proposals.some(
+            (p) => p.id === decision.id && p.status === 'saved',
+          )
+        ) {
+          if (fresh.receiptPending)
+            client.setQueryData<SchedulingView>(
+              ['scheduling-stream', scope, fresh.id],
+              {
+                text: '',
+                activities: [],
+                pending: false,
+                proposalId: decision.id,
+                receiptFailed: true,
+                error: String(failure),
+              },
+            );
+          await refresh();
+          return;
+        }
+      } catch {
+        /* Retain the original operation error if reconciliation is unavailable. */
+      }
+      setError(String(failure));
+      setDecisionFailure(decision.sessionId);
+    },
   });
   const removeConversation = useMutation({
     mutationFn: deleteSchedulingSession,
@@ -547,18 +642,13 @@ function SchedulesPage({ scope }: { scope: string }) {
                         : '—'}
                     </span>
                   </div>
-                  <Badge variant='outline' className='shrink-0'>
-                    {t(
+                  <TaskStatusBadge
+                    task={item}
+                    attention={Boolean(
                       item.lastError ||
-                        ['failed', 'interrupted'].includes(
-                          item.lastStatus || '',
-                        )
-                        ? 'schedules.attention'
-                        : item.enabled
-                          ? 'schedules.active'
-                          : scheduleState(item),
+                      ['failed', 'interrupted'].includes(item.lastStatus || ''),
                     )}
-                  </Badge>
+                  />
                   <ArrowUpRightIcon className='text-muted-foreground hidden size-4 shrink-0 sm:block' />
                 </button>
               ))}
@@ -606,10 +696,22 @@ function SchedulesPage({ scope }: { scope: string }) {
               remember={remember}
               refresh={refresh}
               busy={busy}
+              pendingDecision={
+                decide.isPending && decide.variables.sessionId === sessionId
+                  ? decide.variables
+                  : undefined
+              }
+              decisionFailed={decisionFailure === sessionId && Boolean(error)}
+              clearError={() => {
+                setError('');
+                setDecisionFailure('');
+              }}
+              onRetryReceipt={() => retryReceipt.mutate()}
               scope={scope}
               onDecision={(id, approve) => {
                 setError('');
-                decide.mutate({ id, approve });
+                setDecisionFailure('');
+                decide.mutate({ id, approve, sessionId });
               }}
             />
           )}
@@ -658,6 +760,7 @@ type SchedulingView = {
   userMessage?: SchedulingSession['messages'][number];
   baseMessageCount?: number;
   error?: string;
+  receiptFailed?: boolean;
 };
 
 function receiveSchedulingStream(
@@ -759,6 +862,10 @@ function Conversation({
   busy,
   scope,
   onDecision,
+  pendingDecision,
+  decisionFailed,
+  clearError,
+  onRetryReceipt,
 }: {
   focusProposalId?: string;
   readError?: string;
@@ -773,6 +880,10 @@ function Conversation({
   remember: (s: SchedulingSession) => Promise<SchedulingSession>;
   refresh: () => Promise<void>;
   busy: boolean;
+  pendingDecision?: { id: string; approve: boolean };
+  decisionFailed: boolean;
+  clearError: () => void;
+  onRetryReceipt: () => void;
   scope: string;
   onDecision: (id: string, approve: boolean) => void;
 }) {
@@ -837,14 +948,90 @@ function Conversation({
       });
     },
   });
+  const recover = useMutation({
+    mutationFn: async () => {
+      let fresh = session;
+      if (session) {
+        fresh = await readSchedulingSession(client, scope, session.id);
+        await remember(fresh);
+        if (fresh.status === 'running') return;
+      }
+      if (
+        (streamState.data?.receiptFailed && fresh?.receiptPending === false) ||
+        (readError && !decisionFailed)
+      ) {
+        client.setQueryData(
+          ['scheduling-stream', scope, fresh?.id || draftId],
+          { text: '', activities: [], pending: false },
+        );
+        send.reset();
+        clearError();
+        return;
+      }
+      if (fresh?.receiptPending || streamState.data?.receiptFailed) {
+        onRetryReceipt();
+        return;
+      }
+      if (decisionFailed) {
+        submit(t('schedules.repreviewRequest'), false);
+        return;
+      }
+      const outgoing = streamState.data?.userMessage;
+      const userIndex = outgoing
+        ? (fresh?.messages.findLastIndex(
+            (message, index) =>
+              index >= (streamState.data?.baseMessageCount ?? 0) &&
+              message.role === 'user' &&
+              message.text === outgoing.text,
+          ) ?? -1)
+        : -1;
+      if (
+        userIndex >= 0 &&
+        fresh?.status === 'idle' &&
+        !fresh.error &&
+        fresh.messages
+          .slice(userIndex + 1)
+          .some((message) => message.role === 'assistant')
+      ) {
+        // Delivery succeeded; remove the transport error instead of sending the request twice.
+        client.setQueryData(['scheduling-stream', scope, fresh.id], {
+          text: '',
+          activities: [],
+          pending: false,
+        });
+        send.reset();
+        clearError();
+        return;
+      }
+      submit(
+        outgoing && userIndex < 0
+          ? outgoing.text
+          : t('schedules.continueRequestText'),
+        false,
+      );
+    },
+    onError: (failure) => {
+      client.setQueryData<SchedulingView>(
+        ['scheduling-stream', scope, session?.id || draftId],
+        (previous) => ({
+          text: '',
+          activities: [],
+          pending: false,
+          ...previous,
+          error: String(failure),
+        }),
+      );
+    },
+  });
   // Card decisions and preference writes lock controls without starting a model reply.
   const replying =
     session?.status === 'running' ||
     send.isPending ||
     Boolean(streamState.data?.pending);
-  const active = busy || replying;
-  const submit = (message: string) => {
+  const active = busy || replying || recover.isPending;
+  const submit = (message: string, clearDraft = true) => {
     if (!message.trim() || !modelId || active) return;
+    clearError();
     // This response cache survives route changes and idle snapshots fetched
     // before the native host has persisted the user turn.
     client.setQueryData<SchedulingView>(
@@ -858,7 +1045,7 @@ function Conversation({
       },
     );
     send.mutate(message);
-    setText('');
+    if (clearDraft) setText('');
   };
   const landing =
     !session?.messages.length &&
@@ -878,11 +1065,13 @@ function Conversation({
       effort={effort}
       onEffortChange={onEffortChange}
       active={active}
-      canStop={Boolean(session?.id)}
+      responding={replying}
+      canStop={Boolean(session?.id) && replying}
       onStop={() => {
         if (session) void stopSchedulingResponse(session.id);
       }}
       modifying={false}
+      answering={!active && Boolean(session?.questions.length)}
     />
   );
   const pendingUser = streamState.data?.userMessage;
@@ -905,21 +1094,37 @@ function Conversation({
           message.text === pendingUser.text,
       )
     : -1;
-  const nativeSettled =
-    session?.status !== 'running' &&
-    (nativeUserIndex >= 0 ||
-      (streamState.data?.receiptRevision !== undefined &&
-        (session?.revision ?? 0) > streamState.data.receiptRevision));
   const hasNativeAnswer =
     nativeUserIndex >= 0 &&
     messages
       .slice(nativeUserIndex + 1)
       .some((message) => message.role === 'assistant');
+  const hasNativeReceiptAnswer = Boolean(
+    streamState.data?.proposalId &&
+    messages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        message.proposalId === streamState.data?.proposalId,
+    ),
+  );
+  // A newer status revision alone does not contain the final reply. Keep the
+  // streamed bubble mounted until its answer or a terminal error is persisted.
+  const nativeSettled =
+    session?.status !== 'running' &&
+    (hasNativeAnswer ||
+      hasNativeReceiptAnswer ||
+      (Boolean(session?.error) &&
+        (nativeUserIndex >= 0 ||
+          (streamState.data?.receiptRevision !== undefined &&
+            (session?.revision ?? 0) > streamState.data.receiptRevision))));
   const error =
     session?.error ||
     streamState.data?.error ||
     (send.error ? String(send.error) : undefined) ||
-    readError;
+    readError ||
+    (!active && session?.receiptPending
+      ? t('schedules.replyIncomplete')
+      : undefined);
   return (
     <>
       {landing ? (
@@ -982,8 +1187,29 @@ function Conversation({
           animateFrom={streamState.data?.baseMessageCount}
           active={replying && !nativeSettled}
           disabled={active || !modelId}
-          interrupted={session?.status === 'interrupted'}
+          interrupted={
+            session?.status === 'interrupted' &&
+            (!streamState.data?.pending || nativeSettled)
+          }
           error={error}
+          receiptFailed={Boolean(
+            error &&
+            (streamState.data?.receiptFailed || session?.receiptPending),
+          )}
+          pendingDecision={pendingDecision}
+          recoveryLabel={
+            decisionFailed
+              ? t('schedules.repreview')
+              : readError && !decisionFailed
+                ? t('schedules.retry')
+                : streamState.data?.receiptFailed || session?.receiptPending
+                  ? t('schedules.retryReply')
+                  : !hasNativeUser && streamState.data?.userMessage
+                    ? t('schedules.retrySend')
+                    : t('schedules.continueRequest')
+          }
+          onRecover={() => recover.mutate()}
+          recovering={recover.isPending}
           onDecision={onDecision}
           onAnswer={submit}
         />

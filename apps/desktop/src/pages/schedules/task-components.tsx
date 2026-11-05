@@ -70,6 +70,41 @@ export function TaskRule({ task }: { task: ScheduledTask }) {
   return <>{preview.valid ? preview.description : task.cronExpression}</>;
 }
 
+export function TaskStatusBadge({
+  task,
+  deleted = false,
+  attention = false,
+}: {
+  task: ScheduledTask;
+  deleted?: boolean;
+  attention?: boolean;
+}) {
+  const { t } = useTranslation();
+  const state = deleted
+    ? 'apps.schedules.deleted'
+    : attention
+      ? 'schedules.attention'
+      : scheduleState(task);
+  const color = deleted
+    ? 'border-border bg-muted/70 text-muted-foreground'
+    : state === 'schedules.attention' || state === 'schedules.finish.failed'
+      ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300'
+      : state === 'schedules.active'
+        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+        : [
+              'schedules.paused',
+              'schedules.finish.missed',
+              'schedules.finish.skipped',
+            ].includes(state)
+          ? 'border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-300'
+          : 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300';
+  return (
+    <Badge variant='outline' className={cn('shrink-0', color)}>
+      {t(state)}
+    </Badge>
+  );
+}
+
 function TargetSource({ task }: { task: ScheduledTask }) {
   const { t } = useTranslation();
   return task.source ? (
@@ -108,7 +143,7 @@ export function TaskDetail({
                   : 'navigation.workflow',
               )}
             </Badge>
-            <Badge variant='secondary'>{t(scheduleState(task))}</Badge>
+            <TaskStatusBadge task={task} />
           </div>
           <Link
             state={returnState}
@@ -288,9 +323,14 @@ export function TaskEditor({
               version: task.version,
               name,
               scheduleKind: kind,
-              ...(kind === 'once'
-                ? { runAt }
-                : { cronExpression: cron, runAt: null }),
+              // Preserve seconds and offsets when only task metadata changes.
+              ...(kind !== 'once'
+                ? { cronExpression: cron, runAt: null }
+                : task.scheduleKind !== 'once' ||
+                    runAt !== localScheduleTime(task.runAt, task.timezone) ||
+                    timezone !== task.timezone
+                  ? { runAt }
+                  : {}),
               timezone,
               ...(task.targetType === 'workflow'
                 ? { input: parsed as Record<string, unknown> }
@@ -428,15 +468,17 @@ export function TaskResultCard({ proposal }: { proposal: ScheduleProposal }) {
     queryFn: listSchedules,
     enabled: false,
   });
-  const detail = useQuery({
+  const detail = useQuery<ScheduledTask | null>({
     queryKey: ['schedule', scope, proposal.after.id],
     queryFn: () => getSchedule(proposal.after.id),
     enabled: false,
   });
-  const task =
-    tasks.data?.find((item) => item.id === proposal.after.id) ??
-    detail.data ??
-    proposal.after;
+  const current = tasks.data?.find((item) => item.id === proposal.after.id);
+  // A successfully loaded list is authoritative even when an older detail still exists.
+  const deleted =
+    proposal.operation === 'delete' ||
+    (tasks.data !== undefined ? !current : detail.data === null);
+  const task = current ?? detail.data ?? proposal.after;
   const next = new URLSearchParams(params);
   next.set('task', task.id);
   next.delete('view');
@@ -455,6 +497,12 @@ export function TaskResultCard({ proposal }: { proposal: ScheduleProposal }) {
         /not found|does not exist|was deleted|不存在|已删除/i.test(
           String(error),
         );
+      if (missing) {
+        client.setQueryData(['schedule', scope, task.id], null);
+        client.setQueryData<ScheduledTask[]>(['schedules', scope], (previous) =>
+          previous?.filter((item) => item.id !== task.id),
+        );
+      }
       toast.error(
         t(missing ? 'schedules.taskDeleted' : 'schedules.openTaskFailed'),
         { toasterId: 'global' },
@@ -470,28 +518,24 @@ export function TaskResultCard({ proposal }: { proposal: ScheduleProposal }) {
         <div className='flex min-w-0 flex-1 flex-col gap-1.5'>
           <div className='flex flex-wrap items-center gap-2'>
             <p className='font-medium wrap-break-word'>{task.name}</p>
-            <Badge variant='secondary'>
-              {t(
-                proposal.operation === 'delete'
-                  ? 'apps.schedules.deleted'
-                  : scheduleState(task),
-              )}
-            </Badge>
+            <TaskStatusBadge task={task} deleted={deleted} />
           </div>
           <p className='text-sm'>
             <TaskRule task={task} />
           </p>
-          <p className='text-muted-foreground text-xs'>
-            {task.timezone} · {t('schedules.next')}:{' '}
-            {task.enabled
-              ? time(task.nextRunAt, task.timezone, i18n.language)
-              : '—'}
-          </p>
+          {!deleted && (
+            <p className='text-muted-foreground text-xs'>
+              {task.timezone} · {t('schedules.next')}:{' '}
+              {task.enabled
+                ? time(task.nextRunAt, task.timezone, i18n.language)
+                : '—'}
+            </p>
+          )}
           <span className='sr-only' role='status'>
-            {t('schedules.saved')}
+            {t(deleted ? 'apps.schedules.deleted' : 'schedules.saved')}
           </span>
         </div>
-        {proposal.operation !== 'delete' && (
+        {!deleted && (
           <Button
             variant='outline'
             size='sm'
@@ -517,10 +561,12 @@ export function ProposalCard({
   proposal: p,
   disabled,
   onDecision,
+  pendingDecision,
 }: {
   proposal: ScheduleProposal;
   disabled: boolean;
   onDecision: (id: string, approve: boolean) => void;
+  pendingDecision?: { id: string; approve: boolean };
 }) {
   const { t, i18n } = useTranslation();
   const after = p.after;
@@ -632,14 +678,22 @@ export function ProposalCard({
             disabled={disabled}
             onClick={() => onDecision(p.id, false)}
           >
-            {t('schedules.cancel')}
+            {t(
+              pendingDecision?.id === p.id && !pendingDecision.approve
+                ? 'schedules.cancelling'
+                : 'schedules.cancel',
+            )}
           </Button>
           <Button
             variant={p.operation === 'delete' ? 'destructive' : 'default'}
             disabled={disabled}
             onClick={() => onDecision(p.id, true)}
           >
-            {t(`schedules.confirm.${p.operation}`)}
+            {t(
+              pendingDecision?.id === p.id && pendingDecision.approve
+                ? `schedules.actionProgress.${p.operation}`
+                : `schedules.confirm.${p.operation}`,
+            )}
           </Button>
         </CardFooter>
       )}
@@ -671,6 +725,7 @@ export function Questions({
       >
         <CardHeader>
           <CardTitle>{t('schedules.detailsNeeded')}</CardTitle>
+          <CardDescription>{t('schedules.answerHint')}</CardDescription>
         </CardHeader>
         <CardContent className='flex flex-col gap-5'>
           {questions.map((q, index) => (

@@ -68,6 +68,7 @@ export type SchedulingModelSelection = {
 export type SchedulingSession = {
   id: string;
   revision?: number;
+  receiptPending?: boolean;
   title: string;
   scheduleId?: string | null;
   modelId?: string;

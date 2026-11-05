@@ -489,96 +489,89 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
         scheduled_for,
     };
     let task_id = due.summary.id.clone();
+    let mut pause_on_failure = false;
     let dispatch: Result<()> = async {
-    match due.summary.target_type {
-        ScheduleTargetType::App => {
-            run_manager::start_app_in_workspace(
-                StartAppRun {
-                    run_id: run_id.clone(),
-                    target_id: due.summary.target_id,
-                    target_name: due.summary.target_name,
-                    output_view: json!({"isRunning": true, "node": due.target_snapshot}),
-                    target_snapshot: due.target_snapshot,
-                    schedule_trigger: Some(trigger),
-                    deeplink_trigger: None,
-                },
-                &due.workspace,
-            )
-            .await?
-        },
-        ScheduleTargetType::Workflow => {
-            let recipe: WorkflowExecutionRecipe = serde_json::from_value(due.execution_recipe)?;
-            let follows_latest = matches!(recipe.source, WorkflowScheduleSource::LatestPublished);
-            let resolved = async {
-                let resolved = resolve_workflow_recipe(
+        match due.summary.target_type {
+            ScheduleTargetType::App => {
+                run_manager::start_app_in_workspace(
+                    StartAppRun {
+                        run_id: run_id.clone(),
+                        target_id: due.summary.target_id,
+                        target_name: due.summary.target_name,
+                        output_view: json!({"isRunning": true, "node": due.target_snapshot}),
+                        target_snapshot: due.target_snapshot,
+                        schedule_trigger: Some(trigger),
+                        deeplink_trigger: None,
+                    },
                     &due.workspace,
-                    &due.summary.target_id,
-                    due.target_snapshot,
-                    recipe.source,
+                )
+                .await?
+            },
+            ScheduleTargetType::Workflow => {
+                let recipe: WorkflowExecutionRecipe = serde_json::from_value(due.execution_recipe)?;
+                let follows_latest = matches!(recipe.source, WorkflowScheduleSource::LatestPublished);
+                let resolved = async {
+                    let resolved = resolve_workflow_recipe(
+                        &due.workspace,
+                        &due.summary.target_id,
+                        due.target_snapshot,
+                        recipe.source,
+                    )
+                    .await?;
+                    validate_scheduled_input(&resolved.0, &recipe.input)?;
+                    Ok::<_, anyhow::Error>(resolved)
+                }
+                .await;
+                let (dsl, target_snapshot, release_id, release_version) = match resolved {
+                    Ok(resolved) => resolved,
+                    Err(error) => {
+                        // Following releases also depends on network/session availability.
+                        // Skip a failed occurrence and resolve again next time; fixed/local
+                        // definitions retain their existing pause-on-invalid behavior.
+                        pause_on_failure = !follows_latest;
+                        return Err(error);
+                    },
+                };
+                run_manager::start_workflow_in_workspace(
+                    StartWorkflowRun {
+                        chat_session_id: None,
+                        chat_turn_id: None,
+                        run_id: run_id.clone(),
+                        target_id: due.summary.target_id,
+                        target_name: dsl
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or(&due.summary.target_name)
+                            .to_owned(),
+                        input: recipe.input.clone(),
+                        target_snapshot,
+                        release_id,
+                        release_version,
+                        dsl,
+                        initial_state: recipe.initial_state,
+                        thread_id: Uuid::new_v4().to_string(),
+                        evaluation_profile: None,
+                        evaluation_result_id: None,
+                        schedule_trigger: Some(trigger),
+                        deeplink_trigger: None,
+                    },
+                    &due.workspace,
                 )
                 .await?;
-                validate_scheduled_input(&resolved.0, &recipe.input)?;
-                Ok::<_, anyhow::Error>(resolved)
-            }
-            .await;
-            let (dsl, target_snapshot, release_id, release_version) = match resolved {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    // Following releases also depends on network/session availability.
-                    // Skip a failed occurrence and resolve again next time; fixed/local
-                    // definitions retain their existing pause-on-invalid behavior.
-                    let message = error.to_string();
-                    sqlx::query("UPDATE schedules SET enabled = CASE WHEN ? THEN enabled ELSE 0 END, last_error = ?, finish_reason=CASE WHEN schedule_kind='once' THEN 'failed' ELSE finish_reason END, updated_at = ? WHERE id = ? AND workspace_id=?")
-                        .bind(follows_latest)
-                        .bind(&message)
-                        .bind(Utc::now().to_rfc3339())
-                        .bind(&trigger.schedule_id).bind(&due.workspace)
-                        .execute(pool)
-                        .await?;
-                    sqlx::query(
-                        "UPDATE schedule_occurrences SET status = 'skipped', reason = ?, error = ? WHERE id = ?",
-                    )
-                    .bind("Workflow schedule needs attention.")
-                    .bind(message)
-                    .bind(&occurrence_id)
-                    .execute(pool)
-                    .await?;
-                    return Err(error);
-                },
-            };
-            run_manager::start_workflow_in_workspace(
-                StartWorkflowRun {
-                    chat_session_id: None,
-                    chat_turn_id: None,
-                    run_id: run_id.clone(),
-                    target_id: due.summary.target_id,
-                    target_name: dsl
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&due.summary.target_name)
-                        .to_owned(),
-                    input: recipe.input.clone(),
-                    target_snapshot,
-                    release_id,
-                    release_version,
-                    dsl,
-                    initial_state: recipe.initial_state,
-                    thread_id: Uuid::new_v4().to_string(),
-                    evaluation_profile: None,
-                    evaluation_result_id: None,
-                    schedule_trigger: Some(trigger),
-                    deeplink_trigger: None,
-                },
-                &due.workspace,
-            )
-            .await?;
-        },
+            },
+        }
+        Ok(())
     }
-    Ok(())
-    }.await;
+    .await;
     if let Err(error) = dispatch {
         ScheduleDispatcher::new(pool, &due.workspace)
-            .failed(&task_id, &occurrence_id, &error.to_string())
+            .failed(
+                &task_id,
+                &occurrence_id,
+                &claim.version,
+                &error.to_string(),
+                pause_on_failure,
+            )
             .await?;
         return Ok(());
     }

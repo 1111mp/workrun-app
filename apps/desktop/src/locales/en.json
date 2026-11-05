@@ -2490,6 +2490,28 @@
     "chat": "Chat",
     "navigation": "Scheduled task views",
     "toolbarNew": "New task",
+    "taskPaused": "Task paused",
+    "taskResumed": "Task resumed",
+    "savedReplyFailed": "Task action saved; reply failed",
+    "replyIncomplete": "The reply did not finish. The task action is already saved.",
+    "savedReplyHint": "Your task change is saved. Retry only the reply; this will not save the task again.",
+    "retryReply": "Retry reply only",
+    "retrySend": "Retry sending",
+    "continueRequest": "Continue request",
+    "continueRequestText": "Please continue handling my previous request. Check the current task and confirmation state before preparing any changes.",
+    "repreview": "Generate a new preview",
+    "repreviewRequest": "Please recheck the current task and execution target, then prepare a new preview of my requested change for confirmation. Do not save any changes yet.",
+    "updating": "Updating task…",
+    "cancelling": "Cancelling…",
+    "actionProgress": {
+      "create": "Saving…",
+      "update": "Saving…",
+      "pause": "Pausing…",
+      "resume": "Resuming…",
+      "delete": "Deleting…"
+    },
+    "answerHint": "Choose an option or fill in your answers, then click Continue. You can also add details in the message box below and send them.",
+    "answerPlaceholder": "Add your answers or other requirements…",
     "detailsNeeded": "Task details needed"
   }
 }

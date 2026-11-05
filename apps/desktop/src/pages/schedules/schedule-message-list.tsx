@@ -2,6 +2,7 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
+  Button,
   Bubble,
   BubbleContent,
   Message,
@@ -51,6 +52,11 @@ type Props = {
   disabled: boolean;
   interrupted: boolean;
   error?: string | null;
+  receiptFailed?: boolean;
+  pendingDecision?: { id: string; approve: boolean };
+  recoveryLabel?: string;
+  onRecover?: () => void;
+  recovering?: boolean;
   reasoning?: AssistantReasoning[];
   animateFrom?: number;
   resultProposalId?: string;
@@ -70,6 +76,11 @@ export function ScheduleMessageList({
   disabled,
   interrupted,
   error,
+  receiptFailed,
+  pendingDecision,
+  recoveryLabel,
+  onRecover,
+  recovering,
   reasoning = [],
   animateFrom,
   resultProposalId,
@@ -215,6 +226,7 @@ export function ScheduleMessageList({
                         key={proposal.id}
                         proposal={proposal}
                         disabled={disabled}
+                        pendingDecision={pendingDecision}
                         onDecision={onDecision}
                       />
                     ))}
@@ -248,6 +260,16 @@ export function ScheduleMessageList({
                 <p role='status' className='text-muted-foreground text-sm'>
                   {t('schedules.interrupted')}
                 </p>
+                {!error && onRecover && (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    disabled={disabled || recovering}
+                    onClick={onRecover}
+                  >
+                    {recoveryLabel}
+                  </Button>
+                )}
               </MessageScrollerItem>
             )}
             {error && (
@@ -256,9 +278,26 @@ export function ScheduleMessageList({
                 messageId='error'
               >
                 <Alert variant='destructive'>
-                  <AlertTitle>{t('assistant.failed')}</AlertTitle>
+                  <AlertTitle>
+                    {t(
+                      receiptFailed
+                        ? 'schedules.savedReplyFailed'
+                        : 'assistant.failed',
+                    )}
+                  </AlertTitle>
                   <AlertDescription>
+                    {receiptFailed && <p>{t('schedules.savedReplyHint')}</p>}
                     <p>{error}</p>
+                    {onRecover && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        disabled={disabled || recovering}
+                        onClick={onRecover}
+                      >
+                        {recoveryLabel}
+                      </Button>
+                    )}
                   </AlertDescription>
                 </Alert>
               </MessageScrollerItem>

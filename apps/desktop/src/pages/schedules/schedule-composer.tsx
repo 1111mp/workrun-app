@@ -4,7 +4,7 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from '@workspace/ui/components';
-import { ArrowUpIcon, SquareIcon } from 'lucide-react';
+import { ArrowUpIcon, SquareIcon, LoaderCircleIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AssistantModelSelector } from '@/components/assistant-model-selector';
@@ -22,6 +22,8 @@ export function ScheduleComposer({
   onStop,
   canStop,
   modifying,
+  answering = false,
+  responding = active,
 }: {
   text: string;
   onTextChange: (text: string) => void;
@@ -35,6 +37,8 @@ export function ScheduleComposer({
   onStop: () => void;
   canStop: boolean;
   modifying: boolean;
+  answering?: boolean;
+  responding?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -42,7 +46,8 @@ export function ScheduleComposer({
       className='w-full'
       onSubmit={(event) => {
         event.preventDefault();
-        onSubmit();
+        // Keep drafts editable while the current response owns the conversation.
+        if (!active) onSubmit();
       }}
     >
       <InputGroup
@@ -53,13 +58,14 @@ export function ScheduleComposer({
           rows={2}
           aria-label={t('schedules.composer')}
           placeholder={t(
-            modifying
-              ? 'schedules.modifyPlaceholder'
-              : 'schedules.createPlaceholder',
+            answering
+              ? 'schedules.answerPlaceholder'
+              : modifying
+                ? 'schedules.modifyPlaceholder'
+                : 'schedules.createPlaceholder',
           )}
           className='max-h-40 min-h-16 px-4 py-3 leading-6'
           value={text}
-          disabled={active}
           onChange={(event) => onTextChange(event.target.value)}
           onKeyDown={(event) => {
             // Enter must finish IME composition before it can send a Chinese message.
@@ -87,7 +93,16 @@ export function ScheduleComposer({
               disabled={active}
             />
           </div>
-          {active ? (
+          {active && !responding ? (
+            <InputGroupButton
+              size='icon-sm'
+              variant='outline'
+              disabled
+              aria-label={t('schedules.updating')}
+            >
+              <LoaderCircleIcon className='animate-spin' />
+            </InputGroupButton>
+          ) : active ? (
             <InputGroupButton
               size='icon-sm'
               variant='outline'

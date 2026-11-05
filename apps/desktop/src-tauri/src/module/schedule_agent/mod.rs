@@ -102,6 +102,21 @@ impl ScheduleAgent {
     }
 
     fn public_state(mut state: Value) -> Value {
+        // Expose recovery availability without leaking provider history to the renderer.
+        state["receiptPending"] = json!(state["contents"].as_array().and_then(|items| items.last()).is_some_and(
+            |content| {
+                content["role"] == "user"
+                    && content["parts"].as_array().is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            part["text"]
+                                .as_str()
+                                .and_then(|text| text.strip_prefix("Native schedule action receipt (data): "))
+                                .and_then(|receipt| serde_json::from_str::<Value>(receipt).ok())
+                                .is_some_and(|receipt| receipt["status"] == "saved")
+                        })
+                    })
+            }
+        ));
         state.as_object_mut().unwrap().remove("contents");
         for p in state["proposals"].as_array_mut().into_iter().flatten() {
             for field in ["before", "after"] {
@@ -233,12 +248,14 @@ impl ScheduleAgent {
                 workspace_id: workspace.to_owned(), session_kind: Some("schedule_agent".into()), session_id: Some(request.session_id.clone()), purpose: "schedule_agent".into(), model_profile_id: Some(request.model_id.clone()), ..Default::default()
             }, self.run(model.as_ref(),&definition.provider,&catalog,&request.timezone,&mut state,&channel)))=>result.context("Scheduling response timed out").and_then(|r|r),
         };
-        self.runtime.finish(workspace, &request.session_id);
         state["status"] = json!(if cancel.is_cancelled() { "interrupted" } else { "idle" });
         if let Err(error) = outcome {
             state["error"] = json!(error.to_string());
         }
-        self.store.save_session(&mut state).await?;
+        // Readers must not see a stopped runtime before the final reply is durable.
+        let saved = self.store.save_session(&mut state).await;
+        self.runtime.finish(workspace, &request.session_id);
+        saved?;
         Ok(Self::public_state(state))
     }
 
@@ -358,9 +375,8 @@ impl ScheduleAgent {
         let history: Vec<Content> = serde_json::from_value(state["contents"].clone())?;
         // A native receipt must be the latest input. Reopening details never generates replies.
         ensure!(
-            history.last().is_some_and(
-                |content| assistant::agent_text(content).starts_with("Native schedule action receipt (data):")
-            ),
+            history.last().is_some_and(|content| content.role == "user"
+                && assistant::agent_text(content).starts_with("Native schedule action receipt (data):")),
             "No new action receipt"
         );
         let receipt_text = assistant::agent_text(history.last().unwrap());
@@ -409,7 +425,6 @@ impl ScheduleAgent {
             _ = cancel.cancelled() => Err(anyhow::anyhow!("Response stopped")),
             result = tokio::time::timeout(Duration::from_secs(120), inference) => result.context("Scheduling response timed out").and_then(|result| result),
         };
-        self.runtime.finish(workspace, session_id);
         response_stream.finish(false);
         state["status"] = json!(if cancel.is_cancelled() { "interrupted" } else { "idle" });
         match result {
@@ -423,7 +438,9 @@ impl ScheduleAgent {
             },
             Err(error) => state["error"] = json!(error.to_string()),
         }
-        self.store.save_session(&mut state).await?;
+        let saved = self.store.save_session(&mut state).await;
+        self.runtime.finish(workspace, session_id);
+        saved?;
         Ok(Self::public_state(state))
     }
 

@@ -49,6 +49,24 @@ async fn session(pool: &SqlitePool, workspace: &str, proposal: Value) -> Value {
     state
 }
 
+#[test]
+fn reply_recovery_is_available_only_for_an_unanswered_saved_receipt() {
+    for status in ["saved", "cancelled"] {
+        let mut state = json!({"proposals":[],"contents":[{"role":"user","parts":[{"text":format!("Native schedule action receipt (data): {}", json!({"status":status}))}]}]});
+        assert_eq!(
+            ScheduleAgent::public_state(state.clone())["receiptPending"],
+            status == "saved"
+        );
+        state["contents"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"role":"model","parts":[{"text":"Done"}]}));
+        let public = ScheduleAgent::public_state(state);
+        assert_eq!(public["receiptPending"], false);
+        assert!(public.get("contents").is_none());
+    }
+}
+
 #[tokio::test]
 async fn confirmation_is_atomic_idempotent_and_keeps_conversations_independent() {
     let pool = pool().await;
