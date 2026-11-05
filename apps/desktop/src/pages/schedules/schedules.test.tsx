@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 import en from '@/locales/en.json';
+import { getSessionUsage } from '@/services/model-usage';
 import * as api from '@/services/schedules';
 import type { ScheduledTask, SchedulingSession } from '@/services/schedules';
 
@@ -78,6 +79,7 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'en' },
   }),
 }));
+vi.mock('@/services/model-usage', () => ({ getSessionUsage: vi.fn() }));
 vi.mock('@/services/schedules', () => ({
   listSchedules: vi.fn(),
   getSchedule: vi.fn(),
@@ -2206,4 +2208,29 @@ it('publishes a newly confirmed task before refreshing an initially empty list',
   expect(within(result).getByRole('status')).not.toHaveTextContent(
     en.apps.schedules.deleted,
   );
+});
+
+it('loads usage for the selected scheduling conversation on demand', async () => {
+  vi.mocked(getSessionUsage).mockRejectedValue(new Error('Usage unavailable'));
+  mount('/schedules?conversation=session-1');
+  const usage = await screen.findByRole('button', { name: en.usage.title });
+  expect(getSessionUsage).not.toHaveBeenCalled();
+  fireEvent.click(usage);
+  await waitFor(() =>
+    expect(getSessionUsage).toHaveBeenCalledWith('schedule_agent', 'session-1'),
+  );
+});
+
+it('does not expose conversation usage for a new draft or in the task list', async () => {
+  mount('/schedules');
+  await screen.findByText(en.schedules.hero);
+  expect(
+    screen.queryByRole('button', { name: en.usage.title }),
+  ).not.toBeInTheDocument();
+  cleanup();
+  mount('/schedules?conversation=session-1&view=tasks');
+  await screen.findByText(task.name);
+  expect(
+    screen.queryByRole('button', { name: en.usage.title }),
+  ).not.toBeInTheDocument();
 });

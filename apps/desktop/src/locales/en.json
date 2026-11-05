@@ -2277,6 +2277,7 @@
     "turn": "Turn {{id}}",
     "empty": "No recorded model calls. This does not mean zero tokens were used.",
     "purposes": {
+      "schedule_agent": "Scheduling conversation",
       "conversation": "Conversation",
       "intent": "Intent assessment",
       "planning": "Planning",

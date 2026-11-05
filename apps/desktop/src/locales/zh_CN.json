@@ -2262,6 +2262,7 @@
     "turn": "轮次 {{id}}",
     "empty": "暂无模型调用记录，不代表没有消耗 token。",
     "purposes": {
+      "schedule_agent": "定时任务对话",
       "conversation": "对话",
       "intent": "理解需求",
       "planning": "规划",

@@ -32,6 +32,7 @@ import { toast } from 'sonner';
 
 import { useEntryWorkspace } from '@/components/app-sidebar';
 import { conversationComposerClassName } from '@/components/conversation-layout';
+import { SessionUsage } from '@/components/session-usage';
 import { WorkspaceHeaderContent } from '@/components/workspace-header-content';
 import { scheduleState } from '@/lib/schedule-time';
 import { getModelCatalog } from '@/services/cmd';
@@ -496,6 +497,14 @@ function SchedulesPage({ scope }: { scope: string }) {
               </TabsTrigger>
               <TabsTrigger value='tasks'>{t('schedules.list')}</TabsTrigger>
             </TabsList>
+            {!showTasks && session.data && (
+              <SessionUsage
+                key={`${scope}:${session.data.id}`}
+                kind='schedule_agent'
+                sessionId={session.data.id}
+                scope={scope}
+              />
+            )}
             <ScheduleHistoryMenu
               conversations={conversations.data ?? []}
               selectedId={sessionId}

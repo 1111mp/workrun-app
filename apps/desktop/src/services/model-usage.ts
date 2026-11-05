@@ -69,6 +69,6 @@ export type SessionUsage = {
   }[];
 };
 export const getSessionUsage = (
-  kind: 'assistant' | 'workflow_chat',
+  kind: 'assistant' | 'workflow_chat' | 'schedule_agent',
   id: string,
 ) => invoke<SessionUsage>('model_usage_session', { kind, id });

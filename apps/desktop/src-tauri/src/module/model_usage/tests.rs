@@ -582,3 +582,41 @@ async fn fingerprints_compare_origins_and_detect_request_changes_without_changin
         "exactly one provider call per invocation"
     );
 }
+
+#[tokio::test]
+async fn scheduling_usage_is_isolated_by_workspace_session_and_kind() {
+    let pool = database().await;
+    let writer = Writer::new(pool.clone());
+    let model = Model(vec![chunk(10, 5, false)]);
+    let mut scheduling = context();
+    scheduling.session_kind = Some("schedule_agent".into());
+    scheduling.purpose = "schedule_agent".into();
+    let (_, mut stream) = observe_with_writer(
+        &model,
+        LlmRequest::new("test", vec![]),
+        true,
+        scheduling,
+        Some(writer.clone()),
+    )
+    .await
+    .unwrap();
+    while stream.next().await.is_some() {}
+    let result = snapshot(&pool, &writer, "personal", "schedule_agent", "session")
+        .await
+        .unwrap();
+    assert_eq!(result["conversation"]["totalTokens"], 15);
+    assert_eq!(result["execution"]["totalTokens"], 0);
+    assert_eq!(result["byPurpose"][0]["purpose"], "schedule_agent");
+    for (workspace, kind, id) in [
+        ("other", "schedule_agent", "session"),
+        ("personal", "schedule_agent", "other"),
+        ("personal", "assistant", "session"),
+    ] {
+        assert!(
+            snapshot(&pool, &writer, workspace, kind, id).await.unwrap()["calls"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
