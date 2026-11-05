@@ -7,9 +7,11 @@ import {
   fireEvent,
   waitFor,
 } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { MessageMarkdown } from './message-markdown';
+import { WorkflowBackButton } from './workflow-editor/workflow-back-button';
 
 vi.mock('@/hooks/use-highlighted-code', () => ({
   useHighlightedCode: (code: string) => code.split('\n'),
@@ -101,4 +103,83 @@ it('does not write a file when the save dialog is cancelled', async () => {
   fireEvent.click(download);
   await waitFor(() => expect(download).not.toBeDisabled());
   expect(writeTextFile).not.toHaveBeenCalled();
+});
+
+it('opens scheduling action links in the Workrun router', async () => {
+  render(
+    <MemoryRouter initialEntries={['/schedules']}>
+      <Routes>
+        <Route
+          path='/schedules'
+          element={
+            <MessageMarkdown content='该工作流包含需要人工回答的节点。[打开 Weather workflow](/workflows/weather)' />
+          }
+        />
+        <Route path='/workflows/weather' element={<h1>Weather editor</h1>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const link = screen.getByRole('link', { name: '打开 Weather workflow' });
+  expect(link).not.toHaveAttribute('target');
+  fireEvent.click(link);
+  expect(
+    await screen.findByRole('heading', { name: 'Weather editor' }),
+  ).toBeInTheDocument();
+});
+
+function ScheduleOrigin() {
+  const location = useLocation();
+  return (
+    <>
+      <output data-testid='schedule-origin'>
+        {location.pathname}
+        {location.search}
+        {location.hash}:{location.key}
+      </output>
+      <MessageMarkdown
+        content={`[打开 Weather workflow](${window.location.origin}/workflows/weather)`}
+      />
+    </>
+  );
+}
+it('returns an absolute same-origin workflow link to its original scheduled task conversation', async () => {
+  render(
+    <MemoryRouter
+      initialEntries={[
+        {
+          pathname: '/schedules',
+          search: '?conversation=weather&task=once',
+          hash: '#latest',
+          key: 'original-schedule',
+        },
+      ]}
+    >
+      <Routes>
+        <Route path='/schedules' element={<ScheduleOrigin />} />
+        <Route path='/workflows/weather' element={<WorkflowBackButton />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const link = screen.getByRole('link', { name: '打开 Weather workflow' });
+  expect(link).not.toHaveAttribute('target');
+  fireEvent.click(link);
+  fireEvent.click(
+    await screen.findByRole('button', {
+      name: 'workflowEditor.backToConversation',
+    }),
+  );
+  expect(screen.getByTestId('schedule-origin')).toHaveTextContent(
+    '/schedules?conversation=weather&task=once#latest:original-schedule',
+  );
+});
+it('keeps an external workflow-shaped URL external', () => {
+  render(
+    <MemoryRouter>
+      <MessageMarkdown content='[External](https://example.com/workflows/weather)' />
+    </MemoryRouter>,
+  );
+  expect(screen.getByRole('link', { name: 'External' })).toHaveAttribute(
+    'target',
+    '_blank',
+  );
 });

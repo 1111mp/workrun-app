@@ -9,7 +9,7 @@ export function WorkflowBackButton() {
   const location = useLocation();
   const fromConversation =
     typeof location.state?.assistantReturnTo === 'string' &&
-    location.state.assistantReturnTo.startsWith('/start?');
+    /^\/(?:start|schedules)(?:[?#]|$)/.test(location.state.assistantReturnTo);
 
   return (
     <Button

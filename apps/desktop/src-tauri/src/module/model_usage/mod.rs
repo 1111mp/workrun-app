@@ -268,7 +268,10 @@ async fn observe_with_writer(
 
 /// All numbers are known subtotals. Completeness is separate from request success.
 pub async fn session_usage(pool: &SqlitePool, workspace: &str, kind: &str, id: &str) -> anyhow::Result<Value> {
-    anyhow::ensure!(matches!(kind, "assistant" | "workflow_chat"), "Unknown session kind");
+    anyhow::ensure!(
+        matches!(kind, "assistant" | "workflow_chat" | "schedule_agent"),
+        "Unknown session kind"
+    );
     // Native run receipts also link imported history. OR keeps a call unique
     // when both the new origin metadata and an old receipt identify the run.
     let rows = sqlx::query("SELECT record_json FROM model_calls WHERE workspace_id=? AND ((session_kind=? AND session_id=?) OR (?='assistant' AND run_id IN (SELECT run_id FROM assistant_messages WHERE workspace_id=? AND session_id=? UNION SELECT active_run_id FROM assistant_sessions WHERE workspace_id=? AND id=?))) ORDER BY started_at,id")

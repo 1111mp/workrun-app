@@ -12,6 +12,7 @@ import { AppSidebar } from '@/components/app-sidebar';
 import { ConversationTitle } from '@/components/conversation-title';
 import { RunCenter } from '@/components/run-center';
 import { RunEventTracker } from '@/components/run-event-tracker';
+import { WorkspaceHeaderHost } from '@/components/workspace-header-content';
 
 export function WorkspaceFrame({
   accountMenu,
@@ -23,12 +24,15 @@ export function WorkspaceFrame({
   const { pathname } = useLocation();
   const { t } = useTranslation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [headerHost, setHeaderHost] = useState<HTMLDivElement | null>(null);
+  const schedules = pathname.startsWith('/schedules');
+  const start = pathname === '/start' || pathname === '/';
 
   // The editor owns its node sidebar and toolbar. Nesting it in the navigation
   // shell wastes canvas space and leaks outer sidebar state into its controls.
   const editor = matchPath('/workflows/:id', pathname);
   return (
-    <>
+    <WorkspaceHeaderHost.Provider value={headerHost}>
       <RunEventTracker />
       {editor ? (
         <div
@@ -53,24 +57,41 @@ export function WorkspaceFrame({
               )}
             >
               <SidebarTrigger />
-              <span className='text-muted-foreground truncate text-sm'>
-                {pathname === '/start' || pathname === '/' ? (
-                  <ConversationTitle />
-                ) : pathname.startsWith('/workflows') ? (
-                  t('navigation.workflow')
-                ) : pathname.startsWith('/apps') ? (
-                  t('navigation.apps')
-                ) : pathname === '/profile' ? (
-                  t('profile.title')
-                ) : pathname === '/mcp-servers' ? (
-                  t('navigation.mcpServers')
-                ) : pathname === '/runs' ? (
-                  t('navigation.runHistory')
-                ) : (
-                  t('navigation.settings')
-                )}
-              </span>
-              <div data-tauri-drag-region className='h-full flex-1' />
+              {schedules ? (
+                <div
+                  ref={setHeaderHost}
+                  data-workspace-header-slot
+                  className='flex h-full min-w-0 flex-1 items-center'
+                />
+              ) : (
+                <>
+                  <span className='text-muted-foreground truncate text-sm'>
+                    {start ? (
+                      <ConversationTitle />
+                    ) : pathname.startsWith('/workflows') ? (
+                      t('navigation.workflow')
+                    ) : pathname.startsWith('/apps') ? (
+                      t('navigation.apps')
+                    ) : pathname === '/profile' ? (
+                      t('profile.title')
+                    ) : pathname === '/mcp-servers' ? (
+                      t('navigation.mcpServers')
+                    ) : pathname === '/runs' ? (
+                      t('navigation.runHistory')
+                    ) : (
+                      t('navigation.settings')
+                    )}
+                  </span>
+                  <div data-tauri-drag-region className='h-full flex-1' />
+                  {start && (
+                    <div
+                      ref={setHeaderHost}
+                      data-workspace-header-slot
+                      className='flex shrink-0 items-center'
+                    />
+                  )}
+                </>
+              )}
             </header>
             <div className='min-h-0 flex-1 [view-transition-name:page-content]'>
               {children}
@@ -79,6 +100,6 @@ export function WorkspaceFrame({
           </SidebarInset>
         </SidebarProvider>
       )}
-    </>
+    </WorkspaceHeaderHost.Provider>
   );
 }

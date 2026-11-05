@@ -61,11 +61,13 @@ export function AssistantTurnActivity({
   reasoning = [],
   busy,
   failed = false,
+  statusLabel,
 }: {
   summaries: string[];
   reasoning?: AssistantReasoning[];
   busy: boolean;
   failed?: boolean;
+  statusLabel?: string;
 }) {
   const { t } = useTranslation();
   // Streaming thoughts must not push the plan or answer out of view.
@@ -95,7 +97,7 @@ export function AssistantTurnActivity({
   const line = (
     <TraceLine status={failed ? 'error' : busy ? 'running' : undefined}>
       <TraceIcon>{failed ? <CircleAlertIcon /> : <BrainIcon />}</TraceIcon>
-      <TraceTitle>{title}</TraceTitle>
+      <TraceTitle>{statusLabel || title}</TraceTitle>
       {!busy && duration > 0 && (
         <TraceDescription>
           {t('assistant.thinkingDuration', {

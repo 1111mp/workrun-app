@@ -31,7 +31,7 @@ export function SessionUsage({
   sessionId,
   scope,
 }: {
-  kind: 'assistant' | 'workflow_chat';
+  kind: 'assistant' | 'workflow_chat' | 'schedule_agent';
   sessionId: string;
   scope?: string;
 }) {

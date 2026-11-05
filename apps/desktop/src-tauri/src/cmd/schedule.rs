@@ -2,6 +2,16 @@ use crate::{
     cmd::{CmdResult, StringifyErr},
     module::schedule::{AppScheduleRequest, ScheduleStore, ScheduleSummary, WorkflowScheduleRequest},
 };
+use serde_json::Value;
+
+#[tauri::command]
+pub async fn schedule_update(change: Value, team_token: Option<String>) -> CmdResult<Value> {
+    crate::module::schedule_agent::ScheduleTaskManager::active()
+        .stringify_err()?
+        .update(change, team_token.as_deref())
+        .await
+        .stringify_err()
+}
 
 #[tauri::command]
 pub async fn schedule_set_team_session(server_url: String, token: Option<String>) {

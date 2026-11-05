@@ -20,6 +20,7 @@ import {
   useSidebar,
 } from '@workspace/ui/components';
 import {
+  ClockIcon,
   AppWindowIcon,
   HistoryIcon,
   HomeIcon,
@@ -60,6 +61,7 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
   );
   const { t } = useTranslation();
   const { pathname, search, key } = useLocation();
+  const navigate = useNavigate();
   const currentSessionId =
     pathname === '/start' ? new URLSearchParams(search).get('session') : null;
   const { setOpenMobile } = useSidebar();
@@ -92,6 +94,11 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
     { to: '/start', label: t('start.home'), icon: HomeIcon },
     { to: '/workflows', label: t('navigation.workflow'), icon: WorkflowIcon },
     { to: '/apps', label: t('navigation.apps'), icon: AppWindowIcon },
+    {
+      to: '/schedules',
+      label: t('navigation.schedules'),
+      icon: ClockIcon,
+    },
     { to: '/runs', label: t('navigation.runHistory'), icon: HistoryIcon },
   ];
 
@@ -182,6 +189,21 @@ export function AppSidebar({ accountMenu }: { accountMenu: ReactNode }) {
                     }}
                     viewTransition
                     onClick={(event) => {
+                      if (
+                        to === '/schedules' &&
+                        event.button === 0 &&
+                        !event.metaKey &&
+                        !event.ctrlKey &&
+                        !event.shiftKey &&
+                        !event.altKey
+                      ) {
+                        event.preventDefault();
+                        void navigate('/schedules', {
+                          state: { scheduleDraft: crypto.randomUUID() },
+                        });
+                        setOpenMobile(false);
+                        return;
+                      }
                       const isCurrentPage =
                         to === '/start'
                           ? (pathname === '/start' || pathname === '/') &&

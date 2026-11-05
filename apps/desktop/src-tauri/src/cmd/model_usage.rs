@@ -25,6 +25,13 @@ pub async fn model_usage_session(kind: String, id: String) -> CmdResult<Value> {
                     .fetch_one(&pool)
                     .await?
             },
+            "schedule_agent" => {
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM schedule_agent_sessions WHERE workspace_id=? AND id=?)")
+                    .bind(&workspace)
+                    .bind(&id)
+                    .fetch_one(&pool)
+                    .await?
+            },
             _ => anyhow::bail!("Unknown session kind"),
         };
         anyhow::ensure!(exists, "Session not found in this workspace");

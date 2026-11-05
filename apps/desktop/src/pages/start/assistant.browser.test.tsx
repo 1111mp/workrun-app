@@ -5,7 +5,10 @@ import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 
 import { WorkflowBackButton } from '@/components/workflow-editor/workflow-back-button';
+import { WorkspaceFrame } from '@/components/workspace-frame';
 import zh from '@/locales/zh_CN.json';
+
+import '@/styles/global.css';
 
 const host = vi.hoisted(() => {
   const sequences = new Map<string, number>();
@@ -36,6 +39,7 @@ const host = vi.hoisted(() => {
     inspect: vi.fn(),
     saved,
     compactCatalog: false,
+    layoutEmpty: false,
     catalogGate: undefined as Promise<void> | undefined,
     snapshotGate: undefined as Promise<void> | undefined,
     listeners,
@@ -48,11 +52,16 @@ const state = vi.hoisted(() => ({
   config: { workspace_mode: 'personal', summary_model_profile_id: 'model' },
   teamUser: undefined,
 }));
+vi.mock('@/components/run-center', () => ({ RunCenter: () => null }));
+vi.mock('@/components/run-event-tracker', () => ({
+  RunEventTracker: () => null,
+}));
 vi.mock('@/lib/auth-client', () => ({
   createTeamAuthClient: () => ({ getSession: async () => ({ data: null }) }),
 }));
 vi.mock('@/components/app-sidebar', () => ({
   useEntryWorkspace: () => host.scope,
+  AppSidebar: () => <aside className='hidden w-60 shrink-0 md:block' />,
 }));
 vi.mock('@/stores/workrun.store', () => ({
   useWorkrunStore: Object.assign(
@@ -319,6 +328,40 @@ vi.mock('@/services/workflow', () => {
 import { useAssistantStore } from '@/stores/assistant.store';
 const { disposeAssistantEvents } = useAssistantStore.getState();
 
+import { Component as SchedulesPage } from '../schedules/index';
+vi.mock('@/services/schedules', () => ({
+  listSchedules: async () => [],
+  listSchedulingSessions: async () => [],
+  getSchedulingSession: async () => ({
+    id: 'schedule-layout',
+    title: 'Layout',
+    modelId: 'model',
+    status: 'idle',
+    proposals: [],
+    questions: [],
+    messages: host.layoutEmpty
+      ? []
+      : [
+          { id: 'scheduled-user', role: 'user', text: '安排上海天气任务' },
+          {
+            id: 'scheduled-reply',
+            role: 'assistant',
+            text: '请确认执行时间。',
+          },
+        ],
+  }),
+  getSchedule: async () => null,
+  createSchedulingSession: vi.fn(),
+  decideScheduleChange: vi.fn(),
+  deleteSchedulingSession: vi.fn(),
+  proposeScheduleChange: vi.fn(),
+  changeScheduledTask: vi.fn(),
+  replySchedulingReceipt: vi.fn(),
+  sendSchedulingMessage: vi.fn(),
+  setSchedulingModel: vi.fn(),
+  stopSchedulingResponse: vi.fn(),
+}));
+
 import { Component as StartPage } from './index';
 
 beforeEach(() => {
@@ -330,6 +373,7 @@ beforeEach(() => {
   host.saved.clear();
   host.listeners.clear();
   host.compactCatalog = false;
+  host.layoutEmpty = false;
   host.catalogGate = undefined;
   host.snapshotGate = undefined;
   useAssistantStore.setState({ sessions: {}, scopes: {}, streams: {} });
@@ -1061,7 +1105,8 @@ it('right-aligns user bubbles and folds phase summaries when thinking ends', asy
 });
 
 it('streams reasoning through Trace, collapses for the answer and preserves reader choices', async () => {
-  const { AssistantTurnActivity } = await import('./assistant-turn-activity');
+  const { AssistantTurnActivity } =
+    await import('@/components/assistant-turn-activity');
   const thought = {
     id: 'thinking-1',
     turnId: 'user',
@@ -1124,7 +1169,8 @@ it('streams reasoning through Trace, collapses for the answer and preserves read
 });
 
 it('removes stale preparation reports after completion even if the reader expanded them', async () => {
-  const { AssistantTurnActivity } = await import('./assistant-turn-activity');
+  const { AssistantTurnActivity } =
+    await import('@/components/assistant-turn-activity');
   const summaries = ['正在为您准备执行订单号 43 的取消工作流...'];
   const screen = await render(
     <AssistantTurnActivity summaries={summaries} busy />,
@@ -1872,7 +1918,7 @@ it.each([1280, 390])(
   'anchors a long model menu to its trigger at %spx instead of its selected row',
   async (width) => {
     const { AssistantModelSelector } =
-      await import('./assistant-model-selector');
+      await import('@/components/assistant-model-selector');
     await page.viewport(width, 900);
     const models: ModelDefinition[] = Array.from(
       { length: 30 },
@@ -1924,7 +1970,8 @@ it.each([1280, 390])(
 );
 
 it('opens the model menu below its trigger when there is room', async () => {
-  const { AssistantModelSelector } = await import('./assistant-model-selector');
+  const { AssistantModelSelector } =
+    await import('@/components/assistant-model-selector');
   await page.viewport(1280, 900);
   const screen = await render(
     <div className='flex justify-center pt-16'>
@@ -1997,3 +2044,185 @@ it('preserves a restored effort when sending before model capabilities finish lo
     client.clear();
   }
 });
+
+for (const [viewportWidth, sidebarWidth] of [
+  [1280, 240],
+  [1920, 240],
+  [1920, 0],
+  [390, 0],
+] as const) {
+  for (const empty of [false, true]) {
+    it(`has the same measured widths as the homepage at ${viewportWidth}px with sidebar ${sidebarWidth}, empty=${empty}`, async () => {
+      await page.viewport(viewportWidth, 1000);
+      host.layoutEmpty = empty;
+      const session = {
+        id: 'home-layout',
+        title: '布局对比',
+        modelId: 'model',
+        status: 'idle' as const,
+        steps: 0,
+        messages: [
+          {
+            id: 'home-user',
+            role: 'user' as const,
+            text: '安排上海天气任务',
+            content: { role: 'user', parts: [{ text: '安排上海天气任务' }] },
+          },
+          {
+            id: 'home-reply',
+            role: 'assistant' as const,
+            text: '请确认执行时间。',
+            content: { role: 'model', parts: [{ text: '请确认执行时间。' }] },
+          },
+        ],
+      };
+      host.saved.set(session.id, session);
+      useAssistantStore.setState({
+        sessions: { [session.id]: session },
+        scopes: { [session.id]: host.scope },
+      });
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const shell = (kind: 'home' | 'schedule') => (
+        <QueryClientProvider client={client}>
+          <MemoryRouter
+            initialEntries={[
+              kind === 'home'
+                ? empty
+                  ? '/start'
+                  : '/start?session=home-layout'
+                : empty
+                  ? '/schedules?view=new'
+                  : '/schedules?conversation=schedule-layout',
+            ]}
+          >
+            <section
+              data-layout-page={kind}
+              className='workrun-shell workrun-navigation bg-background text-foreground flex h-[900px] w-full'
+            >
+              <aside style={{ width: sidebarWidth, flexShrink: 0 }} />
+              <div className='workrun-surface flex min-w-0 flex-1 flex-col'>
+                {kind === 'home' ? <StartPage /> : <SchedulesPage />}
+              </div>
+            </section>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+      await render(
+        <>
+          {shell('home')}
+          {shell('schedule')}
+        </>,
+      );
+      const box = (kind: string, selector: string) =>
+        document
+          .querySelector(`[data-layout-page="${kind}"] ${selector}`)!
+          .getBoundingClientRect();
+      await expect
+        .poll(() => document.querySelectorAll('[data-workrun-composer]').length)
+        .toBe(2);
+      if (!empty)
+        await expect
+          .poll(
+            () =>
+              document.querySelectorAll(
+                '[data-slot="message-scroller-content"]',
+              ).length,
+          )
+          .toBe(2);
+      const home = box('home', '[data-workrun-composer]');
+      const schedule = box('schedule', '[data-workrun-composer]');
+      expect({ left: schedule.left, width: schedule.width }).toEqual({
+        left: home.left,
+        width: home.width,
+      });
+      if (!empty) {
+        const homeMessages = box(
+          'home',
+          '[data-slot="message-scroller-content"]',
+        );
+        const scheduleMessages = box(
+          'schedule',
+          '[data-slot="message-scroller-content"]',
+        );
+        expect({
+          left: scheduleMessages.left,
+          width: scheduleMessages.width,
+        }).toEqual({ left: homeMessages.left, width: homeMessages.width });
+      }
+      client.clear();
+    });
+  }
+}
+
+for (const width of [1280, 390]) {
+  it(`places assistant usage in the shell header without taking message height at ${width}px`, async () => {
+    vi.stubGlobal('OS_PLATFORM', 'darwin');
+    await page.viewport(width, 900);
+    const session = {
+      id: 'header-usage',
+      title: '自主编排 Workflow',
+      modelId: 'model',
+      status: 'idle' as const,
+      steps: 0,
+      messages: [
+        {
+          id: 'user',
+          role: 'user' as const,
+          text: '安排上海天气任务',
+          content: { role: 'user', parts: [{ text: '安排上海天气任务' }] },
+        },
+        {
+          id: 'reply',
+          role: 'assistant' as const,
+          text: '请确认执行时间。',
+          content: { role: 'model', parts: [{ text: '请确认执行时间。' }] },
+        },
+      ],
+    };
+    host.saved.set(session.id, session);
+    useAssistantStore.setState({
+      sessions: { [session.id]: session },
+      scopes: { [session.id]: host.scope },
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/start?session=header-usage']}>
+          <WorkspaceFrame accountMenu={null}>
+            <StartPage />
+          </WorkspaceFrame>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const usage = page.getByRole('button', {
+      name: zh.usage.title,
+      exact: true,
+    });
+    await expect.element(usage).toBeVisible();
+    const button = document.querySelector(
+      '[data-workspace-header-slot] button',
+    )!;
+    expect(button.textContent).toBe(zh.usage.title);
+    expect(button.closest('header')).not.toBeNull();
+    await expect
+      .poll(() => document.querySelector('[data-conversation-scroll-viewport]'))
+      .not.toBeNull();
+    const header = document.querySelector('header')!.getBoundingClientRect();
+    const viewport = document
+      .querySelector('[data-conversation-scroll-viewport]')!
+      .getBoundingClientRect();
+    expect(viewport.top).toBe(header.bottom);
+    const rect = button.getBoundingClientRect();
+    expect(rect.left).toBeGreaterThanOrEqual(0);
+    expect(rect.right).toBeLessThanOrEqual(width);
+    await usage.click();
+    await expect
+      .element(page.getByRole('dialog', { name: zh.usage.title }))
+      .toBeVisible();
+    client.clear();
+  });
+}

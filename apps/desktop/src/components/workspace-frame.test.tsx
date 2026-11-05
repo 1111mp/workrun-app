@@ -36,6 +36,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { WorkspaceFrame } from './workspace-frame';
+import { WorkspaceHeaderContent } from './workspace-header-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -99,4 +100,27 @@ it('restores navigation when returning from the editor to the workflow list', ()
   expect(screen.getByTestId('run-tracker')).toBeInTheDocument();
   expect(tracker.mounted).toHaveBeenCalledOnce();
   expect(tracker.disposed).not.toHaveBeenCalled();
+});
+
+it('places schedule controls inside the existing shell header', () => {
+  render(
+    <MemoryRouter initialEntries={['/schedules']}>
+      <WorkspaceFrame accountMenu={null}>
+        <div data-testid='schedule-page'>
+          <WorkspaceHeaderContent>
+            <button>Conversation history</button>
+          </WorkspaceHeaderContent>
+          <div>Messages</div>
+        </div>
+      </WorkspaceFrame>
+    </MemoryRouter>,
+  );
+  expect(
+    screen
+      .getByRole('button', { name: 'Conversation history' })
+      .closest('header'),
+  ).toBeInTheDocument();
+  expect(screen.getByTestId('schedule-page')).not.toContainElement(
+    screen.getByRole('button', { name: 'Conversation history' }),
+  );
 });

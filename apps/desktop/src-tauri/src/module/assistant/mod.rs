@@ -79,3 +79,6 @@ mod planning_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
+
+// Provider transport only; scheduling owns its own instructions, tools and sessions.
+pub(crate) use model::{content_text as agent_text, generate as generate_agent_stream, instructed as agent_contents};

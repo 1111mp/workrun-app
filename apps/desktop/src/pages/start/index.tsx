@@ -9,7 +9,6 @@ import {
   Button,
   Message,
   MessageContent,
-  MessageFooter,
   MessageScroller,
   MessageScrollerButton,
   MessageScrollerContent,
@@ -31,9 +30,21 @@ import { toast } from 'sonner';
 
 import { useEntryWorkspace } from '@/components/app-sidebar';
 import { ArtifactFiles } from '@/components/artifact-files';
+import {
+  AssistantMessageActions,
+  AssistantMessageFooter,
+} from '@/components/assistant-message-actions';
+import { AssistantModelSelector } from '@/components/assistant-model-selector';
+import { AssistantTurnThinking } from '@/components/assistant-turn-activity';
+import {
+  conversationContentClassName,
+  conversationComposerClassName,
+} from '@/components/conversation-layout';
+import { ConversationScrollViewport } from '@/components/conversation-scroll-viewport';
 import { SessionUsage } from '@/components/session-usage';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowRunForm } from '@/components/workflow-run-panel';
+import { WorkspaceHeaderContent } from '@/components/workspace-header-content';
 import { artifactReferences, type ArtifactRef } from '@/services/artifact';
 import type { AssistantMessage } from '@/services/assistant';
 import { getModelCatalog } from '@/services/cmd';
@@ -41,16 +52,12 @@ import { useWorkrunStore } from '@/stores';
 import { loadAssistantHistory } from '@/stores/assistant.runtime';
 import { useAssistantStore } from '@/stores/assistant.store';
 
-import { AssistantMessageActions } from './assistant-message-actions';
 import { AssistantMessageText } from './assistant-message-text';
-import { AssistantModelSelector } from './assistant-model-selector';
 import { AssistantToolConfirmationCard } from './assistant-tool-confirmation';
 import { groupAssistantMessages } from './assistant-turn';
-import { AssistantTurnThinking } from './assistant-turn-activity';
 import { AssistantWorkflowConfirmationCard } from './assistant-workflow-confirmation';
 import { AssistantWorkflowPlan } from './assistant-workflow-plan';
 import { AssistantWorkflowRun } from './assistant-workflow-run';
-import { ConversationScrollViewport } from './conversation-scroll-viewport';
 
 function StartPage() {
   const loadAssistantSession = useAssistantStore(
@@ -299,9 +306,9 @@ function AssistantChat({ scope }: { scope: string }) {
   return (
     <div className='@container flex h-full min-h-0 flex-col'>
       {session && (
-        <div className='flex shrink-0 justify-end px-4'>
+        <WorkspaceHeaderContent>
           <SessionUsage kind='assistant' sessionId={session.id} scope={scope} />
-        </div>
+        </WorkspaceHeaderContent>
       )}
       {syncError && !restored.isError && (
         <Alert variant='destructive'>
@@ -355,7 +362,7 @@ function AssistantChat({ scope }: { scope: string }) {
               </div>
             )}
           </div>
-          <div className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] shrink-0 px-6 pt-3 pb-5'>
+          <div className={conversationComposerClassName}>
             {renderComposer()}
           </div>
         </>
@@ -414,7 +421,9 @@ function AssistantChat({ scope }: { scope: string }) {
                 <ConversationScrollViewport
                   positionKey={`${scope}:${id ?? 'new'}`}
                 >
-                  <MessageScrollerContent className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] px-6 py-5'>
+                  <MessageScrollerContent
+                    className={conversationContentClassName}
+                  >
                     {session?.history?.hasMore && (
                       <div className='flex justify-center py-3'>
                         <Button
@@ -695,12 +704,8 @@ function AssistantChat({ scope }: { scope: string }) {
                                 {message.role !== 'tool' &&
                                   message.text &&
                                   message.id !== stream?.messageId && (
-                                    <MessageFooter
-                                      className={cn(
-                                        'gap-2 pt-1 transition-opacity motion-reduce:transition-none',
-                                        message.id !== latestMessageId &&
-                                          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 [@media(hover:hover)]:group-focus-within/message:opacity-100',
-                                      )}
+                                    <AssistantMessageFooter
+                                      latest={message.id === latestMessageId}
                                     >
                                       {session.error &&
                                         message.id === latestUserId && (
@@ -754,7 +759,7 @@ function AssistantChat({ scope }: { scope: string }) {
                                             : undefined
                                         }
                                       />
-                                    </MessageFooter>
+                                    </AssistantMessageFooter>
                                   )}
                               </div>
                             ))}
@@ -825,7 +830,7 @@ function AssistantChat({ scope }: { scope: string }) {
               </MessageScroller>
             </MessageScrollerProvider>
           </div>
-          <div className='mx-auto w-full max-w-[clamp(56rem,80cqw,84rem)] shrink-0 px-6 pt-3 pb-5'>
+          <div className={conversationComposerClassName}>
             {renderComposer()}
           </div>
         </>

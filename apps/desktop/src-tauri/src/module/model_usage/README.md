@@ -32,7 +32,7 @@ workflow dispatch persists its origin in native runtime metadata before queuing;
 recovery retains that origin, while a new manual replay clears it. Memory summaries
 belong to the conversation, not a workflow model node.
 
-`model_usage_session(kind, id)` accepts `assistant` or `workflow_chat`, verifies the
+`model_usage_session(kind, id)` accepts `assistant`, `workflow_chat`, or `schedule_agent`, verifies the
 session belongs to the active workspace, and returns known subtotals, coverage,
 purpose groups, and call details. Execution is a separate subtotal, identified by
 runId. Native historical receipts can link imported runs without duplicating calls.

@@ -1,11 +1,12 @@
-import { Button } from '@workspace/ui/components';
+import { Button, MessageFooter } from '@workspace/ui/components';
+import { cn } from '@workspace/ui/lib/utils';
 import {
   CheckIcon,
   CopyIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -79,5 +80,26 @@ export function AssistantMessageActions({
         </>
       )}
     </div>
+  );
+}
+
+/** Keep message actions discoverable by hover, keyboard focus and touch alike. */
+export function AssistantMessageFooter({
+  latest,
+  children,
+}: {
+  latest: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <MessageFooter
+      className={cn(
+        'gap-2 pt-1 transition-opacity motion-reduce:transition-none',
+        !latest &&
+          '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 [@media(hover:hover)]:group-focus-within/message:opacity-100',
+      )}
+    >
+      {children}
+    </MessageFooter>
   );
 }

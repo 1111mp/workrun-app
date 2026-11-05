@@ -7,6 +7,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 import {
@@ -68,15 +69,17 @@ function mount() {
   });
   return render(
     <QueryClientProvider client={client}>
-      <WorkflowSchedules
-        workflowId='workflow-1'
-        document={{
-          ...document,
-          settings: { ...document.settings, name: 'Unpublished edits' },
-        }}
-        dsl={{}}
-        release={release}
-      />
+      <MemoryRouter>
+        <WorkflowSchedules
+          workflowId='workflow-1'
+          document={{
+            ...document,
+            settings: { ...document.settings, name: 'Unpublished edits' },
+          }}
+          dsl={{}}
+          release={release}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
