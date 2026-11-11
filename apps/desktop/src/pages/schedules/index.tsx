@@ -774,7 +774,10 @@ function receiveSchedulingStream(
   scope: string,
   id: string,
   event: SchedulingStream,
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: {
+    (key: string): string;
+    (key: string, options: Record<string, unknown>): string;
+  },
 ) {
   client.setQueryData<SchedulingView>(
     ['scheduling-stream', scope, id],

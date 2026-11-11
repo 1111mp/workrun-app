@@ -1146,7 +1146,10 @@ export function hasNodeTrajectoryAssertion(value: unknown) {
 export function criterionLabel(
   criterion: Record<string, unknown>,
   expectation?: unknown,
-  t?: (key: string, options?: Record<string, unknown>) => string,
+  t?: {
+    (key: string): string;
+    (key: string, options: Record<string, unknown>): string;
+  },
 ) {
   const id = stringValue(criterion.criterion);
   if (id.startsWith('jsonPath:')) {
