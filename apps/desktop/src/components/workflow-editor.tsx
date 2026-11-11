@@ -68,8 +68,8 @@ import { WorkflowSchedules } from '@/components/workflow-schedules';
 import { WorkflowSettingsPanel } from '@/components/workflow-settings';
 import { WorkflowConfigureButton } from '@/components/workflow-share-dialog';
 import { useUnsavedChangesGuard } from '@/hooks';
+import { useModelCatalog } from '@/hooks/use-model-catalog';
 import { isPersonalMode, isTeamMode } from '@/lib/constant';
-import { getModelCatalog } from '@/services/cmd';
 import {
   getEvaluationQualityGate,
   latestEvaluationRunsForWorkflowSnapshot,
@@ -104,7 +104,7 @@ import {
 } from '@/services/workflow';
 import {
   createWorkflowStore,
-  replayWorkflowRunProjection,
+  restoreWorkflowRunProjection,
   useWorkflowRunStore,
   useWorkflowStoreApi,
   WorkflowStoreProvider,
@@ -318,10 +318,7 @@ function WorkflowEditorContent({
       }
     : undefined;
 
-  const { data: modelCatalog } = useQuery({
-    queryKey: ['modelCatalog'],
-    queryFn: getModelCatalog,
-  });
+  const { data: modelCatalog } = useModelCatalog();
   const workflowHistory = useInfiniteQuery({
     queryKey: ['run-history', 'workflow', activeWorkflow?.id],
     queryFn: ({ pageParam }) =>
@@ -674,20 +671,12 @@ function WorkflowEditorContent({
       const record = await inspectRunRecord(id);
       const runDocument = workflowDocumentFromSnapshot(record.targetSnapshot);
       restoreHistoricalRun.restoreWorkflowRun(
-        replayWorkflowRunProjection(
-          record.id,
-          record.events.map(({ sequence, event }) => ({
-            runId: record.id,
-            sequence,
-            event: event as WorkflowRunEvent,
-          })),
-          {
-            mode: runDocument?.settings.mode ?? workflowSettings.mode,
-            nodes: runDocument?.nodes ?? nodes,
-            input: replayInput(record),
-            turnId: `history:${record.id}`,
-          },
-        ),
+        restoreWorkflowRunProjection(record, {
+          mode: runDocument?.settings.mode ?? workflowSettings.mode,
+          nodes: runDocument?.nodes ?? nodes,
+          input: replayInput(record),
+          turnId: `history:${record.id}`,
+        }),
       );
       setViewingHistoricalRunId(id);
       setViewingHistoricalRun(record);

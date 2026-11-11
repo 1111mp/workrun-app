@@ -11,6 +11,7 @@ type LocalProfile = {
 
 type TeamSettings = {
   server_url: string;
+  summary_model_id?: string | null;
 };
 
 type ModelProvider =
@@ -20,9 +21,17 @@ type ModelProvider =
   | 'anthropic'
   | 'deep_seek'
   | 'groq'
-  | 'ollama';
+  | 'ollama'
+  | 'team';
 
-type ReasoningEffort = 'low' | 'medium' | 'high' | 'max';
+type ReasoningEffort =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max';
 
 type ModelDefinition = {
   id: string;
@@ -30,12 +39,18 @@ type ModelDefinition = {
   provider: ModelProvider;
   model: string;
   effortOptions?: ReasoningEffort[];
+  apiProtocol?: 'chat_completions' | 'responses';
+  capabilities?: {
+    tools?: boolean | null;
+    structuredOutput?: boolean | null;
+    vision?: boolean | null;
+  };
 };
 
 type ProviderHeader = { name: string; value: string };
 
 type ProviderCredential = {
-  provider: ModelProvider;
+  provider: Exclude<ModelProvider, 'team'>;
   baseUrl?: string;
   apiKey?: string;
   headers?: ProviderHeader[];

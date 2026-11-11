@@ -102,6 +102,8 @@ pub struct WorkflowScheduleRequest {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkflowExecutionRecipe {
+    #[serde(default)]
+    pub(crate) team_model_owner: Option<crate::module::team_model::TeamOwner>,
     pub(crate) source: WorkflowScheduleSource,
     pub(crate) input: Value,
     pub(crate) initial_state: Value,
@@ -237,7 +239,8 @@ impl ScheduleStore {
     pub async fn save_workflow(request: WorkflowScheduleRequest) -> Result<ScheduleSummary> {
         let workspace = crate::utils::dirs::active_workspace_id();
         let pool = DBManager::global().pool()?;
-        Self::save_workflow_in(&pool, &workspace, request).await
+        let owner = crate::module::team_model::owner_for(&workspace)?;
+        crate::module::team_model::with_owner(owner, Self::save_workflow_in(&pool, &workspace, request)).await
     }
     async fn save_workflow_in(
         pool: &sqlx::SqlitePool,
@@ -255,6 +258,7 @@ impl ScheduleStore {
         let now = Utc::now().to_rfc3339();
         let id = request.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
         let recipe = WorkflowExecutionRecipe {
+            team_model_owner: crate::module::team_model::stored_owner(workspace),
             source: request.source,
             input: request.input,
             initial_state: request.initial_state,
@@ -509,6 +513,13 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
             },
             ScheduleTargetType::Workflow => {
                 let recipe: WorkflowExecutionRecipe = serde_json::from_value(due.execution_recipe)?;
+                if let Some(owner) = recipe.team_model_owner.as_ref() {
+                    let current = crate::module::team_model::owner_for(&due.workspace)?;
+                    anyhow::ensure!(
+                        current.as_ref() == Some(owner),
+                        "Sign in with the original task account"
+                    );
+                }
                 let follows_latest = matches!(recipe.source, WorkflowScheduleSource::LatestPublished);
                 let resolved = async {
                     let resolved = resolve_workflow_recipe(
@@ -532,30 +543,33 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                         return Err(error);
                     },
                 };
-                run_manager::start_workflow_in_workspace(
-                    StartWorkflowRun {
-                        chat_session_id: None,
-                        chat_turn_id: None,
-                        run_id: run_id.clone(),
-                        target_id: due.summary.target_id,
-                        target_name: dsl
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or(&due.summary.target_name)
-                            .to_owned(),
-                        input: recipe.input.clone(),
-                        target_snapshot,
-                        release_id,
-                        release_version,
-                        dsl,
-                        initial_state: recipe.initial_state,
-                        thread_id: Uuid::new_v4().to_string(),
-                        evaluation_profile: None,
-                        evaluation_result_id: None,
-                        schedule_trigger: Some(trigger),
-                        deeplink_trigger: None,
-                    },
-                    &due.workspace,
+                crate::module::team_model::with_owner(
+                    recipe.team_model_owner.clone(),
+                    run_manager::start_workflow_in_workspace(
+                        StartWorkflowRun {
+                            chat_session_id: None,
+                            chat_turn_id: None,
+                            run_id: run_id.clone(),
+                            target_id: due.summary.target_id,
+                            target_name: dsl
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&due.summary.target_name)
+                                .to_owned(),
+                            input: recipe.input.clone(),
+                            target_snapshot,
+                            release_id,
+                            release_version,
+                            dsl,
+                            initial_state: recipe.initial_state,
+                            thread_id: Uuid::new_v4().to_string(),
+                            evaluation_profile: None,
+                            evaluation_result_id: None,
+                            schedule_trigger: Some(trigger),
+                            deeplink_trigger: None,
+                        },
+                        &due.workspace,
+                    ),
                 )
                 .await?;
             },

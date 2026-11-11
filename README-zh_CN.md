@@ -89,7 +89,7 @@ pnpm install
 pnpm app:dev
 ```
 
-模型目录由 Workrun 内置，无需新建模型 Profile 或手动填写模型 ID；Provider 密钥加密保存在本机。完整环境说明见[安装与前置条件](https://workrun-docs.pages.dev/zh-cn/getting-started/installation/)。
+个人模式使用 Workrun 内置模型目录，Provider 密钥加密保存在本机。团队模式登录后从 Workrun Server 获取模型目录，使用 Workrun 会话凭据调用 Server，无需填写 LiteLLM Key。团队模式也允许配置本机加密保存的 Provider 凭据直连模型。Server 声明两种协议时，选择器分别显示 Chat Completions 和 Responses 选项；未声明时使用 Chat Completions。完整环境说明见[安装与前置条件](https://workrun-docs.pages.dev/zh-cn/getting-started/installation/)。
 
 ### 常用命令
 

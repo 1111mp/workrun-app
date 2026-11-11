@@ -27,6 +27,14 @@ pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result
             credential.request_headers()?;
         }
     }
+    if patch.workspace_mode.is_some()
+        || patch.team.as_ref().is_some_and(|team| {
+            // Summary selection updates keep the same connection and should not log out.
+            crate::module::team_model::configured_server_changed(&team.server_url)
+        })
+    {
+        crate::module::team_model::clear();
+    }
     BaseConfig::workrun().await.edit_draft(|s| s.patch_config(patch));
 
     let update_flags = determine_update_flags(patch);

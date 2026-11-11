@@ -47,6 +47,10 @@ beforeEach(async () => {
       headers: req.headers,
       body: raw ? JSON.parse(raw) : {},
     });
+    if (req.url === '/v1/model/info' || req.url === '/model_group/info') {
+      res.writeHead(404).end();
+      return;
+    }
     if (req.url === '/v1/models') {
       res.setHeader('Content-Type', 'application/json');
       res.end(

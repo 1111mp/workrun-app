@@ -8,108 +8,23 @@ import { ConfigService } from '@nestjs/config';
 import type { Response as ExpressResponse } from 'express';
 import OpenAI from 'openai';
 
-import { z } from '../../lib/zod';
 import { LlmError } from './llm-error';
-import { normalizeLiteLlmUrl, parseModelCatalog } from './llm.config';
-
-// Only inference parameters cross this boundary. LiteLLM routing, credentials,
-// callbacks, mock responses and arbitrary proxy options are never client-owned.
-const chatSchema = z
-  .object({
-    model: z.string().min(1).max(256),
-    messages: z.array(z.object({ role: z.string().min(1) }).loose()).min(1),
-    stream: z.boolean().optional(),
-    stream_options: z
-      .object({ include_usage: z.boolean().optional() })
-      .strict()
-      .optional(),
-    temperature: z.number().optional(),
-    top_p: z.number().optional(),
-    max_tokens: z.number().int().positive().optional(),
-    max_completion_tokens: z.number().int().positive().optional(),
-    n: z.number().int().positive().optional(),
-    stop: z
-      .union([z.string(), z.array(z.string())])
-      .nullable()
-      .optional(),
-    presence_penalty: z.number().optional(),
-    frequency_penalty: z.number().optional(),
-    seed: z.number().int().optional(),
-    logprobs: z.boolean().nullable().optional(),
-    top_logprobs: z.number().int().optional(),
-    logit_bias: z.record(z.string(), z.number()).nullable().optional(),
-    tools: z.array(z.unknown()).optional(),
-    tool_choice: z.unknown().optional(),
-    parallel_tool_calls: z.boolean().optional(),
-    response_format: z.unknown().optional(),
-    reasoning_effort: z.string().optional(),
-    service_tier: z.string().optional(),
-    // These are accepted for client compatibility but always replaced by the server.
-    user: z.unknown().optional(),
-    metadata: z.unknown().optional(),
-  })
-  .strict();
-
-// Workrun owns conversation history and execution. Provider-side response and
-// conversation IDs cannot be trusted as user-scoped under one shared Team Key.
-const responsesSchema = z
-  .object({
-    model: z.string().min(1).max(256),
-    input: z.union([
-      z.string(),
-      z.array(
-        z
-          .record(z.string(), z.unknown())
-          .refine(
-            (item) => item.type !== 'item_reference',
-            'Replay input items instead of referencing stored items',
-          ),
-      ),
-    ]),
-    instructions: z.string().nullable().optional(),
-    stream: z.boolean().optional(),
-    stream_options: z
-      .object({ include_obfuscation: z.boolean().optional() })
-      .strict()
-      .nullable()
-      .optional(),
-    temperature: z.number().nullable().optional(),
-    top_p: z.number().nullable().optional(),
-    max_output_tokens: z.number().int().positive().nullable().optional(),
-    max_tool_calls: z.number().int().positive().nullable().optional(),
-    tools: z.array(z.unknown()).optional(),
-    tool_choice: z.unknown().optional(),
-    parallel_tool_calls: z.boolean().nullable().optional(),
-    text: z.unknown().optional(),
-    reasoning: z.unknown().optional(),
-    include: z.array(z.string()).nullable().optional(),
-    truncation: z.enum(['auto', 'disabled']).nullable().optional(),
-    service_tier: z.string().nullable().optional(),
-    prompt_cache_retention: z.string().nullable().optional(),
-    store: z.literal(false).optional(),
-    background: z.literal(false).nullable().optional(),
-    previous_response_id: z.null().optional(),
-    conversation: z.null().optional(),
-    user: z.unknown().optional(),
-    safety_identifier: z.unknown().optional(),
-    metadata: z.unknown().optional(),
-  })
-  .strict();
-
-type ApiProtocol = 'chat_completions' | 'responses';
-type InferenceParameters =
-  | z.infer<typeof chatSchema>
-  | z.infer<typeof responsesSchema>;
-
-type TeamModel = {
-  id: string;
-  object: 'model';
-  created: number;
-  owned_by: 'workrun';
-  name: string;
-  apiProtocols?: ApiProtocol[];
-  capabilities?: ReturnType<typeof parseModelCatalog>[string]['capabilities'];
-};
+import {
+  modelInfoSchema,
+  modelGroupSchema,
+  modelListSchema,
+  publicModel,
+  type TeamModel,
+  type ModelInfo,
+  type ModelGroup,
+} from './llm.catalog';
+import { normalizeLiteLlmUrl } from './llm.config';
+import {
+  chatSchema,
+  responsesSchema,
+  type ApiProtocol,
+  type InferenceParameters,
+} from './llm.schemas';
 
 @Injectable()
 export class LlmService {
@@ -160,6 +75,47 @@ export class LlmService {
     }));
   }
 
+  private async modelInfo(settings: {
+    base: string;
+    key: string;
+    timeout: number;
+  }): Promise<ModelInfo[]> {
+    try {
+      const response = await this.client(settings)
+        .get('/model/info', {
+          timeout: 3000,
+          signal: AbortSignal.timeout(3000),
+        })
+        .asResponse();
+      const parsed = modelInfoSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data.data : [];
+    } catch {
+      // Metadata discovery is optional: older proxies or AI-only keys may deny it.
+      return [];
+    }
+  }
+
+  private async modelGroups(settings: {
+    base: string;
+    key: string;
+    timeout: number;
+  }): Promise<ModelGroup[]> {
+    try {
+      // LiteLLM exposes the group route outside /v1; retain any deployment prefix.
+      const url = `${settings.base.replace(/\/v1$/, '')}/model_group/info`;
+      const response = await this.client(settings)
+        .get(url, {
+          timeout: 3000,
+          signal: AbortSignal.timeout(3000),
+        })
+        .asResponse();
+      const parsed = modelGroupSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data.data : [];
+    } catch {
+      return [];
+    }
+  }
+
   async models() {
     return { object: 'list', data: await this.catalog() };
   }
@@ -200,9 +156,6 @@ export class LlmService {
 
   private async loadModels(): Promise<TeamModel[]> {
     const settings = this.settings();
-    const overrides = parseModelCatalog(
-      this.config.get<string>('LITELLM_MODEL_CATALOG_JSON') ?? '{}',
-    );
     let response: Response;
     try {
       response = await this.client(settings)
@@ -233,9 +186,7 @@ export class LlmService {
         'invalid_upstream_response',
       );
     }
-    const parsed = z
-      .object({ data: z.array(z.object({ id: z.string().min(1).max(256) })) })
-      .safeParse(data);
+    const parsed = modelListSchema.safeParse(data);
     if (!parsed.success)
       throw new LlmError(
         502,
@@ -243,20 +194,18 @@ export class LlmService {
         'server_error',
         'invalid_upstream_response',
       );
+    const [info, groups] = await Promise.all([
+      this.modelInfo(settings),
+      this.modelGroups(settings),
+    ]);
+    // /models remains the authority for visibility, even if /model/info is broader.
     const models = [...new Set(parsed.data.data.map((model) => model.id))].map(
-      (id): TeamModel => ({
-        id,
-        object: 'model',
-        created: 0,
-        owned_by: 'workrun',
-        name: overrides[id]?.name ?? id,
-        ...(overrides[id]?.apiProtocols
-          ? { apiProtocols: overrides[id].apiProtocols }
-          : {}),
-        ...(overrides[id]?.capabilities
-          ? { capabilities: overrides[id].capabilities }
-          : {}),
-      }),
+      (id) =>
+        publicModel(
+          id,
+          info.filter((entry) => entry.model_name === id),
+          groups.filter((group) => group.model_group === id),
+        ),
     );
     this.cachedModels = { models, expires: Date.now() + 30_000 };
     return models;
@@ -331,14 +280,8 @@ export class LlmService {
           'model_not_allowed',
         );
       }
-      if (model.apiProtocols && !model.apiProtocols.includes(protocol)) {
-        throw new LlmError(
-          400,
-          'This model does not support the requested API protocol.',
-          'invalid_request_error',
-          'unsupported_protocol',
-        );
-      }
+      // Advertised endpoints are discovery hints; LiteLLM owns protocol adaptation
+      // and validates the actual request for both supported gateway routes.
       abort.signal.throwIfAborted();
       const endUser = `workrun:${settings.deploymentId}:${encodeURIComponent(userId)}`;
       // Input schemas restrict external JSON to inference parameters. Identity

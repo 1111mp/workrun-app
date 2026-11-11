@@ -12,8 +12,6 @@ const settings = {
   LITELLM_TEAM_ID: 'team-1',
   LITELLM_DEPLOYMENT_ID: 'deployment-a',
   LITELLM_TIMEOUT_MS: 1000,
-  LITELLM_MODEL_CATALOG_JSON:
-    '{"fast":{"name":"Fast model","capabilities":{"tools":true}}}',
 };
 
 class Downstream extends Writable {
@@ -42,10 +40,36 @@ class Downstream extends Writable {
 
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 let service: LlmService;
+let infoMock: ReturnType<typeof vi.fn<typeof fetch>>;
+let groupMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 beforeEach(() => {
   fetchMock = vi.fn<typeof fetch>();
-  vi.stubGlobal('fetch', fetchMock);
+  infoMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async () => Response.json({ data: [] }));
+  groupMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async () => Response.json({ data: [] }));
+  vi.stubGlobal(
+    'fetch',
+    (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) =>
+      (typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
+      ).endsWith('/model/info')
+        ? infoMock(input, init)
+        : (typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.href
+                : input.url
+            ).endsWith('/model_group/info')
+          ? groupMock(input, init)
+          : fetchMock(input, init),
+  );
   service = new LlmService(new ConfigService(settings));
 });
 afterEach(() => {
@@ -90,11 +114,10 @@ it('fetches models with the team key, caches concurrent discovery and only expos
     data: [
       {
         id: 'fast',
-        name: 'Fast model',
+        name: 'fast',
         object: 'model',
         created: 0,
         owned_by: 'workrun',
-        capabilities: { tools: true },
       },
     ],
   });
@@ -418,20 +441,95 @@ it('rejects Responses routing overrides and provider-owned state under the share
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-it('advertises and enforces explicitly configured model protocols without guessing support', async () => {
-  service = new LlmService(
-    new ConfigService({
-      ...settings,
-      LITELLM_MODEL_CATALOG_JSON: '{"fast":{"apiProtocols":["responses"]}}',
+it('discovers public capabilities from LiteLLM without manual configuration or broadening visibility', async () => {
+  infoMock.mockResolvedValueOnce(
+    Response.json({
+      data: [
+        {
+          model_name: 'fast',
+          litellm_params: { api_key: 'never-expose' },
+          model_info: {
+            supports_function_calling: true,
+            supports_vision: false,
+            supports_response_schema: true,
+            supported_endpoints: ['/v1/chat/completions', '/v1/responses'],
+            api_key: 'never-expose',
+          },
+        },
+        {
+          model_name: 'not-authorized',
+          model_info: { supports_function_calling: true },
+        },
+      ],
+    }),
+  );
+  fetchMock.mockResolvedValueOnce(models());
+  const catalog = await service.models();
+  expect(catalog.data).toHaveLength(1);
+  expect(catalog.data[0]).toMatchObject({
+    id: 'fast',
+    apiProtocols: ['chat_completions', 'responses'],
+    capabilities: { tools: true, vision: false, structuredOutput: true },
+  });
+  expect(JSON.stringify(catalog)).not.toContain('never-expose');
+  expect(
+    new Headers(infoMock.mock.calls[0][1]?.headers).get('authorization'),
+  ).toBe('Bearer fixture-team-key');
+});
+
+it.each([403, 404, 500])(
+  'keeps models usable when capability discovery returns %s',
+  async (status) => {
+    infoMock.mockResolvedValueOnce(
+      Response.json({ error: 'no metadata' }, { status }),
+    );
+    fetchMock.mockResolvedValueOnce(models()).mockResolvedValueOnce(result());
+    expect((await service.models()).data[0]).not.toHaveProperty('capabilities');
+    await service.chat(
+      'user-1',
+      {
+        ...body,
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'lookup',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+      },
+      new Downstream().response(),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  },
+);
+
+it('leaves conflicting pooled capabilities unknown and treats endpoint metadata as hints', async () => {
+  infoMock.mockResolvedValueOnce(
+    Response.json({
+      data: [
+        {
+          model_name: 'fast',
+          model_info: {
+            supports_function_calling: true,
+            supported_endpoints: ['/v1/chat/completions'],
+          },
+        },
+        {
+          model_name: 'fast',
+          model_info: {
+            supports_function_calling: false,
+            supported_endpoints: ['/v1/chat/completions'],
+          },
+        },
+      ],
     }),
   );
   fetchMock
     .mockResolvedValueOnce(models())
     .mockResolvedValueOnce(Response.json({ id: 'resp-test', output: [] }));
-  expect((await service.models()).data[0].apiProtocols).toEqual(['responses']);
-  await expect(
-    service.chat('user-1', body, new Downstream().response()),
-  ).rejects.toMatchObject({ status: 400 });
+  expect((await service.models()).data[0]).not.toHaveProperty('capabilities');
   await service.responses(
     'user-1',
     { model: 'fast', input: 'hello' },
@@ -487,4 +585,113 @@ it('applies the same model authorization, quota mapping, and total deadline to R
       new Downstream().response(),
     ),
   ).rejects.toMatchObject({ status: 504 });
+});
+
+it('publishes model-group reasoning levels in stable order, scoped to visible models', async () => {
+  groupMock.mockResolvedValueOnce(
+    Response.json({
+      data: [
+        {
+          model_group: 'fast',
+          supported_reasoning_efforts: [
+            'max',
+            'high',
+            'minimal',
+            'none',
+            'xhigh',
+            'low',
+            'medium',
+            'high',
+            'future',
+          ],
+        },
+        { model_group: 'hidden', supported_reasoning_efforts: ['high'] },
+      ],
+    }),
+  );
+  fetchMock.mockResolvedValueOnce(models());
+  const catalog = await service.models();
+  expect(catalog.data).toHaveLength(1);
+  expect(catalog.data[0].capabilities?.reasoningEfforts).toEqual([
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]);
+  await service.models();
+  expect(groupMock).toHaveBeenCalledTimes(1);
+});
+
+it('uses the intersection of reasoning levels for pooled deployments', async () => {
+  infoMock.mockResolvedValueOnce(
+    Response.json({
+      data: [
+        {
+          model_name: 'fast',
+          model_info: { supported_reasoning_efforts: ['low', 'high', 'xhigh'] },
+        },
+        {
+          model_name: 'fast',
+          model_info: { reasoning_effort_levels: ['medium', 'high', 'xhigh'] },
+        },
+      ],
+    }),
+  );
+  groupMock.mockResolvedValueOnce(
+    Response.json({
+      data: [
+        {
+          model_group: 'fast',
+          supported_reasoning_efforts: ['low', 'medium', 'high'],
+        },
+      ],
+    }),
+  );
+  fetchMock.mockResolvedValueOnce(models());
+  expect(
+    (await service.models()).data[0].capabilities?.reasoningEfforts,
+  ).toEqual(['high']);
+});
+
+it.each([null, ['bad'], undefined])(
+  'does not invent effort levels from supports_reasoning alone (%j)',
+  async (levels) => {
+    infoMock.mockResolvedValueOnce(
+      Response.json({
+        data: [
+          { model_name: 'fast', model_info: { supports_reasoning: true } },
+        ],
+      }),
+    );
+    groupMock.mockResolvedValueOnce(
+      Response.json({
+        data: [{ model_group: 'fast', supported_reasoning_efforts: levels }],
+      }),
+    );
+    fetchMock.mockResolvedValueOnce(models());
+    expect(
+      (await service.models()).data[0].capabilities?.reasoningEfforts ?? [],
+    ).toEqual([]);
+  },
+);
+
+it('retains deployment levels when the optional group endpoint is unavailable', async () => {
+  groupMock.mockResolvedValueOnce(Response.json({}, { status: 403 }));
+  infoMock.mockResolvedValueOnce(
+    Response.json({
+      data: [
+        {
+          model_name: 'fast',
+          model_info: { reasoning_effort_levels: ['low', 'high'] },
+        },
+      ],
+    }),
+  );
+  fetchMock.mockResolvedValueOnce(models());
+  expect(
+    (await service.models()).data[0].capabilities?.reasoningEfforts,
+  ).toEqual(['low', 'high']);
 });

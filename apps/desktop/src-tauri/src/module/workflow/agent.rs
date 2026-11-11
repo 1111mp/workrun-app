@@ -63,14 +63,25 @@ pub(super) async fn add_local_agent_node(
         .filter(|tool| tool.execution_policy == ToolExecutionPolicy::AskEveryTime)
         .map(|tool| tool.name.clone())
         .collect::<Vec<_>>();
-    let model = model_catalog()
+    let model = crate::module::team_model::active_catalog()
+        .await?
         .into_iter()
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("agent node `{id}` references unknown model `{profile_id}`"))?;
     let attachment_paths = string_array_data(node, "attachmentPaths")?;
-    let provider = model.provider.clone();
+    let provider = if model.team.as_ref().is_some_and(|team| team.vision != Some(false)) {
+        ModelProvider::OpenAi
+    } else {
+        model.provider.clone()
+    };
     let label = format!("{}/{}", model.id, model.model);
-    let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
+    let model = instrumented_model(
+        create_model(&model, config)?,
+        &id,
+        &label,
+        on_event.clone(),
+        Some(&model),
+    );
     let mut agent = LlmAgentBuilder::new(id.clone())
         .description(description)
         .instruction(instruction)
@@ -297,6 +308,13 @@ pub(crate) fn create_model_with_effort(
             "Unsupported reasoning effort for this model"
         );
     }
+    if model.provider == ModelProvider::Team {
+        anyhow::ensure!(
+            matches!(config.workspace_mode, Some(crate::config::WorkspaceMode::Team)),
+            "Team models require Team mode"
+        );
+        return crate::module::team_model::create_model(model, effort, include_thoughts);
+    }
     let credential = config.credential_for(&model.provider);
     let headers = credential
         .map(|credential| credential.request_headers())
@@ -311,6 +329,7 @@ pub(crate) fn create_model_with_effort(
     }
     let api_key = api_key.unwrap_or_default();
     Ok(match model.provider {
+        ModelProvider::Team => unreachable!("team model uses Workrun Server"),
         ModelProvider::Gemini => {
             let gemini = GeminiModel::new(api_key, &model.model)?;
             Arc::new(if include_thoughts {
@@ -524,18 +543,16 @@ pub(super) fn instrumented_model(
     node_id: &str,
     model_label: &str,
     on_event: Option<Channel<StreamEvent>>,
+    definition: Option<&ModelDefinition>,
 ) -> Arc<dyn Llm> {
     let mut usage_context = crate::module::model_usage::current();
     usage_context.purpose = "workflow".into();
     usage_context.node_id = Some(node_id.into());
-    if let Some(profile) = model_catalog()
-        .into_iter()
-        .find(|profile| model_label.starts_with(&format!("{}/", profile.id)))
-    {
+    if let Some(profile) = definition {
         usage_context.provider = serde_json::to_value(&profile.provider)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned));
-        usage_context.model_profile_id = Some(profile.id);
+        usage_context.model_profile_id = Some(profile.id.clone());
     }
     Arc::new(InstrumentedLlm {
         usage_context,
@@ -1180,6 +1197,7 @@ mod usage_snapshot_tests {
                     name: "test".into(),
                     provider,
                     model: model_name.into(),
+                    team: None,
                 },
                 &config,
                 include_thoughts,
@@ -1437,6 +1455,7 @@ mod usage_snapshot_tests {
             "agent",
             "gemini-test",
             Some(on_event),
+            None,
         );
         let mut responses = model
             .generate_content(adk_rust::LlmRequest::new("test", vec![]), true)

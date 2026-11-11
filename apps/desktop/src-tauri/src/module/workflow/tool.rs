@@ -644,6 +644,47 @@ mod tests {
         node.execute_stream(&context).collect().await
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scoped_graph_tool_journal_runs_on_default_tokio_worker_stack() {
+        tokio::spawn(async {
+            let pool = remote_tasks::test_pool().await;
+            let uploads = Arc::new(AtomicU32::new(0));
+            let node = upload_agent(pool.clone(), uploads.clone(), upload_model(false), false);
+            let graph = StateGraph::with_channels(&["input"])
+                .add_node(node)
+                .add_edge(START, "agent")
+                .add_edge("agent", END)
+                .compile()
+                .unwrap();
+            let run = async {
+                let stream = graph.stream_with_run_config(
+                    HashMap::from([("input".into(), json!("upload"))]),
+                    ExecutionConfig::new("worker-stack").with_metadata("workrun.run_id", json!("run-1")),
+                    StreamMode::Messages,
+                    Default::default(),
+                );
+                tokio::pin!(stream);
+                let mut done = false;
+                while let Some(event) = stream.next().await {
+                    let event = event.unwrap();
+                    done |= matches!(event, StreamEvent::Done { .. });
+                }
+                assert!(done);
+            };
+            // Match production ownership and usage scopes around graph polling.
+            crate::module::team_model::with_owner(None, crate::module::model_usage::scope(Default::default(), run))
+                .await;
+            assert_eq!(uploads.load(Ordering::SeqCst), 1);
+            let status: String = sqlx::query_scalar("SELECT status FROM workflow_operations")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(status, "succeeded");
+        })
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn agent_failure_after_upload_reuses_saved_result_in_original_task() {
         let pool = remote_tasks::test_pool().await;

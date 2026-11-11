@@ -24,10 +24,9 @@ import {
   replayRun,
   type RunStatus,
 } from '@/services/run-history';
-import type { WorkflowRunEvent } from '@/services/workflow';
 import { useRunWorkspaceStore } from '@/stores/run-workspace.store';
 import {
-  replayWorkflowRunProjection,
+  restoreWorkflowRunProjection,
   workflowRunView,
 } from '@/stores/workflow-run.store';
 
@@ -86,26 +85,18 @@ function RunWorkspace() {
     if (activeTab?.targetType !== 'workflow' || !activeRecord) return;
     const snapshot = workflowSnapshot(activeRecord.targetSnapshot);
     const run = workflowRunView(
-      replayWorkflowRunProjection(
-        activeRecord.id,
-        activeRecord.events.map(({ sequence, event }) => ({
-          runId: activeRecord.id,
-          sequence,
-          event: event as WorkflowRunEvent,
-        })),
-        {
-          ...snapshot,
-          // Run Center opens one durable chat turn. Recreate its user message
-          // so both node output and interactive requests have a visible owner.
-          turnId: snapshot.mode === 'chat' ? activeRecord.id : undefined,
-          input:
-            snapshot.mode === 'chat'
-              ? activeRecord.input && typeof activeRecord.input === 'object'
-                ? (activeRecord.input as Record<string, unknown>)
-                : { input: '' }
-              : undefined,
-        },
-      ),
+      restoreWorkflowRunProjection(activeRecord, {
+        ...snapshot,
+        // Run Center opens one durable chat turn. Recreate its user message
+        // so both node output and interactive requests have a visible owner.
+        turnId: snapshot.mode === 'chat' ? activeRecord.id : undefined,
+        input:
+          snapshot.mode === 'chat'
+            ? activeRecord.input && typeof activeRecord.input === 'object'
+              ? (activeRecord.input as Record<string, unknown>)
+              : { input: '' }
+            : undefined,
+      }),
     );
     const startedAt = Date.parse(activeRecord.startedAt);
     const endedAt =

@@ -57,6 +57,10 @@ vi.mock('@/stores', () => ({
     selector({ config: { summary_model_profile_id: 'model-1' } }),
 }));
 vi.mock('@/services/cmd', () => ({
+  getModelCatalogStatus: async () => ({
+    models: await (await import('@/services/cmd')).getModelCatalog(),
+    serverError: null,
+  }),
   getModelCatalog: async () => [
     {
       id: 'model-1',

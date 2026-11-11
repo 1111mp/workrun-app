@@ -45,8 +45,8 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 
+import { useModelCatalog } from '@/hooks/use-model-catalog';
 import type { AppShareFormat } from '@/services/app-share';
-import { getModelCatalog } from '@/services/cmd';
 import { listRemoteCredentials } from '@/services/remote-agent';
 import { listSkills } from '@/services/skill';
 import type { StoredWorkflow } from '@/services/workflow';
@@ -599,11 +599,9 @@ function WorkflowBindingFields({
   busy: boolean;
 }) {
   const { t } = useTranslation();
-  const models = useQuery({
-    queryKey: ['modelCatalog'],
-    queryFn: getModelCatalog,
-    enabled: requirements.some((item) => item.kind === 'model'),
-  });
+  const models = useModelCatalog(
+    requirements.some((item) => item.kind === 'model'),
+  );
   const tools = useQuery({
     queryKey: ['workflow-share-tools'],
     queryFn: listWorkflowShareMcpTools,

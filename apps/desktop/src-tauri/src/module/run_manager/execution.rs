@@ -36,7 +36,17 @@ async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
     result
 }
 
-async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, mut runtime: Value, workspace: &str) -> Result<()> {
+async fn execute_claimed_workflow(run_id: &str, workflow_id: &str, runtime: Value, workspace: &str) -> Result<()> {
+    let owner = runtime
+        .get("teamModelOwner")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .flatten();
+    crate::module::team_model::with_owner(owner, execute_owned_workflow(run_id, workflow_id, runtime, workspace)).await
+}
+
+async fn execute_owned_workflow(run_id: &str, workflow_id: &str, mut runtime: Value, workspace: &str) -> Result<()> {
     if runtime.get("restoredQueue").and_then(Value::as_bool) == Some(true) {
         if let Err(error) = super::workflow::validate_restored_queue(run_id, &runtime).await {
             // Validation is not a failed execution and must not trigger cleanup
@@ -316,4 +326,21 @@ async fn execute_workflow(
         RunManager::global().workflow_sessions.lock().remove(run_id);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+
+    #[test]
+    fn queued_run_dispatch_future_fits_worker_stack_budget() {
+        // Merely construct the production future; no run or user storage is touched.
+        // Nested context scopes must not copy the whole graph future into each parent.
+        let future = execute_claimed_run("stack-budget-fixture");
+        let bytes = std::mem::size_of_val(&future);
+        assert!(
+            bytes <= 32 * 1024,
+            "queued dispatcher embeds {bytes} bytes of nested futures"
+        );
+    }
 }

@@ -19,6 +19,10 @@ import {
 
 vi.mock('@/services/cmd', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/cmd')>()),
+  getModelCatalogStatus: async () => ({
+    models: await (await import('@/services/cmd')).getModelCatalog(),
+    serverError: null,
+  }),
   getModelCatalog: vi.fn(async () => []),
 }));
 it('preserves every editor node color and handle layout while adding read-only diff markers and selection', async () => {

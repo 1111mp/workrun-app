@@ -147,13 +147,11 @@ curl -N http://localhost:3000/api/v1/llm/chat/completions \
 
 `model` 必须是该 Team Key 可见的精确 alias。目录在进程内缓存 30 秒，并合并并发查询；推理请求仍由 LiteLLM 实时执行 Key/Team 权限和预算校验。连接失败不回退到其他 Provider。
 
-目录只返回模型 ID、显示名称及显式配置的能力，不暴露 LiteLLM 部署详情。可用以下可选环境变量配置显示名称和已验证的能力；未配置的能力保持未知，不根据 alias 猜测：
+模型目录和权限以 LiteLLM `/models` 为准。Server 使用同一个 Team Key 自动读取 `/model/info`，仅提取工具调用、图片、结构化输出能力及支持的协议，不向客户端暴露 Provider 凭据、内部模型名或部署参数。能力信息接口不可用、无权限或字段缺失时，目录仍正常返回，相关能力保持未知；无需维护额外的模型 JSON 环境变量。
 
-```dotenv
-LITELLM_MODEL_CATALOG_JSON={"fast":{"name":"快速模型","apiProtocols":["chat_completions","responses"],"capabilities":{"tools":true,"structuredOutput":true,"vision":false,"reasoningEfforts":["low","high"]}}}
-```
+推理档位自动读取 LiteLLM `/model_group/info` 的 `supported_reasoning_efforts`，也兼容 `/model/info` 中的 `supported_reasoning_efforts` 和 `reasoning_effort_levels`。同一 alias 的多个部署取已确认档位的交集。客户端按模型展示 `none / minimal / low / medium / high / xhigh / max` 中实际报告的选项；选择默认时不传推理强度参数，继承网关或 Provider 默认值。仅报告 `supports_reasoning: true` 而未给出档位时不猜测可选值。模型组能力信息与目录共用缓存，无前端轮询。
 
-`apiProtocols` 可设置为 `["chat_completions"]`、`["responses"]` 或两者。声明后 Server 会拒绝该模型未声明的协议；未配置时保持未知，由 LiteLLM 检查实际支持情况，不自动探测或转换协议。此配置不增加模型访问权限。发现列表可能包含非聊天模型，管理员应将应用 Key 的允许模型限定为经过验证的聊天/Agent 模型。第一版未实现成员级模型差异授权、模型管理界面、Responses 资源管理接口、自动创建 Team/Key 或桌面端接线。
+同一 alias 对应多个部署时，只发布各部署一致的能力信息。客户端默认使用 Chat Completions；LiteLLM 明确报告 Responses 支持时也提供对应选项。协议信息用于模型发现，两个推理接口仍由 LiteLLM 校验实际请求和执行协议适配。
 
 ### Responses 调用
 
@@ -180,3 +178,13 @@ Responses 的 `user` 和 `metadata` 与 Chat Completions 一样由 Server 覆盖
 - LiteLLM 的 429 作为配额/限流错误返回；上游 401 转为 502，避免将服务端 Team Key 配置错误误判为 Workrun 用户需要重新登录。上游错误正文不直接暴露。
 
 单元测试与 HTTP 集成测试均在 `pnpm --filter workrun-server test` 中运行。HTTP 测试使用临时本机模拟服务和真实 NestJS 认证 Guard，不访问真实 LiteLLM 或付费 Provider。
+
+### Workrun 桌面客户端接入
+
+团队模式的客户端调用 `/users/me` 验证身份，再读取 `/llm/models`。模型 ID 按 Server 和协议区分，助手、Agent、CodeAct、摘要及工作流执行均可选择 Server 模型，也可明确选择本机 Provider 直连。模型能力由 LiteLLM 自动提供；未知能力允许尝试调用，明确不支持的工具、图片和结构化输出会在客户端提示。实际请求由 LiteLLM 和 Provider 验证，不会自动切换为直连。
+
+客户端只在内存中保留 Workrun 会话 token。每次模型调用使用当前已验证的凭据，并校验原 Server、用户和工作空间；换号、退出和连接变化会中断正在进行的团队模型流。相同用户重新认证后，新调用可使用新 token，已有流不会自动重试。Responses 使用手动历史重放，并保留加密推理 Item，不使用 `previous_response_id`。
+
+后台运行和定时任务持久化不含 token 的原用户归属，恢复时仍需该用户的有效登录会话。旧团队任务缺少归属时须登录后重新创建；旧工作流中的个人模型 ID 必须显式重新选择团队模型并保存/发布。个人和团队的会话摘要模型设置分开保存。
+
+团队模式同时开放本机 Provider 直连：模型选择器合并内置模型与 Server 模型，Server 目录不可用时仍可选择直连模型。直连请求使用本机加密保存的 Provider 凭据，不经过 Server/LiteLLM；当前尚无 Server 禁用直连的管理开关。Server 模型依然要求原用户身份校验。

@@ -1,8 +1,5 @@
 import { z } from './lib/zod';
-import {
-  normalizeLiteLlmUrl,
-  parseModelCatalog,
-} from './modules/llm/llm.config';
+import { normalizeLiteLlmUrl } from './modules/llm/llm.config';
 
 export const envValidationSchema = z
   .object({
@@ -18,7 +15,7 @@ export const envValidationSchema = z
       .string()
       .min(1)
       .default('example-only-secret-do-not-use-in-production-32'),
-    BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
+    BETTER_AUTH_URL: z.url().default('http://localhost:3000'),
     GITHUB_CLIENT_ID: z.string().default(''),
     GITHUB_CLIENT_SECRET: z.string().default(''),
     GOOGLE_CLIENT_ID: z.string().default(''),
@@ -50,17 +47,6 @@ export const envValidationSchema = z
       .min(1)
       .max(3_600_000)
       .default(300_000),
-    LITELLM_MODEL_CATALOG_JSON: z
-      .string()
-      .default('{}')
-      .refine((value) => {
-        try {
-          parseModelCatalog(value);
-          return true;
-        } catch {
-          return false;
-        }
-      }, 'Invalid LiteLLM model capability catalog'),
 
     LOG_LEVEL: z.string().default('debug'),
     LOG_DIR: z.string().default('./logs'),

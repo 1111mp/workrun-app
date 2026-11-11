@@ -1,5 +1,5 @@
 import { envValidationSchema } from '../../env.validation';
-import { normalizeLiteLlmUrl, parseModelCatalog } from './llm.config';
+import { normalizeLiteLlmUrl } from './llm.config';
 
 const connection = {
   MONGODB_URI: 'mongodb://localhost/test',
@@ -45,32 +45,6 @@ it('normalizes API origins and rejects secret-bearing or non-HTTP URLs', () => {
     expect(
       envValidationSchema.safeParse({ ...connection, LITELLM_BASE_URL: url })
         .success,
-    ).toBe(false);
-  }
-});
-
-it('validates explicit capability metadata instead of deriving it from an alias', () => {
-  const catalog = {
-    fast: {
-      name: 'Fast',
-      apiProtocols: ['chat_completions', 'responses'],
-      capabilities: { tools: true, reasoningEfforts: ['low', 'high'] },
-    },
-  };
-  expect(parseModelCatalog(JSON.stringify(catalog))).toEqual(catalog);
-  for (const value of [
-    'invalid',
-    '[]',
-    '{"fast":{"apiProtocols":["unknown"]}}',
-    '{"fast":{"apiProtocols":[]}}',
-    '{"fast":{"apiKey":"secret"}}',
-    '{"fast":{"capabilities":{"tools":"true"}}}',
-  ]) {
-    expect(
-      envValidationSchema.safeParse({
-        ...connection,
-        LITELLM_MODEL_CATALOG_JSON: value,
-      }).success,
     ).toBe(false);
   }
 });

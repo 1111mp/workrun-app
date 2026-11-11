@@ -385,7 +385,7 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
         },
         "list_authoring_resources" => match args["kind"].as_str().unwrap_or("models") {
             "models" => Ok(
-                json!({"items":crate::config::model_catalog(),"note":"IDs are native modelProfileId values; provider credentials must be configured separately"}),
+                json!({"items":crate::module::team_model::active_catalog().await?,"note":"IDs are native modelProfileId values; provider credentials must be configured separately"}),
             ),
             _ => anyhow::bail!(
                 "Unknown resource kind; use models. Tools and Skills use workspace resource tools; Apps and workflows use list_capabilities"

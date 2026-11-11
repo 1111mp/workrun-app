@@ -7,12 +7,19 @@ import type { Node } from '@xyflow/react';
 import { type ReactNode } from 'react';
 import { expect, it, vi } from 'vitest';
 
-import type { RunSpan } from '@/services/run-history';
+import type { RunRecord, RunSpan } from '@/services/run-history';
 import type { WorkflowRunEventEnvelope } from '@/services/workflow';
-import { useWorkflowRunStore } from '@/stores/workflow-run.store';
+import {
+  restoreWorkflowRunProjection,
+  workflowRunView,
+  useWorkflowRunStore,
+} from '@/stores/workflow-run.store';
 
 import recording from './__fixtures__/workflow-output-replay.json';
-import { LiveWorkflowTaskOutput } from './workflow-output-panel';
+import {
+  LiveWorkflowTaskOutput,
+  WorkflowRunOutput,
+} from './workflow-output-panel';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -424,5 +431,49 @@ it('shows completed execution and fixed duration while local typing frames are s
     store.resetRunView();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  }
+});
+
+it('shows interrupted archived output without workflow or node loading indicators after a restart', () => {
+  const nodes = [recording.nodes[0]] as Node[];
+  const record = {
+    id: 'restarted-run',
+    status: 'interrupted',
+    lastSequence: 0,
+    startedAt: '2026-11-11T05:36:00Z',
+    durationMs: 10000,
+    error: 'Execution ended when Workrun restarted.',
+    events: [
+      {
+        sequence: 0,
+        event: { type: 'node_start', node: nodes[0].id, step: 0 },
+      },
+    ],
+  } as unknown as RunRecord;
+  const run = workflowRunView(
+    restoreWorkflowRunProjection(record, { mode: 'task', nodes }),
+  );
+  const view = renderComponent(
+    <WorkflowRunOutput
+      readOnly
+      run={run}
+      workflowNodes={nodes}
+      isRunning={run.status === 'running'}
+      onClose={() => {}}
+      onRunAgain={() => {}}
+    />,
+  );
+  try {
+    expect(view.container.textContent).toContain(
+      'workflowEditor.output.status.interrupted',
+    );
+    expect(view.container.textContent).not.toContain(
+      'workflowEditor.output.runningWorkflow',
+    );
+    expect(
+      view.container.querySelector('[data-component="Spinner"]'),
+    ).toBeNull();
+  } finally {
+    view.unmount();
   }
 });

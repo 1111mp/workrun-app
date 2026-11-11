@@ -93,6 +93,10 @@ const comparison: WorkflowComparison = {
 };
 vi.mock('@/services/cmd', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/cmd')>()),
+  getModelCatalogStatus: async () => ({
+    models: await (await import('@/services/cmd')).getModelCatalog(),
+    serverError: null,
+  }),
   getModelCatalog: vi.fn(async () => []),
 }));
 vi.mock('@/services/workflow-revision', () => ({

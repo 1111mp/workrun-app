@@ -89,7 +89,7 @@ pnpm install
 pnpm app:dev
 ```
 
-Workrun includes a built-in model catalog; there is no need to create model profiles or enter model IDs manually. Provider credentials are encrypted locally. See [installation and prerequisites](https://workrun-docs.pages.dev/getting-started/installation/) for full setup instructions.
+Personal mode uses the built-in model catalog and locally encrypted provider credentials. Team mode loads models from Workrun Server and authenticates model calls with the signed-in Workrun session; users never configure LiteLLM keys. Team mode also allows direct provider connections using locally encrypted provider credentials. Models declaring both protocols appear as separate Chat Completions and Responses choices; models with no declared protocol use Chat Completions. See [installation and prerequisites](https://workrun-docs.pages.dev/getting-started/installation/) for full setup instructions.
 
 ### Common commands
 

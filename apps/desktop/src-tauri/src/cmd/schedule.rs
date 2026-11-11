@@ -14,8 +14,11 @@ pub async fn schedule_update(change: Value, team_token: Option<String>) -> CmdRe
 }
 
 #[tauri::command]
-pub async fn schedule_set_team_session(server_url: String, token: Option<String>) {
-    crate::module::schedule::set_team_session(server_url, token);
+pub async fn schedule_set_team_session(server_url: String, token: Option<String>) -> CmdResult<()> {
+    crate::module::schedule::set_team_session(server_url.clone(), token.clone());
+    crate::module::team_model::set_session(server_url, token)
+        .await
+        .stringify_err()
 }
 
 #[tauri::command]

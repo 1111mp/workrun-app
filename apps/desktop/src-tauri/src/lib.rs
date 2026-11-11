@@ -136,6 +136,7 @@ pub fn run() {
             cmd::workrun::get_workrun_config,
             cmd::workrun::patch_workrun_config,
             cmd::model::model_catalog_list,
+            cmd::model::model_catalog_status,
             // evaluations
             cmd::evaluation::evaluation_suite_create,
             cmd::evaluation::evaluation_suite_list,

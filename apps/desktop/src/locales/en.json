@@ -1570,6 +1570,19 @@
       }
     },
     "models": {
+      "teamDescription": "Use team models from Workrun Server or configure local provider credentials for direct connections.",
+      "serverConnectionSettings": "Connection settings",
+      "directProviders": "Direct providers",
+      "serverNotConfigured": "No team Server URL configured",
+      "serverRefresh": "Refresh models",
+      "serverLoading": "Loading models…",
+      "serverUnavailable": "Server models are unavailable. Direct providers configured below remain available.",
+      "serverReady": "Server models are ready to use in model selectors.",
+      "serverEmpty": "Server has no available models. Ask your administrator to check the model gateway configuration.",
+      "serverModels": "Available Server models",
+      "serverHelp": "Configure the connection URL in Workspace settings. Your Server administrator manages models, access and budgets; no LiteLLM key is needed here.",
+      "teamSessionFailed": "Could not verify your team model session. Sign in again or check the Server connection.",
+
       "title": "Models",
       "description": "Set credentials for each provider. You can also use a custom endpoint for compatible APIs or a remote Ollama host. Changes are saved automatically.",
       "gatewaySettings": "{{provider}} endpoint and custom headers",

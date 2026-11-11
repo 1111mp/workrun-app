@@ -293,7 +293,7 @@ impl Catalog {
         } else {
             vec![]
         };
-        let models = crate::config::model_catalog();
+        let models = crate::module::team_model::active_catalog().await?;
         for dependency in dependencies {
             let available = match dependency.kind.as_str() {
                 "model" => models.iter().any(|model| model.id == dependency.id),

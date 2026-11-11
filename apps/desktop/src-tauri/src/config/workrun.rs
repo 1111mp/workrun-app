@@ -17,6 +17,7 @@ pub enum ModelProvider {
     DeepSeek,
     Groq,
     Ollama,
+    Team,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,12 +46,17 @@ pub struct ModelDefinition {
     pub name: String,
     pub provider: ModelProvider,
     pub model: String,
+    #[serde(skip)]
+    pub team: Option<crate::module::team_model::ModelBinding>,
 }
 
 impl ModelDefinition {
     /// Only advertise effort levels our provider adapter actually forwards.
-    pub fn effort_options(&self) -> &'static [&'static str] {
-        match self.provider {
+    pub fn effort_options(&self) -> Vec<&str> {
+        if let Some(team) = &self.team {
+            return team.effort_options.iter().map(String::as_str).collect();
+        }
+        let options: &[&str] = match self.provider {
             ModelProvider::OpenAi | ModelProvider::OpenAiStrict if self.model.starts_with("gpt-5") => {
                 &["low", "medium", "high"]
             },
@@ -65,7 +71,8 @@ impl ModelDefinition {
             ModelProvider::Gemini if self.model.starts_with("gemini-3") => &["low", "high"],
             ModelProvider::DeepSeek if self.model.starts_with("deepseek-v4") => &["high", "max"],
             _ => &[],
-        }
+        };
+        options.to_vec()
     }
 }
 
@@ -205,6 +212,7 @@ pub fn model_catalog() -> Vec<ModelDefinition> {
             name: profile.name,
             provider: profile.provider,
             model: profile.model,
+            team: None,
         })
         .collect()
 }
@@ -226,6 +234,8 @@ pub struct LocalProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamSettings {
     pub server_url: String,
+    #[serde(default)]
+    pub summary_model_id: Option<String>,
 }
 
 /// Workrun configuration

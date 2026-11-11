@@ -22,7 +22,12 @@ pub async fn start_workflow(request: StartWorkflowRun) -> Result<()> {
     start_workflow_in_workspace(request, &crate::utils::dirs::active_workspace_id()).await
 }
 
-pub(crate) async fn start_workflow_in_workspace(mut request: StartWorkflowRun, workspace: &str) -> Result<()> {
+pub(crate) async fn start_workflow_in_workspace(request: StartWorkflowRun, workspace: &str) -> Result<()> {
+    let owner = crate::module::team_model::owner_for(workspace)?;
+    crate::module::team_model::with_owner(owner, start_workflow_owned(request, workspace)).await
+}
+
+async fn start_workflow_owned(mut request: StartWorkflowRun, workspace: &str) -> Result<()> {
     if request.run_id.trim().is_empty() || request.thread_id.trim().is_empty() {
         bail!("run id and thread id are required");
     }
@@ -105,6 +110,7 @@ pub(crate) async fn start_workflow_in_workspace(mut request: StartWorkflowRun, w
     };
     let runtime = json!({
         "kind": "workflow",
+        "teamModelOwner": crate::module::team_model::owner_for(workspace)?,
         "compensationJournalVersion": 1,
         "processCleanupVersion": 1,
         "executionId": request.run_id,
@@ -524,6 +530,12 @@ fn replay_target_type(target_type: &str) -> Result<RunTargetType> {
 
 fn replay_runtime(mut runtime: Value, source_run_id: &str) -> Result<Value> {
     let object = runtime.as_object_mut().context("run runtime metadata is invalid")?;
+    object.insert(
+        "teamModelOwner".into(),
+        serde_json::to_value(crate::module::team_model::owner_for(
+            &crate::utils::dirs::active_workspace_id(),
+        )?)?,
+    );
     // A replay starts from the original recipe, but never from its checkpoint.
     // The thread ID namespaces persisted graph state, so it must also be new.
     object.insert("executionId".to_string(), json!(uuid::Uuid::new_v4().to_string()));

@@ -6,7 +6,7 @@ mod stream;
 mod tests;
 mod tools;
 use crate::{
-    config::{BaseConfig, model_catalog},
+    config::BaseConfig,
     core::db::DBManager,
     module::assistant::{self, catalog::Catalog},
     utils::dirs,
@@ -42,8 +42,9 @@ pub struct ScheduleModelSelection {
 }
 
 impl ScheduleModelSelection {
-    fn validate(&self) -> Result<()> {
-        let model = model_catalog()
+    async fn validate(&self) -> Result<()> {
+        let model = crate::module::team_model::active_catalog()
+            .await?
             .into_iter()
             .find(|model| model.id == self.model_id)
             .context("Select a valid model")?;
@@ -138,7 +139,7 @@ impl ScheduleAgent {
         selection: Option<ScheduleModelSelection>,
     ) -> Result<Value> {
         if let Some(selection) = &selection {
-            selection.validate()?;
+            selection.validate().await?;
         }
         if let Some(id) = &schedule_id {
             self.store.raw(id).await?;
@@ -162,7 +163,7 @@ impl ScheduleAgent {
     pub async fn set_model(&self, session_id: &str, selection: ScheduleModelSelection) -> Result<Value> {
         let lock = self.runtime.lease(self.store.workspace(), session_id);
         let _guard = lock.try_lock().context("Scheduling conversation is busy")?;
-        selection.validate()?;
+        selection.validate().await?;
         let mut state = self.store.load_session(session_id).await?;
         // Only model preferences can be changed here; conversation and proposal state stay native-owned.
         selection.apply(&mut state);
@@ -205,7 +206,8 @@ impl ScheduleAgent {
         let lock = self.runtime.lease(workspace, &request.session_id);
         let _guard = lock.try_lock().context("Scheduling conversation is busy")?;
         let mut state = self.store.load_session(&request.session_id).await?;
-        let definition = model_catalog()
+        let definition = crate::module::team_model::active_catalog()
+            .await?
             .into_iter()
             .find(|m| m.id == request.model_id)
             .context("Select a valid model")?;
@@ -382,7 +384,8 @@ impl ScheduleAgent {
         let receipt_text = assistant::agent_text(history.last().unwrap());
         let receipt: Value =
             serde_json::from_str(receipt_text.trim_start_matches("Native schedule action receipt (data): "))?;
-        let definition = model_catalog()
+        let definition = crate::module::team_model::active_catalog()
+            .await?
             .into_iter()
             .find(|m| Some(m.id.as_str()) == state["modelId"].as_str())
             .context("Select a valid model")?;

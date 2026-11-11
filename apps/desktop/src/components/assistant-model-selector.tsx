@@ -52,7 +52,9 @@ export function AssistantModelSelector({
           <DropdownMenuRadioGroup value={modelId} onValueChange={onModelChange}>
             {providers.map((provider) => (
               <DropdownMenuGroup key={provider}>
-                <DropdownMenuLabel>{provider}</DropdownMenuLabel>
+                <DropdownMenuLabel>
+                  {provider === 'team' ? 'Workrun Server' : provider}
+                </DropdownMenuLabel>
                 {models
                   .filter((model) => model.provider === provider)
                   .map((model) => (

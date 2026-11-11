@@ -54,7 +54,7 @@ use tool::*;
 use crate::core::db::DBManager;
 use crate::{
     config::ToolExecutionPolicy,
-    config::{BaseConfig, IWorkrun, ModelDefinition, ModelProvider, model_catalog},
+    config::{BaseConfig, IWorkrun, ModelDefinition, ModelProvider},
     module::{
         state::{AccessRule, NodeStatePolicy},
         tool_registry::{ToolDefinition, ToolRegistry, ToolSource},

@@ -45,9 +45,9 @@ import { SessionUsage } from '@/components/session-usage';
 import { WorkflowChatComposer } from '@/components/workflow-chat-composer';
 import { WorkflowRunForm } from '@/components/workflow-run-panel';
 import { WorkspaceHeaderContent } from '@/components/workspace-header-content';
+import { useModelCatalog } from '@/hooks/use-model-catalog';
 import { artifactReferences, type ArtifactRef } from '@/services/artifact';
 import type { AssistantMessage } from '@/services/assistant';
-import { getModelCatalog } from '@/services/cmd';
 import { useWorkrunStore } from '@/stores';
 import { loadAssistantHistory } from '@/stores/assistant.runtime';
 import { useAssistantStore } from '@/stores/assistant.store';
@@ -225,10 +225,7 @@ function AssistantChat({ scope }: { scope: string }) {
       progress: [],
     });
   }
-  const models = useQuery({
-    queryKey: ['model-catalog'],
-    queryFn: getModelCatalog,
-  });
+  const models = useModelCatalog();
   const modelId =
     chosenModel ||
     session?.modelId ||
@@ -237,6 +234,7 @@ function AssistantChat({ scope }: { scope: string }) {
     models.data?.find(
       (model) =>
         model.provider === 'ollama' ||
+        model.provider === 'team' ||
         config?.provider_credentials?.some(
           (credential) =>
             credential.provider === model.provider && credential.apiKey,

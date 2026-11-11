@@ -60,9 +60,22 @@ function SettingsPage() {
             { provider: 'groq', apiKey: '', baseUrl: '', headers: [] },
             { provider: 'ollama', apiKey: '', baseUrl: '', headers: [] },
           ],
-      summary_model_profile_id: config?.summary_model_profile_id ?? '',
+      summary_model_profile_id:
+        (config?.workspace_mode === 'team'
+          ? config.team?.summary_model_id
+          : config?.summary_model_profile_id) ?? '',
     },
   });
+
+  useEffect(() => {
+    const current = useWorkrunStore.getState().config;
+    form.setValue(
+      'summary_model_profile_id',
+      (current?.workspace_mode === 'team'
+        ? current.team?.summary_model_id
+        : current?.summary_model_profile_id) ?? '',
+    );
+  }, [config?.workspace_mode, config?.team?.server_url, form]);
 
   const onSubmit = useEffectEvent(async (values: SettingsForm) => {
     const settings: IWorkrunConfig = {
@@ -82,7 +95,14 @@ function SettingsPage() {
       otlp_endpoint: values.otlp_endpoint,
       // model
       provider_credentials: values.provider_credentials,
-      summary_model_profile_id: values.summary_model_profile_id,
+      ...(config?.workspace_mode === 'team' && config.team
+        ? {
+            team: {
+              ...config.team,
+              summary_model_id: values.summary_model_profile_id,
+            },
+          }
+        : { summary_model_profile_id: values.summary_model_profile_id }),
     };
 
     if (settings.locale && settings.locale !== config?.locale) {

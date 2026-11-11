@@ -5,7 +5,7 @@ use crate::{
 use anyhow::Result;
 use rmcp::transport::StoredCredentials;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -75,7 +75,7 @@ pub struct IMcpServers {
 impl IMcpServers {
     pub async fn new() -> Self {
         match dirs::mcp_server_catalog_path() {
-            Ok(path) => match help::read_json::<Self>(&path).await {
+            Ok(path) => match Self::load_file(&path).await {
                 Ok(servers) => servers,
                 Err(error) => {
                     logging!(error, Type::Config, "{error}");
@@ -87,6 +87,15 @@ impl IMcpServers {
                 Self::default()
             },
         }
+    }
+
+    async fn load_file(path: &PathBuf) -> Result<Self> {
+        // New workspaces have no catalog until their first MCP server is saved.
+        // Propagate permission errors instead of treating them as an empty catalog.
+        if !tokio::fs::try_exists(path).await? {
+            return Ok(Self::default());
+        }
+        help::read_json(path).await
     }
 
     /// Save the MCP server catalog to file
@@ -138,5 +147,43 @@ impl IMcpServers {
         server.oauth_credentials = Some(credentials);
         server.updated_at = updated_at;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_catalog_is_empty_without_creating_a_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("mcp-servers/catalog.json");
+        let catalog = IMcpServers::load_file(&path).await.unwrap();
+        assert!(catalog.get_mcp_servers().is_empty());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn existing_catalog_is_loaded_and_invalid_json_remains_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("catalog.json");
+        tokio::fs::write(
+            &path,
+            r#"{"servers":[{"id":"local","name":"Local MCP","command":"node"}]}"#,
+        )
+        .await
+        .unwrap();
+        let catalog = IMcpServers::load_file(&path).await.unwrap();
+        assert_eq!(catalog.get_mcp_servers().len(), 1);
+        assert_eq!(catalog.get_mcp_server("local").unwrap().command, "node");
+        tokio::fs::write(&path, "invalid json").await.unwrap();
+        assert!(IMcpServers::load_file(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn unreadable_catalog_is_not_treated_as_missing() {
+        let root = tempfile::tempdir().unwrap();
+        // A directory at the catalog path exists but cannot be read as a JSON file.
+        assert!(IMcpServers::load_file(&root.path().to_path_buf()).await.is_err());
     }
 }

@@ -39,8 +39,10 @@ pub fn current() -> CallContext {
     })
 }
 
-pub async fn scope<T>(context: CallContext, future: impl Future<Output = T>) -> T {
-    CONTEXT.scope(context, future).await
+pub fn scope<T>(context: CallContext, future: impl Future<Output = T>) -> impl Future<Output = T> {
+    // Keep context wrappers small on Tokio's worker stack without changing task
+    // identity, cancellation, or the lifetime of the scoped model operation.
+    CONTEXT.scope(context, Box::pin(future))
 }
 
 pub async fn purpose<T>(purpose: &str, future: impl Future<Output = T>) -> T {

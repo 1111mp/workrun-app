@@ -118,6 +118,7 @@ impl SchedulingStore {
     fn new_recipe(&self, kind: &str) -> Result<Value> {
         if kind == "workflow" {
             Ok(serde_json::to_value(schedule::WorkflowExecutionRecipe {
+                team_model_owner: crate::module::team_model::stored_owner(&self.workspace),
                 source: if self.workspace.starts_with("team:") {
                     schedule::WorkflowScheduleSource::LatestPublished
                 } else {

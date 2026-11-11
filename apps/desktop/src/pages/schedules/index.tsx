@@ -34,8 +34,8 @@ import { useEntryWorkspace } from '@/components/app-sidebar';
 import { conversationComposerClassName } from '@/components/conversation-layout';
 import { SessionUsage } from '@/components/session-usage';
 import { WorkspaceHeaderContent } from '@/components/workspace-header-content';
+import { useModelCatalog } from '@/hooks/use-model-catalog';
 import { scheduleState } from '@/lib/schedule-time';
-import { getModelCatalog } from '@/services/cmd';
 import {
   createSchedulingSession,
   decideScheduleChange,
@@ -122,10 +122,7 @@ function SchedulesPage({ scope }: { scope: string }) {
     enabled: Boolean(sessionId),
   });
   const config = useWorkrunStore((state) => state.config);
-  const models = useQuery({
-    queryKey: ['model-catalog'],
-    queryFn: getModelCatalog,
-  });
+  const models = useModelCatalog();
   const [lastSelection, setLastSelection] = useState(() =>
     readSchedulingModelPreference(scope),
   );

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::model_catalog;
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use std::sync::Mutex;
 
