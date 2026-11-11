@@ -93,7 +93,11 @@ if (process.argv[2] === 'build') {
   if (!specs.length) throw new Error('No E2E specs matched');
   for (const spec of specs) {
     const workflow = basename(spec) === 'workflow.spec.ts';
-    const dataDir = await createWorkspace(root, workflow);
+    const dataDir = await createWorkspace(
+      root,
+      workflow,
+      basename(spec) === 'team-account.spec.ts',
+    );
     console.log(`E2E data and backend logs (${spec}): ${dataDir}`);
     const env = {
       WORKRUN_E2E_DATA_DIR: dataDir,

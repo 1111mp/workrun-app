@@ -1,9 +1,12 @@
 //! Native workflow discovery, version resolution and dependency preparation.
 use super::tools::Capability;
 use crate::{
-    config::{BaseConfig, IProcessNode},
+    config::{BaseConfig, IProcessNode, ProcessNodeKind},
     feat,
-    module::{process_node::ProcessNodeInstallStatus, workflow::WorkflowDsl},
+    module::{
+        process_node::{ProcessNode, ProcessNodeInstallStatus},
+        workflow::WorkflowDsl,
+    },
     utils::dirs,
 };
 use anyhow::{Context, Result, bail};
@@ -42,6 +45,51 @@ impl TeamApi {
             bail!("Team API rejected the request");
         }
         Ok(envelope["payload"].clone())
+    }
+    async fn install_release(
+        &self,
+        app: &str,
+        release: &str,
+        sha: &str,
+        scope: Option<String>,
+        workspace: &str,
+    ) -> Result<ProcessNode> {
+        let path = format!("/app/catalog/{}/releases/{}", encoded(app), encoded(release));
+        let mut definition = self.get(&path).await?;
+        if scope.is_none() && definition["kind"] != "tool" {
+            bail!("App {app} is not a Tool App");
+        }
+        definition["remoteAppId"] = json!(app);
+        definition["remoteReleaseId"] = json!(release);
+        definition["remoteArchiveSha256"] = json!(sha);
+        let response = self.response(&format!("{path}/source-archive")).await?;
+        if response.headers().get("x-workrun-sha256").and_then(|v| v.to_str().ok()) != Some(sha) {
+            bail!("Team app archive checksum changed");
+        }
+        let temporary = tempfile::NamedTempFile::new()?;
+        let mut file = tokio::fs::File::create(temporary.path()).await?;
+        let mut response = response;
+        use tokio::io::AsyncWriteExt;
+        while let Some(bytes) = response.chunk().await? {
+            file.write_all(&bytes).await?;
+        }
+        file.flush().await?;
+        drop(file);
+        anyhow::ensure!(
+            dirs::active_workspace_id() == workspace,
+            "Workspace changed during App preparation"
+        );
+        feat::install_process_node_archive(
+            feat::InstallProcessNodeArchiveRequest {
+                definition: serde_json::from_value::<IProcessNode>(definition)?,
+                archive_path: temporary.path().into(),
+                sha256: sha.into(),
+                release_id: release.into(),
+                installation_scope: scope,
+            },
+            tauri::ipc::Channel::new(|_| Ok(())),
+        )
+        .await
     }
 }
 impl Catalog {
@@ -128,6 +176,46 @@ impl Catalog {
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("draft-{}", workflow["id"].as_str().unwrap_or_default()))
             );
+            // Tool IDs remain App IDs. Only missing Process App Tools are installed;
+            // MCP tools continue to use their existing running-server lifecycle.
+            for node in dsl["nodes"].as_array().context("Workflow nodes are missing")? {
+                if !matches!(node["type"].as_str(), Some("agent" | "codeact_agent")) {
+                    continue;
+                }
+                for id in node["data"]["toolIds"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    if id.starts_with("mcp:") {
+                        continue;
+                    }
+                    anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
+                    if let Ok(local) = feat::process_node_inspect(id).await {
+                        if local.definition.kind != ProcessNodeKind::Tool {
+                            bail!("App {id} is not a Tool App");
+                        }
+                        if matches!(
+                            local.install_status,
+                            ProcessNodeInstallStatus::Installed | ProcessNodeInstallStatus::Draft
+                        ) {
+                            continue;
+                        }
+                    }
+                    let catalog = api.get(&format!("/app/catalog/{}", encoded(id))).await?;
+                    let release = catalog["catalogVersionId"]
+                        .as_str()
+                        .context("Tool App has no published release")?;
+                    let published = api
+                        .get(&format!("/app/catalog/{}/releases/{}", encoded(id), encoded(release)))
+                        .await?;
+                    let sha = published["archiveSha256"]
+                        .as_str()
+                        .context("Missing Tool App checksum")?;
+                    api.install_release(id, release, sha, None, &self.workspace_id).await?;
+                }
+            }
             for node in dsl["nodes"].as_array_mut().context("Workflow nodes are missing")? {
                 let reference = node["data"]["appRef"].clone();
                 if node["type"] != "process" || reference["source"] != "team" {
@@ -145,39 +233,13 @@ impl Catalog {
                 }) {
                     node
                 } else {
-                    let path = format!("/app/catalog/{}/releases/{}", encoded(app), encoded(release));
-                    let mut definition = api.get(&path).await?;
-                    definition["remoteAppId"] = json!(app);
-                    definition["remoteReleaseId"] = json!(release);
-                    definition["remoteArchiveSha256"] = json!(sha);
-                    let response = api.response(&format!("{path}/source-archive")).await?;
-                    if response.headers().get("x-workrun-sha256").and_then(|v| v.to_str().ok()) != Some(sha) {
-                        bail!("Team app archive checksum changed");
-                    }
-                    let temporary = tempfile::NamedTempFile::new()?;
-                    let mut file = tokio::fs::File::create(temporary.path()).await?;
-                    let mut response = response;
-                    use tokio::io::AsyncWriteExt;
-                    while let Some(bytes) = response.chunk().await? {
-                        file.write_all(&bytes).await?;
-                    }
-                    file.flush().await?;
-                    drop(file);
-                    feat::install_process_node_archive(
-                        feat::InstallProcessNodeArchiveRequest {
-                            definition: serde_json::from_value::<IProcessNode>(definition)?,
-                            archive_path: temporary.path().into(),
-                            sha256: sha.into(),
-                            release_id: release.into(),
-                            installation_scope: Some(scope.clone()),
-                        },
-                        tauri::ipc::Channel::new(|_| Ok(())),
-                    )
-                    .await?
+                    api.install_release(app, release, sha, Some(scope.clone()), &self.workspace_id)
+                        .await?
                 };
                 node["data"]["processNodeId"] = json!(local.definition.id);
             }
         }
+        anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
         let config = BaseConfig::workrun().await.data_arc();
         crate::module::workflow::compile(serde_json::from_value::<WorkflowDsl>(dsl.clone())?, &config, None).await?;
         Ok(dsl)

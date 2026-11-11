@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { Skeleton } from '@workspace/ui/components';
-import { type ReactNode } from 'react';
+import { Fragment, type ReactNode, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate } from 'react-router';
 
+import { createTeamAuthClient } from '@/lib/auth-client';
 import { getTeamUser } from '@/services/session';
+import { syncTeamModelSession } from '@/services/team-model-session';
 import { useWorkrunStore } from '@/stores';
 
 const MINIMUM_LOADING_DURATION = 300;
@@ -13,16 +15,42 @@ function TeamSessionGate({ children }: { children: ReactNode }) {
   const workspaceMode = useWorkrunStore((s) => s.config?.workspace_mode);
   const serverUrl = useWorkrunStore((s) => s.config?.team?.server_url);
 
+  if (workspaceMode !== 'team') return children;
+  if (!serverUrl) return <Navigate replace to='/login' />;
+  return (
+    <AuthenticatedTeamGate key={serverUrl} serverUrl={serverUrl}>
+      {children}
+    </AuthenticatedTeamGate>
+  );
+}
+
+function AuthenticatedTeamGate({
+  children,
+  serverUrl,
+}: {
+  children: ReactNode;
+  serverUrl: string;
+}) {
   const { t } = useTranslation();
-
-  const requiresSession = workspaceMode === 'team';
-
+  const authClient = useMemo(
+    () => createTeamAuthClient(serverUrl),
+    [serverUrl],
+  );
+  const { data: session, isPending } = authClient.useSession();
+  const token = session?.session.token;
   const teamUser = useQuery({
-    enabled: requiresSession && Boolean(serverUrl),
-    queryFn: async () => {
+    enabled: !isPending,
+    queryFn: async ({ signal }) => {
       const startedAt = Date.now();
       try {
-        const user = await getTeamUser(serverUrl!);
+        await syncTeamModelSession(serverUrl, token ?? null);
+        signal.throwIfAborted();
+        await useWorkrunStore.persist.rehydrate();
+        signal.throwIfAborted();
+        const user = token ? await getTeamUser(serverUrl) : null;
+        signal.throwIfAborted();
+        if (user && user.id !== session?.user.id)
+          throw new Error('Team account changed');
         useWorkrunStore.getState().setTeamUser(user ?? undefined);
         return user;
       } finally {
@@ -32,20 +60,15 @@ function TeamSessionGate({ children }: { children: ReactNode }) {
         }
       }
     },
-    queryKey: ['team-user', serverUrl],
+    queryKey: ['team-user', serverUrl, token],
     // A local team server can be reachable even when the browser reports offline.
     networkMode: 'always',
     retry: false,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
   });
 
-  if (!requiresSession) return children;
-
-  if (!serverUrl) {
-    return <Navigate replace to='/login' />;
-  }
-
-  if (teamUser.isPending) {
+  if (isPending || teamUser.isPending || teamUser.isFetching) {
     return (
       <div
         aria-busy
@@ -87,7 +110,7 @@ function TeamSessionGate({ children }: { children: ReactNode }) {
     );
   }
 
-  return children;
+  return <Fragment key={session?.user.id}>{children}</Fragment>;
 }
 
 export { TeamSessionGate };

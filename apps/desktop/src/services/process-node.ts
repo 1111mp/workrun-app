@@ -7,6 +7,7 @@ import { gt } from 'semver';
 import { isTeamMode } from '@/lib/constant';
 import { fetchApi } from '@/services/fetch-api';
 import type { DependencySyncResult } from '@/services/runtime';
+import { teamModelSessionVersion } from '@/services/team-model-session';
 
 export type ProcessNodeInstallStatus =
   | 'draft'
@@ -256,7 +257,9 @@ export function getProcessNode(id: string) {
 export async function getPublishedProcessNode(
   id: string,
 ): Promise<ProcessNode> {
-  const definition = await fetchApi.get<TeamApp>(`/app/catalog/${id}`);
+  const definition = await fetchApi.get<TeamApp>(
+    `/app/catalog/${encodeURIComponent(id)}`,
+  );
   return {
     definition: {
       ...definition,
@@ -305,6 +308,7 @@ export async function ensurePublishedProcessNode(
   onProgress?: (progress: ProcessNodePreparationProgress) => void,
   installationScope?: string,
 ): Promise<ProcessNode> {
+  const session = teamModelSessionVersion();
   onProgress?.({ stage: 'checkingVersion' });
   const id = node.definition.remoteAppId ?? node.definition.id;
   const catalog = await getPublishedProcessNode(id);
@@ -353,6 +357,8 @@ export async function ensurePublishedProcessNode(
     await writeFile(archivePath, trackedStream);
     const progress = new Channel<ProcessNodePreparationProgress>();
     if (onProgress) progress.onmessage = onProgress;
+    if (session !== teamModelSessionVersion())
+      throw new Error('Team account changed');
     return await invoke<ProcessNode>('process_node_install_archive', {
       request: {
         definition: remote.definition,
@@ -380,6 +386,44 @@ export async function prepareWorkflowProcessApps<T>(
   const cloned = structuredClone(dsl) as {
     nodes?: Array<{ type?: string; data?: Record<string, unknown> }>;
   };
+  const preparedTools = new Set<string>();
+  for (const node of cloned.nodes ?? []) {
+    if (!['agent', 'codeact_agent'].includes(node.type ?? '')) continue;
+    const ids = node.data?.toolIds;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) {
+      if (
+        typeof id !== 'string' ||
+        id.startsWith('mcp:') ||
+        preparedTools.has(id)
+      )
+        continue;
+      const local = await invoke<ProcessNode>('get_process_node', { id }).catch(
+        () => undefined,
+      );
+      if (local && ['installed', 'draft'].includes(local.installStatus)) {
+        if (local.definition.kind !== 'tool')
+          throw new Error(`App ${id} is not a Tool App`);
+        preparedTools.add(id);
+        continue;
+      }
+      if (options?.allowInstall === false)
+        throw new Error(
+          `Prepare Tool App ${id} in Workrun before running this workflow from a link.`,
+        );
+      const published = await getPublishedProcessNode(id);
+      if (published.definition.kind !== 'tool')
+        throw new Error(`App ${id} is not a Tool App`);
+      await ensurePublishedProcessNode(published, (progress) =>
+        onProgress?.({
+          appName: published.definition.name,
+          version: published.definition.version,
+          progress,
+        }),
+      );
+      preparedTools.add(id);
+    }
+  }
   for (const node of cloned.nodes ?? []) {
     const ref = node.data?.appRef as ProcessAppRef | undefined;
     if (node.type !== 'process' || ref?.source !== 'team') continue;
@@ -467,14 +511,18 @@ function publishRequest(definition: ProcessNodeDefinition) {
     remoteReleaseId: _remoteReleaseId,
     remoteArchiveSha256: _remoteArchiveSha256,
     ownerId: _ownerId,
+    teamInstallationScope: _teamInstallationScope,
     ...request
   } = definition;
   return { ...request, compensation: definition.compensation ?? null };
 }
 
-/** Creates the server-owned Draft that mirrors a newly initialized local App. */
+/** Creates the server-owned App record on first publication. */
 export function createTeamProcessNodeDraft(definition: ProcessNodeDefinition) {
-  return fetchApi.post<{ id: string }>('/app', publishRequest(definition));
+  return fetchApi.post<{ id: string }>('/app', {
+    ...publishRequest(definition),
+    id: definition.id,
+  });
 }
 
 export function updatePublishedProcessNode(

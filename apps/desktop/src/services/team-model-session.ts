@@ -32,3 +32,9 @@ export function syncTeamModelSession(
     .catch(() => {});
   return promise;
 }
+
+// Cleanup from a previous Server must not clear the next Server's session.
+export function clearTeamModelSession(server: string): Promise<void> {
+  if (context && JSON.parse(context)[0] !== server) return Promise.resolve();
+  return syncTeamModelSession(server, null);
+}

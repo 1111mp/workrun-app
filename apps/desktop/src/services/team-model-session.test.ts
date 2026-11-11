@@ -32,3 +32,17 @@ it('shares concurrent verification and issues logout even while login is pending
   finish();
   await a;
 });
+
+it('ignores cleanup belonging to a Server that has already been replaced', async () => {
+  const { syncTeamModelSession, clearTeamModelSession } =
+    await import('./team-model-session');
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  await syncTeamModelSession('https://b.example', 'b');
+  await clearTeamModelSession('https://a.example');
+  expect(invoke).toHaveBeenCalledTimes(1);
+  await clearTeamModelSession('https://b.example');
+  expect(invoke).toHaveBeenLastCalledWith('schedule_set_team_session', {
+    serverUrl: 'https://b.example',
+    token: null,
+  });
+});

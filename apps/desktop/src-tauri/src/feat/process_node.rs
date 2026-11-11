@@ -222,6 +222,7 @@ pub async fn install_process_node_archive(
     request: InstallProcessNodeArchiveRequest,
     progress: Channel<ProcessNodeInstallProgress>,
 ) -> Result<ProcessNode> {
+    let workspace = dirs::active_workspace_id();
     validate_process_node_definition(&request.definition)?;
     if let Some(scope) = &request.installation_scope {
         validate_team_installation_scope(scope)?;
@@ -234,15 +235,25 @@ pub async fn install_process_node_archive(
     };
     let existing = registry.data_arc().get_process_nodes().into_iter().find(|node| {
         node.remote_app_id.as_deref() == Some(remote_id.as_str())
-            && node.remote_release_id.as_deref() == Some(request.release_id.as_str())
             && node.team_installation_scope == request.installation_scope
+            && (node.remote_release_id.as_deref() == Some(request.release_id.as_str())
+                || (request.definition.kind == ProcessNodeKind::Tool && request.installation_scope.is_none()))
     });
 
+    anyhow::ensure!(
+        dirs::workspace_available() && dirs::active_workspace_id() == workspace,
+        "Workspace changed"
+    );
     let mut definition = request.definition;
-    definition.id = existing
-        .as_ref()
-        .map(|node| node.id.clone())
-        .unwrap_or_else(|| Uuid::now_v7().to_string());
+    definition.id = existing.as_ref().map(|node| node.id.clone()).unwrap_or_else(|| {
+        // Agent toolIds identify Apps, so normal Tool installations retain
+        // that identity inside each account's separate catalog and directory.
+        if definition.kind == ProcessNodeKind::Tool && request.installation_scope.is_none() {
+            remote_id.clone()
+        } else {
+            Uuid::now_v7().to_string()
+        }
+    });
     definition.remote_app_id = Some(remote_id);
     definition.remote_release_id = Some(request.release_id);
     definition.remote_archive_sha256 = Some(request.sha256.clone());
@@ -317,6 +328,10 @@ pub async fn install_process_node_archive(
     });
     let saved = nodes
         .with_data_modify(|mut data| async move {
+            anyhow::ensure!(
+                dirs::workspace_available() && dirs::active_workspace_id() == workspace,
+                "Workspace changed"
+            );
             // A workflow release owns one local copy of each remote App. Once
             // its replacement is committed, other releases in that scope can
             // no longer be reached and are safe to remove from its cache.
@@ -555,6 +570,7 @@ pub async fn create_process_node(
     request: CreateProcessNodeRequest,
     progress: Channel<ProcessNodeCreateProgress>,
 ) -> Result<ProcessNode> {
+    let workspace = dirs::active_workspace_id();
     let now = Utc::now().to_rfc3339();
     let definition = IProcessNode {
         id: Uuid::now_v7().to_string(),
@@ -583,12 +599,16 @@ pub async fn create_process_node(
         team_installation_scope: None,
     };
     validate_process_node_definition(&definition)?;
+    let project_path = ProcessNodeRegistry::project_path(&definition)?;
     ProcessNodeRegistry::initialize_project(&definition, progress.clone()).await?;
 
-    let cleanup_definition = definition.clone();
     let nodes = Config::process_nodes().await;
     let saved = nodes
         .with_data_modify(|mut data| async move {
+            anyhow::ensure!(
+                dirs::workspace_available() && dirs::active_workspace_id() == workspace,
+                "Workspace changed"
+            );
             data.add_process_node(definition.clone());
             validate_process_node_catalog(&data)?;
             data.save_file().await?;
@@ -600,7 +620,7 @@ pub async fn create_process_node(
         Ok(definition) => definition,
         Err(error) => {
             // The catalog was not committed, so leaving its newly-created project would orphan it.
-            let _ = ProcessNodeRegistry::delete_project(&cleanup_definition).await;
+            let _ = ProcessNodeRegistry::delete_project_at(&project_path).await;
             return Err(error);
         },
     };
@@ -613,13 +633,20 @@ pub async fn create_process_node(
 
 /// Update an existing Process Node catalog entry and its local project.
 pub async fn update_process_node(mut definition: IProcessNode) -> Result<ProcessNode> {
+    let workspace = dirs::active_workspace_id();
     let nodes = Config::process_nodes().await;
     let definition = nodes
         .with_data_modify(|mut data| async move {
+            anyhow::ensure!(
+                dirs::workspace_available() && dirs::active_workspace_id() == workspace,
+                "Workspace changed"
+            );
             let existing = data
                 .get_process_node(&definition.id)
                 .ok_or_else(|| anyhow::anyhow!("Process Node is not in the catalog: {}", definition.id))?;
             definition.created_at = existing.created_at;
+            // An older editor snapshot must not erase an established server identity.
+            definition.remote_app_id = existing.remote_app_id.or(definition.remote_app_id);
             definition.updated_at = Utc::now().to_rfc3339();
             validate_process_node_definition(&definition)?;
             debug_assert!(data.replace_process_node(definition.clone()));
@@ -633,11 +660,18 @@ pub async fn update_process_node(mut definition: IProcessNode) -> Result<Process
 
 /// Delete a Process Node catalog entry and optionally its local project.
 pub async fn delete_process_node(id: &str, delete_project_files: bool) -> Result<()> {
+    let workspace = dirs::active_workspace_id();
     let definition = get_process_node(id).await?;
+    anyhow::ensure!(dirs::active_workspace_id() == workspace, "Workspace changed");
+    let project_path = ProcessNodeRegistry::project_path(&definition)?;
     let catalog_id = definition.id.clone();
     let nodes = Config::process_nodes().await;
     nodes
         .with_data_modify(|mut data| async move {
+            anyhow::ensure!(
+                dirs::workspace_available() && dirs::active_workspace_id() == workspace,
+                "Workspace changed"
+            );
             if !data.remove_process_node(&catalog_id) {
                 bail!("Process Node is not in the catalog: {catalog_id}");
             }
@@ -647,7 +681,7 @@ pub async fn delete_process_node(id: &str, delete_project_files: bool) -> Result
         .await?;
 
     if delete_project_files {
-        ProcessNodeRegistry::delete_project(&definition).await?;
+        ProcessNodeRegistry::delete_project_at(&project_path).await?;
     }
     Ok(())
 }

@@ -1,7 +1,9 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { validateSync } from 'class-validator';
 import { Types } from 'mongoose';
 
 import { AppService } from './app.service';
+import { CreateAppDto } from './dto/create-app.dto';
 
 describe('AppService', () => {
   const ownerId = '507f191e810c19729de860ea';
@@ -37,6 +39,7 @@ describe('AppService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    model.findOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
     service = new AppService(
       model as any,
       appVersionModel as any,
@@ -50,6 +53,7 @@ describe('AppService', () => {
     model.create.mockResolvedValue({ id: 'app-1' });
 
     await service.create(ownerId, {
+      id: '01a1caa4-f9b8-7040-bf2e-36bce96be908',
       name: 'Process data',
       projectRoot: '/Users/me/projects/process-data',
     });
@@ -64,23 +68,63 @@ describe('AppService', () => {
     );
   });
 
-  it('rejects creating a duplicate active app version', async () => {
-    model.exists.mockResolvedValue({ _id: 'existing-app' });
+  it('allows different App IDs to have the same name and initial version', async () => {
+    model.create.mockImplementation(async (data) => data);
+    const one = await service.create(ownerId, {
+      id: 'app-one',
+      name: '订单查询',
+      version: '0.1.0',
+    });
+    const two = await service.create(ownerId, {
+      id: 'app-two',
+      name: '订单查询',
+      version: '0.1.0',
+    });
+    expect(one.id).toBe('app-one');
+    expect(two.id).toBe('app-two');
+    expect(model.create).toHaveBeenCalledTimes(2);
+    expect(model.exists).not.toHaveBeenCalled();
+  });
 
+  it('returns the same owned App when publication creation is retried', async () => {
+    const previous = { id: 'stable-app', name: 'Process data' };
+    const lean = vi.fn().mockResolvedValue(previous);
+    model.findOne.mockReturnValue({ lean });
     await expect(
-      service.create(ownerId, {
-        name: 'Process data',
-        version: '1.2.3',
-      }),
-    ).rejects.toBeInstanceOf(ConflictException);
-
-    expect(model.exists).toHaveBeenCalledWith({
-      isDelete: false,
-      name: 'Process data',
+      service.create(ownerId, { id: 'stable-app', name: 'Process data' }),
+    ).resolves.toEqual(previous);
+    expect(model.findOne).toHaveBeenCalledWith({
+      id: 'stable-app',
       ownerId: expect.any(Types.ObjectId),
-      version: '1.2.3',
+      isDelete: false,
     });
     expect(model.create).not.toHaveBeenCalled();
+  });
+
+  it('recovers a concurrent creation of the same App ID', async () => {
+    const lean = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'stable-app' });
+    model.findOne.mockReturnValue({ lean });
+    model.exists.mockResolvedValue(null);
+    model.create.mockRejectedValueOnce({ code: 11000 });
+    await expect(
+      service.create(ownerId, { id: 'stable-app', name: 'Process data' }),
+    ).resolves.toEqual({ id: 'stable-app' });
+  });
+
+  it('does not reuse an App ID belonging to another owner', async () => {
+    model.findOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) });
+    model.create.mockRejectedValueOnce({ code: 11000 });
+    await expect(
+      service.create(ownerId, { id: 'foreign-app', name: '订单查询' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(model.findOne).toHaveBeenCalledWith({
+      id: 'foreign-app',
+      ownerId: expect.any(Types.ObjectId),
+      isDelete: false,
+    });
   });
 
   it('creates an immutable version snapshot for an owned app', async () => {
@@ -399,15 +443,15 @@ describe('AppService', () => {
     );
   });
 
-  it('soft deletes an app', async () => {
+  it('soft deletes an owned app and allows deletion retries', async () => {
     const lean = vi.fn().mockResolvedValue({ id: 'app-1' });
     model.findOneAndUpdate.mockReturnValue({ lean });
 
     await service.remove(ownerId, 'app-1');
+    await service.remove(ownerId, 'app-1');
 
     expect(model.findOneAndUpdate).toHaveBeenCalledWith(
       {
-        isDelete: false,
         id: 'app-1',
         ownerId: expect.any(Types.ObjectId),
       },
@@ -415,4 +459,19 @@ describe('AppService', () => {
       { new: true },
     );
   });
+});
+
+it('accepts desktop UUID v7 identities for first-publication retries', () => {
+  const dto = Object.assign(new CreateAppDto(), {
+    id: '01a1caa4-f9b8-7040-bf2e-36bce96be908',
+    name: '订单查询',
+    version: '0.1.0',
+    kind: 'tool',
+  });
+  expect(validateSync(dto)).toEqual([]);
+});
+
+it('rejects creation without the client App ID', () => {
+  const dto = Object.assign(new CreateAppDto(), { name: '订单查询' });
+  expect(validateSync(dto).some((error) => error.property === 'id')).toBe(true);
 });

@@ -37,7 +37,15 @@ impl From<&IWorkrun> for PublicWorkrunConfig {
             onboarding_completed: config.onboarding_completed,
             local_profile: config.local_profile.clone(),
             team: config.team.clone(),
-            provider_credentials: config.provider_credentials.clone(),
+            provider_credentials: config
+                .provider_credentials
+                .iter()
+                .filter(|credential| {
+                    crate::utils::dirs::workspace_available()
+                        && credential.workspace_id == crate::utils::dirs::active_workspace_id()
+                })
+                .cloned()
+                .collect(),
             summary_model_profile_id: config.summary_model_profile_id.clone(),
             app_log_level: config.app_log_level.clone(),
             app_log_max_size: config.app_log_max_size,

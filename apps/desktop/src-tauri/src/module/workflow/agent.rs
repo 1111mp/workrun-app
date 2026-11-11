@@ -1166,6 +1166,7 @@ mod usage_snapshot_tests {
                 request
             });
             let credential = crate::config::ProviderCredential {
+                workspace_id: "personal".into(),
                 provider: provider.clone(),
                 base_url: Some(format!("http://{address}/v1")),
                 api_key: Some("test-key".into()),

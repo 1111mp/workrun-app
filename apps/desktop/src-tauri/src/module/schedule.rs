@@ -365,7 +365,9 @@ pub fn start_scheduler() {
 }
 
 pub(crate) fn notify_scheduler() {
-    ScheduleEvents::tasks(&crate::utils::dirs::active_workspace_id());
+    if crate::utils::dirs::workspace_available() {
+        ScheduleEvents::tasks(&crate::utils::dirs::active_workspace_id());
+    }
     if let Some(sender) = SCHEDULE_CHANGES.get() {
         sender.send_modify(|version| *version = version.wrapping_add(1));
     }
@@ -374,6 +376,13 @@ pub(crate) fn notify_scheduler() {
 async fn run_scheduler(mut changes: tokio::sync::watch::Receiver<u64>) {
     let mut previous_workspace = None;
     loop {
+        if !crate::utils::dirs::workspace_available() {
+            previous_workspace = None;
+            if changes.changed().await.is_err() {
+                return;
+            }
+            continue;
+        }
         let workspace = crate::utils::dirs::active_workspace_id();
         if previous_workspace.as_ref() != Some(&workspace) {
             // Inactive workspace periods are missed occurrences, just like
@@ -473,7 +482,7 @@ async fn trigger_due_schedules() -> Result<()> {
 }
 
 async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Result<()> {
-    if crate::utils::dirs::active_workspace_id() != due.workspace {
+    if !crate::utils::dirs::workspace_available() || crate::utils::dirs::active_workspace_id() != due.workspace {
         return Ok(());
     }
     let Some(claim) = ScheduleDispatcher::new(pool, &due.workspace)

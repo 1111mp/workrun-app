@@ -231,7 +231,7 @@ it.each([
         });
       } else {
         expect(option?.textContent).toContain('https://agent.example');
-        await user.click(option!);
+        await user.keyboard('{ArrowDown}{Enter}');
         expect(ui.onChange).not.toHaveBeenCalled();
       }
     } finally {

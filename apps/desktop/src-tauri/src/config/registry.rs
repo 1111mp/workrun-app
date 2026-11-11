@@ -18,6 +18,13 @@ impl Config {
         static CONFIG: OnceCell<Config> = OnceCell::const_new();
         CONFIG
             .get_or_init(|| async {
+                if crate::utils::dirs::is_team_workspace() && !crate::module::team_model::has_session() {
+                    return Self {
+                        process_node_config: Draft::new(IProcessNodes::default()),
+                        team_process_node_config: Draft::new(IProcessNodes::default()),
+                        mcp_server_config: Draft::new(IMcpServers::default()),
+                    };
+                }
                 Self {
                     process_node_config: Draft::new(IProcessNodes::new().await),
                     team_process_node_config: Draft::new(IProcessNodes::new_team_releases().await),
@@ -42,6 +49,12 @@ impl Config {
     /// Reloads catalog snapshots after the active workspace directory changes.
     pub async fn reload_workspace() {
         let config = Self::global().await;
+        if crate::utils::dirs::is_team_workspace() && !crate::module::team_model::has_session() {
+            config.process_node_config.replace(IProcessNodes::default());
+            config.team_process_node_config.replace(IProcessNodes::default());
+            config.mcp_server_config.replace(IMcpServers::default());
+            return;
+        }
         config.process_node_config.replace(IProcessNodes::new().await);
         config
             .team_process_node_config
@@ -50,6 +63,9 @@ impl Config {
     }
 
     pub async fn apply_all_and_save_file() {
+        if !crate::utils::dirs::workspace_available() {
+            return;
+        }
         logging!(info, Type::Config, "save all draft data");
 
         let save_process_node_task = AsyncHandler::spawn(|| async {

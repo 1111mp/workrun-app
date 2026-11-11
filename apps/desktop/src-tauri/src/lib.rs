@@ -105,7 +105,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(cmd::require_workspace(tauri::generate_handler![
             cmd::model_usage::model_usage_session,
             // deeplink
             cmd::deeplink::deeplink_snapshot,
@@ -293,7 +293,7 @@ pub fn run() {
             cmd::python_runtime::run_project_python,
             // system
             cmd::system::get_system_theme,
-        ]);
+        ]));
 
     // Under memory pressure on macOS, the WKWebView rendering process may be
     // terminated by the system (resulting in a blank window).

@@ -51,6 +51,16 @@ pnpm --filter workrun-server start:prod
 
 `nest-cli.json` 已启用 SWC builder；`@swc/core` 负责转换 TypeScript，保留 Nest 所需的 decorator metadata。
 
+## App 唯一索引更新
+
+App 使用客户端创建的 UUID 标识，允许不同 App 使用相同名称。升级已有数据库时，在使用新服务端代码前执行一次：
+
+```bash
+pnpm --filter workrun-server db:remove-app-name-index
+```
+
+命令使用 `MONGODB_URI`（未设置时读取服务端 `.env`），仅移除旧的 `(ownerId, name, version)` 唯一索引，保留 App、版本数据及其他索引，可重复执行。新数据库无需执行。
+
 ## 测试
 
 项目使用 Vitest，并通过 `unplugin-swc` 处理 Nest 的 TypeScript decorators。

@@ -31,12 +31,12 @@ vi.mock('@/components/workflow-chat-composer', () => ({
   WorkflowChatComposer: () => null,
 }));
 vi.mock('@/components/workflow-recovery-notice', () => ({
-  WorkflowRecoveryNotice: () => null,
+  WorkflowRecoveryNotice: vi.fn(() => null),
 }));
 vi.mock('@/components/workflow-actions', () => ({
   WorkflowActionCards: () => null,
   WorkflowActionNotice: () => null,
-  useWorkflowActions: () => ({ data: [] }),
+  useWorkflowActions: vi.fn(() => ({ data: [] })),
 }));
 vi.mock('@melloware/react-logviewer', () => ({ LazyLog: () => null }));
 vi.mock('@workspace/ui/components', async () => {
@@ -475,5 +475,43 @@ it('shows interrupted archived output without workflow or node loading indicator
     ).toBeNull();
   } finally {
     view.unmount();
+  }
+});
+
+it('does not query notices using the provisional ID while Team Apps are preparing', async () => {
+  const { WorkflowRecoveryNotice } =
+    await import('@/components/workflow-recovery-notice');
+  const { useWorkflowActions } = await import('@/components/workflow-actions');
+  const store = useWorkflowRunStore.getState();
+  store.resetRunView();
+  store.startWorkflowRun('provisional', {}, 'task');
+  const ui = renderComponent(
+    <LiveWorkflowTaskOutput
+      workflowNodes={[]}
+      onRunAgain={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  try {
+    expect(
+      vi.mocked(WorkflowRecoveryNotice).mock.calls.at(-1)?.[0].runId,
+    ).toBeUndefined();
+    expect(
+      vi.mocked(useWorkflowActions).mock.calls.at(-1)?.[0],
+    ).toBeUndefined();
+    ui.rerender(
+      <LiveWorkflowTaskOutput
+        runId='provisional'
+        workflowNodes={[]}
+        onRunAgain={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(vi.mocked(WorkflowRecoveryNotice).mock.calls.at(-1)?.[0].runId).toBe(
+      'provisional',
+    );
+  } finally {
+    ui.unmount();
+    store.resetRunView();
   }
 });

@@ -23,6 +23,7 @@ bitflags! {
 /// Patch Workrun Configuration
 pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result<()> {
     if let Some(credentials) = &patch.provider_credentials {
+        anyhow::ensure!(dirs::workspace_available(), "Sign in to edit Team credentials");
         for credential in credentials {
             credential.request_headers()?;
         }
@@ -109,7 +110,9 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatc
             crate::config::WorkspaceMode::Personal => dirs::WorkspaceScope::Personal,
         };
         dirs::initialize_active_workspace_scope(scope);
-        init::ensure_active_workspace_directories().await?;
+        if dirs::workspace_available() {
+            init::ensure_active_workspace_directories().await?;
+        }
         Config::reload_workspace().await;
         crate::module::run_manager::notify_supervisor();
         crate::module::deeplink::DeeplinkManager::global().notify_frontend();

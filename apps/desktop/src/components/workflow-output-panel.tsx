@@ -1837,15 +1837,17 @@ function ChatTurnReceipt({
  * cannot rerender or remount completed rows (or the thinking spinner).
  */
 function LiveWorkflowTaskOutput({
+  runId,
   workflowNodes,
   onRunAgain,
   onClose,
   readOnly = false,
   spans = [],
-}: Omit<WorkflowOutputPanelProps, 'run' | 'isRunning' | 'isChat' | 'onSend'>) {
+}: Omit<WorkflowOutputPanelProps, 'run' | 'isRunning' | 'isChat' | 'onSend'> & {
+  runId?: string;
+}) {
   const { t } = useTranslation();
   const {
-    runId,
     status,
     startedAt,
     endedAt,
@@ -1857,7 +1859,6 @@ function LiveWorkflowTaskOutput({
     thoughtIds,
   } = useWorkflowRunStore(
     useShallow((state) => ({
-      runId: state.projection.runId,
       status: state.projection.status,
       startedAt: state.projection.startedAt,
       endedAt: state.projection.endedAt,

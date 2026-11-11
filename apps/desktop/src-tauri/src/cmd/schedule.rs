@@ -16,9 +16,21 @@ pub async fn schedule_update(change: Value, team_token: Option<String>) -> CmdRe
 #[tauri::command]
 pub async fn schedule_set_team_session(server_url: String, token: Option<String>) -> CmdResult<()> {
     crate::module::schedule::set_team_session(server_url.clone(), token.clone());
-    crate::module::team_model::set_session(server_url, token)
-        .await
-        .stringify_err()
+    let verified = crate::module::team_model::set_session(server_url, token).await;
+    static RELOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _reload = RELOAD.lock().await;
+    let workspace = crate::utils::dirs::active_workspace_id();
+    if !crate::utils::dirs::is_team_workspace() || crate::module::team_model::has_session() {
+        crate::utils::init::ensure_active_workspace_directories()
+            .await
+            .stringify_err()?;
+    }
+    crate::config::Config::reload_workspace().await;
+    verified.stringify_err()?;
+    if crate::utils::dirs::is_team_workspace() && crate::module::team_model::has_session() {
+        crate::module::team_model::finish_workspace_change(&workspace).stringify_err()?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

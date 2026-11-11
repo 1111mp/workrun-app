@@ -44,6 +44,29 @@ struct AuthState {
     session: Option<Session>,
     pending: CancellationToken,
 }
+static WORKSPACE_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn workspace_ready() -> bool {
+    WORKSPACE_READY.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(crate) fn has_session() -> bool {
+    AUTH.read().session.is_some()
+}
+
+pub(crate) fn finish_workspace_change(workspace: &str) -> Result<()> {
+    let state = AUTH.read();
+    ensure!(
+        state.session.is_some() && crate::utils::dirs::active_workspace_id() == workspace,
+        "Team account changed"
+    );
+    WORKSPACE_READY.store(true, std::sync::atomic::Ordering::Release);
+    drop(state);
+    crate::module::schedule::notify_scheduler();
+    crate::module::run_manager::notify_supervisor();
+    Ok(())
+}
+
 static AUTH: LazyLock<RwLock<AuthState>> = LazyLock::new(|| {
     RwLock::new(AuthState {
         revision: 0,
@@ -91,6 +114,7 @@ pub(crate) async fn set_session(server: String, token: Option<String>) -> Result
         {
             return Ok(());
         }
+        WORKSPACE_READY.store(false, std::sync::atomic::Ordering::Release);
         state.pending.cancel();
         if let Some(old) = state.session.take() {
             old.cancel.cancel();
@@ -130,6 +154,9 @@ pub(crate) async fn set_session(server: String, token: Option<String>) -> Result
         state.revision == revision && !cancel.is_cancelled(),
         "Team authentication changed"
     );
+    if crate::utils::dirs::is_team_workspace() {
+        crate::utils::dirs::initialize_active_workspace_scope(crate::utils::dirs::team_account_scope(&server, &owner));
+    }
     state.session = Some(Session {
         server,
         owner,
@@ -426,6 +453,18 @@ pub(crate) fn owner_for(workspace: &str) -> Result<Option<TeamOwner>> {
     }))
 }
 
+pub(crate) fn credential_workspace() -> String {
+    EXPECTED_OWNER
+        .try_with(|owner| match owner {
+            Some(owner) => match crate::utils::dirs::team_account_scope(&owner.server, &owner.user_id) {
+                crate::utils::dirs::WorkspaceScope::Team { account_key } => format!("team:{account_key}"),
+                _ => unreachable!(),
+            },
+            None => "personal".into(),
+        })
+        .unwrap_or_else(|_| crate::utils::dirs::active_workspace_id())
+}
+
 pub(crate) fn with_owner<T>(
     owner: Option<TeamOwner>,
     future: impl std::future::Future<Output = T>,
@@ -436,6 +475,7 @@ pub(crate) fn with_owner<T>(
 }
 
 pub(crate) fn clear() {
+    WORKSPACE_READY.store(false, std::sync::atomic::Ordering::Release);
     let mut state = AUTH.write();
     state.pending.cancel();
     if let Some(old) = state.session.take() {

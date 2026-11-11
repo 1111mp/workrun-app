@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Types } from 'mongoose';
 
 import { WorkflowService } from './workflow.service';
@@ -105,6 +109,15 @@ describe('WorkflowService', () => {
     );
   });
 
+  it('creates different IDs for workflows with the same name', async () => {
+    model.create.mockImplementation(async (value) => value);
+    const document = { nodes: [], edges: [], settings: { name: 'Same name' } };
+    const one = await service.create(ownerId, { document });
+    const two = await service.create(ownerId, { document });
+    expect(one.id).not.toBe(two.id);
+    expect(model.create).toHaveBeenCalledTimes(2);
+  });
+
   it('lists only workflows owned by the authenticated user', async () => {
     const lean = vi.fn().mockResolvedValue([]);
     const populate = vi.fn().mockReturnValue({ lean });
@@ -177,6 +190,46 @@ describe('WorkflowService', () => {
         matchesLatestRelease: false,
       },
     );
+  });
+
+  it('updates only the draft and preserves the existing published snapshot', async () => {
+    const released = {
+      nodes: [{ id: 'start' }],
+      edges: [],
+      settings: { name: 'Published' },
+    };
+    const edited = {
+      nodes: [{ id: 'start' }],
+      edges: [],
+      settings: { name: 'Edited' },
+    };
+    const release = { id: 'release-one', version: '1.0.0', document: released };
+    const ownerPopulate = vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        id: 'workflow-one',
+        document: edited,
+        latestReleaseId: release,
+      }),
+    });
+    model.findOneAndUpdate.mockReturnValue({
+      populate: vi.fn().mockReturnValue({ populate: ownerPopulate }),
+    });
+    const result = await service.update(ownerId, 'workflow-one', {
+      document: edited,
+    });
+    expect(result.document).toEqual(edited);
+    expect(result.latestReleaseId?.document).toEqual(released);
+    expect(model.findOneAndUpdate).toHaveBeenCalledWith(
+      {
+        id: 'workflow-one',
+        ownerId: expect.any(Types.ObjectId),
+        isDelete: false,
+      },
+      { document: edited },
+      { new: true },
+    );
+    expect(releaseModel.create).not.toHaveBeenCalled();
+    expect(model.updateOne).not.toHaveBeenCalled();
   });
 
   it('rejects missing, updated, or deleted workflows', async () => {
@@ -254,6 +307,28 @@ describe('WorkflowService', () => {
       { _id: 'mongo-workflow-1' },
       { latestReleaseId: 'mongo-release-1', status: 'published' },
     );
+  });
+
+  it('rejects duplicate release versions within the same workflow', async () => {
+    model.findOne.mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'mongo-one',
+        id: 'workflow-one',
+        document: {
+          nodes: [{ id: 'start' }],
+          edges: [],
+          settings: { name: 'Same name' },
+        },
+      }),
+    });
+    releaseModel.create.mockRejectedValueOnce({ code: 11000 });
+    await expect(
+      service.publish(ownerId, 'workflow-one', {
+        version: '1.0.0',
+        releaseNote: 'Repeat',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(model.updateOne).not.toHaveBeenCalled();
   });
 
   it('rejects a Team App reference whose immutable archive no longer matches', async () => {

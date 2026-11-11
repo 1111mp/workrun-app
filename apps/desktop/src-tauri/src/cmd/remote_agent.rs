@@ -23,12 +23,14 @@ pub async fn remote_credentials_list() -> CmdResult<Vec<RemoteCredentialSummary>
         .data_arc()
         .remote_agent_credentials
         .iter()
+        .filter(|c| c.workspace_id == crate::utils::dirs::active_workspace_id())
         .map(|c| c.summary())
         .collect())
 }
 
 #[tauri::command]
 pub async fn remote_credential_save(payload: SaveCredential) -> CmdResult<RemoteCredentialSummary> {
+    let workspace = crate::utils::dirs::active_workspace_id();
     let origin = remote_credential_origin(&payload.service_url).stringify_err()?;
     let name = payload.name.trim().to_string();
     if name.is_empty() || name.len() > 100 {
@@ -44,10 +46,16 @@ pub async fn remote_credential_save(payload: SaveCredential) -> CmdResult<Remote
     let draft = BaseConfig::workrun().await;
     draft
         .with_data_modify(move |mut config| async move {
-            let existing = payload
-                .id
-                .as_ref()
-                .and_then(|id| config.remote_agent_credentials.iter().find(|c| &c.id == id));
+            anyhow::ensure!(
+                workspace == crate::utils::dirs::active_workspace_id(),
+                "Workspace changed"
+            );
+            let existing = payload.id.as_ref().and_then(|id| {
+                config
+                    .remote_agent_credentials
+                    .iter()
+                    .find(|c| &c.id == id && c.workspace_id == workspace)
+            });
             if payload.id.is_some() && existing.is_none() {
                 anyhow::bail!("A2A credential no longer exists");
             }
@@ -63,6 +71,7 @@ pub async fn remote_credential_save(payload: SaveCredential) -> CmdResult<Remote
                 },
             };
             let credential = RemoteAgentCredential {
+                workspace_id: workspace.clone(),
                 id: payload.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 name,
                 kind: payload.kind,
@@ -81,10 +90,17 @@ pub async fn remote_credential_save(payload: SaveCredential) -> CmdResult<Remote
 
 #[tauri::command]
 pub async fn remote_credential_delete(id: String) -> CmdResult {
+    let workspace = crate::utils::dirs::active_workspace_id();
     BaseConfig::workrun()
         .await
         .with_data_modify(move |mut config| async move {
-            config.remote_agent_credentials.retain(|c| c.id != id);
+            anyhow::ensure!(
+                workspace == crate::utils::dirs::active_workspace_id(),
+                "Workspace changed"
+            );
+            config
+                .remote_agent_credentials
+                .retain(|c| c.id != id || c.workspace_id != workspace);
             config.save_config().await?;
             Ok((config, ()))
         })
@@ -106,6 +122,9 @@ pub async fn remote_agent_test_connection(
 #[tauri::command]
 pub async fn remote_tasks_list(run_id: String) -> CmdResult<Vec<crate::module::workflow::RemoteTaskRecord>> {
     let pool = crate::core::db::DBManager::global().pool().stringify_err()?;
+    crate::module::run_history::RunHistoryStore::ensure_active_workspace(&run_id)
+        .await
+        .stringify_err()?;
     crate::module::workflow::list_remote_tasks(&pool, &run_id)
         .await
         .stringify_err()
@@ -116,6 +135,16 @@ pub async fn remote_task_manage(
     id: String,
     operation: crate::module::workflow::RemoteTaskOperation,
 ) -> CmdResult<crate::module::workflow::RemoteTaskRecord> {
+    let pool = crate::core::db::DBManager::global().pool().stringify_err()?;
+    let run: String = sqlx::query_scalar("SELECT run_id FROM remote_tasks WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&pool)
+        .await
+        .stringify_err()?
+        .ok_or("Remote task not found")?;
+    crate::module::run_history::RunHistoryStore::ensure_active_workspace(&run)
+        .await
+        .stringify_err()?;
     let config = BaseConfig::workrun().await.data_arc();
     crate::module::workflow::remote_task_operation(&id, operation, &config)
         .await

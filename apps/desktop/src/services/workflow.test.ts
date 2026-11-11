@@ -6,6 +6,8 @@ import { fetchApi } from '@/services/fetch-api';
 
 import configurationExamplesSource from '../../src-tauri/src/module/assistant/workflow_agent/reference/configuration-examples.json?raw';
 import {
+  createWorkflow,
+  publishWorkflow,
   deleteWorkflow,
   getExecutableWorkflow,
   getWorkflow,
@@ -37,7 +39,7 @@ describe('workflowDocumentFromSnapshot', () => {
 vi.mock('@tauri-apps/api/core', () => ({ Channel: class {}, invoke: vi.fn() }));
 vi.mock('@/lib/constant', () => ({ isTeamMode: vi.fn() }));
 vi.mock('@/services/fetch-api', () => ({
-  fetchApi: { delete: vi.fn(), get: vi.fn() },
+  fetchApi: { delete: vi.fn(), get: vi.fn(), post: vi.fn(), patch: vi.fn() },
 }));
 
 describe('deleteWorkflow', () => {
@@ -174,5 +176,48 @@ it('passes the checked revision to the native personal save without changing leg
   expect(invoke).toHaveBeenLastCalledWith('update_workflow', {
     id: 'one',
     document,
+  });
+});
+
+describe('workflow authoring and publication boundaries', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const document = {
+    nodes: [],
+    edges: [],
+    settings: {
+      name: 'Same workflow name',
+      mode: 'task',
+      inputSchema: { fields: [] },
+    },
+  } as unknown as WorkflowDocument;
+  it('saves the existing Team draft by ID without creating another workflow or release', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    await updateWorkflow('workflow-one', document);
+    expect(fetchApi.patch).toHaveBeenCalledWith('/workflow/workflow-one', {
+      document,
+    });
+    expect(fetchApi.post).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('publishes a version under the existing workflow ID', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    await publishWorkflow('workflow-one', '1.0.0', 'Release');
+    expect(fetchApi.post).toHaveBeenCalledWith(
+      '/workflow/workflow-one/releases',
+      { version: '1.0.0', releaseNote: 'Release' },
+    );
+    expect(fetchApi.patch).not.toHaveBeenCalled();
+  });
+  it('keeps Personal creation and saving in native storage', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(false);
+    await createWorkflow(document);
+    await updateWorkflow('workflow-one', document);
+    expect(invoke).toHaveBeenCalledWith('create_workflow', { document });
+    expect(invoke).toHaveBeenCalledWith('update_workflow', {
+      id: 'workflow-one',
+      document,
+    });
+    expect(fetchApi.post).not.toHaveBeenCalled();
+    expect(fetchApi.patch).not.toHaveBeenCalled();
   });
 });

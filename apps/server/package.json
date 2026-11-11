@@ -6,6 +6,7 @@
   "license": "MIT",
   "scripts": {
     "build": "nest build",
+    "db:remove-app-name-index": "node scripts/remove-app-name-index.mjs",
     "start": "nest start",
     "dev": "cross-env NODE_ENV=development nest start --watch",
     "start:debug": "cross-env NODE_ENV=development nest start --debug --watch",

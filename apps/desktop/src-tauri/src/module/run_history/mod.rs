@@ -53,6 +53,27 @@ mod tests {
     use super::{RunStatus, claim_next_queued_run_from_pool, finish_execution_in_pool};
     use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 
+    #[tokio::test]
+    #[ignore = "changes process-global account state; run separately with --ignored --test-threads=1"]
+    async fn team_startup_without_login_initializes_ipc_without_reading_business_storage() {
+        use crate::utils::dirs::{self, WorkspaceScope};
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                dirs::initialize_active_workspace_scope(WorkspaceScope::Personal);
+            }
+        }
+        let _restore = Restore;
+        dirs::initialize_active_workspace_scope(dirs::default_team_workspace_scope());
+        assert!(!dirs::workspace_available());
+        assert!(dirs::app_home_dir().is_err());
+        crate::module::ipc::IpcServer::global().start().await.unwrap();
+        assert!(crate::module::ipc::IpcServer::global().create_session().await.is_err());
+        let pool = SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+        pool.close().await;
+        assert!(claim_next_queued_run_from_pool(&pool, true).await.unwrap().is_none());
+    }
+
     async fn pending_action_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
             // An in-memory SQLite database belongs to one connection. Keeping

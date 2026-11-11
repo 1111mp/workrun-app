@@ -299,3 +299,65 @@ it('blocks both launch paths while entry run reconstruction is pending', async (
     await view.close();
   }
 });
+
+it('exposes a queryable run ID only after preparation and native record creation', async () => {
+  const view = await mount([]);
+  let finishPreparation!: (dsl: unknown) => void;
+  let finishCreation!: () => void;
+  vi.mocked(prepareWorkflowProcessApps).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finishPreparation = resolve;
+    }),
+  );
+  vi.mocked(startBackgroundWorkflowRun).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finishCreation = () => resolve(undefined as never);
+    }),
+  );
+  try {
+    await act(async () => {
+      view.hook.startWorkflowRun({});
+    });
+    await vi.waitFor(() =>
+      expect(prepareWorkflowProcessApps).toHaveBeenCalled(),
+    );
+    expect(useWorkflowRunStore.getState().projection.runId).toBeTruthy();
+    expect(view.hook.runId).toBeUndefined();
+    expect(startBackgroundWorkflowRun).not.toHaveBeenCalled();
+    await act(async () => {
+      finishPreparation({ nodes: [], edges: [] });
+    });
+    expect(startBackgroundWorkflowRun).toHaveBeenCalledOnce();
+    expect(view.hook.runId).toBeUndefined();
+    await act(async () => {
+      finishCreation();
+    });
+    expect(view.hook.runId).toBe(
+      useWorkflowRunStore.getState().projection.runId,
+    );
+  } finally {
+    await view.close();
+  }
+});
+
+it('does not dispatch execution when preparing a required Tool App fails', async () => {
+  const view = await mount([]);
+  vi.mocked(prepareWorkflowProcessApps).mockRejectedValueOnce(
+    new Error('Tool App download failed'),
+  );
+  try {
+    await act(async () => {
+      view.hook.startWorkflowRun({});
+    });
+    await vi.waitFor(() =>
+      expect(useWorkflowRunStore.getState().projection.status).toBe('failed'),
+    );
+    expect(startBackgroundWorkflowRun).not.toHaveBeenCalled();
+    expect(view.hook.runId).toBeUndefined();
+    expect(useWorkflowRunStore.getState().projection.error).toBe(
+      'Tool App download failed',
+    );
+  } finally {
+    await view.close();
+  }
+});

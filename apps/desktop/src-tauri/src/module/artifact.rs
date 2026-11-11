@@ -41,7 +41,7 @@ impl ArtifactStore {
             WorkspaceScope::Personal
         } else {
             WorkspaceScope::Team {
-                team_id: workspace.strip_prefix("team:").context("Invalid workspace ID")?.into(),
+                account_key: workspace.strip_prefix("team:").context("Invalid workspace ID")?.into(),
             }
         };
         Ok(Self::new(dirs::workspace_paths(scope)?.artifacts_dir()))

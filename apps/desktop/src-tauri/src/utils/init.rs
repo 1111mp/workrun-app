@@ -133,7 +133,9 @@ pub async fn init_config() -> Result<()> {
     };
     if let Some(scope) = scope {
         dirs::initialize_active_workspace_scope(scope);
-        ensure_active_workspace_directories().await?;
+        if dirs::workspace_available() {
+            ensure_active_workspace_directories().await?;
+        }
     }
 
     AsyncHandler::spawn(|| async {

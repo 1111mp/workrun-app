@@ -86,6 +86,9 @@ pub struct ProviderHeader {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCredential {
+    // Team saves replace this with the verified account's workspace.
+    #[serde(default = "crate::utils::dirs::personal_credential_workspace")]
+    pub workspace_id: String,
     pub provider: ModelProvider,
     #[serde(default)]
     pub base_url: Option<String>,
@@ -372,12 +375,13 @@ impl IWorkrun {
                 let provider = credential_provider(&credential.provider);
                 let mut credential = credential.clone();
                 credential.provider = provider.clone();
+                credential.workspace_id = dirs::active_workspace_id();
                 credential.api_key = credential.api_key.filter(|key| !key.trim().is_empty());
                 credential.base_url = credential.base_url.filter(|url| !url.trim().is_empty());
                 if let Some(existing) = self
                     .provider_credentials
                     .iter_mut()
-                    .find(|item| item.provider == provider)
+                    .find(|item| item.provider == provider && item.workspace_id == dirs::active_workspace_id())
                 {
                     *existing = credential;
                 } else {
@@ -409,7 +413,9 @@ impl IWorkrun {
 
     pub fn credential_for(&self, provider: &ModelProvider) -> Option<&ProviderCredential> {
         let provider = credential_provider(provider);
-        self.provider_credentials.iter().find(|item| item.provider == provider)
+        self.provider_credentials.iter().find(|item| {
+            item.provider == provider && item.workspace_id == crate::module::team_model::credential_workspace()
+        })
     }
 
     /// get app log level
