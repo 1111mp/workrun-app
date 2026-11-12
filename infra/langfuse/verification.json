@@ -1,0 +1,81 @@
+{
+  "status": "native_adk_adaptation_implemented",
+  "date": "2026-11-12",
+  "exporter": "existing_adk_telemetry_grpc",
+  "spans": "ADK native model and tool spans; Workrun conversation/workflow/node boundaries",
+  "fixtures": {
+    "model": {
+      "traceId": "055948d153b13ae1207592f015482a6e",
+      "observationCount": 2,
+      "names": [
+        "LLM · native-probe",
+        "native.adk.probe"
+      ],
+      "rootObservationId": "c031e83dcc62df4c",
+      "fixture": true,
+      "generationCount": 1,
+      "syntheticTokens": 7,
+      "inputOutputVerified": true
+    },
+    "tool": {
+      "traceId": "196819de54bf5cc0c121ae25627f2834",
+      "observationCount": 2,
+      "names": [
+        "工具 · upload",
+        "文件上传"
+      ],
+      "rootObservationId": "ef639a48bd9c7622",
+      "fixture": true
+    },
+    "workflow": {
+      "traceId": "f2c580210fe5187a89e78acb957c1407",
+      "observationCount": 4,
+      "names": [
+        "人工确认",
+        "恢复执行",
+        "人工确认",
+        "原生观测验收"
+      ],
+      "rootObservationId": "110c5e4f089ddb9c",
+      "fixture": true,
+      "singleTrace": true,
+      "nodeStates": [
+        "completed",
+        "waiting_for_input"
+      ],
+      "selectedRoute": "approved"
+    },
+    "homepage": {
+      "traceId": "686280ecedbe7ffdf4cb4be8e7ae131b",
+      "observationCount": 5,
+      "names": [
+        "LLM · conversation",
+        "工具 · report_progress",
+        "LLM · conversation",
+        "LLM · intent",
+        "对话"
+      ],
+      "rootObservationId": "d9aa470e162bd4a8",
+      "fixture": true,
+      "generationCount": 3,
+      "syntheticTokens": 45,
+      "inputOutputVerified": true
+    }
+  },
+  "checks": {
+    "rustPassed": 637,
+    "rustIgnored": 28,
+    "serverTestsPassed": 36,
+    "settingsTestsPassed": 6,
+    "desktopTypecheck": "passed",
+    "serverTypecheck": "passed"
+  },
+  "paidProviderCalls": 0,
+  "newDatabaseTables": 0,
+  "realOrderWorkflowRetested": false,
+  "limitations": [
+    "Real Team model/order workflow still requires validation on updated desktop and Server",
+    "Graph represents execution, not Workrun canvas coordinates",
+    "Private reasoning and binary bodies are omitted; existing redaction applies"
+  ]
+}

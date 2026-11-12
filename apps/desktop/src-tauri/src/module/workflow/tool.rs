@@ -177,6 +177,16 @@ impl Tool for ManagedTool {
     }
 
     async fn execute(&self, context: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+        crate::core::telemetry_langfuse::tool(
+            &self.definition.display_name,
+            &args,
+            self.execute_observed(context, args.clone()),
+        )
+        .await
+    }
+}
+impl ManagedTool {
+    async fn execute_observed(&self, context: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
         let journal = super::tool_journal::CURRENT.try_with(Arc::clone).ok();
         if let Some(journal) = &journal {
             journal
@@ -642,6 +652,35 @@ mod tests {
             2,
         );
         node.execute_stream(&context).collect().await
+    }
+
+    #[tokio::test]
+    #[ignore = "local Langfuse required; in-memory tool fixture, no external effects"]
+    async fn export_native_tool_observation() {
+        use tracing::{Instrument, instrument::WithSubscriber};
+        let subscriber = crate::core::telemetry::subscriber("http://127.0.0.1:4317").unwrap();
+        crate::core::telemetry::test_capture(true);
+        let session = uuid::Uuid::new_v4().to_string();
+        println!("tool_probe={session}");
+        let origin = crate::module::model_usage::CallContext {
+            workspace_id: "personal".into(),
+            session_id: Some(session.clone()),
+            run_id: Some(session.clone()),
+            node_id: Some("agent".into()),
+            ..Default::default()
+        };
+        async {
+            let root=tracing::info_span!("workrun.tool.probe","otel.name"="文件上传","langfuse.observation.type"="chain","langfuse.session.id"=%session);
+            crate::module::model_usage::scope(origin,crate::core::telemetry_langfuse::node("agent","文件上传",async {
+                let pool=remote_tasks::test_pool().await;
+                let uploads=Arc::new(AtomicU32::new(0));
+                let node=upload_agent(pool,uploads.clone(),upload_model(false),false);
+                assert!(execute_upload(&node).await.into_iter().all(|event|event.is_ok()));
+                assert_eq!(uploads.load(Ordering::SeqCst),1);
+            })).instrument(root).await;
+        }.with_subscriber(subscriber).await;
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        crate::core::telemetry::test_capture(false);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -3,7 +3,7 @@ import { FieldGroup } from '@workspace/ui/components';
 import { cn } from '@workspace/ui/lib/utils';
 import { Power } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useEffectEvent } from 'react';
+import { useEffect, useEffectEvent, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
@@ -22,7 +22,27 @@ import { WorkspaceSettings } from './workspace-settings';
 
 function SettingsPage() {
   const config = useWorkrunStore((s) => s.config);
+  const userId = useWorkrunStore((s) => s.teamUser?.id);
+  // Mount the form only after hydration and remount on an account/workspace
+  // change. Otherwise react-hook-form retains the previous scope's defaults.
+  if (!config) return null;
+  const scope = JSON.stringify([
+    config.workspace_mode,
+    config.team?.server_url,
+    userId,
+  ]);
+  return <SettingsFormPage key={scope} config={config} />;
+}
+
+function SettingsFormPage({ config }: { config: IWorkrunConfig }) {
   const updateConfig = useWorkrunStore((s) => s.updateConfig);
+  const active = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
 
   const confirm = useConfirm();
   const { i18n, t } = useTranslation();
@@ -42,6 +62,7 @@ function SettingsPage() {
       app_log_max_size: config?.app_log_max_size ?? 128,
       app_log_max_count: config?.app_log_max_count ?? 8,
       otlp_endpoint: config?.otlp_endpoint ?? '',
+      otlp_capture_content: config?.otlp_capture_content ?? false,
       // model
       provider_credentials: config?.provider_credentials?.length
         ? config.provider_credentials.map((credential) => ({
@@ -67,18 +88,11 @@ function SettingsPage() {
     },
   });
 
-  useEffect(() => {
-    const current = useWorkrunStore.getState().config;
-    form.setValue(
-      'summary_model_profile_id',
-      (current?.workspace_mode === 'team'
-        ? current.team?.summary_model_id
-        : current?.summary_model_profile_id) ?? '',
-    );
-  }, [config?.workspace_mode, config?.team?.server_url, form]);
-
   const onSubmit = useEffectEvent(async (values: SettingsForm) => {
-    const settings: IWorkrunConfig = {
+    // Validation is asynchronous: discard a pending save from a form whose
+    // account/workspace was replaced before validation completed.
+    if (!active.current) return;
+    const candidate: IWorkrunConfig = {
       locale: values.locale,
       theme: values.theme,
       // general
@@ -93,6 +107,7 @@ function SettingsPage() {
       app_log_max_size: values.app_log_max_size,
       app_log_max_count: values.app_log_max_count,
       otlp_endpoint: values.otlp_endpoint,
+      otlp_capture_content: values.otlp_capture_content,
       // model
       provider_credentials: values.provider_credentials,
       ...(config?.workspace_mode === 'team' && config.team
@@ -105,6 +120,17 @@ function SettingsPage() {
         : { summary_model_profile_id: values.summary_model_profile_id }),
     };
 
+    // Autosave only edited fields. A log/telemetry change must never submit
+    // default or stale model credentials alongside it.
+    const settings: Partial<IWorkrunConfig> = {};
+    for (const key of Object.keys(candidate) as Array<keyof IWorkrunConfig>) {
+      const formKey = key === 'team' ? 'summary_model_profile_id' : key;
+      if (form.getFieldState(formKey as keyof SettingsForm).isDirty) {
+        settings[key] = candidate[key] as never;
+      }
+    }
+    if (!Object.keys(settings).length) return;
+
     if (settings.locale && settings.locale !== config?.locale) {
       await i18n.changeLanguage(settings.locale);
     }
@@ -113,11 +139,15 @@ function SettingsPage() {
       await applyPendingTheme(settings.theme);
     }
 
+    if (!active.current) return;
     await updateConfig(settings);
 
     if (
-      settings.otlp_endpoint &&
-      settings.otlp_endpoint !== config?.otlp_endpoint
+      (settings.otlp_endpoint !== undefined &&
+        settings.otlp_endpoint !== (config.otlp_endpoint ?? '')) ||
+      (settings.otlp_capture_content !== undefined &&
+        settings.otlp_capture_content !==
+          (config.otlp_capture_content ?? false))
     ) {
       // The endpoint is persisted before offering a restart so accepting it
       // cannot restart the process before the new collector is available.

@@ -76,6 +76,7 @@ struct Call {
     record: Value,
     elapsed: Instant,
     finished: bool,
+    trace: crate::core::telemetry_langfuse::ModelTrace,
 }
 
 impl Call {
@@ -94,6 +95,7 @@ impl Call {
     }
 
     fn close(&mut self, status: &str) {
+        self.trace.finish(status);
         self.record["status"] = json!(status);
         self.record["endedAt"] = json!(chrono::Utc::now().to_rfc3339());
         self.record["durationMs"] = json!(self.elapsed.elapsed().as_millis().min(i64::MAX as u128) as i64);
@@ -186,7 +188,9 @@ async fn observe_with_writer(
     let largest_tool_results = tool_results.iter().take(20).map(|(name, (count, chars))| {
         json!({"name":name.chars().take(128).collect::<String>(),"responses":count,"chars":chars})
     }).collect::<Vec<_>>();
+    let trace = crate::core::telemetry_langfuse::ModelTrace::new(&id, &request, &context);
     let mut call = Call {
+        trace: trace.clone(),
         writer,
         record: json!({
             "id": id, "context": context, "model": model.name(), "source": "provider",
@@ -201,7 +205,7 @@ async fn observe_with_writer(
     };
     // Enqueue synchronously, but never await the database on the model path.
     call.enqueue();
-    let source = match model.generate_content(request, stream).await {
+    let source = match trace.scope(model.generate_content(request, stream)).await {
         Ok(source) => {
             // Adapter readiness is not time to first token; non-streaming
             // adapters may have already waited for the complete response here.
@@ -220,9 +224,10 @@ async fn observe_with_writer(
             let mut source = source;
             let mut terminal = false;
             let mut failed = false;
-            while let Some(response) = source.next().await {
+            while let Some(response) = trace.scope(source.next()).await {
                 match &response {
                     Ok(response) => {
+                        trace.response(response);
                         if call.record.get("firstResponseMs").is_none() && response.content.as_ref().is_some_and(|c| !c.parts.is_empty()) {
                             call.record["firstResponseMs"] = json!(call.elapsed.elapsed().as_millis().min(i64::MAX as u128) as i64);
                         }

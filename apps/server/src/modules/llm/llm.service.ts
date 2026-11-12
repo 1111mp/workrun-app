@@ -25,6 +25,7 @@ import {
   type ApiProtocol,
   type InferenceParameters,
 } from './llm.schemas';
+import { ChatUsageStream } from './llm.stream';
 
 @Injectable()
 export class LlmService {
@@ -346,15 +347,17 @@ export class LlmService {
       downstream.setHeader('Cache-Control', 'no-store');
       downstream.setHeader('X-Accel-Buffering', 'no');
       downstream.flushHeaders();
-      // No token parsing or re-encoding: preserve tool deltas and usage tails.
-      // pipeline applies backpressure; closing the client aborts the upstream fetch.
-      await pipeline(
-        Readable.fromWeb(
-          upstream.body as unknown as NodeReadableStream<Uint8Array>,
-        ),
-        downstream,
-        { signal: abort.signal },
+      const source = Readable.fromWeb(
+        upstream.body as unknown as NodeReadableStream<Uint8Array>,
       );
+      // ADK expects usage-only Chat frames to have choices: [].
+      if (protocol === 'chat_completions' && parameters.stream) {
+        await pipeline(source, new ChatUsageStream(), downstream, {
+          signal: abort.signal,
+        });
+      } else {
+        await pipeline(source, downstream, { signal: abort.signal });
+      }
     } catch (error) {
       abort.abort();
       if (downstream.destroyed) return;

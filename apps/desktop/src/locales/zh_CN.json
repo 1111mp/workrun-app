@@ -1545,6 +1545,8 @@
       "maxCount": "最大日志数量",
       "otlpEndpoint": "OTLP 端点",
       "otlpEndpointDescription": "可选的诊断追踪采集器地址。修改后请重启 Workrun 生效。",
+      "otlpCaptureContent": "导出对话和工作流正文",
+      "otlpCaptureContentDescription": "在追踪中记录模型、工具和节点输入输出，可能包含隐私内容。修改后重启生效。",
       "otlpEndpointPlaceholder": "http://127.0.0.1:4317",
       "fileCount": "个",
       "autoClean": {

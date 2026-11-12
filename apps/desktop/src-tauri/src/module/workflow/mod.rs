@@ -25,6 +25,7 @@ pub(crate) mod saga_scheduler;
 mod state_bridge;
 pub(crate) mod subworkflow;
 mod subworkflow_journal;
+mod telemetry;
 mod tool;
 pub(crate) mod tool_journal;
 
@@ -104,6 +105,10 @@ pub(super) struct ToolStateBinding {
 
 pub(super) fn send_guarded_event(channel: &Channel<StreamEvent>, event: StreamEvent) {
     let _ = channel.send(redact_stream_event(event));
+}
+
+pub(crate) fn trace_input(dsl: &WorkflowDsl, input: &Value) -> Value {
+    visible_input_state(input, &dsl.input_schema.sensitive_fields)
 }
 
 pub(crate) fn redact_event_for_transport(event: StreamEvent) -> StreamEvent {
@@ -1012,6 +1017,7 @@ pub(super) async fn compile_with_path(
 
     let fingerprint = serde_json::to_string(&dsl)?;
     let workflow_id = dsl.id.clone();
+    telemetry::wrap(&mut graph, &dsl, &state);
     let plan = WorkflowPlan {
         workflow_id: dsl.id,
         workflow_name: dsl.name,

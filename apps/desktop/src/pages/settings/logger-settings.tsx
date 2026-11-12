@@ -19,6 +19,7 @@ import {
   ItemContent,
   ItemTitle,
   Separator,
+  Switch,
 } from '@workspace/ui/components';
 import { ChevronRightIcon } from 'lucide-react';
 import { Controller, type UseFormReturn } from 'react-hook-form';
@@ -128,6 +129,32 @@ function LoggerSettings({ form }: { form: UseFormReturn<SettingsForm> }) {
                     </ItemActions>
                   </Item>
                 </FieldLabel>
+              </Field>
+            )}
+          />
+          <Separator />
+          <Controller
+            name='otlp_capture_content'
+            control={form.control}
+            render={({ field }) => (
+              <Field>
+                <Item variant='muted' size='sm' className='rounded-none'>
+                  <ItemContent>
+                    <FieldLabel htmlFor='otlp_capture_content'>
+                      {t('settings.log.otlpCaptureContent')}
+                    </FieldLabel>
+                    <p className='text-muted-foreground text-xs'>
+                      {t('settings.log.otlpCaptureContentDescription')}
+                    </p>
+                  </ItemContent>
+                  <ItemActions>
+                    <Switch
+                      id='otlp_capture_content'
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </ItemActions>
+                </Item>
               </Field>
             )}
           />

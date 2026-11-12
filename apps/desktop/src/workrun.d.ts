@@ -73,6 +73,7 @@ interface IWorkrunConfig {
   auto_log_clean?: 0 | 1 | 2 | 3 | 4;
   // OTLP diagnostic export; changes take effect after restarting the app.
   otlp_endpoint?: string;
+  otlp_capture_content?: boolean;
   // model profile
   provider_credentials?: ProviderCredential[];
   summary_model_profile_id?: string;

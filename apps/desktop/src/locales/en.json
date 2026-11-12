@@ -1559,6 +1559,8 @@
       "maxCount": "Max Log Count",
       "otlpEndpoint": "OTLP endpoint",
       "otlpEndpointDescription": "Optional diagnostic trace collector. Restart Workrun after changing this setting.",
+      "otlpCaptureContent": "Export conversation and workflow content",
+      "otlpCaptureContentDescription": "Include model, tool and node inputs/outputs in OTLP traces. May contain private content. Restart to apply.",
       "otlpEndpointPlaceholder": "http://127.0.0.1:4317",
       "fileCount": "File",
       "autoClean": {

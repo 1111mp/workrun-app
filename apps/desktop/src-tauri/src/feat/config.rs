@@ -1,4 +1,3 @@
-#[allow(unused_imports)]
 use crate::config::{BaseConfig, Config, WorkrunPatch};
 use crate::{
     core::{autostart, logger::Logger, tray},
@@ -8,7 +7,6 @@ use crate::{
 use anyhow::Result;
 use bitflags::bitflags;
 
-// Define update flags as bitflags for better performance
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     struct UpdateFlags: u16 {
@@ -17,6 +15,7 @@ bitflags! {
         const LOG_LEVEL = 1 << 2;
         const LOG_FILE = 1 << 3;
         const INITIALIZE_WORKSPACE = 1 << 4;
+        const RESET_TEAM_SESSION = 1 << 5;
     }
 }
 
@@ -28,32 +27,21 @@ pub async fn patch_workrun(patch: &WorkrunPatch, need_save_file: bool) -> Result
             credential.request_headers()?;
         }
     }
-    if patch.workspace_mode.is_some()
-        || patch.team.as_ref().is_some_and(|team| {
-            // Summary selection updates keep the same connection and should not log out.
-            crate::module::team_model::configured_server_changed(&team.server_url)
-        })
-    {
-        crate::module::team_model::clear();
-    }
-    BaseConfig::workrun().await.edit_draft(|s| s.patch_config(patch));
-
+    // Resolve flags before staging: session changes must be compared with the
+    // existing authenticated connection, not with the updated configuration.
     let update_flags = determine_update_flags(patch);
     logging!(debug, Type::Setup, "Determined update flags: {:?}", update_flags);
-    let process_flag_result: std::result::Result<(), anyhow::Error> = {
-        process_terminated_flags(update_flags, patch).await?;
-        Ok(())
-    };
 
-    if let Err(err) = process_flag_result {
-        BaseConfig::workrun().await.discard();
-        return Err(err);
+    let workrun = BaseConfig::workrun().await;
+    workrun.edit_draft(|config| config.patch_config(patch));
+    if let Err(error) = process_update_flags(update_flags).await {
+        workrun.discard();
+        return Err(error);
     }
-    BaseConfig::workrun().await.apply();
+    workrun.apply();
     if need_save_file {
-        let workrun_data = BaseConfig::workrun().await.data_arc();
         logging!(debug, Type::Setup, "Saving Workrun configuration to file...");
-        workrun_data.save_config().await?;
+        workrun.data_arc().save_config().await?;
     }
     Ok(())
 }
@@ -84,10 +72,22 @@ fn determine_update_flags(patch: &WorkrunPatch) -> UpdateFlags {
         update_flags.insert(UpdateFlags::INITIALIZE_WORKSPACE);
     }
 
+    if patch.workspace_mode.is_some()
+        || patch.team.as_ref().is_some_and(|team| {
+            // Changing only the summary model keeps the authenticated connection.
+            crate::module::team_model::configured_server_changed(&team.server_url)
+        })
+    {
+        update_flags.insert(UpdateFlags::RESET_TEAM_SESSION);
+    }
+
     update_flags
 }
 
-async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatch) -> Result<()> {
+async fn process_update_flags(update_flags: UpdateFlags) -> Result<()> {
+    // Side effects consume merged settings so a partial patch cannot reset
+    // another field (for example log count when only log size changed).
+    let config = BaseConfig::workrun().await.latest_arc();
     if update_flags.contains(UpdateFlags::LAUNCH) {
         autostart::update_launch().await?;
     }
@@ -95,15 +95,21 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatc
         tray::Tray::global().update_menu().await?;
     }
     if update_flags.contains(UpdateFlags::LOG_LEVEL) {
-        Logger::global().update_log_level(patch.get_log_level())?;
+        Logger::global().update_log_level(config.get_log_level())?;
     }
     if update_flags.contains(UpdateFlags::LOG_FILE) {
-        let log_max_size = patch.app_log_max_size.unwrap_or(128);
-        let log_max_count = patch.app_log_max_count.unwrap_or(8);
+        let log_max_size = config.app_log_max_size.unwrap_or(128);
+        let log_max_count = config.app_log_max_count.unwrap_or(8);
         Logger::global().update_log_config(log_max_size, log_max_count).await?;
     }
+    // Clear the old account before choosing/reloading its replacement workspace.
+    // Do this after the independent fallible updates, avoiding an early logout
+    // when a logger/tray update has already failed.
+    if update_flags.contains(UpdateFlags::RESET_TEAM_SESSION) {
+        crate::module::team_model::clear();
+    }
     if update_flags.contains(UpdateFlags::INITIALIZE_WORKSPACE)
-        && let Some(workspace_mode) = &patch.workspace_mode
+        && let Some(workspace_mode) = &config.workspace_mode
     {
         let scope = match workspace_mode {
             crate::config::WorkspaceMode::Team => dirs::default_team_workspace_scope(),
@@ -121,16 +127,45 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &WorkrunPatc
     Ok(())
 }
 
-impl WorkrunPatch {
-    fn get_log_level(&self) -> log::LevelFilter {
-        match self.app_log_level.as_deref().map(str::to_lowercase).as_deref() {
-            Some("silent") => log::LevelFilter::Off,
-            Some("error") => log::LevelFilter::Error,
-            Some("warn") => log::LevelFilter::Warn,
-            Some("info") => log::LevelFilter::Info,
-            Some("debug") => log::LevelFilter::Debug,
-            Some("trace") => log::LevelFilter::Trace,
-            _ => log::LevelFilter::Info,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn patch(value: serde_json::Value) -> WorkrunPatch {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn metadata_and_telemetry_updates_do_not_change_runtime_services() {
+        assert_eq!(determine_update_flags(&patch(json!({}))), UpdateFlags::empty());
+        assert_eq!(
+            determine_update_flags(&patch(json!({"otlp_endpoint":"http://localhost:4317","theme":"dark"}))),
+            UpdateFlags::empty()
+        );
+    }
+
+    #[test]
+    fn workspace_changes_also_reset_the_authenticated_team_connection() {
+        for mode in ["personal", "team"] {
+            assert_eq!(
+                determine_update_flags(&patch(json!({"workspace_mode":mode}))),
+                UpdateFlags::INITIALIZE_WORKSPACE | UpdateFlags::RESET_TEAM_SESSION
+            );
         }
+    }
+
+    #[test]
+    fn independent_changes_combine_without_workspace_side_effects() {
+        assert_eq!(
+            determine_update_flags(&patch(
+                json!({"enable_auto_launch":false,"locale":"zh-CN","app_log_level":"debug","app_log_max_size":256})
+            )),
+            UpdateFlags::LAUNCH | UpdateFlags::LOCALE | UpdateFlags::LOG_LEVEL | UpdateFlags::LOG_FILE
+        );
+        assert_eq!(
+            determine_update_flags(&patch(json!({"app_log_max_count":3}))),
+            UpdateFlags::LOG_FILE
+        );
     }
 }

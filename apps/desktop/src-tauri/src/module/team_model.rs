@@ -36,6 +36,8 @@ pub(crate) struct ModelBinding {
 struct Session {
     server: String,
     owner: String,
+    user_name: Option<String>,
+    user_email: Option<String>,
     token: String,
     cancel: CancellationToken,
 }
@@ -145,9 +147,20 @@ pub(crate) async fn set_session(server: String, token: Option<String>) -> Result
             .filter(|id| !id.is_empty())
             .context("Workrun Server returned no user identity")?
             .to_owned();
-        Ok::<_, anyhow::Error>(owner)
+        let user = &body["payload"]["user"];
+        Ok::<_, anyhow::Error>((
+            owner,
+            user["name"]
+                .as_str()
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_owned),
+            user["email"]
+                .as_str()
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_owned),
+        ))
     };
-    let owner =
+    let (owner, user_name, user_email) =
         tokio::select! { result = verify => result?, _ = cancel.cancelled() => bail!("Team authentication changed") };
     let mut state = AUTH.write();
     ensure!(
@@ -158,6 +171,8 @@ pub(crate) async fn set_session(server: String, token: Option<String>) -> Result
         crate::utils::dirs::initialize_active_workspace_scope(crate::utils::dirs::team_account_scope(&server, &owner));
     }
     state.session = Some(Session {
+        user_name,
+        user_email,
         server,
         owner,
         token,
@@ -431,6 +446,10 @@ impl Llm for TeamModel {
 pub(crate) struct TeamOwner {
     pub server: String,
     pub user_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_email: Option<String>,
 }
 tokio::task_local! { static EXPECTED_OWNER: Option<TeamOwner>; }
 
@@ -450,6 +469,8 @@ pub(crate) fn owner_for(workspace: &str) -> Result<Option<TeamOwner>> {
     Ok(Some(TeamOwner {
         server: session.server.clone(),
         user_id: session.owner.clone(),
+        user_name: session.user_name.clone(),
+        user_email: session.user_email.clone(),
     }))
 }
 
@@ -471,7 +492,25 @@ pub(crate) fn with_owner<T>(
 ) -> impl std::future::Future<Output = T> {
     // Box before building the scope future. An async wrapper would retain the
     // entire graph future inline, multiplying debug stack frames at each layer.
-    EXPECTED_OWNER.scope(owner, Box::pin(future))
+    let future = Box::pin(future);
+    // Capture profile data once for this execution, including persisted owners on resume.
+    async move {
+        let user = if let Some(owner) = &owner {
+            crate::core::telemetry_langfuse::User::team(owner)
+        } else if !crate::utils::dirs::is_team_workspace() && crate::APP_HANDLE.get().is_some() {
+            // Headless execution has no desktop profile; telemetry must not initialize the UI.
+            let config = BaseConfig::workrun().await.data_arc();
+            crate::core::telemetry_langfuse::User::personal(
+                config
+                    .local_profile
+                    .as_ref()
+                    .map(|profile| profile.display_name.as_str()),
+            )
+        } else {
+            crate::core::telemetry_langfuse::User::default()
+        };
+        crate::core::telemetry_langfuse::user(user, EXPECTED_OWNER.scope(owner, future)).await
+    }
 }
 
 pub(crate) fn clear() {
@@ -503,6 +542,8 @@ pub(crate) fn stored_owner(workspace: &str) -> Option<TeamOwner> {
         AUTH.read().session.as_ref().map(|session| TeamOwner {
             server: session.server.clone(),
             user_id: session.owner.clone(),
+            user_name: session.user_name.clone(),
+            user_email: session.user_email.clone(),
         })
     })
 }

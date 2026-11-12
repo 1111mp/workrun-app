@@ -273,6 +273,8 @@ pub struct IWorkrun {
 
     /// Optional OTLP/gRPC collector endpoint used for diagnostic trace export.
     pub otlp_endpoint: Option<String>,
+    /// Opt-in model/tool/node content export; restart to apply.
+    pub otlp_capture_content: Option<bool>,
 
     /// i18n
     pub locale: Option<String>,
@@ -310,6 +312,8 @@ pub struct WorkrunPatch {
     pub app_log_max_size: Option<u64>,
     pub app_log_max_count: Option<usize>,
     pub otlp_endpoint: Option<String>,
+    /// Opt-in model/tool/node content export; restart to apply.
+    pub otlp_capture_content: Option<bool>,
     pub locale: Option<String>,
     pub theme: Option<String>,
     pub enable_auto_launch: Option<bool>,
@@ -321,7 +325,7 @@ pub struct WorkrunPatch {
 impl IWorkrun {
     pub async fn new() -> Self {
         match dirs::workrun_path() {
-            Ok(path) => match help::read_yaml::<Self>(&path).await {
+            Ok(path) => match Self::load_file(&path).await {
                 Ok(config) => config,
                 Err(err) => {
                     logging!(error, Type::Config, "{err}");
@@ -333,6 +337,20 @@ impl IWorkrun {
                 Self::template()
             },
         }
+    }
+
+    async fn load_file(path: &std::path::PathBuf) -> anyhow::Result<Self> {
+        // On first launch the main configuration has not been saved yet.
+        if !tokio::fs::try_exists(path).await? {
+            logging!(
+                info,
+                Type::Config,
+                "configuration not created yet, using defaults: {}",
+                path.display()
+            );
+            return Ok(Self::template());
+        }
+        help::read_yaml(path).await
     }
 
     pub fn template() -> Self {
@@ -403,6 +421,7 @@ impl IWorkrun {
         patch!(app_log_max_size);
         patch!(app_log_max_count);
         patch!(otlp_endpoint);
+        patch!(otlp_capture_content);
         patch!(locale);
         patch!(theme);
         patch!(enable_auto_launch);
@@ -515,5 +534,23 @@ mod effort_tests {
         assert_eq!(options("claude-opus-5"), &["low", "medium", "high"]);
         assert_eq!(options("deepseek-v4-flash"), &["high", "max"]);
         assert_eq!(options("gemini-3.1-pro-preview"), &["low", "high"]);
+    }
+}
+
+#[cfg(test)]
+mod missing_config_tests {
+    use super::IWorkrun;
+
+    #[tokio::test]
+    async fn missing_config_uses_template_but_invalid_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workrun.yaml");
+        let config = IWorkrun::load_file(&path).await.unwrap();
+        assert!(!config.onboarding_completed);
+        assert!(config.workspace_mode.is_none());
+        assert!(!path.exists());
+        tokio::fs::write(&path, "[invalid yaml").await.unwrap();
+        assert!(IWorkrun::load_file(&path).await.is_err());
+        assert!(IWorkrun::load_file(&dir.path().to_path_buf()).await.is_err());
     }
 }

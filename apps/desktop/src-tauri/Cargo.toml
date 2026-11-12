@@ -54,6 +54,9 @@ ignore = { workspace = true }
 jsonschema = "0.58.6"
 log = { workspace = true }
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
+# Standard context propagation and attributes on ADK-owned spans; no second SDK.
+opentelemetry = { version = "0.32.0", features = ["trace"] }
+tracing-opentelemetry = "0.33.0"
 open = "5.4.4"
 parking_lot = { workspace = true }
 regex = "1.13.1"

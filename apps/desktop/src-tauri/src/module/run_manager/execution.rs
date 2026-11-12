@@ -76,7 +76,7 @@ async fn execute_owned_workflow(run_id: &str, workflow_id: &str, mut runtime: Va
     let session = workflow_session_from_runtime(&runtime)?;
     let workflow_version = runtime.get("releaseVersion").and_then(Value::as_str).unwrap_or("draft");
     let resume = runtime.get("resume").and_then(Value::as_bool).unwrap_or(false);
-    let tool_confirmation = runtime
+    let tool_confirmation: Option<ToolConfirmationDecisionRequest> = runtime
         .get("toolConfirmation")
         .filter(|value| !value.is_null())
         .cloned()
@@ -102,13 +102,36 @@ async fn execute_owned_workflow(run_id: &str, workflow_id: &str, mut runtime: Va
         .insert(run_id.to_string(), cancellation.clone());
     // Keep the root span attached across await points so ADK's model and tool
     // spans become children of the durable Workrun run they belong to.
+    let name = runtime
+        .pointer("/dsl/name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(workflow_id);
     let run_span = tracing::info_span!(
         "workrun.workflow.run",
+        "otel.name"=name,"langfuse.trace.name"=name,"langfuse.observation.type"="chain",
+        "langfuse.session.id"=tracing::field::Empty,
+        "langfuse.observation.input"=tracing::field::Empty,
+        "langfuse.observation.metadata.runId"=run_id,
+        "langfuse.observation.metadata.turnId"=tracing::field::Empty,
+        "langfuse.observation.metadata.workflowId"=workflow_id,
+        "langfuse.observation.metadata.resumed"=resume,
+        "langfuse.observation.metadata.toolApproval"=%json!(tool_confirmation.as_ref().map(|decision|json!({"approved":decision.approved,"requestedCallId":decision.function_call_id.split("__thought__").next()}))),
+        "langfuse.observation.metadata.phaseStatus"=tracing::field::Empty,
         workrun.run.id = %run_id,
         workrun.workflow.id = %workflow_id,
         workrun.workflow.version = %workflow_version,
         workrun.thread.id = %session.thread_id,
     );
+    if crate::core::telemetry::capture_content()
+        && let Ok(dsl) = serde_json::from_value::<WorkflowDsl>(runtime["dsl"].clone())
+    {
+        let input = workflow_module::trace_input(&dsl, &runtime["initialState"]);
+        run_span.record(
+            "langfuse.observation.input",
+            crate::core::telemetry_langfuse::encoded(&input),
+        );
+    }
     // Attribution is diagnostic: malformed/stale origin data must not stop a run.
     let mut usage_context = runtime
         .get("usageOrigin")
@@ -122,6 +145,17 @@ async fn execute_owned_workflow(run_id: &str, workflow_id: &str, mut runtime: Va
             purpose: "workflow".into(),
             ..Default::default()
         });
+    run_span.record(
+        "langfuse.session.id",
+        usage_context.session_id.as_deref().unwrap_or(run_id),
+    );
+    run_span.record(
+        "langfuse.observation.metadata.turnId",
+        usage_context.turn_id.as_deref().unwrap_or(""),
+    );
+    if let Ok(pool) = crate::core::db::DBManager::global().pool() {
+        crate::core::telemetry::workflow_parent(&pool, run_id, &runtime, &run_span).await;
+    }
     usage_context.run_id = Some(run_id.into());
     usage_context.purpose = "workflow".into();
     usage_context.workflow_path = vec![workflow_id.into()];
@@ -141,8 +175,16 @@ async fn execute_owned_workflow(run_id: &str, workflow_id: &str, mut runtime: Va
             cancellation,
         ),
     )
-    .instrument(run_span)
+    .instrument(run_span.clone())
     .await;
+    if let Ok(pool) = crate::core::db::DBManager::global().pool()
+        && let Ok(Some(status)) = sqlx::query_scalar::<_, String>("SELECT status FROM run_records WHERE id=?")
+            .bind(run_id)
+            .fetch_optional(&pool)
+            .await
+    {
+        run_span.record("langfuse.observation.metadata.phaseStatus", status);
+    }
     RunManager::global().workflow_cancellations.lock().remove(run_id);
     result
 }

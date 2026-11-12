@@ -75,12 +75,17 @@ pub(super) async fn add_local_agent_node(
         model.provider.clone()
     };
     let label = format!("{}/{}", model.id, model.model);
-    let model = instrumented_model(
+    let model = instrumented_model_with_tools(
         create_model(&model, config)?,
         &id,
         &label,
         on_event.clone(),
         Some(&model),
+        tools
+            .iter()
+            .filter(|tool| !tool.display_name.trim().is_empty())
+            .map(|tool| (tool.name.clone(), tool.display_name.clone()))
+            .collect(),
     );
     let mut agent = LlmAgentBuilder::new(id.clone())
         .description(description)
@@ -436,6 +441,7 @@ impl Llm for HeaderOpenAi {
 }
 
 struct InstrumentedLlm {
+    tool_names: HashMap<String, String>,
     inner: Arc<dyn Llm>,
     node_id: String,
     model: String,
@@ -472,9 +478,11 @@ impl Llm for InstrumentedLlm {
                 ),
             );
         }
-        let (call_id, response_stream) =
-            crate::module::model_usage::observe(self.inner.as_ref(), request, stream, self.usage_context.clone())
-                .await?;
+        let (call_id, response_stream) = crate::core::telemetry_langfuse::tool_names(
+            &self.tool_names,
+            crate::module::model_usage::observe(self.inner.as_ref(), request, stream, self.usage_context.clone()),
+        )
+        .await?;
         let node_id = self.node_id.clone();
         let model = self.model.clone();
         let on_event = self.on_event.clone();
@@ -545,6 +553,17 @@ pub(super) fn instrumented_model(
     on_event: Option<Channel<StreamEvent>>,
     definition: Option<&ModelDefinition>,
 ) -> Arc<dyn Llm> {
+    instrumented_model_with_tools(model, node_id, model_label, on_event, definition, HashMap::new())
+}
+
+fn instrumented_model_with_tools(
+    model: Arc<dyn Llm>,
+    node_id: &str,
+    model_label: &str,
+    on_event: Option<Channel<StreamEvent>>,
+    definition: Option<&ModelDefinition>,
+    tool_names: HashMap<String, String>,
+) -> Arc<dyn Llm> {
     let mut usage_context = crate::module::model_usage::current();
     usage_context.purpose = "workflow".into();
     usage_context.node_id = Some(node_id.into());
@@ -555,6 +574,7 @@ pub(super) fn instrumented_model(
         usage_context.model_profile_id = Some(profile.id.clone());
     }
     Arc::new(InstrumentedLlm {
+        tool_names,
         usage_context,
         inner: model,
         node_id: node_id.to_string(),
@@ -1283,6 +1303,13 @@ mod usage_snapshot_tests {
 
     #[tokio::test]
     async fn forwards_agent_text_before_model_completion_without_repeating_it() {
+        assert_agent_stream(false).await;
+    }
+    #[tokio::test]
+    async fn tracing_preserves_the_agent_streaming_contract() {
+        assert_agent_stream(true).await;
+    }
+    async fn assert_agent_stream(observed: bool) {
         let resume = Arc::new(tokio::sync::Notify::new());
         let agent = LlmAgentBuilder::new("agent")
             .model(Arc::new(PausedStreamingLlm {
@@ -1305,6 +1332,15 @@ mod usage_snapshot_tests {
                 sensitive_fields: BTreeSet::new(),
             },
         );
+        let node: Arc<dyn Node> = if observed {
+            let state = node.state.clone();
+            let mut graph = StateGraph::with_channels(&[]).add_node(node);
+            let dsl=serde_json::from_value(json!({"id":"stream-contract","nodes":[{"id":"agent","type":"agent","data":{"name":"流式节点"}}],"edges":[]})).unwrap();
+            super::super::telemetry::wrap(&mut graph, &dsl, &state);
+            graph.nodes.remove("agent").unwrap()
+        } else {
+            Arc::new(node)
+        };
         let context = NodeContext::new(HashMap::new(), adk_rust::graph::ExecutionConfig::new("stream-test"), 0);
         let mut stream = node.execute_stream(&context);
         // The model cannot finish until this first frontend-bound message arrives.
