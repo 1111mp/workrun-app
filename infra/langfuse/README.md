@@ -1,5 +1,10 @@
 # Local Langfuse
 
+This stack is independent of Workrun Server and LiteLLM. You can also use an
+existing OTLP collector/backend instead of deploying Langfuse. See the
+[deployment guide](../../apps/docs/src/content/docs/team/deployment.md) for the
+optional connection paths.
+
 Based on https://github.com/langfuse/langfuse/blob/main/docker-compose.yml.
 Local deployment only. Langfuse receives traces; the existing Workrun model
 request path is unchanged. Langfuse AI Gateway is not deployed.

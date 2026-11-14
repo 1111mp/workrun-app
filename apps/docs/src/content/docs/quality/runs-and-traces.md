@@ -147,6 +147,14 @@ Before configuring export, confirm that the collector and network policy allow o
 
 OTLP is a diagnostic export. It does not replace local run records, state boundaries, or inspecting individual results.
 
+### Use Langfuse
+
+Deploy `infra/langfuse` independently for Langfuse and a Collector, or use an existing OTLP backend. See [Deployment](/team/deployment/). Configure the desktop with the Collector's OTLP/gRPC address, not the Langfuse UI URL: locally, `http://127.0.0.1:4317`. The Collector supplies project authentication and forwards to Langfuse `/api/public/otel`. Remote desktops need a reachable, protected collector endpoint.
+
+Export covers conversations, workflows, nodes, model generations, and tool observations, correlated with session/run/node/call IDs. Metadata can include the current account identity. Input/output capture is off by default; enable **Settings → Logs → Export conversation and workflow content** separately and restart. Disabling content capture does not disable metadata export. The supplied configuration discards metrics and requires neither Langfuse AI Gateway nor a LiteLLM Langfuse callback.
+
+Langfuse helps investigate model, tool, and orchestration timing. It does not replace local checkpoints or run history; the Server currently has no additional NestJS distributed-trace instrumentation.
+
 ## File results and local storage
 
 History stores file outputs as artifact references; the actual files remain in the current workspace's local artifacts directory. Export files from the results, preview images and videos, or open PDFs. Access depends on the corresponding local snapshots: keeping run records without their artifact files cannot restore file contents.

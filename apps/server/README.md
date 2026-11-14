@@ -1,11 +1,11 @@
 # Workrun Server
 
-Workrun 的 NestJS 服务端应用。当前提供基础 HTTP 服务，并使用 SWC 加速构建、Vitest 运行单元测试与端到端测试。
+Workrun 的 NestJS 服务端应用。提供 Better Auth 身份认证、Workflow/App 发布与资源存储，以及 LiteLLM 团队模型代理。工作流和定时任务仍在桌面端执行。构建使用 SWC，单元与 HTTP 集成测试使用 Vitest。
 
 ## 环境要求
 
 - Node.js 24 或更高版本
-- pnpm 11
+- pnpm 12（具体版本见仓库根目录 `packageManager`）
 
 依赖请在仓库根目录安装：
 
@@ -15,16 +15,16 @@ pnpm install
 
 ## 开发
 
-从仓库根目录启动服务：
+先将 `apps/server/.env.example` 复制到 `apps/server/.env`，配置 `MONGODB_URI` 与认证 secret，然后从仓库根目录启动服务：
 
 ```bash
 pnpm server:dev
 ```
 
-服务默认监听 `http://localhost:3000`。访问根路径可得到：
+服务默认监听 `http://localhost:3000`。认证探活接口是：
 
-```text
-Hello World!
+```sh
+curl --fail http://localhost:3000/api/v1/auth/ok
 ```
 
 也可以直接运行此 workspace 的脚本：
@@ -33,10 +33,10 @@ Hello World!
 pnpm --filter workrun-server dev
 ```
 
-使用 `PORT` 指定其他端口：
+使用 `SERVER_PORT` 指定其他端口：
 
 ```bash
-PORT=4000 pnpm --filter workrun-server dev
+SERVER_PORT=4000 pnpm --filter workrun-server dev
 ```
 
 ## 构建与运行
@@ -95,21 +95,29 @@ pnpm --filter workrun-server format
 pnpm --filter workrun-server format:write
 ```
 
+## Docker 部署
+
+从仓库根目录使用现有 Server + MongoDB 配置：
+
+```sh
+cp apps/server/.env.example apps/server/.env
+# 编辑 MongoDB 凭据、BETTER_AUTH_SECRET 和公开 URL。
+docker compose --env-file apps/server/.env -f apps/server/docker-compose.yaml up -d --build
+```
+
+Server 不要求部署 LiteLLM 或 Langfuse。不启用团队模型时，四个 LiteLLM 连接/身份变量保持未设置；需要时连接已有网关，或使用 [`infra/litellm`](../../infra/litellm/README.md) 的独立 Compose 示例，再手动配置 Team Virtual Key。Langfuse/其他 OTLP 后端由桌面端单独连接，不依赖 Server 的模型代理。
+
+详细步骤见[部署文档](../docs/src/content/docs/zh-cn/team/deployment.md)。这些配置没有统一启动器，不会自动创建 Team/Key，也不假定共享网络。
+
 ## 目录结构
 
-```text
-src/
-├── app.controller.ts        HTTP 控制器
-├── app.controller.spec.ts   单元测试
-├── app.module.ts            根模块
-├── app.service.ts           业务服务
-└── main.ts                  应用入口
-test/
-└── app.e2e-spec.ts          端到端测试
-vitest.config.mts            单元测试与覆盖率配置
-vitest.e2e.config.mts        端到端测试配置
-nest-cli.json                Nest CLI / SWC 构建配置
-```
+- `src/main.ts`、`src/main.module.ts`：启动、配置校验与模块装配。
+- `src/lib/auth.ts`：Better Auth 会话、邮箱/密码与 GitHub 登录。
+- `src/modules/workflow`、`app`、`file`、`fs`：发布版本及 MongoDB/GridFS 资源。
+- `src/modules/llm`：模型目录、Chat Completions/Responses 代理和归因。
+- `src/modules/user`：当前用户与账号接口。
+- `scripts/remove-app-name-index.mjs`：旧 App 名称唯一索引迁移。
+- `vitest.config.mts`、`vitest.e2e.config.mts`：测试配置。
 
 ## 团队模型服务（LiteLLM）
 

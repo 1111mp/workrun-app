@@ -5,15 +5,17 @@ description: Understand personal and team workspaces, publish reproducible Workf
 
 Workrun has two separate workspace modes. **Personal mode** is for building and running on your own computer; **team mode** uses Workrun Server to share, review, and use published versions. Choosing team mode does not deploy workflows to the server: workflows still run in each member's desktop app. The team service manages identity, shared assets, and published versions.
 
+Your saved local workflows can also be reused from the Team-mode homepage without publishing. Publishing shares a version with other members. See [Architecture](/concepts/architecture/) and the [Server, LiteLLM, and Langfuse deployment guide](/team/deployment/).
+
 ## Choose a workspace mode
 
-|                    | Personal mode                                        | Team mode                                                                      |
-| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Best for           | Exploration, local development, and independent runs | Collaborative workflows that need sharing, review, and reproducibility         |
-| Data and assets    | Stored in the current device's personal workspace    | Workflow and App drafts, releases, and metadata are stored in the team service |
-| Sign-in and server | No sign-in or team service required                  | Requires a team-service connection and sign-in                                 |
-| Execution          | The desktop app runs local Workflows and Apps        | The desktop app runs selected releases and prepares their pinned Team Apps     |
-| Publishing         | Save a draft and continue editing                    | Publish semantic versions for members to browse, run, and schedule             |
+|                    | Personal mode                                        | Team mode                                                                                         |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Best for           | Exploration, local development, and independent runs | Collaborative workflows that need sharing, review, and reproducibility                            |
+| Data and assets    | Stored in the current device's personal workspace    | Current account drafts are local; releases and shared metadata are stored on Server               |
+| Sign-in and server | No sign-in or team service required                  | Requires a team-service connection and sign-in                                                    |
+| Execution          | The desktop app runs local Workflows and Apps        | The desktop app runs its local definitions or shared releases, preparing pinned Apps for releases |
+| Publishing         | Save a draft and continue editing                    | Publish semantic versions for members to browse, run, and schedule                                |
 
 ![Choose Personal mode or Team mode when you first launch Workrun.](/media/workspace/01-select-workspace-mode.png)
 
@@ -62,13 +64,13 @@ Before publishing, complete three checks:
 ## Use a release after publishing
 
 - Team members run a **published release** from the team workspace; later draft edits do not silently change that run.
-- Team-mode schedules must select a published release and pin that version.
+- Team-mode schedules use published definitions, following the recipe’s latest-published or pinned-release policy.
 - Publish a new version to fix a problem or update a dependency. Do not alter an old version to repair history.
 - If a run reports a missing or mismatched Team App release, restore that release before retrying instead of substituting the current development copy.
 
 ## Self-hosted team service: deployment preparation
 
-Team mode relies on Workrun Server for its service capabilities. Its backend source lives in `apps/server` and manages team authentication, shared Workflow and App drafts and releases, and their related resources; it depends on MongoDB and Better Auth. Before enabling team mode, deploy Workrun Server to an address members can reach and connect to that address in the desktop app's **Settings → Workspace**.
+Team mode relies on Workrun Server for its service capabilities. Its backend source lives in `apps/server` and manages authentication, shared Workflow/App releases, related resources, and optional LiteLLM model access; desktop editing drafts are local to the current account; it depends on MongoDB and Better Auth. Before enabling team mode, deploy Workrun Server to an address members can reach and connect to that address in the desktop app's **Settings → Workspace**.
 
 Plan the deployment boundary as follows:
 
@@ -82,7 +84,7 @@ Workrun desktop apps ── HTTPS ──> reverse proxy / Workrun Server ──>
 1. Provide a stable HTTPS address, such as `https://workrun.example.com`; members connect to it in **Settings → Workspace**.
 2. Prepare a MongoDB connection string and persistent storage. Recreating containers must not lose team users, drafts, releases, or file resources.
 3. Generate and securely retain `BETTER_AUTH_SECRET`; never use an example value in production. Keep it unchanged during migration or scaling to preserve existing sessions.
-4. Set both `SERVER_BASE_URL` and `BETTER_AUTH_URL` to the public HTTPS address, not a container address or `localhost`. If GitHub or Google sign-in is enabled, register the same callback base with the provider.
+4. Set both `SERVER_BASE_URL` and `BETTER_AUTH_URL` to the public HTTPS address, not a container address or `localhost`. If GitHub sign-in is enabled, register the same callback base with the provider.
 5. Keep `MONGODB_URI`, OAuth client secrets, and authentication secrets in secret management or an uncommitted environment file—not in images, deployment configuration, or the repository.
 6. Terminate TLS at the reverse proxy and expose only required service ports. Keep MongoDB on a private network rather than exposing it to the internet.
 

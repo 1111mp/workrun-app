@@ -81,6 +81,11 @@ export default defineConfig({
               link: '/concepts/overview/',
             },
             {
+              label: 'Architecture and deployment boundaries',
+              translations: { 'zh-CN': '架构与部署边界' },
+              link: '/concepts/architecture/',
+            },
+            {
               label: 'Workflows and state',
               translations: { 'zh-CN': '工作流与状态' },
               link: '/concepts/workflows-and-state/',
@@ -163,6 +168,11 @@ export default defineConfig({
           label: 'Team and publishing',
           translations: { 'zh-CN': '团队与发布' },
           items: [
+            {
+              label: 'Deploy Server, LiteLLM, and Langfuse',
+              translations: { 'zh-CN': '部署 Server、LiteLLM 与 Langfuse' },
+              link: '/team/deployment/',
+            },
             {
               label: 'Versioned publishing',
               translations: { 'zh-CN': '版本化发布' },
