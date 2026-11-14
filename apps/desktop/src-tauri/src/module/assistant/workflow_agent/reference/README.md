@@ -1,7 +1,7 @@
 # Progressive workflow authoring reference
 
 Planning and Workflow authoring specialists read this reference through
-get_workflow_reference. The main agent delegates an authorized outcome; it does not
+get_workflow_reference. The task agent delegates an authorized outcome; it does not
 load node manuals or construct graphs itself. All three roles can read the same
 optional workrun-capabilities Skill, packaged at reference/workrun-capabilities.md.
 The overview supplies capability boundaries and discovery paths, not installed IDs.
@@ -25,7 +25,7 @@ needed by the model must exist in the shipped reference/tool response.
 5. Save a valid normal workspace workflow and return its native UUID and validation result.
 
 Missing essential resources or ambiguous business requirements return questions to the
-main agent. The specialist cannot dispatch a workflow. The main agent decides the next
+task agent. The specialist cannot dispatch a workflow. The task agent decides the next
 step using the user's execution authorization and the actual native save result.
 
 A new graph uses its delegation UUID, making repeated saves idempotent. A revision

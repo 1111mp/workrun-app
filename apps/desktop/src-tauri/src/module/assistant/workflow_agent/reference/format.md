@@ -2,10 +2,24 @@
 
 Pass document_json as a JSON-encoded string containing the document, not prose, DSL code or an array of tool calls. The document contains settings, nodes and edges, with optional viewport. Native delegation supplies a stable workflow UUID. Creation adds one definition to the ordinary workflow catalog; an authorized revision updates its specified target. Historical execution snapshots remain immutable.
 
+## Essentials
+
+Submit JSON text containing settings, nodes and edges. settings requires name;
+mode is task/chat. inputSchema/outputSchema:{fields:[{id,key,label,type,required}]};
+field types are string, textarea, number, boolean, file, files. Keys are unique and
+cannot start with workflow. Node:{id,type,data,position:{x,y}}; edge:{id,source,target,
+sourceHandle?}. Use unique IDs and only native branch handles. Exactly one Start
+and at least one End are required; Start connects to an executable node, not End.
+Match node data to its supplied schema. Required outputs must be produced, published
+by data.state.globalKeys and declared by settings.outputSchema. Saving validates
+before writing and neither publishes nor runs the Workflow.
+
+## Details
+
 settings supports name (required, nonempty), description, mode (task/chat), inputSchema, outputSchema and sessionStateFields.
 inputSchema/outputSchema use {fields:[{id,key,label,type,required,description?}]}. Supported field types: string, textarea, number, boolean, file, files. Keys must be nonempty and unique, without the reserved workflow. prefix. Legacy output fields may have only key; new workflows should declare complete types and required flags. outputSchema does not generate results: nodes must publish corresponding globalKeys.
 
-inputSchema may include rawReaders (node IDs permitted to read original input) and sensitiveFields (input paths to hide). Agent prompts receive visible state only; authorized original values are retrieved at the tool boundary. Existing chat services manage implicit chat input and sessionStateFields. A single main-agent capability execution is not a persistent chat session.
+inputSchema may include rawReaders (node IDs permitted to read original input) and sensitiveFields (input paths to hide). Agent prompts receive visible state only; authorized original values are retrieved at the tool boundary. Existing chat services manage implicit chat input and sessionStateFields. A single task-agent capability execution is not a persistent chat session.
 
 Node shape: {id,type,data,position:{x,y}}. IDs must be unique; prefer letters, numbers and underscores. Discover supported types from the native index. Position affects layout only. Groups can use React Flow parentId, extent and style; the group itself cannot have edges.
 Edge shape: {id,source,target,sourceHandle?}. sourceHandle is only for conditional routing. Stable edge IDs are recommended; execution uses endpoints and handles.

@@ -19,6 +19,7 @@ import {
   type ModelGroup,
 } from './llm.catalog';
 import { normalizeLiteLlmUrl } from './llm.config';
+import { adaptJsonOutput } from './llm.output';
 import {
   chatSchema,
   responsesSchema,
@@ -288,7 +289,10 @@ export class LlmService {
       // Input schemas restrict external JSON to inference parameters. Identity
       // fields are assigned last, so neither protocol can override attribution.
       const request = {
-        ...parameters,
+        ...adaptJsonOutput(
+          parameters,
+          this.config.get<string>('LITELLM_JSON_OBJECT_MODELS') ?? '',
+        ),
         user: endUser,
         metadata: {
           workrun_request_id: requestId,

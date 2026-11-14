@@ -95,6 +95,9 @@ export type WorkflowPlan = {
   dependencyIssues: string[];
   workflowId?: string | null;
   outcome?: {
+    validation?: { valid: boolean };
+    published?: boolean;
+    executed?: boolean;
     summary?: string;
     status?: string;
     before_revision_id?: string | null;

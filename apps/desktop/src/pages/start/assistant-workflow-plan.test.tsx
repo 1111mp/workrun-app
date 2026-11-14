@@ -35,13 +35,14 @@ const plan: WorkflowPlan = {
     acceptance_criteria: ['Report matches verified inputs'],
   },
 };
-function view(value: WorkflowPlan, busy = false) {
+function view(value: WorkflowPlan, busy = false, showConversationReply = true) {
   const decide = vi.fn(),
     discuss = vi.fn();
   render(
     <MemoryRouter>
       <AssistantWorkflowPlan
         plan={value}
+        showConversationReply={showConversationReply}
         busy={busy}
         onDecide={decide}
         onDiscuss={discuss}
@@ -272,6 +273,54 @@ it('renders saved outcomes as Markdown', () => {
   expect(status.querySelector('strong')).toHaveTextContent('未执行');
   expect(status.querySelector('code')).toHaveTextContent('sales_csv');
   expect(status.querySelectorAll('li')).toHaveLength(2);
+});
+
+it('shows the completion reply outside the card without repeating the proposal summary', () => {
+  view({
+    ...plan,
+    status: 'saved',
+    workflowId: 'workflow-id',
+    outcome: {
+      validation: { valid: true },
+      published: false,
+      executed: false,
+      summary: plan.document.summary,
+    },
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'assistant.plan.createdReply',
+  );
+  expect(screen.getAllByText(plan.document.summary)).toHaveLength(1);
+  expect(screen.getByLabelText('assistant.plan.title')).not.toContainElement(
+    screen.getByRole('status'),
+  );
+});
+
+it('does not claim unpublished or unexecuted status without native evidence', () => {
+  view({
+    ...plan,
+    status: 'saved',
+    outcome: { validation: { valid: true }, summary: 'Saved result' },
+  });
+  expect(
+    screen.queryByText('assistant.plan.createdReply'),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('Saved result');
+});
+
+it('places the planning reply outside the review card', () => {
+  view(plan);
+  const reply = screen.getByRole('status');
+  expect(reply).toHaveTextContent('assistant.plan.readyReply');
+  expect(screen.getByLabelText('assistant.plan.title')).not.toContainElement(
+    reply,
+  );
+});
+
+it('does not add a generic reply when the turn already has assistant text', () => {
+  view(plan, false, false);
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('assistant.plan.title')).toBeVisible();
 });
 
 it('keeps legacy plain-text outcomes readable', () => {

@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router';
 
+import { MessageMarkdown } from '@/components/message-markdown';
 import { WorkflowChangeCard } from '@/components/workflow-diff/workflow-change-card';
 import type { WorkflowPlan } from '@/services/assistant';
 
@@ -31,7 +32,9 @@ export function AssistantWorkflowPlan({
   onDecide,
   onDiscuss,
   active = true,
+  showConversationReply = true,
 }: {
+  showConversationReply?: boolean;
   active?: boolean;
   plan: WorkflowPlan;
   busy: boolean;
@@ -68,6 +71,29 @@ export function AssistantWorkflowPlan({
     plan.status === 'ready' &&
     !doc.questions.length &&
     !plan.dependencyIssues.length;
+  const conversationReply =
+    plan.status === 'saved' &&
+    plan.outcome?.validation?.valid === true &&
+    plan.outcome.published === false &&
+    plan.outcome.executed === false
+      ? t(
+          isRevision
+            ? 'assistant.plan.updatedReply'
+            : 'assistant.plan.createdReply',
+        )
+      : ready
+        ? t(
+            isRevision
+              ? 'assistant.plan.revisionReadyReply'
+              : 'assistant.plan.readyReply',
+          )
+        : plan.status === 'needs_clarification'
+          ? t('assistant.plan.clarificationReply')
+          : undefined;
+  const outcomeSummary =
+    plan.outcome?.summary && plan.outcome.summary !== doc.summary
+      ? plan.outcome.summary
+      : undefined;
   const list = (title: string, values: string[]) =>
     values.length > 0 && (
       <section className='flex flex-col gap-2'>
@@ -80,211 +106,223 @@ export function AssistantWorkflowPlan({
       </section>
     );
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={(open) => setExpansion({ compact, open })}
-    >
-      <Card className='my-3 w-full' aria-label={t(titleKey)}>
-        <CardHeader>
-          <CardTitle>
-            {t(titleKey)} ·{' '}
-            {t('assistant.plan.version', { version: plan.version })}
-          </CardTitle>
-          <CardDescription>{doc.summary}</CardDescription>
-          <CardAction>
-            <Badge variant='secondary'>
-              {t(
-                isRevision && plan.status === 'building'
-                  ? 'assistant.plan.revisionBuilding'
-                  : `assistant.plan.status.${plan.status}`,
-              )}
-            </Badge>
-          </CardAction>
-        </CardHeader>
-        <CardContent>
-          <CollapsibleTrigger render={<Button variant='ghost' size='sm' />}>
-            <ChevronDownIcon data-icon='inline-start' />
-            {t(open ? 'assistant.plan.hidePlan' : 'assistant.plan.viewPlan')}
-          </CollapsibleTrigger>
-        </CardContent>
-        <CollapsibleContent>
-          <CardContent className='flex flex-col gap-5'>
-            {active && plan.interaction?.status === 'waiting' && (
-              <p className='text-muted-foreground text-sm'>
+    <>
+      <Collapsible
+        open={open}
+        onOpenChange={(open) => setExpansion({ compact, open })}
+      >
+        <Card className='my-3 w-full' aria-label={t(titleKey)}>
+          <CardHeader>
+            <CardTitle>
+              {t(titleKey)} ·{' '}
+              {t('assistant.plan.version', { version: plan.version })}
+            </CardTitle>
+            <CardDescription>{doc.summary}</CardDescription>
+            <CardAction>
+              <Badge variant='secondary'>
                 {t(
-                  isRevision
-                    ? 'assistant.plan.revisionWaitingFeedback'
-                    : 'assistant.plan.waitingFeedback',
+                  isRevision && plan.status === 'building'
+                    ? 'assistant.plan.revisionBuilding'
+                    : `assistant.plan.status.${plan.status}`,
                 )}
-              </p>
-            )}
-            {doc.questions.length > 0 && (
-              <section
-                className='flex flex-col gap-2'
-                aria-label={t('assistant.plan.questions')}
-              >
-                <h3 className='font-medium'>{t('assistant.plan.questions')}</h3>
+              </Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <CollapsibleTrigger render={<Button variant='ghost' size='sm' />}>
+              <ChevronDownIcon data-icon='inline-start' />
+              {t(open ? 'assistant.plan.hidePlan' : 'assistant.plan.viewPlan')}
+            </CollapsibleTrigger>
+          </CardContent>
+          <CollapsibleContent>
+            <CardContent className='flex flex-col gap-5'>
+              {active && plan.interaction?.status === 'waiting' && (
                 <p className='text-muted-foreground text-sm'>
-                  {t('assistant.plan.clarificationHint')}
+                  {t(
+                    isRevision
+                      ? 'assistant.plan.revisionWaitingFeedback'
+                      : 'assistant.plan.waitingFeedback',
+                  )}
                 </p>
-                {doc.questions.map((question, index) => (
-                  <Questionnaire
-                    key={index}
-                    onSubmit={(event) => event.preventDefault()}
-                  >
-                    <QuestionnaireItem
-                      name={`plan-${plan.id}-v${plan.version}-question-${index}`}
+              )}
+              {doc.questions.length > 0 && (
+                <section
+                  className='flex flex-col gap-2'
+                  aria-label={t('assistant.plan.questions')}
+                >
+                  <h3 className='font-medium'>
+                    {t('assistant.plan.questions')}
+                  </h3>
+                  <p className='text-muted-foreground text-sm'>
+                    {t('assistant.plan.clarificationHint')}
+                  </p>
+                  {doc.questions.map((question, index) => (
+                    <Questionnaire
+                      key={index}
+                      onSubmit={(event) => event.preventDefault()}
                     >
-                      <QuestionnaireTitle>{question}</QuestionnaireTitle>
-                      {active && editable && plan.status !== 'approved' && (
-                        <Button
-                          type='button'
-                          variant='outline'
-                          size='sm'
-                          disabled={busy}
-                          onClick={() => onDiscuss(question)}
-                        >
-                          {t('assistant.plan.answerQuestion')}
-                        </Button>
-                      )}
-                    </QuestionnaireItem>
-                  </Questionnaire>
-                ))}
-              </section>
-            )}
-            <p>{doc.goal}</p>
-            {doc.target_id && (
-              <Link
-                className='underline'
-                to={`/workflows/${encodeURIComponent(doc.target_id)}`}
-                state={navigationState}
-              >
-                {t('assistant.plan.revisionTarget')}
-              </Link>
-            )}
-            {doc.inputs.length > 0 && (
+                      <QuestionnaireItem
+                        name={`plan-${plan.id}-v${plan.version}-question-${index}`}
+                      >
+                        <QuestionnaireTitle>{question}</QuestionnaireTitle>
+                        {active && editable && plan.status !== 'approved' && (
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            disabled={busy}
+                            onClick={() => onDiscuss(question)}
+                          >
+                            {t('assistant.plan.answerQuestion')}
+                          </Button>
+                        )}
+                      </QuestionnaireItem>
+                    </Questionnaire>
+                  ))}
+                </section>
+              )}
+              <p>{doc.goal}</p>
+              {doc.target_id && (
+                <Link
+                  className='underline'
+                  to={`/workflows/${encodeURIComponent(doc.target_id)}`}
+                  state={navigationState}
+                >
+                  {t('assistant.plan.revisionTarget')}
+                </Link>
+              )}
+              {doc.inputs.length > 0 && (
+                <section className='flex flex-col gap-2'>
+                  <h3 className='font-medium'>{t('assistant.plan.inputs')}</h3>
+                  <ul className='list-disc pl-5'>
+                    {doc.inputs.map((input, index) => (
+                      <li key={index}>
+                        {input.name} · {input.description}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {list(t('assistant.plan.outputs'), doc.outputs)}
               <section className='flex flex-col gap-2'>
-                <h3 className='font-medium'>{t('assistant.plan.inputs')}</h3>
-                <ul className='list-disc pl-5'>
-                  {doc.inputs.map((input, index) => (
+                <h3 className='font-medium'>{t('assistant.plan.steps')}</h3>
+                <ol className='flex list-decimal flex-col gap-3 pl-5'>
+                  {doc.steps.map((step, index) => (
                     <li key={index}>
-                      {input.name} · {input.description}
+                      <p className='font-medium'>{step.title}</p>
+                      <p className='text-muted-foreground'>
+                        {step.description}
+                      </p>
                     </li>
                   ))}
-                </ul>
+                </ol>
               </section>
+              {list(t('assistant.plan.assumptions'), doc.assumptions)}
+              {list(t('assistant.plan.acceptance'), doc.acceptance_criteria)}
+              {list(t('assistant.plan.dependencies'), plan.dependencyIssues)}
+              <Collapsible>
+                <CollapsibleTrigger
+                  render={<Button variant='ghost' size='sm' />}
+                >
+                  <ChevronDownIcon data-icon='inline-start' />
+                  {t('assistant.plan.details')}
+                </CollapsibleTrigger>
+                <CollapsibleContent className='flex flex-col gap-4 pt-3'>
+                  {list(t('assistant.plan.constraints'), doc.constraints)}
+                  {doc.steps.map((step, index) => (
+                    <section key={index} className='flex flex-col gap-2'>
+                      <h3 className='font-medium'>{step.title}</h3>
+                      <div className='flex flex-wrap gap-2'>
+                        {step.node_types.map((type) => (
+                          <Badge key={type} variant='outline'>
+                            {type}
+                          </Badge>
+                        ))}
+                      </div>
+                      <p className='whitespace-pre-wrap'>
+                        {step.configuration_notes}
+                      </p>
+                      <ul className='list-disc pl-5'>
+                        {step.dependencies.map((dependency, i) => (
+                          <li key={i} className='wrap-break-word'>
+                            {dependency.purpose} · {dependency.kind}:{' '}
+                            {dependency.id}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            </CardContent>
+          </CollapsibleContent>
+          <CardFooter className='flex-wrap gap-2'>
+            {plan.outcome?.after_revision_id && (
+              <WorkflowChangeCard
+                beforeRevisionId={plan.outcome.before_revision_id}
+                afterRevisionId={plan.outcome.after_revision_id}
+              />
             )}
-            {list(t('assistant.plan.outputs'), doc.outputs)}
-            <section className='flex flex-col gap-2'>
-              <h3 className='font-medium'>{t('assistant.plan.steps')}</h3>
-              <ol className='flex list-decimal flex-col gap-3 pl-5'>
-                {doc.steps.map((step, index) => (
-                  <li key={index}>
-                    <p className='font-medium'>{step.title}</p>
-                    <p className='text-muted-foreground'>{step.description}</p>
-                  </li>
-                ))}
-              </ol>
-            </section>
-            {list(t('assistant.plan.assumptions'), doc.assumptions)}
-            {list(t('assistant.plan.acceptance'), doc.acceptance_criteria)}
-            {list(t('assistant.plan.dependencies'), plan.dependencyIssues)}
-            <Collapsible>
-              <CollapsibleTrigger render={<Button variant='ghost' size='sm' />}>
-                <ChevronDownIcon data-icon='inline-start' />
-                {t('assistant.plan.details')}
-              </CollapsibleTrigger>
-              <CollapsibleContent className='flex flex-col gap-4 pt-3'>
-                {list(t('assistant.plan.constraints'), doc.constraints)}
-                {doc.steps.map((step, index) => (
-                  <section key={index} className='flex flex-col gap-2'>
-                    <h3 className='font-medium'>{step.title}</h3>
-                    <div className='flex flex-wrap gap-2'>
-                      {step.node_types.map((type) => (
-                        <Badge key={type} variant='outline'>
-                          {type}
-                        </Badge>
-                      ))}
-                    </div>
-                    <p className='whitespace-pre-wrap'>
-                      {step.configuration_notes}
-                    </p>
-                    <ul className='list-disc pl-5'>
-                      {step.dependencies.map((dependency, i) => (
-                        <li key={i} className='wrap-break-word'>
-                          {dependency.purpose} · {dependency.kind}:{' '}
-                          {dependency.id}
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ))}
-              </CollapsibleContent>
-            </Collapsible>
-          </CardContent>
-        </CollapsibleContent>
-        <CardFooter className='flex-wrap gap-2'>
-          {plan.outcome?.after_revision_id && (
-            <WorkflowChangeCard
-              beforeRevisionId={plan.outcome.before_revision_id}
-              afterRevisionId={plan.outcome.after_revision_id}
-            />
-          )}
-          {plan.outcome?.summary && (
-            <AssistantPlanOutcome summary={plan.outcome.summary} />
-          )}
-          {editable && active && (
-            <>
-              <Button
-                disabled={busy || !ready}
-                onClick={() => onDecide('approve')}
-              >
-                {t(
-                  isRevision
-                    ? 'assistant.plan.approveRevision'
-                    : 'assistant.plan.approve',
-                )}
-              </Button>
+            {editable && active && (
+              <>
+                <Button
+                  disabled={busy || !ready}
+                  onClick={() => onDecide('approve')}
+                >
+                  {t(
+                    isRevision
+                      ? 'assistant.plan.approveRevision'
+                      : 'assistant.plan.approve',
+                  )}
+                </Button>
+                <Button
+                  variant='outline'
+                  disabled={busy || plan.status === 'approved'}
+                  onClick={() => onDiscuss()}
+                >
+                  {t('assistant.plan.discuss')}
+                </Button>
+                <Button
+                  variant='ghost'
+                  disabled={busy}
+                  onClick={() => onDecide('cancel')}
+                >
+                  {t('assistant.plan.cancel')}
+                </Button>
+              </>
+            )}
+            {plan.workflowId && (
               <Button
                 variant='outline'
-                disabled={busy || plan.status === 'approved'}
-                onClick={() => onDiscuss()}
+                nativeButton={false}
+                role='link'
+                render={
+                  <Link
+                    to={`/workflows/${encodeURIComponent(plan.workflowId)}`}
+                    state={navigationState}
+                  />
+                }
               >
-                {t('assistant.plan.discuss')}
+                {t('assistant.plan.openWorkflow')}
               </Button>
-              <Button
-                variant='ghost'
-                disabled={busy}
-                onClick={() => onDecide('cancel')}
-              >
-                {t('assistant.plan.cancel')}
-              </Button>
-            </>
-          )}
-          {plan.workflowId && (
-            <Button
-              variant='outline'
-              nativeButton={false}
-              role='link'
-              render={
-                <Link
-                  to={`/workflows/${encodeURIComponent(plan.workflowId)}`}
-                  state={navigationState}
-                />
-              }
-            >
-              {t('assistant.plan.openWorkflow')}
-            </Button>
-          )}
-          <p className='text-muted-foreground text-xs'>
-            {t(
-              isRevision
-                ? 'assistant.plan.revisionOnly'
-                : 'assistant.plan.creationOnly',
             )}
-          </p>
-        </CardFooter>
-      </Card>
-    </Collapsible>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                isRevision
+                  ? 'assistant.plan.revisionOnly'
+                  : 'assistant.plan.creationOnly',
+              )}
+            </p>
+          </CardFooter>
+        </Card>
+      </Collapsible>
+      {showConversationReply && outcomeSummary ? (
+        <AssistantPlanOutcome summary={outcomeSummary} />
+      ) : showConversationReply && conversationReply ? (
+        <div role='status' className='mt-3 w-full min-w-0'>
+          <MessageMarkdown content={conversationReply} />
+        </div>
+      ) : null}
+    </>
   );
 }

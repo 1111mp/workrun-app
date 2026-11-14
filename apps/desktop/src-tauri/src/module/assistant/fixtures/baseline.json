@@ -106,7 +106,8 @@
         "intents": [
           "conversation"
         ],
-        "routing": "none"
+        "routing": "none",
+        "maxModelCalls": 2
       }
     },
     {
@@ -126,7 +127,8 @@
         "intents": [
           "conversation"
         ],
-        "routing": "none"
+        "routing": "none",
+        "maxModelCalls": 2
       }
     },
     {
@@ -146,7 +148,8 @@
         "intents": [
           "conversation"
         ],
-        "routing": "none"
+        "routing": "none",
+        "maxModelCalls": 2
       }
     },
     {
@@ -166,7 +169,8 @@
         "intents": [
           "conversation"
         ],
-        "routing": "none"
+        "routing": "none",
+        "maxModelCalls": 2
       }
     },
     {
@@ -186,7 +190,8 @@
         "intents": [
           "conversation"
         ],
-        "routing": "none"
+        "routing": "none",
+        "maxModelCalls": 2
       }
     },
     {
@@ -364,7 +369,8 @@
       ],
       "expected": {
         "intents": [
-          "execution"
+          "execution",
+          "task"
         ],
         "routing": "required",
         "workflowId": "sales-report",

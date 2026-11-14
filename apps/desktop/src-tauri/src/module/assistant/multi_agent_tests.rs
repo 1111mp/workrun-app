@@ -1,5 +1,5 @@
 //! Task-level regressions: ordinary work never enters workflow authoring.
-use super::main_agent::direct;
+use super::task_agent::direct;
 use super::tools::WorkflowDiscovery;
 use super::*;
 use crate::module::artifact::{ArtifactRef, ArtifactStore};
@@ -132,9 +132,7 @@ async fn simple_file_request_and_declining_workflow_use_direct_tools_only() {
         assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
         assert!(!workspace.root.path().join("workflow.json").exists());
         for request in model
-            .requests
-            .lock()
-            .unwrap()
+            .handler_requests()
             .iter()
             .filter(|request| !request.tools.is_empty())
         {
@@ -187,15 +185,15 @@ async fn specialist_questions_return_to_parent_without_saving_or_executing() {
     assert!(reply.text.contains("有效记录"));
     assert!(reply.call.is_none());
     assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert!(!requests[1].tools.contains_key("prepare_workflow_task"));
     assert_eq!(
-        requests[1].tools["transfer_to_agent"]["parameters"]["properties"]["agent_name"]["enum"],
+        requests[0].tools["transfer_to_agent"]["parameters"]["properties"]["agent_name"]["enum"],
         json!(["workflow_planner"])
     );
     assert_eq!(
         requests[2].tools["transfer_to_agent"]["parameters"]["properties"]["agent_name"]["enum"],
-        json!(["main_agent"])
+        json!(["task_agent"])
     );
     assert!(!requests.last().unwrap().tools.contains_key("transfer_to_agent"));
     assert!(!requests[1].tools.contains_key("save_workflow_draft"));
@@ -278,7 +276,7 @@ fn has_number(value: &Value, expected: f64) -> bool {
 
 #[tokio::test]
 #[ignore = "uses configured Gemini; direct tools on temporary files, no workflows or business Apps"]
-async fn live_main_agent_handles_natural_file_requests_without_workflows() {
+async fn live_task_agent_handles_natural_file_requests_without_workflows() {
     let model = super::evaluation::ProbeModel::new(
         std::sync::Arc::new(tests::live_gemini_model_from_env()),
         std::time::Duration::from_secs(6),
@@ -364,9 +362,9 @@ async fn missing_operation_context_returns_feedback_without_aborting_the_turn() 
         .unwrap();
     assert!(reply.call.is_none());
     assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert!(
-        serde_json::to_string(&requests[2].contents)
+        serde_json::to_string(&requests.last().unwrap().contents)
             .unwrap()
             .contains("requires a session ID")
     );
@@ -397,15 +395,14 @@ async fn sdk_direct_handoff_does_not_require_a_custom_delegation_tool() {
         .unwrap();
     assert!(reply.call.is_none());
     assert!(reply.text.contains("输入"));
-    let requests = model.requests.lock().unwrap();
-    assert!(requests[1].tools.contains_key("transfer_to_agent"));
+    let requests = model.handler_requests();
+    assert!(requests[0].tools.contains_key("transfer_to_agent"));
     assert!(requests[2].tools.contains_key("get_workflow_reference"));
     assert!(!requests[3].tools.contains_key("get_workflow_reference"));
-    assert!(
-        serde_json::to_string(&requests[2].contents)
-            .unwrap()
-            .contains("创建可复用的数据处理流程")
-    );
+    let planner_input = serde_json::to_string(&requests[2].contents).unwrap();
+    // Direct handoff keeps the original request once, rather than relying on
+    // an authorization model's paraphrase as the planner's source of intent.
+    assert_eq!(planner_input.matches("帮我整理成流程").count(), 1);
     assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
     assert!(
         workspace
@@ -480,7 +477,7 @@ async fn mixed_sdk_handoffs_are_repaired_without_running_siblings_or_losing_sign
     let records = workspace.records.lock().unwrap();
     assert!(records.iter().all(|record| record["task"]["goal"] == "创建可复用流程"));
     assert!(records.iter().any(|record| record["status"] == "needs_clarification"));
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let retry = &requests[2].contents;
     assert!(
         retry
@@ -533,11 +530,11 @@ async fn repeated_mixed_sdk_handoffs_stop_at_the_existing_model_budget_without_s
     assert!(error.to_string().contains("limit"));
     assert!(workspace.records.lock().unwrap().is_empty());
     assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
-    assert_eq!(model.requests.lock().unwrap().len(), 3);
+    assert_eq!(model.handler_requests().len(), 3);
 }
 
 #[tokio::test]
-async fn main_agent_discovers_installed_dependencies_without_creating_or_executing() {
+async fn task_agent_discovers_installed_dependencies_without_creating_or_executing() {
     let workspace = Workspace::new();
     let model = tests::ScriptedModel::new(vec![
         task_decision(),
@@ -566,7 +563,7 @@ async fn main_agent_discovers_installed_dependencies_without_creating_or_executi
         .unwrap();
     assert!(reply.call.is_none());
     assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let serialized = serde_json::to_string(&requests.last().unwrap().contents).unwrap();
     for name in ["list_workspace_tools", "list_workspace_skills", "read_workspace_skill"] {
         let marker = format!("\"resourceTool\":\"{name}\"");
@@ -580,7 +577,7 @@ async fn main_agent_discovers_installed_dependencies_without_creating_or_executi
 }
 
 #[tokio::test]
-async fn main_agent_proposes_then_executes_one_exact_confirmed_tool_call_without_workflows() {
+async fn task_agent_proposes_then_executes_one_exact_confirmed_tool_call_without_workflows() {
     let workspace = Workspace::new();
     let initial = Content::new("user").with_text("分析工具结果");
     let args = tool_execution::tests::arguments(2);
@@ -635,7 +632,7 @@ async fn main_agent_proposes_then_executes_one_exact_confirmed_tool_call_without
     assert!(result.call.is_none());
     assert_eq!(workspace.tool_backend.calls.load(Ordering::SeqCst), 1);
     assert_eq!(workspace.saves.load(Ordering::SeqCst), 0);
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let last = requests.last().unwrap();
     let history = serde_json::to_string(&last.contents).unwrap();
     assert!(history.contains("replayed"));
@@ -679,7 +676,7 @@ async fn native_tool_refusal_closes_pending_call_without_exposing_execution() {
         .unwrap();
     assert!(workspace.pending_tool_call("tool-session").await.unwrap().is_none());
     assert_eq!(workspace.tool_backend.calls.load(Ordering::SeqCst), 0);
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert!(!requests.last().unwrap().tools.contains_key("call_workspace_tool"));
 }
 

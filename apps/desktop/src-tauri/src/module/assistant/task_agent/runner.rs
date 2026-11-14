@@ -1,24 +1,29 @@
-//! Native boundaries around an SDK-owned coordinator, specialist tree and Runner.
-use super::{
-    main_agent::tools::ToolRegistry,
-    model::{content_text, generate},
-    planning_agent,
-    protocol::{self, AssistantContext, AssistantReply, AssistantStreamEvent},
-    sdk,
-    tools::WorkflowDiscovery,
-    workflow_agent,
-};
+//! Native boundaries around an SDK-owned task agent, specialist tree and Runner.
 use crate::module::artifact::ArtifactRef;
+use crate::module::assistant;
 use adk_rust::prelude::LlmAgentBuilder;
 use adk_rust::runner::Runner;
 use adk_rust::session::{CreateRequest, InMemorySessionService, SessionService};
 use adk_rust::{Content, Event, Llm, LlmRequest, Part, RunConfig, ToolExecutionStrategy};
 use anyhow::{Context, Result, bail, ensure};
+use assistant::{
+    model::{content_text, generate},
+    planning_agent,
+    protocol::{self, AssistantContext, AssistantReply, AssistantStreamEvent},
+    sdk,
+    task_agent::tools::ToolRegistry,
+    tools::WorkflowDiscovery,
+    workflow_agent,
+};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
+use tracing::Instrument;
 
 pub(super) struct Turn<'a> {
+    pub provider: &'a crate::config::ModelProvider,
+    pub authorization_pending: bool,
+    pub start_planning: bool,
     pub instruction: &'a str,
     pub history: &'a [Content],
     pub context: &'a AssistantContext,
@@ -35,6 +40,9 @@ pub(super) struct Turn<'a> {
 pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantReply> {
     let Turn {
         instruction,
+        provider,
+        authorization_pending,
+        start_planning,
         history,
         context,
         registry,
@@ -47,7 +55,15 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
         plan,
     } = turn;
     let (send, mut receive) = tokio::sync::mpsc::channel(8);
-    let mut declarations = registry.declarations();
+    // Offer actions to the task agent without granting them. Native validation
+    // runs only if it actually requests an operation or specialist transfer.
+    let available = ToolRegistry {
+        execution_allowed: registry.execution_allowed || authorization_pending,
+        planning_allowed: registry.planning_allowed || authorization_pending,
+        workspace_tools_allowed: registry.workspace_tools_allowed || authorization_pending,
+        ..registry.clone()
+    };
+    let mut declarations = available.declarations();
     if discovery.is_some() {
         declarations.remove("list_workflow");
         declarations.remove("execute_workflow");
@@ -65,11 +81,11 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
             declarations.remove(name);
         }
     }
-    let mut builder = LlmAgentBuilder::new("main_agent")
+    let mut builder = LlmAgentBuilder::new("task_agent")
         .description("Understand user goals, perform direct work and coordinate workflow specialists")
         .instruction(instruction)
         .model(Arc::new(sdk::Model {
-            agent: "main_agent".into(),
+            agent: "task_agent".into(),
             name: model.name().into(),
             requests: send.clone(),
         }))
@@ -77,7 +93,7 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
         .tool_execution_strategy(ToolExecutionStrategy::Sequential);
     for declaration in declarations.into_values() {
         builder = builder.tool(Arc::new(sdk::NativeTool {
-            agent: "main_agent".into(),
+            agent: "task_agent".into(),
             declaration,
             requests: send.clone(),
         }));
@@ -85,7 +101,7 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
     if registry.authoring_allowed && registry.workflows_enabled && discovery.is_some() {
         builder = builder.sub_agent(workflow_agent::build(model.name(), send.clone(), max_steps)?);
     }
-    if registry.planning_allowed && registry.workflows_enabled && discovery.is_some() {
+    if available.planning_allowed && registry.workflows_enabled && discovery.is_some() {
         builder = builder.sub_agent(planning_agent::build(model.name(), send.clone(), max_steps)?);
     }
     let coordinator = Arc::new(builder.build()?);
@@ -109,7 +125,7 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
     };
     for content in initial {
         let mut event = Event::new("native_history");
-        event.author = if content.role == "user" { "user" } else { "main_agent" }.into();
+        event.author = if content.role == "user" { "user" } else { "task_agent" }.into();
         event.llm_response.content = Some(content.clone());
         sessions.append_event(&session_id, event).await?;
     }
@@ -134,7 +150,7 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
         let mut reply = None;
         while let Some(event) = events.next().await {
             let event = event?;
-            if event.author == "main_agent"
+            if event.author == "task_agent"
                 && let Some(content) = event.llm_response.content
                 && !content
                     .parts
@@ -145,12 +161,15 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
                 reply = Some(protocol::parse_reply(content, &[])?);
             }
         }
-        reply.context("SDK runner returned no main-agent answer")
+        reply.context("SDK runner returned no task-agent answer")
     };
     tokio::pin!(invocation);
     let mut state = NativeTurn {
         context,
-        registry,
+        registry: registry.clone(),
+        provider,
+        authorization_pending,
+        start_planning,
         discovery,
         emit,
         history,
@@ -185,10 +204,10 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
                     let result = state.model(model, &agent, *request).await;
                     let _ = response.send(result);
                 },
-                sdk::Request::Tool(agent, name, args, response) => {
-                    if agent == "main_agent" && matches!(name.as_str(), "execute_capability" | "execute_workflow")
+                sdk::Request::Tool(agent, name, args, span, response) => {
+                    if agent == "task_agent" && matches!(name.as_str(), "execute_capability" | "execute_workflow")
                         && !state.blocked.contains_key(&agent) {
-                        match state.propose(&name, &args).await {
+                        match crate::core::telemetry_langfuse::tool(&name, &args, state.propose(&name, &args)).instrument(span).await {
                             Ok(mut reply) => {
                                 if let Some(record) = &mut state.input_issue {
                                     record["status"] = json!("resolved");
@@ -197,7 +216,7 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
                                 reply.artifacts = state.produced; return Ok(reply);
                             },
                             Err(error) => {
-                                if let Some(issue) = error.downcast_ref::<super::bindings::InputIssue>() {
+                                if let Some(issue) = error.downcast_ref::<assistant::bindings::InputIssue>() {
                                     let id = args[if name == "execute_capability" {"capability_id"} else {"workflow_id"}].clone();
                                     let record_id = state.input_issue.as_ref().and_then(|r|r["id"].as_str()).map(str::to_owned)
                                         .unwrap_or_else(||uuid::Uuid::new_v4().to_string());
@@ -213,7 +232,11 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
                             },
                         }
                     } else {
-                        let result = state.tool(&agent, &name, args).await;
+                        // Record the native result before a save/confirmation gate drops
+                        // the SDK invocation waiting for this response.
+                        let result = crate::core::telemetry_langfuse::tool(
+                            &name, &args, state.tool(&agent, &name, args.clone()),
+                        ).instrument(span).await;
                         if result.is_ok() && agent == "workflow_planner" && name == "save_workflow_plan"
                             && let Some(plan) = state.planned.clone() {
                             // Stop the entire SDK invocation at the native gate.
@@ -221,6 +244,13 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
                             // continue a task whose next step requires the user.
                             state.finish(&agent, "", None).await?;
                             return Ok(AssistantReply::paused(&plan, "review_required"));
+                        }
+                        if result.is_ok() && agent == "workflow_author" && name == "save_workflow_draft"
+                            && state.saved.is_some() && !state.registry.execution_allowed {
+                            // The native plan card is the save receipt. No model
+                            // needs the full authoring history just to repeat it.
+                            state.finish(&agent, &json!({"summary":"","assumptions":[]}).to_string(), None).await?;
+                            return Ok(AssistantReply { pause:None, content:Content::new("model"), text:String::new(), call:None, artifacts:state.produced });
                         }
                         if name == "call_workspace_tool" && let Ok(value) = &result
                             && value["status"] == "awaiting_confirmation" {
@@ -240,7 +270,10 @@ pub(super) async fn run(model: &dyn Llm, turn: Turn<'_>) -> Result<AssistantRepl
 
 struct NativeTurn<'a> {
     context: &'a AssistantContext,
-    registry: &'a ToolRegistry<'a>,
+    registry: ToolRegistry<'a>,
+    provider: &'a crate::config::ModelProvider,
+    authorization_pending: bool,
+    start_planning: bool,
     discovery: Option<&'a dyn WorkflowDiscovery>,
     emit: &'a (dyn Fn(AssistantStreamEvent) -> Result<()> + Send + Sync),
     history: &'a [Content],
@@ -263,12 +296,58 @@ struct NativeTurn<'a> {
     approved_tool: Option<&'a str>,
 }
 impl NativeTurn<'_> {
+    async fn authorize(&mut self, model: &dyn Llm) -> Result<()> {
+        if !self.authorization_pending {
+            return Ok(());
+        }
+        let current = self
+            .history
+            .last()
+            .filter(|c| c.role == "user")
+            .map(content_text)
+            .context("Operations require a current user request")?;
+        let decision =
+            assistant::authorization::assess(model, self.provider, self.history, &current, None, self.plan.as_ref())
+                .await?;
+        ensure!(
+            decision.tool_confirmation.is_none() && decision.plan_feedback.is_none(),
+            "An ordinary operation cannot approve a native interaction"
+        );
+        let authoring = decision.allows_authoring(&current);
+        self.registry.planning_allowed = authoring
+            || decision.intent == assistant::authorization::Intent::Planning
+                && !current.trim().is_empty()
+                && !decision.summary.trim().is_empty();
+        self.registry.execution_allowed = decision.allows_execution(&current) && !authoring;
+        self.registry.workspace_tools_allowed = self.registry.execution_allowed && !self.registry.planning_allowed;
+        self.task = workflow_agent::initial_task(&decision.summary);
+        self.authorization_pending = false;
+        if let (Some(discovery), Some(session)) = (self.discovery, self.context.session_id.as_deref()) {
+            discovery.record_turn(&json!({"id":uuid::Uuid::new_v4().to_string(),"sessionId":session,
+                "turnKey":self.tool_turn,"kind":"turn_interpretation","name":"assess_turn",
+                "status":"completed","startedAt":chrono::Utc::now().to_rfc3339(),"decision":decision,
+                "result":{"intent":decision.intent,"workflowExecutionAllowed":self.registry.execution_allowed && self.registry.workflows_enabled,
+                    "authoringAllowed":false,"planningAllowed":self.registry.planning_allowed && self.registry.workflows_enabled,
+                    "workspaceToolsAllowed":self.registry.workspace_tools_allowed,"hasCurrentUserMessage":true,
+                    "workflowProfileEnabled":self.registry.workflows_enabled,"pendingToolId":null,"toolConfirmationAccepted":false}})).await?;
+        }
+        Ok(())
+    }
     async fn model(&mut self, model: &dyn Llm, agent: &str, mut request: LlmRequest) -> Result<Content> {
         if agent == "workflow_planner" {
             ensure!(self.operation.is_some(), "Planner has no authorized handoff");
-            let conversation = super::planning_context::conversation(self.history);
-            let mut context = json!({"task":self.task,"current_plan":self.plan,"conversation":conversation,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id});
-            if let Some(evidence) = super::repair::evidence(self.handoff_contents.as_deref().unwrap_or(self.history)) {
+            let conversation = assistant::planning_context::conversation(self.history, &request.contents);
+            // Native initial delegation repeats the goal and generic planning
+            // instructions. Original messages carry the goal; preserve custom
+            // coordinator contracts (including revision targets) in full.
+            let task = self.task["goal"]
+                .as_str()
+                .filter(|goal| self.task != workflow_agent::initial_task(goal))
+                .map(|_| &self.task);
+            let mut context = json!({"task":task,"current_plan":self.plan,"conversation":conversation,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id});
+            if let Some(evidence) =
+                assistant::repair::evidence(self.handoff_contents.as_deref().unwrap_or(self.history))
+            {
                 context["execution_evidence"] = evidence;
             }
             request.contents.insert(
@@ -289,7 +368,7 @@ impl NativeTurn<'_> {
                         .await?,
                 );
             }
-            request.contents.insert(1.min(request.contents.len()), Content::new("user").with_text(json!({"approved_plan":self.plan,"delegated_task":self.task,"existing_workflow":self.revision_source,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
+            request.contents.insert(1.min(request.contents.len()), Content::new("user").with_text(json!({"approved_plan":self.plan,"delegated_task":self.task,"existing_workflow":self.revision_source,"node_contracts":workflow_agent::authoring::context_contracts(self.plan.as_ref().unwrap_or(&Value::Null), self.revision_source.as_ref().unwrap_or(&Value::Null))?,"authorized_artifacts":self.artifacts,"preferred_model_profile_id":self.context.model_profile_id}).to_string()));
         } else if let Some(contents) = &self.delivery_contents {
             // The SDK session contains specialist events too. Resume from the
             // coordinator's own history and native outcome, never rewrite valid
@@ -298,7 +377,7 @@ impl NativeTurn<'_> {
             request.tools.remove("transfer_to_agent");
             request.tools.remove("prepare_workflow_task");
         }
-        if agent == "main_agent" && self.input_issue.is_some() {
+        if agent == "task_agent" && self.input_issue.is_some() {
             // The native contract is already selected; another catalog search
             // cannot supply absent business inputs. Direct reads and corrected
             // bindings remain available, and a new user turn resets this gate.
@@ -309,6 +388,18 @@ impl NativeTurn<'_> {
         // immediately transfers and would skip every sibling call. Preserve the
         // signed response and one denial per call in the provider retry history.
         loop {
+            if agent == "task_agent" && !self.authorization_pending {
+                if !self.registry.execution_allowed {
+                    request.tools.remove("execute_capability");
+                    request.tools.remove("execute_workflow");
+                }
+                if !self.registry.workspace_tools_allowed {
+                    request.tools.remove("call_workspace_tool");
+                }
+                if !self.registry.planning_allowed && !self.registry.authoring_allowed {
+                    request.tools.remove("transfer_to_agent");
+                }
+            }
             let count = self.steps.entry(agent.into()).or_default();
             *count += 1;
             ensure!(
@@ -320,7 +411,7 @@ impl NativeTurn<'_> {
             usage_context.purpose = match agent {
                 "workflow_planner" => "planning",
                 "workflow_author" => "authoring",
-                _ => "conversation",
+                _ => "task",
             }
             .into();
             usage_context.operation_id = self
@@ -328,7 +419,7 @@ impl NativeTurn<'_> {
                 .as_ref()
                 .and_then(|op| op["id"].as_str())
                 .map(str::to_owned);
-            let native_author_handoff = agent == "main_agent"
+            let native_author_handoff = agent == "task_agent"
                 && self.operation.is_none()
                 && self.registry.authoring_allowed
                 && self.registry.workflows_enabled
@@ -337,25 +428,38 @@ impl NativeTurn<'_> {
                     .as_ref()
                     .is_some_and(|plan| plan["status"] == "approved" && plan["approvedTurnKey"] == self.tool_turn)
                 && request.tools.contains_key("transfer_to_agent");
-            let content = if native_author_handoff {
-                // The version-bound native approval already determines this route.
-                // Keep the normal SDK transfer and all checks/journaling below,
-                // without asking a model to choose the only authorized specialist.
+            let planner_handoff = agent == "task_agent"
+                && self.start_planning
+                && self.operation.is_none()
+                && request.tools.contains_key("transfer_to_agent");
+            if agent == "task_agent" {
+                self.start_planning = false;
+            }
+            let content = if native_author_handoff || planner_handoff {
+                // Routing or version-bound approval supplies a candidate target.
+                // The normal SDK transfer and native checks below still decide
+                // whether that handoff is authorized before any specialist runs.
                 Content {
                     role: "model".into(),
                     parts: vec![Part::FunctionCall {
                         name: "transfer_to_agent".into(),
-                        args: json!({"agent_name":"workflow_author"}),
+                        args: json!({"agent_name":if native_author_handoff {"workflow_author"} else {"workflow_planner"}}),
                         id: Some(uuid::Uuid::new_v4().to_string()),
                         thought_signature: None,
                     }],
                 }
             } else {
                 crate::module::model_usage::scope(usage_context, async {
-                    if agent == "main_agent" && !self.registry.planning_allowed {
-                        super::model::generate_answer(model, request.clone(), self.emit).await
+                    if agent == "task_agent" && !self.registry.planning_allowed {
+                        assistant::model::generate_answer(model, request.clone(), self.emit).await
                     } else {
-                        generate(model, request.clone(), &|_| Ok(())).await
+                        generate(model, request.clone(), &|event| match event {
+                            // Keep tool requests and specialist JSON out of chat,
+                            // while forwarding provider-exposed reasoning live.
+                            AssistantStreamEvent::Reasoning { .. } => (self.emit)(event),
+                            _ => Ok(()),
+                        })
+                        .await
                     }
                 })
                 .await?
@@ -368,8 +472,32 @@ impl NativeTurn<'_> {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            if agent == "task_agent"
+                && calls.iter().any(|(name, _)| {
+                    matches!(
+                        *name,
+                        "execute_capability" | "execute_workflow" | "call_workspace_tool" | "transfer_to_agent"
+                    )
+                })
+            {
+                self.authorize(model).await?;
+                for (name, _) in &calls {
+                    if matches!(*name, "execute_capability" | "execute_workflow") {
+                        ensure!(
+                            self.registry.execution_allowed && self.registry.workflows_enabled,
+                            "tool `{name}` is not permitted for this turn"
+                        );
+                    }
+                    if *name == "call_workspace_tool" {
+                        ensure!(
+                            self.registry.workspace_tools_allowed,
+                            "tool `{name}` is not permitted for this turn"
+                        );
+                    }
+                }
+            }
             self.blocked.remove(agent);
-            let denied_save = agent == "main_agent" && calls.iter().any(|(name, _)| *name == "save_workflow_draft");
+            let denied_save = agent == "task_agent" && calls.iter().any(|(name, _)| *name == "save_workflow_draft");
             if denied_save {
                 // Deny the current coordinator batch, not successful historical
                 // writes performed by the authorized specialist.
@@ -437,7 +565,7 @@ impl NativeTurn<'_> {
                         .push(serde_json::from_value(json!({"role":"function","parts":parts}))?);
                     continue;
                 }
-                if agent == "main_agent" {
+                if agent == "task_agent" {
                     let target = args["agent_name"].as_str().unwrap_or_default();
                     let allowed_target = (target == "workflow_planner" && self.registry.planning_allowed)
                         || (target == "workflow_author" && self.registry.authoring_allowed);
@@ -474,7 +602,7 @@ impl NativeTurn<'_> {
                     let id = if planning {
                         uuid::Uuid::new_v4().to_string()
                     } else {
-                        let digest = super::tool_execution::digest(&json!([
+                        let digest = assistant::tool_execution::digest(&json!([
                             self.plan.as_ref().unwrap()["id"],
                             self.plan.as_ref().unwrap()["version"]
                         ]))?;
@@ -514,10 +642,10 @@ impl NativeTurn<'_> {
                         })?;
                     }
                 } else {
-                    ensure!(args["agent_name"] == "main_agent", "Invalid specialist handoff target");
+                    ensure!(args["agent_name"] == "task_agent", "Invalid specialist handoff target");
                 }
             }
-            if agent == "main_agent" {
+            if agent == "task_agent" {
                 self.pending = Some(content.clone());
                 if let Some(history) = &mut self.delivery_contents {
                     *history = request.contents;
@@ -568,7 +696,7 @@ impl NativeTurn<'_> {
     }
     async fn tool(&mut self, agent: &str, name: &str, args: Value) -> Result<Value> {
         let result = self.dispatch_tool(agent, name, args.clone()).await;
-        if agent == "main_agent"
+        if agent == "task_agent"
             && let Some(contents) = &mut self.delivery_contents
         {
             // Preserve genuine coordinator tool exchanges, including call IDs
@@ -634,8 +762,8 @@ impl NativeTurn<'_> {
                 // diagnostic from this handoff may bind it to a matching target.
                 let document: Value =
                     serde_json::from_str(args["document_json"].as_str().unwrap_or("")).unwrap_or(Value::Null);
-                let repair = super::repair::evidence(self.handoff_contents.as_deref().unwrap_or(self.history))
-                    .and_then(|evidence| super::repair::plan_context(&evidence, document["target_id"].as_str()));
+                let repair = assistant::repair::evidence(self.handoff_contents.as_deref().unwrap_or(self.history))
+                    .and_then(|evidence| assistant::repair::plan_context(&evidence, document["target_id"].as_str()));
                 args["repair"] = serde_json::to_value(repair)?;
             }
             let record = self.operation.as_mut().context("Missing authorized handoff")?;
@@ -693,8 +821,10 @@ impl NativeTurn<'_> {
                         .await
                 },
                 "read_artifact" => discovery.direct(name, &args, &self.artifacts).await,
-                "list_capabilities" => super::tools::discover_capabilities(discovery, &args).await,
-                name if super::workspace_resources::contains(name) => discovery.workspace_resource(name, &args).await,
+                "list_capabilities" => assistant::tools::discover_capabilities(discovery, &args).await,
+                name if assistant::workspace_resources::contains(name) => {
+                    discovery.workspace_resource(name, &args).await
+                },
                 _ => discovery.authoring(name, &args).await,
             };
             let value = match result {
@@ -712,7 +842,7 @@ impl NativeTurn<'_> {
             {
                 let mut saved = value.clone();
                 if !saved["definitionDigest"].is_string() {
-                    saved["definitionDigest"] = json!(super::tool_execution::digest(
+                    saved["definitionDigest"] = json!(assistant::tool_execution::digest(
                         &workflow_agent::authoring::parse_document(&args)?
                     )?);
                 }
@@ -736,8 +866,8 @@ impl NativeTurn<'_> {
         }
         match name {
             "inspect_execution" if args["detail"] == "verification" => {
-                super::repair::authorize(self.history, &args)?;
-                args["_repair"] = super::repair::receipt_context(self.history, args["run_id"].as_str().unwrap())
+                assistant::repair::authorize(self.history, &args)?;
+                args["_repair"] = assistant::repair::receipt_context(self.history, args["run_id"].as_str().unwrap())
                     .unwrap_or(Value::Null);
                 self.discovery
                     .context("Stored execution comparison is unavailable")?
@@ -745,7 +875,7 @@ impl NativeTurn<'_> {
                     .await
             },
             "inspect_execution" if args["detail"] == "diagnostic" => {
-                super::repair::authorize(self.history, &args)?;
+                assistant::repair::authorize(self.history, &args)?;
                 self.discovery
                     .context("Stored execution diagnostics are unavailable")?
                     .execution_diagnostics(args["run_id"].as_str().unwrap(), args["node_id"].as_str())
@@ -813,14 +943,14 @@ impl NativeTurn<'_> {
                 }
                 result
             },
-            name if super::workspace_resources::contains(name) => {
+            name if assistant::workspace_resources::contains(name) => {
                 self.discovery
                     .context("Workspace resources are unavailable")?
                     .workspace_resource(name, &args)
                     .await
             },
             "list_capabilities" => match self.discovery {
-                Some(discovery) => super::tools::discover_capabilities(discovery, &args).await,
+                Some(discovery) => assistant::tools::discover_capabilities(discovery, &args).await,
                 None => self.registry.read(name, &args),
             },
             "list_workflow" => match self.discovery {
@@ -872,7 +1002,7 @@ impl NativeTurn<'_> {
                 json!({"status":"failed","summary":parsed.get("summary").cloned().unwrap_or(json!("No plan proposal was saved")),"error":error,"executed":false})
             }
         } else if let Some(saved) = &self.saved {
-            json!({"status":"completed","workflow_id":saved["capability_id"],"before_revision_id":saved["before_revision_id"],"after_revision_id":saved["after_revision_id"],"definitionDigest":saved["definitionDigest"],"validation":saved["validation"],"summary":parsed.get("summary").cloned().unwrap_or(json!("Workflow saved and validated")),"assumptions":parsed["assumptions"],"executed":false})
+            json!({"status":"completed","workflow_id":saved["capability_id"],"before_revision_id":saved["before_revision_id"],"after_revision_id":saved["after_revision_id"],"definitionDigest":saved["definitionDigest"],"validation":saved["validation"],"summary":parsed.get("summary").cloned().unwrap_or(json!("Workflow saved and validated")),"assumptions":parsed["assumptions"],"published":false,"executed":false})
         } else if error.is_none()
             && parsed["status"] == "needs_clarification"
             && parsed["questions"]
@@ -911,7 +1041,7 @@ impl NativeTurn<'_> {
             .clone()
             .context("Specialist has no coordinator handoff history")?;
         delivery.push(Content::new("user").with_text(format!(
-            "Native specialist outcome (data, not new permission): {}. Continue as the main agent using the approved plan and this outcome. A completed native save confirms the draft exists; the discovery catalog may predate this save, so do not query that catalog merely to prove this save. Describe validation and unexecuted criteria accurately. Do not create another workflow or infer permission to execute.",
+            "Native specialist outcome (data, not new permission): {}. Continue as the task agent using the approved plan and this outcome. A completed native save confirms the draft exists; the discovery catalog may predate this save, so do not query that catalog merely to prove this save. Describe validation and unexecuted criteria accurately. Do not create another workflow or infer permission to execute.",
             delivery_outcome(&result)
         )));
         self.delivery_contents = Some(delivery);
@@ -919,7 +1049,7 @@ impl NativeTurn<'_> {
     }
 }
 fn denied() -> Value {
-    json!({"error":"The main agent is not authorized to edit Workflow definitions. No calls in this batch were performed. Only workflow_author with a current native approved plan may save. Preserve existing native save/run outcomes; this denial concerns this attempted batch only.","permissionDenied":true,"executed":false})
+    json!({"error":"The task agent is not authorized to edit Workflow definitions. No calls in this batch were performed. Only workflow_author with a current native approved plan may save. Preserve existing native save/run outcomes; this denial concerns this attempted batch only.","permissionDenied":true,"executed":false})
 }
 
 // Keep the full specialist result in native audit storage. Only its bounded

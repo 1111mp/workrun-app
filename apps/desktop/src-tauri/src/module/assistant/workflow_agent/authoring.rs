@@ -15,16 +15,50 @@ use std::path::{Path, PathBuf};
 mod node_references;
 pub(in crate::module::assistant) use node_references::NODE_REFERENCES;
 
+/// Native plan hints are advisory. Supplying their contracts removes a discovery
+/// round trip; the author may still select other nodes when necessary.
+pub(in crate::module::assistant) fn context_contracts(plan: &Value, existing: &Value) -> Result<Value> {
+    let mut kinds = std::collections::BTreeSet::from(["start".to_owned(), "end".to_owned()]);
+    for step in plan["document"]["steps"].as_array().into_iter().flatten() {
+        for kind in step["node_types"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            kinds.insert(kind.to_owned());
+        }
+    }
+    for node in existing["document"]["nodes"].as_array().into_iter().flatten() {
+        if let Some(kind) = node["type"].as_str() {
+            kinds.insert(kind.to_owned());
+        }
+    }
+    // Invalid advisory hints cannot turn a valid approval into a host failure.
+    kinds.retain(|kind| contracts::NODE_TYPES.contains(&kind.as_str()));
+    reference(&json!({"topic":"nodes","node_types":kinds,"detail":"summary"}))
+}
+
 pub(in crate::module::assistant) fn reference(args: &Value) -> Result<Value> {
     let topic = args["topic"].as_str().unwrap_or("index");
-    Ok(match topic {
+    let mut value = match topic {
         "index" => {
-            json!({"schemaVersion":1,"topics":["capabilities","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"],"nodes":contracts::NODE_TYPES.iter().map(|kind|{let c=contracts::node_contract(kind).unwrap();json!({"type":kind,"title":c["title"],"summary":c["summary"],"skill":format!("workflow-node-{kind}")})}).collect::<Vec<_>>(),"next":"Request topic=nodes with explicit node_types for selected nodes. A node response includes its guide; do not reread it through read_skill."})
+            json!({"schemaVersion":1,"topics":["capabilities","codeact-runtime","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"],"nodes":contracts::NODE_TYPES.iter().map(|kind|{let c=contracts::node_contract(kind).unwrap();json!({"type":kind,"title":c["title"],"summary":c["summary"]})}).collect::<Vec<_>>(),"next":"Request topic=nodes with explicit node_types for selected nodes. A node response includes its guide; do not reread it through read_skill."})
         },
         "capabilities" => {
             json!({"schemaVersion":1,"guide":crate::module::assistant::resources::read("reference/workrun-capabilities.md")?})
         },
+        "codeact-runtime" => {
+            json!({"schemaVersion":1,"guide":workflow::codeact_agent::codeact_environment_guide()})
+        },
         "configuration" => {
+            if args.get("node_types").is_some() {
+                // Selected configuration uses the native node contract rather
+                // than silently returning the unrelated global resource manual.
+                let mut selected = args.clone();
+                selected["topic"] = json!("nodes");
+                return reference(&selected);
+            }
             json!({"schemaVersion":1,"guide":crate::module::assistant::resources::read("workflow_agent/reference/configuration.md")?})
         },
         "examples" => {
@@ -39,7 +73,7 @@ pub(in crate::module::assistant) fn reference(args: &Value) -> Result<Value> {
                 .into_iter()
                 .filter(|example| kinds.is_empty() || kinds.iter().any(|kind| example["node_type"] == *kind))
                 .map(|example| {
-                    if kinds.is_empty() {
+                    if kinds.is_empty() || args["detail"] == "summary" {
                         json!({"id":example["id"],"node_type":example["node_type"],"summary":example["summary"]})
                     } else {
                         example
@@ -64,19 +98,21 @@ pub(in crate::module::assistant) fn reference(args: &Value) -> Result<Value> {
                     if topic == "node-schema" {
                         return Ok(json!({"type":kind,"dataSchema":contract["dataSchema"]}));
                     }
+                    if args["detail"] != "full" {
+                        // Derive the brief from the same contracts used by validation.
+                        // Exact field types make the brief usable without a schema lookup.
+                        return Ok(json!({"type":kind,"guide":contract["guide"],
+                            "dataSchema":contract["dataSchema"],"sourceHandles":contract["sourceHandles"]}));
+                    }
                     let (_, _, guide) = NODE_REFERENCES
                         .iter()
                         .find(|(name, _, _)| *name == kind)
                         .context("Missing packaged node reference")?;
-                    let mut guide = crate::module::assistant::resources::read(guide)?;
-                    if kind == "codeact_agent" {
-                        guide.push_str("\n\n");
-                        guide.push_str(&workflow::codeact_agent::codeact_environment_guide());
-                    }
-                    Ok(json!({"type":kind,"skill":format!("workflow-node-{kind}"),"guide":guide}))
+                    let guide = crate::module::assistant::resources::read(guide)?;
+                    Ok(json!({"type":kind,"guide":guide}))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            json!({"schemaVersion":1,"nodes":nodes})
+            json!({"schemaVersion":1,"nodes":nodes,"next":"These are complete selected node data contracts. Configure from the supplied document/state rules and submit to save_workflow_draft. Read other references only for a concrete unanswered question; examples and configuration do not add another required step."})
         },
         "format" => {
             json!({"schemaVersion":1,"guide":crate::module::assistant::resources::read("workflow_agent/reference/format.md")?})
@@ -97,7 +133,31 @@ pub(in crate::module::assistant) fn reference(args: &Value) -> Result<Value> {
             json!({"schemaVersion":1,"guide":crate::module::assistant::resources::read("workflow_agent/reference/execution-recovery.md")?})
         },
         _ => anyhow::bail!("Unknown authoring topic"),
-    })
+    };
+    if args["detail"] == "summary"
+        && let Some(guide) = value["guide"].as_str()
+    {
+        // Summaries must contain semantics, not the introductory disclaimer.
+        let summary = if topic == "codeact-runtime" {
+            guide
+                .split("\n\n")
+                .skip(2)
+                .collect::<Vec<_>>()
+                .join("\n\n")
+                .split("OS access (sandboxed):")
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        } else if let Some(essentials) = guide.split("## Essentials\n\n").nth(1) {
+            essentials.split("\n## ").next().unwrap_or(essentials).trim().to_owned()
+        } else {
+            guide.to_owned()
+        };
+        value["guide"] = json!(summary);
+        value["detail"] = json!("summary");
+    }
+    Ok(value)
 }
 
 fn issue(phase: &str, path: &str, message: impl ToString) -> Value {
@@ -384,9 +444,17 @@ pub(in crate::module::assistant) async fn native_tool(name: &str, args: &Value) 
             )
         },
         "list_authoring_resources" => match args["kind"].as_str().unwrap_or("models") {
-            "models" => Ok(
-                json!({"items":crate::module::team_model::active_catalog().await?,"note":"IDs are native modelProfileId values; provider credentials must be configured separately"}),
-            ),
+            "models" => {
+                let mut models = crate::module::team_model::active_catalog().await?;
+                if let Some(id) = args.get("model_id") {
+                    let id = id.as_str().context("model_id must be a string")?;
+                    models.retain(|model| model.id == id);
+                    ensure!(!models.is_empty(), "Model profile is unavailable: {id}");
+                }
+                Ok(
+                    json!({"items":models,"note":"IDs are native modelProfileId values; provider credentials must be configured separately"}),
+                )
+            },
             _ => anyhow::bail!(
                 "Unknown resource kind; use models. Tools and Skills use workspace resource tools; Apps and workflows use list_capabilities"
             ),
@@ -433,13 +501,8 @@ mod tests {
         assert!(!index.to_string().contains("dataSchema"));
         let reference = reference(&json!({"topic":"nodes","node_types":["if_else"]})).unwrap();
         assert_eq!(reference["nodes"].as_array().unwrap().len(), 1);
-        assert!(
-            reference["nodes"][0]["guide"]
-                .as_str()
-                .unwrap()
-                .contains("interface IfElseNodeData")
-        );
-        assert!(reference["nodes"][0].get("dataSchema").is_none());
+        assert!(reference["nodes"][0]["guide"].as_str().unwrap().contains("conditions"));
+        assert!(reference["nodes"][0]["dataSchema"].is_object());
         assert!(!reference.to_string().contains("workflow/routing.rs"));
         let schema = super::reference(&json!({"topic":"node-schema","node_types":["if_else"]})).unwrap();
         assert!(schema["nodes"][0]["dataSchema"].is_object());
@@ -456,11 +519,8 @@ mod tests {
             assert!(NODE_REFERENCES.iter().any(|(name, _, _)| name == kind));
         }
         assert!(!skills.summaries().to_string().contains("interface IfElseNodeData"));
-        for (kind, _, guide) in NODE_REFERENCES {
-            assert_eq!(
-                skills.read(&format!("workflow-node-{kind}")).unwrap(),
-                crate::module::assistant::resources::read(guide).unwrap()
-            );
+        for (_, _, guide) in NODE_REFERENCES {
+            assert!(!crate::module::assistant::resources::read(guide).unwrap().is_empty());
         }
         assert_eq!(
             skills.mandatory_instructions().unwrap(),
@@ -478,13 +538,29 @@ mod tests {
         }
     }
     #[test]
-    fn codeact_node_details_include_linked_runtime_briefing_without_preloading() {
+    fn compact_node_references_preserve_native_contracts_for_all_nodes() {
+        for kind in contracts::NODE_TYPES {
+            let contract = contracts::node_contract(kind).unwrap();
+            let brief = reference(&json!({"topic":"nodes","node_types":[kind]})).unwrap();
+            let full = reference(&json!({"topic":"nodes","node_types":[kind],"detail":"full"})).unwrap();
+            let node = &brief["nodes"][0];
+            assert_eq!(node["guide"], contract["guide"]);
+            assert_eq!(node["dataSchema"], contract["dataSchema"]);
+            assert_eq!(node["sourceHandles"], contract["sourceHandles"]);
+            assert!(full["nodes"][0]["guide"].as_str().unwrap().contains("## Configuration"));
+            assert!(!brief.to_string().contains("export interface"));
+        }
+    }
+
+    #[test]
+    fn codeact_runtime_is_available_without_preloading_node_details() {
         let index = reference(&json!({})).unwrap();
         assert!(!index.to_string().contains("Linked runtime language"));
         let detail = reference(&json!({"topic":"nodes","node_types":["codeact_agent"]})).unwrap();
         let guide = detail["nodes"][0]["guide"].as_str().unwrap();
-        assert!(guide.ends_with(&workflow::codeact_agent::codeact_environment_guide()));
-        assert!(guide.contains("call_tool"));
+        assert!(!guide.contains("Linked runtime language"));
+        let runtime = reference(&json!({"topic":"codeact-runtime"})).unwrap();
+        assert_eq!(runtime["guide"], workflow::codeact_agent::codeact_environment_guide());
         assert!(guide.contains("/artifacts"));
         assert!(guide.contains("/outputs"));
         assert!(guide.contains("final_result"));
@@ -492,6 +568,71 @@ mod tests {
         assert!(!other.to_string().contains("Linked runtime language"));
         let schema = reference(&json!({"topic":"node-schema","node_types":["codeact_agent"]})).unwrap();
         assert!(schema["nodes"][0].get("guide").is_none());
+    }
+
+    #[test]
+    fn authoring_context_supplies_selected_and_existing_schemas_without_freezing_topology() {
+        let plan = json!({"document":{"steps":[{"node_types":["codeact_agent", "unknown_hint"]}]}});
+        let existing = json!({"document":{"nodes":[{"type":"agent"}]}});
+        let context = context_contracts(&plan, &existing).unwrap();
+        let nodes = context["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 4);
+        for kind in ["start", "end", "agent", "codeact_agent"] {
+            let node = nodes.iter().find(|node| node["type"] == kind).unwrap();
+            assert_eq!(
+                node["dataSchema"],
+                contracts::node_contract(kind).unwrap()["dataSchema"]
+            );
+        }
+        let summary = reference(&json!({"topic":"state","detail":"summary"})).unwrap();
+        for term in ["globalKeys", "settings.outputSchema", "final_result", "private"] {
+            assert!(summary["guide"].as_str().unwrap().contains(term));
+        }
+    }
+
+    #[test]
+    fn selected_configuration_is_scoped_and_node_guides_have_one_entry() {
+        let skills = crate::module::assistant::workflow_agent::skills::catalog();
+        for kind in contracts::NODE_TYPES {
+            assert!(skills.read(&format!("workflow-node-{kind}")).is_err());
+            for detail in ["summary", "full"] {
+                let config = reference(&json!({"topic":"configuration","node_types":[kind],"detail":detail})).unwrap();
+                let nodes = reference(&json!({"topic":"nodes","node_types":[kind],"detail":detail})).unwrap();
+                assert_eq!(config, nodes);
+                assert_eq!(config["nodes"].as_array().unwrap().len(), 1);
+                assert_eq!(config["nodes"][0]["type"], *kind);
+            }
+        }
+        assert!(reference(&json!({"topic":"configuration","node_types":["invented"]})).is_err());
+    }
+
+    #[test]
+    fn explicit_summary_never_returns_example_documents_or_full_manuals() {
+        for kind in contracts::NODE_TYPES {
+            let summary = reference(&json!({"topic":"examples","node_types":[kind],"detail":"summary"})).unwrap();
+            for example in summary["examples"].as_array().unwrap() {
+                assert!(example.get("document").is_none());
+                assert!(example["summary"].is_string());
+            }
+        }
+        for topic in [
+            "state",
+            "format",
+            "configuration",
+            "codeact-runtime",
+            "routing",
+            "recovery",
+            "compensation",
+            "execution-recovery",
+        ] {
+            let summary = reference(&json!({"topic":topic,"detail":"summary"})).unwrap();
+            let full = reference(&json!({"topic":topic,"detail":"full"})).unwrap();
+            assert!(
+                summary["guide"].as_str().unwrap().len() <= full["guide"].as_str().unwrap().len(),
+                "{topic}"
+            );
+            assert_eq!(summary["detail"], "summary");
+        }
     }
 
     #[test]

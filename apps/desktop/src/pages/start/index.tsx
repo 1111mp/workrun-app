@@ -501,6 +501,13 @@ function AssistantChat({ scope }: { scope: string }) {
                                   >
                                     <AssistantWorkflowPlan
                                       plan={entry.plan}
+                                      showConversationReply={
+                                        !group.messages.some(
+                                          (message) =>
+                                            message.role === 'assistant' &&
+                                            message.text.trim(),
+                                        )
+                                      }
                                       busy={Boolean(busy)}
                                       active={
                                         entry ===

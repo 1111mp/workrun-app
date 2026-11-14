@@ -430,7 +430,7 @@ impl super::tools::WorkflowDiscovery for Catalog {
         let store = crate::module::artifact::ArtifactStore::active()?;
         let (name, args, artifacts) = (name.to_owned(), args.clone(), artifacts.to_vec());
         let result =
-            tokio::task::spawn_blocking(move || super::main_agent::direct::execute(store, &name, &args, &artifacts))
+            tokio::task::spawn_blocking(move || super::task_agent::direct::execute(store, &name, &args, &artifacts))
                 .await??;
         anyhow::ensure!(dirs::active_workspace_id() == self.workspace_id, "Workspace changed");
         Ok(result)

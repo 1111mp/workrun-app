@@ -2,17 +2,29 @@
 use adk_rust::Content;
 use serde_json::{Value, json};
 
-pub(super) fn conversation(history: &[Content]) -> Vec<Value> {
+pub(super) fn conversation(history: &[Content], supplied: &[Content]) -> Vec<Value> {
     history
         .iter()
         .enumerate()
         .filter(|(_, message)| matches!(message.role.as_str(), "user" | "model"))
         .map(|(index, message)| {
-            json!({
+            let mut entry = json!({
                 "message_index":index,"role":message.role,
                 "source":if message.role=="user" {"user_expression"}else{"assistant_generated_unverified"},
                 "text":super::model::content_text(message)
-            })
+            });
+            // The SDK already supplies the current user message. Keep its native
+            // index/source label, but never repeat a large body inside JSON too.
+            if index + 1 == history.len()
+                && message.role == "user"
+                && supplied.iter().any(|content| {
+                    content.role == "user" && super::model::content_text(content) == super::model::content_text(message)
+                })
+            {
+                entry.as_object_mut().unwrap().remove("text");
+                entry["text_source"] = json!("current_user_message");
+            }
+            entry
         })
         .collect()
 }
@@ -44,12 +56,37 @@ mod tests {
             Content::new("model").with_text("The file must describe monthly orders"),
             Content::new("function").with_text("not conversational prose"),
         ];
-        let context = conversation(&history);
+        let context = conversation(&history, &[]);
         assert_eq!(context.len(), 2);
         assert_eq!(context[0]["source"], "user_expression");
         assert_eq!(context[1]["source"], "assistant_generated_unverified");
         assert_eq!(context[1]["message_index"], 1);
     }
+    #[test]
+    fn latest_body_is_supplied_once_without_losing_prior_context_or_indices() {
+        let text = "本次用户输入".repeat(5000);
+        let history = vec![
+            Content::new("user").with_text("Earlier scope"),
+            Content::new("model").with_text("Unverified assumption"),
+            Content::new("user").with_text(&text),
+        ];
+        let supplied = vec![history[2].clone()];
+        let compact = conversation(&history, &supplied);
+        assert_eq!(compact[0]["text"], "Earlier scope");
+        assert_eq!(compact[1]["source"], "assistant_generated_unverified");
+        assert_eq!(compact[2]["message_index"], 2);
+        assert_eq!(compact[2]["source"], "user_expression");
+        assert!(compact[2].get("text").is_none());
+        assert_eq!(compact[2]["text_source"], "current_user_message");
+        assert_eq!(super::super::model::content_text(&supplied[0]), text);
+        // If the SDK did not supply the original, retain it in labeled history.
+        assert_eq!(conversation(&history, &[])[2]["text"], text);
+        assert_eq!(
+            conversation(&history, &[Content::new("user").with_text("different")])[2]["text"],
+            text
+        );
+    }
+
     #[test]
     fn binding_index_preserves_original_positions_without_repeating_large_bodies() {
         let source = format!("{} amount=1700", "数据".repeat(10000));

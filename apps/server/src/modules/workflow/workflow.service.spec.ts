@@ -309,6 +309,65 @@ describe('WorkflowService', () => {
     );
   });
 
+  it('uploads a native draft only during publication and preserves its ID', async () => {
+    const id = 'd317e463-6d73-b355-02bd-96bec657f972';
+    const document = {
+      nodes: [{ id: 'start' }],
+      edges: [],
+      settings: { name: '成绩判断' },
+    };
+    model.findOneAndUpdate.mockResolvedValue({});
+    model.findOne.mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ _id: 'stored', id, document }),
+    });
+    releaseModel.create.mockResolvedValue({
+      _id: 'release',
+      id: 'release-1',
+      version: '1.0.0',
+    });
+    await service.publish(ownerId, id, {
+      document,
+      version: '1.0.0',
+      releaseNote: 'Initial release',
+    });
+    expect(model.findOneAndUpdate).toHaveBeenCalledWith(
+      { id, ownerId: new Types.ObjectId(ownerId), isDelete: false },
+      {
+        $set: { document },
+        $setOnInsert: { id, ownerId: new Types.ObjectId(ownerId) },
+      },
+      { upsert: true },
+    );
+    expect(releaseModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowId: id, document }),
+    );
+  });
+
+  it('does not upload an invalid native draft or overwrite another owner', async () => {
+    const id = 'd317e463-6d73-b355-02bd-96bec657f972';
+    await expect(
+      service.publish(ownerId, id, {
+        document: {
+          nodes: [{ id: 'same' }, { id: 'same' }],
+          edges: [],
+          settings: {},
+        },
+        version: '1.0.0',
+        releaseNote: 'Invalid',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+    model.findOneAndUpdate.mockRejectedValueOnce({ code: 11000 });
+    await expect(
+      service.publish(ownerId, id, {
+        document: { nodes: [], edges: [], settings: {} },
+        version: '1.0.0',
+        releaseNote: 'Collision',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(releaseModel.create).not.toHaveBeenCalled();
+  });
+
   it('rejects duplicate release versions within the same workflow', async () => {
     model.findOne.mockReturnValue({
       lean: vi.fn().mockResolvedValue({

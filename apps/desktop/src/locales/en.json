@@ -2166,6 +2166,11 @@
       "failed": "Tool confirmation failed. Review the current request."
     },
     "plan": {
+      "readyReply": "The plan is ready for review in the card above. Once you confirm, I will create the workflow without running it.",
+      "revisionReadyReply": "The proposed changes are ready for review in the card above. Once you confirm, I will save them without running the workflow.",
+      "clarificationReply": "The proposal is ready for your input. Please answer the questions in the card so I can refine it.",
+      "createdReply": "I have created and saved the workflow draft from the confirmed plan. Configuration validation passed. You can open it to review the setup or tell me what to adjust. It has not been published or run; runtime results remain unverified.",
+      "updatedReply": "I have updated and saved the workflow draft from the confirmed plan. Configuration validation passed. You can open it to review the changes or tell me what to adjust. It has not been published or run; runtime results remain unverified.",
       "viewOutcome": "View save details",
       "hideOutcome": "Collapse creation details",
       "viewPlan": "View full plan",
@@ -2292,6 +2297,8 @@
     "turn": "Turn {{id}}",
     "empty": "No recorded model calls. This does not mean zero tokens were used.",
     "purposes": {
+      "routing": "Request routing",
+      "task": "Task handling",
       "schedule_agent": "Scheduling conversation",
       "conversation": "Conversation",
       "intent": "Intent assessment",

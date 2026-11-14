@@ -1,38 +1,38 @@
 ---
 name: workflow-authoring
-description: Configure, review, validate and save native Workflows from approved plans.
+description: Configure and save native Workflows from approved plans.
 ---
-# Workflow authoring
-
-Follow the authoring role boundaries; use workrun-capabilities for selection guidance.
-
-1. Discover summaries with get_workflow_reference(topic=index). Read format/state
-   and selected contracts via topic=nodes,node_types=[...]. Node responses already
-   include their guides and CodeAct runtime support: do not also read_skill for
-   those same nodes. Read configuration, examples, routing, recovery or
-   compensation/execution-recovery only to resolve a relevant uncertainty.
-2. Resolve real models with list_authoring_resources; discover tools/Skills with
-   list_workspace_tools/list_workspace_skills, then retrieve selected tool_id contracts
-   and read_workspace_skill bodies/references. Use expected_id and pagination as
-   needed; trigger=true requires explicit @name invocation. Discover Workflow/App
-   contracts through list_capabilities. Reading a Skill does not attach its tools:
-   configure actual dependencies, including toolIds/skillRefs where supported.
-3. Build settings/nodes/edges using the same fields as the visual editor. Native
-   global/namespace state is the data-sharing mechanism; use the state/configuration
-   references for visibility and output publication. Do not invent mappings, node
-   types, loops, scripting APIs or host access. Submit JSON, not TypeScript.
-4. Compare the actual configuration with the approved processing rules: input
-   selection/meaning, capable executor, produced outputs, downstream visibility and
-   Workflow export. Executing code or calling a tool does not prove the intended
-   rules were implemented. Use supported capabilities for exact work; preserve
-   computed values through presentation. Keep useful check evidence/failures visible,
-   without requiring a fixed output form or topology. Return substantive gaps for
-   discussion rather than guessing. Sample answers are not reusable implementations.
-5. Submit the definition once with save_workflow_draft(document_json=JSON text).
-   Saving validates configuration/compilation before any write; repair returned
-   issues and retry. Use validate_workflow_draft separately only when a validation-only
-   review is needed. Validation does not prove execution or business correctness.
-   Save one valid definition; report its actual identity,
-   assumptions and pending criteria. Respect the operation's creation/revision
-   target. If interrupted or out of budget, report unfinished work without claiming
-   success or creating duplicates. The parent alone handles authorized execution.
+1. node_contracts supplies complete native data schemas for plan-suggested and existing
+   nodes, including Start/End. Use them directly; hints are not a mandatory topology.
+   Read another selected node only if choosing a type not supplied. Use references
+   for a specific unanswered question, not as a checklist before saving. Do not read
+   examples/configuration to reconfirm supplied fields; native saving validates them.
+2. Reuse supplied native IDs, including preferred_model_profile_id unless unsuitable.
+   Native saving validates model configuration; do not enumerate models merely to
+   reconfirm the supplied ID. Use model_id for an exact lookup if it is in doubt.
+   Discover missing models, tools, Skills or Workflow/App contracts with their tools;
+   inspect selected exact contracts. Never invent IDs, paths, credentials or access.
+   Discovery is not availability, and reading a Skill does not attach dependencies.
+3. Submit {settings,nodes,edges}. settings has name, mode (task/chat), optional
+   description and inputSchema/outputSchema:{fields:[{id,key,label,type,required}]}.
+   Field types: string, textarea, number, boolean, file, files; keys are unique and
+   cannot start with workflow. Node:{id,type,data,position:{x,y}}; edge:{id,source,
+   target,sourceHandle?}. Use unique IDs and only the selected contract's handles.
+   Exactly one start and at least one end; start connects to an executable node.
+   Run input top-level keys enter global state. Node outputs are private unless
+   published by data.state.globalKeys; edges establish order, not private sharing.
+   Consumers read visible fields directly, without an invented node-ID prefix.
+   Schemas and End do not produce values. Agent/CodeAct data.name names the node;
+   their outputSchema is JSON text, not an object. CodeAct final_result.value is an
+   object of named output fields. State is supplied as model-visible input, not
+   automatically injected Python variables; scripts use actual visible input values.
+   Returning final_result.value publishes its named fields through state.globalKeys;
+   declare matching settings.outputSchema fields to export the Workflow result.
+   A plain value computation needs neither filesystem APIs nor a second publication
+   tool. Selected examples demonstrate syntax; they do not define a required topology. Use format/state for private access, redaction,
+   subworkflow wiring or other unresolved details; codeact-runtime for exact file,
+   tool or language APIs beyond basic expressions. Never assume full Python support.
+   Group independent reads and wait before dependent work.
+4. Call save_workflow_draft(document_json=JSON text), which validates before writing.
+   Repair errors and retry only on failure. Separate validate_workflow_draft is for
+   explicit validation-only review. Saving grants neither execution nor publication.

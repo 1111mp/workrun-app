@@ -11,6 +11,7 @@ import {
   deleteWorkflow,
   getExecutableWorkflow,
   getWorkflow,
+  getWorkflows,
   updateWorkflow,
   toWorkflowDocument,
   toWorkflowDsl,
@@ -54,11 +55,13 @@ describe('deleteWorkflow', () => {
     expect(fetchApi.delete).not.toHaveBeenCalled();
   });
 
-  it('uses the author-scoped server endpoint in team mode', async () => {
+  it('deletes the local draft without deleting a Team release', async () => {
     vi.mocked(isTeamMode).mockReturnValue(true);
     await deleteWorkflow('workflow-1');
-    expect(fetchApi.delete).toHaveBeenCalledWith('/workflow/workflow-1');
-    expect(invoke).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith('delete_workflow', {
+      id: 'workflow-1',
+    });
+    expect(fetchApi.delete).not.toHaveBeenCalled();
   });
 });
 
@@ -193,20 +196,65 @@ describe('workflow authoring and publication boundaries', () => {
   it('saves the existing Team draft by ID without creating another workflow or release', async () => {
     vi.mocked(isTeamMode).mockReturnValue(true);
     await updateWorkflow('workflow-one', document);
-    expect(fetchApi.patch).toHaveBeenCalledWith('/workflow/workflow-one', {
+    expect(invoke).toHaveBeenCalledWith('update_workflow', {
+      id: 'workflow-one',
       document,
     });
     expect(fetchApi.post).not.toHaveBeenCalled();
-    expect(invoke).not.toHaveBeenCalled();
+    expect(fetchApi.patch).not.toHaveBeenCalled();
   });
   it('publishes a version under the existing workflow ID', async () => {
     vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValueOnce({ id: 'workflow-one', document });
     await publishWorkflow('workflow-one', '1.0.0', 'Release');
     expect(fetchApi.post).toHaveBeenCalledWith(
       '/workflow/workflow-one/releases',
-      { version: '1.0.0', releaseNote: 'Release' },
+      { version: '1.0.0', releaseNote: 'Release', document },
     );
     expect(fetchApi.patch).not.toHaveBeenCalled();
+  });
+  it('creates and opens Team drafts locally without uploading', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    await createWorkflow(document);
+    await getWorkflow('local-draft');
+    expect(invoke).toHaveBeenCalledWith('create_workflow', { document });
+    expect(invoke).toHaveBeenCalledWith('get_workflow', { id: 'local-draft' });
+    expect(fetchApi.get).not.toHaveBeenCalled();
+    expect(fetchApi.post).not.toHaveBeenCalled();
+  });
+  it('lists local drafts alongside releases without replacing local edits', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValueOnce([{ id: 'one', document }]);
+    vi.mocked(fetchApi.get).mockResolvedValueOnce({
+      items: [
+        {
+          id: 'one',
+          document: { settings: { name: 'Published' } },
+          latestRelease: { version: '1.0.0' },
+        },
+        { id: 'remote', document, editable: true },
+      ],
+    });
+    expect(await getWorkflows()).toEqual([
+      expect.objectContaining({
+        id: 'one',
+        document,
+        editable: true,
+        latestRelease: { version: '1.0.0' },
+      }),
+      expect.objectContaining({ id: 'remote', editable: false }),
+    ]);
+    expect(fetchApi.get).toHaveBeenCalledWith(
+      expect.stringContaining('view=published'),
+    );
+  });
+  it('keeps drafts visible when the Team catalog is unavailable', async () => {
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValueOnce([{ id: 'local', document }]);
+    vi.mocked(fetchApi.get).mockRejectedValueOnce(new Error('Offline'));
+    expect(await getWorkflows()).toEqual([
+      expect.objectContaining({ id: 'local', document }),
+    ]);
   });
   it('keeps Personal creation and saving in native storage', async () => {
     vi.mocked(isTeamMode).mockReturnValue(false);

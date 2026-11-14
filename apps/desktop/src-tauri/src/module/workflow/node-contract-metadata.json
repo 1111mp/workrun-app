@@ -13,7 +13,12 @@
     "sourceHandles": [],
     "guide": "Exactly one entry is required. It may only connect to executable nodes, cannot be an edge target, and cannot connect directly to end. Each run input key enters global state.",
     "summary": "Enter a workflow and expose run inputs.",
-    "dataConstraints": {}
+    "dataConstraints": {},
+    "planning": {
+      "capability": "Expose per-run inputs to subsequent steps.",
+      "limits": "Entry only; connects to an executable step, not directly to end.",
+      "requires": "Declared runtime inputs."
+    }
   },
   "end": {
     "title": "End",
@@ -29,7 +34,12 @@
     "sourceHandles": [],
     "guide": "At least one end node is required. End nodes only accept incoming edges; all map to graph END. Declaring outputSchema does not create output: executable nodes must publish output keys to global state.",
     "summary": "Complete a workflow branch.",
-    "dataConstraints": {}
+    "dataConstraints": {},
+    "planning": {
+      "capability": "Complete a branch and return produced Workflow outputs.",
+      "limits": "Does not create output; an executable producer must supply it.",
+      "requires": "Outputs produced by earlier executable steps."
+    }
   },
   "agent": {
     "title": "Local agent",
@@ -54,7 +64,7 @@
       }
     },
     "sourceHandles": [],
-    "guide": "Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths containing ArtifactRefs (files), never ordinary text, JSON strings or objects. Visible ordinary values are already available as scoped state; refer to their existing keys in instruction and use native state visibility. Do not add attachmentPaths merely to pass a previous node result. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.\n\nTool IDs and callable names are different: select the discovered ID in toolIds and toolStateBindings.toolId; use the tool contract for its callable name and argument schema. With no selected Skills, selected tools are attached directly. With skillRefs, SkillToolset exposes Skill discovery/loading and resolves tools after the declaring Skill is loaded. Every Skill-declared tool must be selected; nonempty allowedTools declarations restrict the effective tool set to their union. Reading a Skill during planning does not activate it in this node. Read reference topic=configuration for resource wiring and topic=examples with node_types=[\"agent\"] for a native example.",
+    "guide": "Reads visible scoped state; instruction defines its task. outputKey stores the complete final text and is mutually exclusive with outputSchema. Structured output top-level keys are private until published with state.globalKeys. Discover real toolIds; the executor enforces Tool App confirmation. skillRefs must reference existing personal skills. attachmentPaths select visible state paths containing ArtifactRefs (files), never ordinary text, JSON strings or objects. Visible ordinary values are already available as scoped state; refer to their existing keys in instruction and use native state visibility. Do not add attachmentPaths merely to pass a previous node result. UTF-8 text/*, JSON and XML attachments are included as file text (1 MiB per file); images use provider-native attachments, and PDF attachments require Gemini. Other binary formats require extraction before analysis. Total attachments are limited to 20 MiB. Omitted temperature/topP use runtime defaults. maxToolCalls: 1–50, default 8; toolTimeoutSeconds: 1–600, default 60.\n\nTool IDs and callable names are different: select the discovered ID in toolIds and toolStateBindings.toolId; use the tool contract for its callable name and argument schema. With no selected Skills, selected tools are attached directly. With skillRefs, SkillToolset exposes Skill discovery/loading and resolves tools after the declaring Skill is loaded. Every Skill-declared tool must be selected; nonempty allowedTools declarations restrict the effective tool set to their union. Reading a Skill during planning does not activate it in this node. For unresolved wiring questions, configuration and examples (node_types=[\"agent\"]) are available; do not load them just to repeat this contract.",
     "summary": "Use a configured model, tools and personal skills.",
     "dataConstraints": {
       "properties": {
@@ -164,6 +174,11 @@
           }
         }
       }
+    },
+    "planning": {
+      "capability": "Interpret or generate content using a model; use selected tools or Skills when needed.",
+      "limits": "Instructions alone provide neither exact computation nor external actions; attachments depend on provider support.",
+      "requires": "Configured model and any selected tool/Skill contracts; publish required outputs."
     }
   },
   "codeact_agent": {
@@ -184,7 +199,7 @@
       }
     },
     "sourceHandles": [],
-    "guide": "Uses the restricted Monty Python runtime, not an unrestricted Python terminal or package installer. Read reference topic=nodes with node_types=[\"codeact_agent\"] for the linked runtime language/module/OS briefing before committing to an implementation; Python familiarity does not establish library or method support. Read input files through /artifacts/manifest.json; write deliverables under /outputs for runtime export. maxIterations: 1–50, default 8; script duration: 1–300 seconds, default 5; memory: 16–4096 MiB, default 256. mounts/environment grant real host access and must come from explicitly authorized configuration. Never invent paths or secrets. Reserve /artifacts and /outputs; mounts must not overlap. Compilation currently requires a configured model and workspace runtime. The artifact manifest is an array of {reference:{id,name,...},path}; read entry.path, not a guessed input-name key or artifact directory. Inspect input structure before processing. Finish with a last-expression {\"type\":\"final_result\",\"value\":{...named output fields...}}. Object fields enter private state and state.globalKeys publishes them; use outputSchema for explicit validation. Do not invent global-state tools. Avoid bound dictionary methods as callbacks in Monty; use explicit loops.\n\nCodeAct selects executable dependencies with discovered toolIds and may bind arguments with toolStateBindings. It does not support personal skillRefs or Agent outputKey/attachmentPaths. Visible ArtifactRefs are mapped to its file workspace automatically. Workrun writes exported files to the artifacts state key; publish artifacts with state.globalKeys or share the namespace through readers when downstream nodes need them. Do not put invented ArtifactRefs into final_result. Read reference topic=configuration and topic=examples with node_types=[\"codeact_agent\"] for a native example.",
+    "guide": "Uses the restricted Monty Python runtime, not an unrestricted Python terminal or package installer. For file operations, tool calls or uncertain language/library support, read topic=codeact-runtime; basic comparisons, arithmetic and final_result need no extended runtime manual. Python familiarity does not establish library or method support. Read input files through /artifacts/manifest.json; write deliverables under /outputs for runtime export. maxIterations: 1–50, default 8; script duration: 1–300 seconds, default 5; memory: 16–4096 MiB, default 256. mounts/environment grant real host access and must come from explicitly authorized configuration. Never invent paths or secrets. Reserve /artifacts and /outputs; mounts must not overlap. Compilation currently requires a configured model and workspace runtime. The artifact manifest is an array of {reference:{id,name,...},path}; read entry.path, not a guessed input-name key or artifact directory. Inspect input structure before processing. Finish with a last-expression {\"type\":\"final_result\",\"value\":{...named output fields...}}. Object fields enter private state and state.globalKeys publishes them; use outputSchema for explicit validation. Do not invent global-state tools. Avoid bound dictionary methods as callbacks in Monty; use explicit loops.\n\nCodeAct selects executable dependencies with discovered toolIds and may bind arguments with toolStateBindings. It does not support personal skillRefs or Agent outputKey/attachmentPaths. Visible ArtifactRefs are mapped to its file workspace automatically. Workrun writes exported files to the artifacts state key; publish artifacts with state.globalKeys or share the namespace through readers when downstream nodes need them. Do not put invented ArtifactRefs into final_result. For unresolved wiring questions, configuration and examples (node_types=[\"codeact_agent\"]) are available; do not load them just to repeat this contract.",
     "summary": "Compose authorized tools with restricted Python.",
     "dataConstraints": {
       "properties": {
@@ -305,6 +320,11 @@
           }
         }
       }
+    },
+    "planning": {
+      "capability": "Compute reproducible results with restricted Python (Monty), optionally composing authorized tools.",
+      "limits": "No unrestricted packages, network or subprocesses; verify runtime support for specialized processing.",
+      "requires": "Configured model and workspace runtime; input data and any selected tools; publish computed outputs."
     }
   },
   "process": {
@@ -328,7 +348,7 @@
       }
     },
     "sourceHandles": [],
-    "guide": "Uses the existing Process executor for installed Workflow-type Apps. Tool-type Apps belong in agent.toolIds; never change their type to bypass confirmation. processNodeId is the native local App ID, without the app: capability prefix. The App receives visible inputs; outputs remain private until their agreed keys are published. Team appRef requires immutable coordinates for an authorized published version; ask for missing coordinates. Do not substitute inline scripts for Apps. Read the recovery topic for compensation.\n\nDiscover the App contract before configuration: process receives scoped visible state, so its expected input keys must be available under the names its contract declares. Node edges do not rename fields. For tool-shaped calls inside an Agent, select a Tool App or MCP tool in toolIds instead. Publish only actual declared outputs through state.globalKeys. Read reference topic=configuration and topic=examples with node_types=[\"process\"] for a native example.",
+    "guide": "Uses the existing Process executor for installed Workflow-type Apps. Tool-type Apps belong in agent.toolIds; never change their type to bypass confirmation. processNodeId is the native local App ID, without the app: capability prefix. The App receives visible inputs; outputs remain private until their agreed keys are published. Team appRef requires immutable coordinates for an authorized published version; ask for missing coordinates. Do not substitute inline scripts for Apps. Read the recovery topic for compensation.\n\nDiscover the App contract before configuration: process receives scoped visible state, so its expected input keys must be available under the names its contract declares. Node edges do not rename fields. For tool-shaped calls inside an Agent, select a Tool App or MCP tool in toolIds instead. Publish only actual declared outputs through state.globalKeys. For unresolved wiring questions, configuration and examples (node_types=[\"process\"]) are available; do not load them just to repeat this contract.",
     "summary": "Execute an installed Workflow-type App.",
     "dataConstraints": {
       "properties": {
@@ -371,6 +391,11 @@
           "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
         }
       }
+    },
+    "planning": {
+      "capability": "Execute an installed Workflow-type App and return its declared outputs.",
+      "limits": "Not for Tool Apps or arbitrary inline scripts. Inputs and outputs follow the App contract.",
+      "requires": "Installed App; Team use needs authorized immutable release coordinates."
     }
   },
   "remote_agent": {
@@ -458,6 +483,11 @@
           }
         }
       }
+    },
+    "planning": {
+      "capability": "Delegate work to an external A2A agent.",
+      "limits": "Remote side effects are possible; a timeout does not prove nothing happened.",
+      "requires": "Reachable A2A service, its contract and any required stored credentials."
     }
   },
   "if_else": {
@@ -541,6 +571,11 @@
           }
         }
       }
+    },
+    "planning": {
+      "capability": "Route execution using two ordered, independent conditions.",
+      "limits": "Routing is not a business boolean output. Conditions support field/literal comparisons, not arbitrary code; neither matching ends the branch.",
+      "requires": "Comparable visible input; executable producers for business results."
     }
   },
   "switch": {
@@ -619,6 +654,11 @@
           }
         }
       }
+    },
+    "planning": {
+      "capability": "Route to the first matching case, otherwise default.",
+      "limits": "Routes only; does not compute or publish business results.",
+      "requires": "Visible case inputs and an executable result producer when outputs are needed."
     }
   },
   "human_review": {
@@ -693,6 +733,11 @@
           "uniqueItems": true
         }
       }
+    },
+    "planning": {
+      "capability": "Pause for a real human approval or rejection.",
+      "limits": "The agent cannot supply approval or bypass the pause.",
+      "requires": "Review content and a human decision through native controls."
     }
   },
   "ask_user_question": {
@@ -769,6 +814,11 @@
           }
         }
       }
+    },
+    "planning": {
+      "capability": "Pause until the user selects an offered option.",
+      "limits": "The agent cannot answer on the user’s behalf.",
+      "requires": "Defined choices and a real user response through native controls."
     }
   },
   "subworkflow": {
@@ -831,6 +881,11 @@
           "description": "Read get_workflow_reference(topic=compensation) for the declaration: mode unspecified/read_only/irreversible/compensatable/delegated; compiler validates nested action, bindings and idempotency."
         }
       }
+    },
+    "planning": {
+      "capability": "Reuse a saved Workflow and collect its declared outputs.",
+      "limits": "No recursive invocation; only declared child outputs are returned.",
+      "requires": "Exact saved Workflow contract in this workspace, required inputs and output publication."
     }
   },
   "terminate": {
@@ -849,7 +904,12 @@
     "sourceHandles": [],
     "guide": "Stops this workflow and all parent workflows, unlike ordinary end. Successors must not continue business execution. Termination does not undo existing side effects; use native compensation and cleanup records.",
     "summary": "Stop the current workflow and its parents.",
-    "dataConstraints": {}
+    "dataConstraints": {},
+    "planning": {
+      "capability": "Stop the Workflow and its parent chain.",
+      "limits": "Does not undo prior side effects; ordinary completion should use end.",
+      "requires": "Explicit task need for termination; compensation if reversal is required."
+    }
   },
   "group": {
     "title": "Layout group",
@@ -867,6 +927,11 @@
     "sourceHandles": [],
     "guide": "Canvas layout only; not executable and must have no edges. Children may use React Flow parentId/extent and relative coordinates. Grouping does not create subworkflows or loops.",
     "summary": "Organize canvas nodes without executing.",
-    "dataConstraints": {}
+    "dataConstraints": {},
+    "planning": {
+      "capability": "Organize nodes visually.",
+      "limits": "Layout only; cannot execute, route or produce outputs.",
+      "requires": "None."
+    }
   }
 }

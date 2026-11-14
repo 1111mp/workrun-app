@@ -452,13 +452,30 @@ export function clearLegacyWorkflowDocument() {
   window.localStorage.removeItem(workflowDocumentStorageKey);
 }
 
-export async function getWorkflows() {
-  if (isTeamMode()) return (await getWorkflowOverview()).items;
-  return invoke<StoredWorkflow[]>('get_workflows');
+export async function getWorkflows(): Promise<StoredWorkflow[]> {
+  const drafts = await invoke<StoredWorkflow[]>('get_workflows');
+  if (!isTeamMode()) return drafts;
+  // Drafts are account-scoped locally. A catalog/network failure must not hide
+  // them, and a released snapshot must never replace the editable document.
+  const published = await getWorkflowCapabilities().catch(() => []);
+  const localIds = new Set(drafts.map((draft) => draft.id));
+  const releases = new Map(
+    published.map((workflow) => [workflow.id, workflow]),
+  );
+  return [
+    ...drafts.map((draft) => ({
+      ...releases.get(draft.id),
+      ...draft,
+      editable: true,
+    })),
+    ...published
+      .filter((workflow) => !localIds.has(workflow.id))
+      .map((workflow) => ({ ...workflow, editable: false })),
+  ];
 }
 
 /** The entry searches the full team catalog rather than only its first page. */
-export async function getWorkflowCapabilities() {
+export async function getWorkflowCapabilities(): Promise<StoredWorkflow[]> {
   if (!isTeamMode()) return getWorkflows();
   const items: StoredWorkflow[] = [];
   let cursor: string | undefined;
@@ -484,16 +501,10 @@ export function getWorkflowOverview(query: WorkflowOverviewQuery = {}) {
 }
 
 export function createWorkflow(document: WorkflowDocument) {
-  if (isTeamMode()) {
-    return fetchApi.post<StoredWorkflow>('/workflow', { document });
-  }
   return invoke<StoredWorkflow>('create_workflow', { document });
 }
 
 export function getWorkflow(id: string) {
-  if (isTeamMode()) {
-    return fetchApi.get<StoredWorkflow>(`/workflow/${id}`);
-  }
   return invoke<StoredWorkflow>('get_workflow', { id });
 }
 
@@ -507,11 +518,6 @@ export function updateWorkflow(
   document: WorkflowDocument,
   expectedRevisionId?: string,
 ) {
-  if (isTeamMode()) {
-    return fetchApi.patch<StoredWorkflow>(`/workflow/${id}`, {
-      document,
-    });
-  }
   return invoke<StoredWorkflow>('update_workflow', {
     id,
     document,
@@ -520,18 +526,19 @@ export function updateWorkflow(
 }
 
 export function deleteWorkflow(id: string) {
-  if (isTeamMode()) return fetchApi.delete(`/workflow/${id}`);
   return invoke<void>('delete_workflow', { id });
 }
 
-export function publishWorkflow(
+export async function publishWorkflow(
   id: string,
   version: string,
   releaseNote: string,
 ) {
+  const draft = await getWorkflow(id);
   return fetchApi.post<WorkflowRelease>(`/workflow/${id}/releases`, {
     version,
     releaseNote,
+    document: draft.document,
   });
 }
 

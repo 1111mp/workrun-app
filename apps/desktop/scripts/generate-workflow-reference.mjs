@@ -19,6 +19,17 @@ const metadata = JSON.parse(
 const shapes = workflowNodeSchemas();
 if (Object.keys(metadata).sort().join() !== Object.keys(shapes).sort().join())
   throw new Error('Workflow node directory differs from workflow.d.ts');
+// Keep planning briefs next to the full contract, so both are generated from
+// one maintained source rather than trimming authoring manuals at runtime.
+for (const [kind, contract] of Object.entries(metadata)) {
+  for (const field of ['capability', 'limits', 'requires']) {
+    if (
+      typeof contract.planning?.[field] !== 'string' ||
+      !contract.planning[field].trim()
+    )
+      throw new Error(`Missing planning ${field} for ${kind}`);
+  }
+}
 const contracts = Object.fromEntries(
   Object.entries(metadata).map(([kind, { dataConstraints, ...contract }]) => [
     kind,
@@ -58,15 +69,20 @@ function output(path, content) {
     );
 }
 // Built-in skills and shared references remain external files in every bundle.
-for (const role of ['main_agent', 'workflow_agent', 'planning_agent']) {
+for (const role of [
+  'task_agent',
+  'workflow_agent',
+  'planning_agent',
+  'router',
+  'conversation_agent',
+]) {
   const source = new URL(
     `../src-tauri/src/module/assistant/${role}/`,
     import.meta.url,
   );
-  for (const file of role === 'main_agent'
+  for (const file of role === 'task_agent'
     ? [
         'AGENT.md',
-        'INTENT.md',
         ...[
           'conversation',
           'task-planning',
@@ -78,13 +94,36 @@ for (const role of ['main_agent', 'workflow_agent', 'planning_agent']) {
       ]
     : role === 'workflow_agent'
       ? ['AGENT.md', 'skills/workflow-authoring.md']
-      : ['AGENT.md', 'skills/workflow-planning.md']) {
+      : role === 'planning_agent'
+        ? ['AGENT.md', 'skills/workflow-planning.md']
+        : ['AGENT.md']) {
     writeOutput(
       new URL(`${role}/${file}`, resources),
       readFileSync(new URL(file, source), 'utf8'),
     );
   }
 }
+// Current-request authorization is shared, not a task-agent instruction set.
+writeOutput(
+  new URL('authorization/INSTRUCTIONS.md', resources),
+  readFileSync(
+    new URL(
+      '../src-tauri/src/module/assistant/authorization/INSTRUCTIONS.md',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+);
+writeOutput(
+  new URL('authorization/CONFIRMATION.md', resources),
+  readFileSync(
+    new URL(
+      '../src-tauri/src/module/assistant/authorization/CONFIRMATION.md',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+);
 // The shared capability overview is loaded through each role's existing Skill catalog.
 writeOutput(
   new URL('reference/workrun-capabilities.md', resources),

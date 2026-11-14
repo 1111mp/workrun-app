@@ -14,6 +14,13 @@ async function normalize(input: string) {
 }
 
 describe('Chat usage tail compatibility', () => {
+  it('preserves provider reasoning deltas across fragmented SSE frames', async () => {
+    const input =
+      'data: {"choices":[{"delta":{"reasoning_content":"核对输入"},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"delta":{"reasoning":"Check outputs"},"finish_reason":null}],"usage":{"total_tokens":6}}\n\n' +
+      'data: [DONE]\n\n';
+    expect(await normalize(input)).toBe(input);
+  });
   it('normalizes placeholder choices while preserving streamed text and tools', async () => {
     const text =
       'data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}\n\n';

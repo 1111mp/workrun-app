@@ -8,7 +8,13 @@ use tokio::sync::{mpsc, oneshot};
 pub(super) enum Request {
     SpecialistFinished(String, String, Option<String>, oneshot::Sender<anyhow::Result<Value>>),
     Model(String, Box<LlmRequest>, oneshot::Sender<anyhow::Result<Content>>),
-    Tool(String, String, Value, oneshot::Sender<anyhow::Result<Value>>),
+    Tool(
+        String,
+        String,
+        Value,
+        tracing::Span,
+        oneshot::Sender<anyhow::Result<Value>>,
+    ),
 }
 
 pub(super) struct Model {
@@ -60,23 +66,21 @@ impl Tool for NativeTool {
         self.declaration.get("parameters").cloned()
     }
     async fn execute(&self, _: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
-        crate::core::telemetry_langfuse::tool(self.name(), &args, async {
-            let (send, receive) = oneshot::channel();
-            self.requests
-                .send(Request::Tool(
-                    self.agent.clone(),
-                    self.name().into(),
-                    args.clone(),
-                    send,
-                ))
-                .await
-                .map_err(|_| AdkError::tool("Scoped agent invocation ended"))?;
-            receive
-                .await
-                .map_err(|_| AdkError::tool("Scoped tool request cancelled"))?
-                .map_err(|error| AdkError::tool(error.to_string()))
-        })
-        .await
+        let (send, receive) = oneshot::channel();
+        self.requests
+            .send(Request::Tool(
+                self.agent.clone(),
+                self.name().into(),
+                args,
+                tracing::Span::current(),
+                send,
+            ))
+            .await
+            .map_err(|_| AdkError::tool("Scoped agent invocation ended"))?;
+        receive
+            .await
+            .map_err(|_| AdkError::tool("Scoped tool request cancelled"))?
+            .map_err(|error| AdkError::tool(error.to_string()))
     }
 }
 
@@ -132,7 +136,7 @@ impl Agent for ReturningAgent {
                     yield Ok(result);
                     let mut transfer = Event::new(context.invocation_id());
                     transfer.author = agent.clone();
-                    transfer.actions.transfer_to_agent = Some("main_agent".into());
+                    transfer.actions.transfer_to_agent = Some("task_agent".into());
                     yield Ok(transfer);
                 },
                 _ => { yield Err(adk_rust::AdkError::agent("Specialist outcome could not be recorded")); },
@@ -155,10 +159,18 @@ mod telemetry_tests {
         }
         async fn generate_content(&self, _: LlmRequest, stream: bool) -> adk_rust::Result<LlmResponseStream> {
             let step = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let content=match step {
-                0=>Content::new("model").with_text(r#"{"intent":"conversation","actionQuote":"","summary":"Tool verification","reuseExisting":false,"authoringQuote":""}"#),
-                1=>Content{role:"model".into(),parts:vec![adk_rust::Part::FunctionCall{name:"report_progress".into(),args:json!({"summary":"Verification progress"}),id:Some("fixture-call".into()),thought_signature:None}]},
-                _=>Content::new("model").with_text("Tool verification complete"),
+            let content = match step {
+                0 => Content::new("model").with_text(r#"{"route":"task"}"#),
+                1 => Content {
+                    role: "model".into(),
+                    parts: vec![adk_rust::Part::FunctionCall {
+                        name: "report_progress".into(),
+                        args: json!({"summary":"Verification progress"}),
+                        id: Some("fixture-call".into()),
+                        thought_signature: None,
+                    }],
+                },
+                _ => Content::new("model").with_text("Tool verification complete"),
             };
             let span = adk_telemetry::llm_generate_span("fixture", self.name(), stream);
             let response = LlmResponse {

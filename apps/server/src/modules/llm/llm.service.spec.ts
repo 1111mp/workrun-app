@@ -330,6 +330,32 @@ it('applies the request deadline while waiting for shared model discovery', asyn
   await expect(service.models()).resolves.toHaveProperty('object', 'list');
 });
 
+it('adapts configured JSON output before forwarding to the gateway', async () => {
+  service = new LlmService(
+    new ConfigService({
+      ...settings,
+      LITELLM_JSON_OBJECT_MODELS: 'fast',
+    }),
+  );
+  fetchMock.mockResolvedValueOnce(models()).mockResolvedValueOnce(result());
+  const schema = { type: 'object', properties: { ok: { type: 'boolean' } } };
+  await service.chat(
+    'user-1',
+    {
+      ...body,
+      response_format: { type: 'json_schema', json_schema: { schema } },
+    },
+    new Downstream().response(),
+  );
+  const sent = JSON.parse(fetchMock.mock.calls[1][1]!.body as string);
+  expect(sent.response_format).toEqual({ type: 'json_object' });
+  expect(sent.messages.at(-1)).toEqual({
+    role: 'system',
+    content: `Return only a JSON object conforming to this JSON Schema:\n${JSON.stringify(schema)}`,
+  });
+  expect(sent.user).toBe('workrun:deployment-a:user-1');
+});
+
 it('does not inherit unrelated OpenAI organization or project settings', async () => {
   vi.stubEnv('OPENAI_ORG_ID', 'unrelated-organization');
   vi.stubEnv('OPENAI_PROJECT_ID', 'unrelated-project');

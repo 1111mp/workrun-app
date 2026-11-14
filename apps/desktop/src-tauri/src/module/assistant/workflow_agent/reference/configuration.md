@@ -88,9 +88,8 @@ Agent guide for format/provider/size limits and use a capable executor when need
 CodeAct maps visible files through /artifacts/manifest.json, an array of
 {reference:{id,name,...},path} entries. Match the actual input reference ID and read
 entry.path; no attachmentPaths is needed. Use only supported Python modules/tools.
-Read CodeAct node details (topic=nodes, node_types=["codeact_agent"]) for the linked
-runtime language/module and supported
-OS/path-operation briefing. It describes the standard virtual workspace, not host
+Read topic=codeact-runtime with detail=full for exact runtime language/module
+and supported OS/path-operation APIs when they are needed. It describes the standard virtual workspace, not host
 permissions or a complete Python API inventory. Do not assume arbitrary library
 or method availability.
 Write deliverables under /outputs; Workrun imports them and writes real references

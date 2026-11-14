@@ -188,7 +188,7 @@ async fn repair_diagnosis_hands_native_evidence_to_existing_plan_review_without_
             .baseline_run_id,
         "failed-run"
     );
-    let requests = scripted.requests.lock().unwrap();
+    let requests = scripted.handler_requests();
     let planner = requests
         .iter()
         .find(|request| request.tools.contains_key("save_workflow_plan"))
@@ -246,11 +246,14 @@ async fn repair_verification_is_read_only_and_needs_no_new_model_phase() {
     assert!(reply.call.is_none());
     assert!(workspace.writes.lock().unwrap().is_empty());
     assert_eq!(*workspace.reads.lock().unwrap(), 1);
-    let requests = model.requests.lock().unwrap();
-    assert_eq!(requests.len(), 3); // Existing intent, comparison read and delivery; no verifier agent.
+    let requests = model.handler_requests();
+    assert_eq!(requests.len(), 2); // Comparison read and delivery; no preliminary classifier or verifier.
     let delivery = requests.last().unwrap();
-    assert!(!delivery.tools.contains_key("execute_capability"));
-    assert!(!delivery.tools.contains_key("transfer_to_agent"));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.config.as_ref().is_none_or(|c| c.response_schema.is_none()))
+    );
     assert!(
         serde_json::to_string(&delivery.contents)
             .unwrap()
@@ -315,9 +318,9 @@ async fn approved_edit_receives_current_graph_once_and_saves_only_the_original_t
         .await
         .unwrap();
     let cost = model.costs_since(0);
-    assert_eq!(cost["phases"]["authoring"]["callCount"], 3);
-    assert_eq!(cost["phases"]["conversation"]["callCount"], 1);
-    assert_eq!(cost["missingUsageCalls"], 4);
+    assert_eq!(cost["phases"]["authoring"]["callCount"], 2);
+    assert!(cost["phases"].get("task").is_none());
+    assert_eq!(cost["missingUsageCalls"], 2);
     assert_eq!(cost["executionIncluded"], false);
     assert!(reply.call.is_none());
     assert_eq!(*workspace.reads.lock().unwrap(), 2);
@@ -327,15 +330,13 @@ async fn approved_edit_receives_current_graph_once_and_saves_only_the_original_t
     let saved = store.current(&sid).unwrap().unwrap();
     assert_eq!(saved.workflow_id.as_deref(), Some(workspace.id.as_str()));
     {
-        let requests = scripted.requests.lock().unwrap();
-        assert_eq!(requests.len(), 4); // Progress, save, specialist outcome, delivery.
+        let requests = scripted.handler_requests();
+        assert_eq!(requests.len(), 2); // Progress and save only.
         assert!(requests[0].tools.contains_key("save_workflow_draft"));
         assert!(!requests[0].tools.contains_key("execute_capability"));
     }
     for request in scripted
-        .requests
-        .lock()
-        .unwrap()
+        .handler_requests()
         .iter()
         .filter(|r| r.tools.contains_key("save_workflow_draft"))
     {
@@ -483,26 +484,26 @@ async fn local_task_prompt_budget_against_explicit_baseline() {
         )
         .await
         .unwrap();
-    let intent_after = scripted.requests.lock().unwrap()[0].clone();
+    let intent_after = scripted.handler_requests()[0].clone();
     let mut intent_before = intent_after.clone();
     for content in &mut intent_before.contents {
         for part in &mut content.parts {
             if let Part::Text { text, .. } = part {
                 *text = text.replace(
-                    &resources::read("main_agent/INTENT.md").unwrap(),
-                    &std::fs::read_to_string(baseline.join("main_agent/INTENT.md")).unwrap(),
+                    &resources::read("authorization/INSTRUCTIONS.md").unwrap(),
+                    &std::fs::read_to_string(baseline.join("authorization/INSTRUCTIONS.md")).unwrap(),
                 );
             }
         }
     }
-    let after = scripted.requests.lock().unwrap()[1].clone();
+    let after = scripted.handler_requests()[1].clone();
     let mut before = after.clone();
     before.tools.remove("execute_capability");
     before.tools.remove("execute_workflow");
     for content in &mut before.contents {
         for part in &mut content.parts {
             if let Part::Text { text, .. } = part {
-                for path in ["main_agent/AGENT.md", "main_agent/skills/capability-orchestration.md"] {
+                for path in ["task_agent/AGENT.md", "task_agent/skills/capability-orchestration.md"] {
                     *text = text.replace(
                         &resources::read(path).unwrap(),
                         &std::fs::read_to_string(baseline.join(path)).unwrap(),
@@ -569,14 +570,14 @@ async fn make_reusable_save_only_request_can_finish_with_existing_workflow_witho
     let cost = model.costs_since(0);
     assert_eq!(cost["phases"]["intent"]["callCount"], 1);
     assert_eq!(cost["phases"]["planning"]["callCount"], 3);
-    assert_eq!(cost["phases"]["conversation"]["callCount"], 2);
+    assert_eq!(cost["phases"]["task"]["callCount"], 2);
     assert!(cost["phases"]["authoring"].is_null());
     assert!(reply.call.is_none());
     assert!(reply.pause.is_none());
     assert!(reply.text.contains(&workspace.id));
     assert!(Store::new(workspace.root.path()).current(&sid).unwrap().is_none());
     assert!(workspace.writes.lock().unwrap().is_empty());
-    let requests = scripted.requests.lock().unwrap();
+    let requests = scripted.handler_requests();
     assert_eq!(requests.len(), 6);
     let context = requests
         .iter()
@@ -623,7 +624,7 @@ async fn planner_cannot_claim_reuse_without_inspecting_the_exact_contract() {
         .unwrap();
     assert!(reply.call.is_none());
     assert!(workspace.writes.lock().unwrap().is_empty());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert!(
         requests
             .last()

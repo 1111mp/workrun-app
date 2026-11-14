@@ -4,7 +4,8 @@ description: Workrun capability map, configuration concepts and discovery paths.
 ---
 # Workrun capabilities
 
-Main handles intent, direct work and execution requests. Planning develops a proposal
+The router selects a handler; conversation_agent answers from context and task_agent
+handles direct work and execution requests. Planning develops a proposal
 with user feedback; after native confirmation, authoring configures/saves an ordinary
 Workflow using the same settings, nodes and edges as the visual editor. Creation and
 execution are separate authorizations. Reading guidance never changes available tools.
@@ -102,7 +103,7 @@ not factual truth. Presentation must preserve computed values and expose failed 
 Planning records method, committed dependencies, assumptions and acceptance criteria
 in existing fields. Authoring implements the approved approach and reports unexecuted
 criteria as pending. Validation checks configuration; saving establishes identity;
-execution supplies receipts/artifacts. None alone proves goal fulfillment. Main reports
+execution supplies receipts/artifacts. None alone proves goal fulfillment. task_agent reports
 observed results, contradictions and remaining uncertainty without fabricating success.
 
 ## Read only relevant details
@@ -111,5 +112,5 @@ All roles can read_skill(name=workrun-capabilities). Specialists use
 get_workflow_reference(topic=index), then nodes with selected node_types; node-schema
 returns exact schemas. Other topics: format, state, configuration, routing, recovery.
 Examples lists summaries; add node_types for matching full native documents. Detailed
-compensation/execution-recovery are available when needed. Main delegates configuration
+compensation/execution-recovery are available when needed. task_agent delegates configuration
 rather than loading node manuals. Resource IDs always come from dynamic discovery.

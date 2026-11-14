@@ -1,4 +1,4 @@
-use super::main_agent::tools::tool_name;
+use super::task_agent::tools::tool_name;
 use super::*;
 use adk_rust::prelude::LlmResponse;
 use serde_json::Value;
@@ -7,14 +7,30 @@ use tools::Capability;
 
 pub(super) struct ScriptedModel {
     responses: Mutex<VecDeque<Content>>,
+    authorization: Mutex<Option<Content>>,
     pub(super) requests: Mutex<Vec<LlmRequest>>,
 }
 impl ScriptedModel {
     pub(super) fn new(responses: Vec<Content>) -> Self {
         Self {
             responses: Mutex::new(responses.into()),
+            authorization: Mutex::new(None),
             requests: Mutex::new(vec![]),
         }
+    }
+    pub(super) fn handler_requests(&self) -> Vec<LlmRequest> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                !r.config
+                    .as_ref()
+                    .and_then(|c| c.response_schema.as_ref())
+                    .is_some_and(|s| s["properties"]["route"].is_object())
+            })
+            .cloned()
+            .collect()
     }
 }
 #[async_trait::async_trait]
@@ -23,13 +39,62 @@ impl Llm for ScriptedModel {
         "test"
     }
     async fn generate_content(&self, request: LlmRequest, _: bool) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        let routing = request
+            .config
+            .as_ref()
+            .and_then(|c| c.response_schema.as_ref())
+            .is_some_and(|s| s["properties"]["route"].is_object());
+        let checking = request
+            .config
+            .as_ref()
+            .and_then(|c| c.response_schema.as_ref())
+            .is_some_and(|s| s["properties"]["intent"].is_object());
         self.requests.lock().unwrap().push(request);
-        let content = self
-            .responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("unexpected extra model invocation");
+        let mut responses = self.responses.lock().unwrap();
+        if routing {
+            let explicit = responses.front().is_some_and(|c| {
+                serde_json::from_str::<Value>(&model::content_text(c)).is_ok_and(|v| v.get("route").is_some())
+            });
+            let content = if explicit {
+                responses.pop_front().unwrap()
+            } else {
+                // Legacy task fixtures do not prescribe a router decision. Keep
+                // their protocol checks focused on the selected handler; dedicated
+                // routing tests supply explicit decisions and inspect all requests.
+                let first_decision = responses
+                    .front()
+                    .and_then(|c| serde_json::from_str::<TurnDecision>(&model::content_text(c)).ok());
+                let response = responses.get(usize::from(first_decision.is_some()));
+                let plain = response.is_some_and(|c| !c.parts.iter().any(|p| matches!(p, Part::FunctionCall { .. })));
+                let conversation = plain && first_decision.as_ref().is_none_or(|d| d.intent == Intent::Conversation);
+                Content::new("model")
+                    .with_text(json!({"route":if conversation {"conversation"} else {"task"}}).to_string())
+            };
+            return Ok(Box::pin(futures::stream::iter(vec![Ok(LlmResponse {
+                content: Some(content),
+                partial: false,
+                ..Default::default()
+            })])));
+        }
+        let mut authorization = self.authorization.lock().unwrap();
+        // Legacy fixtures list authorization before the action. The runtime now
+        // asks for it only at the native action boundary, after task-agent work.
+        let is_decision =
+            |content: &Content| serde_json::from_str::<TurnDecision>(&model::content_text(content)).is_ok();
+        let content = if checking {
+            if responses.front().is_some_and(is_decision) {
+                responses.pop_front().unwrap()
+            } else {
+                authorization
+                    .take()
+                    .unwrap_or_else(|| responses.pop_front().expect("missing authorization response"))
+            }
+        } else {
+            if responses.front().is_some_and(is_decision) {
+                *authorization = responses.pop_front();
+            }
+            responses.pop_front().expect("unexpected extra task-agent invocation")
+        };
         Ok(Box::pin(futures::stream::iter(vec![Ok(LlmResponse {
             content: Some(content),
             partial: false,
@@ -84,6 +149,64 @@ fn receipt() -> Content {
 }
 
 #[tokio::test]
+async fn routed_conversation_does_not_receive_task_tools_or_skills() {
+    for provider in [ModelProvider::OpenAi, ModelProvider::Gemini, ModelProvider::DeepSeek] {
+        let model = ScriptedModel::new(vec![text("这是直接回答。")]);
+        let reply = runtime()
+            .run(
+                &model,
+                &provider,
+                request(vec![Content::new("user").with_text("解释一下归并排序")]),
+                &|_| Ok(()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.text, "这是直接回答。");
+        let requests = model.handler_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(model.requests.lock().unwrap().len(), 2);
+        assert_eq!(requests[0].tools.len(), 1);
+        assert!(requests[0].tools.contains_key("handoff_to_task"));
+        assert!(requests[0].config.as_ref().is_none_or(|c| c.response_schema.is_none()));
+        let instructions = content_text(&requests[0].contents[0]);
+        assert!(!instructions.contains("Interpret ONLY"));
+        for name in [
+            "conversation",
+            "task-planning",
+            "capability-orchestration",
+            "result-delivery",
+        ] {
+            assert!(!instructions.contains(&runtime().skills.read(name).unwrap()));
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_action_is_checked_after_main_selects_it_and_rejected_without_scope() {
+    let model = ScriptedModel::new(vec![
+        call("execute_workflow", json!({"message":"取消订单43"})),
+        decision(Intent::Explanation, "", "只解释，不执行"),
+        text("我只会解释，不会执行取消。"),
+    ]);
+    let error = runtime()
+        .run(
+            &model,
+            &ModelProvider::OpenAi,
+            request(vec![
+                Content::new("user").with_text("解释取消订单43会发生什么，不要执行"),
+            ]),
+            &|_| Ok(()),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not permitted"));
+    let requests = model.handler_requests();
+    assert!(requests[0].config.as_ref().is_none_or(|c| c.response_schema.is_none()));
+    assert!(requests[1].config.as_ref().unwrap().response_schema.is_some());
+    assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
 async fn conversation_execution_status_explanation_and_explicit_retry_have_separate_grants() {
     let model = ScriptedModel::new(vec![
         decision(Intent::Execution, "帮我取消订单43", "我会为你提交订单43的取消请求。"),
@@ -132,11 +255,11 @@ async fn conversation_execution_status_explanation_and_explicit_retry_have_separ
         .await
         .unwrap();
     assert!(retry.call.is_some());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert_eq!(
         requests
             .iter()
-            .filter(|request| request.tools.contains_key(&tool_name("cancel-order")))
+            .filter(|request| request.config.as_ref().is_some_and(|c| c.response_schema.is_some()))
             .count(),
         2
     );
@@ -145,7 +268,7 @@ async fn conversation_execution_status_explanation_and_explicit_retry_have_separ
         // survive that boundary instead of being silently discarded as system.
         assert_eq!(request.contents[0].role, "user");
         let instruction = content_text(&request.contents[0]);
-        assert!(instruction.contains("Interpret ONLY") || instruction.contains("Workrun main agent"));
+        assert!(instruction.contains("Interpret ONLY") || instruction.contains("Workrun"));
         if request
             .config
             .as_ref()
@@ -225,12 +348,17 @@ async fn status_agent_can_read_receipts_and_skills_without_execution_permission(
         .await
         .unwrap();
     assert!(reply.call.is_none());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let final_request = requests.last().unwrap();
     let serialized = serde_json::to_string(&final_request.contents).unwrap();
     assert!(serialized.contains("pending_review"));
-    assert!(serialized.contains("success criteria"));
-    assert!(!final_request.tools.contains_key(&tool_name("cancel-order")));
+    assert!(serialized.contains("result-delivery"));
+    assert!(!serialized.contains(&runtime().skills.read("task-planning").unwrap()));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.config.as_ref().is_none_or(|c| c.response_schema.is_none()))
+    );
 }
 
 #[tokio::test]
@@ -242,7 +370,7 @@ async fn receipt_continuation_cannot_dispatch_again_or_reclassify_as_execution()
             .await
             .is_err()
     );
-    assert_eq!(model.requests.lock().unwrap().len(), 1);
+    assert_eq!(model.handler_requests().len(), 1);
 }
 
 #[tokio::test]
@@ -575,7 +703,7 @@ async fn native_discovery_is_lazy_and_unified_execution_resolves_a_workspace_aut
     assert_eq!(call.input_sources.unwrap()[0]["value_json"], "\"this_week\"");
     assert_eq!(discovery.lists.load(Ordering::SeqCst), 1);
     assert_eq!(discovery.describes.load(Ordering::SeqCst), 1);
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert!(requests[1].tools.contains_key("execute_capability"));
     assert!(!requests[1].tools.contains_key("execute_workflow"));
     assert!(!requests[1].tools.contains_key("list_workflow"));
@@ -584,11 +712,11 @@ async fn native_discovery_is_lazy_and_unified_execution_resolves_a_workspace_aut
             .unwrap()
             .contains("native-report")
     );
-    assert!(
-        serde_json::to_string(&requests[2].contents)
+    assert!(requests.iter().any(|request| {
+        serde_json::to_string(&request.contents)
             .unwrap()
             .contains("native-report")
-    );
+    }));
 }
 
 #[tokio::test]
@@ -625,7 +753,7 @@ async fn native_binding_rejection_collects_missing_inputs_without_dispatch() {
         .await
         .unwrap();
     assert!(reply.call.is_none());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let contents = serde_json::to_value(&requests[2].contents).unwrap();
     let receipt = &contents.as_array().unwrap().last().unwrap()["parts"][0]["functionResponse"]["response"];
     assert_eq!(receipt["executed"], false);
@@ -927,7 +1055,7 @@ async fn batched_general_skills_preserve_ids_and_signatures() {
             .await
             .unwrap();
         assert!(reply.call.is_none());
-        let requests = model.requests.lock().unwrap();
+        let requests = model.handler_requests();
         let messages = &requests.last().unwrap().contents;
         assert!(
             messages
@@ -952,12 +1080,12 @@ async fn batched_general_skills_preserve_ids_and_signatures() {
             let Part::FunctionResponse { function_response, .. } = part else {
                 panic!("expected tool response")
             };
-            assert_eq!(function_response.response["alreadyInInstructions"], true);
-            assert!(function_response.response.get("content").is_none());
+            assert!(function_response.response["content"].is_string());
+            assert!(function_response.response.get("alreadyInInstructions").is_none());
         }
         let instructions = model::content_text(&messages[0]);
         for name in ["conversation", "task-planning", "result-delivery"] {
-            assert!(instructions.contains(&runtime().skills.read(name).unwrap()));
+            assert!(!instructions.contains(&runtime().skills.read(name).unwrap()));
         }
     }
 }
@@ -989,7 +1117,7 @@ async fn mixed_execution_batch_is_repairable_without_dispatch_or_progress() {
         .unwrap();
     assert_eq!(reply.call.unwrap().workflow_id, "cancel-order");
     assert!(!activities.lock().unwrap().iter().any(|text| text == "should not run"));
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let results = last_tool_results(&requests.last().unwrap().contents);
     assert_eq!(results.parts.len(), 2);
     let wire = serde_json::to_value(results).unwrap().to_string();
@@ -1022,7 +1150,7 @@ async fn batch_read_errors_do_not_discard_other_results_and_large_batches_can_re
         .await
         .unwrap();
     assert!(reply.call.is_none());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let result = last_tool_results(&requests.last().unwrap().contents);
     assert_eq!(result.parts.len(), 2);
     let wire = serde_json::to_value(&result).unwrap().to_string();
@@ -1048,8 +1176,8 @@ async fn retry_grants_execution_without_authorizing_new_drafts() {
         .await
         .unwrap();
     assert!(reply.call.is_some());
-    let requests = model.requests.lock().unwrap();
-    let tools = &requests.last().unwrap().tools;
+    let requests = model.handler_requests();
+    let tools = &requests[0].tools;
     assert!(tools.contains_key("execute_capability"));
     assert!(!tools.contains_key("save_workflow_draft"));
 }
@@ -1091,7 +1219,7 @@ async fn failed_receipt_denies_draft_repair_but_can_deliver_the_original_failure
         .unwrap();
     assert!(reply.call.is_none());
     assert!(reply.text.contains("iteration limit"));
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert_eq!(requests.len(), 2);
     let denial = serde_json::to_value(requests.last().unwrap().contents.last().unwrap())
         .unwrap()
@@ -1118,12 +1246,13 @@ async fn long_user_sources_reach_main_once_with_original_binding_indices() {
         .run(&model, &ModelProvider::DeepSeek, request(history.clone()), &|_| Ok(()))
         .await
         .unwrap();
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let main = requests.last().unwrap();
     let sent = serde_json::to_string(&main.contents).unwrap();
     assert_eq!(sent.matches("tail-evidence-1700").count(), 1);
-    assert!(sent.contains("userOrdinal"));
-    assert!(sent.contains("previewTruncated"));
+    // The conversation handler needs original text, not execution-binding indices.
+    assert!(main.tools.contains_key("handoff_to_task"));
+    assert!(!sent.contains("userOrdinal"));
     assert!(main.contents.iter().any(|c| content_text(c) == source));
     assert_eq!(serde_json::to_value(history).unwrap(), original);
 }
@@ -1153,7 +1282,7 @@ async fn ordinary_tasks_reuse_discovered_workflows_across_domains_without_author
         }, &|_| Ok(())).await.unwrap();
         let call = reply.call.unwrap();
         assert_eq!(call.workflow_id, id);
-        let requests = model.requests.lock().unwrap();
+        let requests = model.handler_requests();
         assert_eq!(requests.len(), 4); // intent + search + contract + dispatch
         for request in requests.iter().skip(1) {
             assert!(!request.tools.contains_key("save_workflow_draft"));
@@ -1248,7 +1377,7 @@ async fn delivery_receives_complete_authorized_source_without_replaying_discover
         .await
         .unwrap();
     assert!(reply.call.is_none());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert_eq!(requests.len(), 1);
     assert!(
         requests[0].contents.iter().any(
@@ -1360,14 +1489,12 @@ async fn missing_input_proposals_are_denied_and_completed_inputs_reuse_the_selec
             .unwrap();
         assert!(reply.call.is_none());
         assert!(!reply.text.is_empty());
-        assert_eq!(model.requests.lock().unwrap().len(), 4);
-        let error_history = serde_json::to_string(&model.requests.lock().unwrap().last().unwrap().contents).unwrap();
+        assert_eq!(model.handler_requests().len(), 4);
+        let error_history = serde_json::to_string(&model.handler_requests().last().unwrap().contents).unwrap();
         assert!(error_history.contains("empty without explicit empty-value evidence"));
         assert!(
             !model
-                .requests
-                .lock()
-                .unwrap()
+                .handler_requests()
                 .last()
                 .unwrap()
                 .tools
@@ -1408,8 +1535,8 @@ async fn missing_input_proposals_are_denied_and_completed_inputs_reuse_the_selec
         assert_eq!(call.workflow_id, "processor");
         assert_eq!(call.input, json!({"input":supplied}));
         assert_eq!(discovery.lists.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(followup.requests.lock().unwrap().len(), 2);
-        let followup_context = content_text(&followup.requests.lock().unwrap()[1].contents[0]);
+        assert_eq!(followup.handler_requests().len(), 2);
+        let followup_context = content_text(&followup.handler_requests()[0].contents[0]);
         assert!(followup_context.contains("Previous input clarification"));
         assert!(followup_context.contains("processor"));
     }
@@ -1482,13 +1609,13 @@ async fn clarification_hints_refresh_contracts_allow_new_targets_and_expire() {
         } else {
             assert_eq!(reply.call.unwrap().workflow_id, target);
         }
-        let requests = model.requests.lock().unwrap();
-        let instruction = content_text(&requests[1].contents[0]);
+        let requests = model.handler_requests();
+        let instruction = content_text(&requests[0].contents[0]);
         assert_eq!(
             instruction.contains("Previous input clarification"),
-            matches!(scenario, "updated" | "changed")
+            matches!(scenario, "updated" | "changed" | "status")
         );
-        assert!(requests[1].tools.contains_key("list_capabilities"));
+        assert!(requests[0].tools.contains_key("list_capabilities"));
         if scenario == "updated" {
             assert!(instruction.contains("\"inputSchema\""));
             assert!(instruction.contains("\"number\""));
@@ -1529,7 +1656,7 @@ async fn corrected_binding_in_the_same_turn_resolves_the_clarification_record() 
     assert_eq!(reply.call.unwrap().input, json!({"input":0}));
     assert_eq!(discovery.records.lock().unwrap().len(), 1);
     assert_eq!(discovery.records.lock().unwrap()[0]["status"], "resolved");
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert_eq!(requests.len(), 3);
     assert!(!requests[2].tools.contains_key("list_capabilities"));
     assert!(requests[2].tools.contains_key("execute_capability"));

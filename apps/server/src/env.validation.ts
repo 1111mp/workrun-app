@@ -36,6 +36,7 @@ export const envValidationSchema = z
       }, 'Invalid LiteLLM API base URL'),
     LITELLM_TEAM_KEY: z.string().trim().optional(),
     LITELLM_TEAM_ID: z.string().trim().optional(),
+    LITELLM_JSON_OBJECT_MODELS: z.string().trim().default(''),
     LITELLM_DEPLOYMENT_ID: z
       .string()
       .trim()

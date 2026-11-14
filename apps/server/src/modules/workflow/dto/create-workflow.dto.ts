@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsDefined, IsObject, ValidateNested } from 'class-validator';
 
-class WorkflowDocumentDto {
+export class WorkflowDocumentDto {
   @IsDefined()
   @IsArray()
   nodes!: unknown[];

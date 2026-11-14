@@ -1,21 +1,24 @@
 //! Workrun assistant composition and native integration.
+mod authorization;
 mod bindings;
 mod capability;
 pub mod catalog;
+mod conversation_agent;
 pub mod events;
 mod execution_context;
-mod main_agent;
 mod model;
-mod orchestration;
 mod planning_agent;
 mod planning_context;
 mod protocol;
 mod repair;
 mod resources;
+mod router;
+mod runtime;
 mod sdk;
 pub mod session;
 mod skills;
 pub(crate) mod storage;
+mod task_agent;
 mod task_runtime;
 mod tool_execution;
 mod tools;
@@ -28,10 +31,9 @@ use adk_rust::prelude::{Content, Llm, LlmRequest, Part};
 #[cfg(test)]
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
-use futures::StreamExt;
-pub use main_agent::AssistantRuntime;
+use authorization::{Intent, TurnDecision};
 #[cfg(test)]
-use main_agent::{AgentProfile, Intent, TurnDecision, skills::MainSkills as SkillCatalog};
+use futures::StreamExt;
 #[cfg(test)]
 use model::{content_text, generate};
 #[cfg(test)]
@@ -40,11 +42,16 @@ pub use protocol::{AssistantRequest, AssistantStreamEvent};
 #[cfg(test)]
 use protocol::{ReplyStream, normalize_assistant_contents, parse_reply};
 #[cfg(test)]
+use runtime::AgentProfile;
+pub use runtime::AssistantRuntime;
+#[cfg(test)]
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::json;
 #[cfg(test)]
 use std::{collections::HashMap, time::Duration};
+#[cfg(test)]
+use task_agent::skills::TaskSkills as SkillCatalog;
 #[cfg(test)]
 use workflow_agent::authoring;
 #[cfg(test)]
