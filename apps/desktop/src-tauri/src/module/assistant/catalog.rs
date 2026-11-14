@@ -13,12 +13,14 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tauri_plugin_http::reqwest::{Client, Response};
 
+#[derive(Clone)]
 pub struct Catalog {
     workflows: Vec<Value>,
     team: Option<TeamApi>,
     root: std::path::PathBuf,
     workspace_id: String,
 }
+#[derive(Clone)]
 struct TeamApi {
     base: String,
     token: String,
@@ -117,15 +119,13 @@ impl Catalog {
         };
         // The catalog is fetched only when list_workflow/execute_workflow needs
         // it. Ordinary conversation must not depend on the Team server being up.
-        let mut workflows = if team.is_none() {
-            feat::get_workflows()
-                .await?
-                .into_iter()
-                .map(serde_json::to_value)
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        } else {
-            vec![]
-        };
+        // Local definitions are scoped to the active account/workspace, including
+        // Team authors' unpublished workflows. Publishing is only for sharing.
+        let mut workflows = feat::get_workflows()
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         workflows.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
         Ok(Self {
             workflows,
@@ -147,7 +147,21 @@ impl Catalog {
     /// Read-only catalog access shared with the independent scheduling agent.
     pub async fn schedule_targets(&self, args: &Value) -> Result<Value> {
         use super::tools::WorkflowDiscovery;
-        self.list_capabilities(args).await
+        self.scheduling_catalog().list_capabilities(args).await
+    }
+
+    fn scheduling_catalog(&self) -> Self {
+        let mut catalog = self.clone();
+        // Team schedules use LatestPublished recipes. Their discovery and exact
+        // reads must use the same release, even when the author has local edits.
+        if catalog.team.is_some() {
+            catalog.workflows.clear();
+        }
+        catalog
+    }
+
+    pub async fn schedule_workflow(&self, id: &str) -> Result<Value> {
+        self.scheduling_catalog().resolve(id).await
     }
 
     pub fn capabilities(&self) -> Vec<Capability> {
@@ -158,14 +172,52 @@ impl Catalog {
         if let Some(id) = id.strip_prefix("app:") {
             return super::capability::app_workflow(&feat::process_node_inspect(id).await?);
         }
+        if self.workflows.iter().any(|workflow| workflow["id"] == id) {
+            // Reread the local definition so edits/deletion cannot replay a stale snapshot.
+            return Ok(serde_json::to_value(feat::get_workflow(id).await?)?);
+        }
         if let Some(api) = &self.team {
             let encoded = encoded(id);
-            // Execution must use a release even when the caller owns the workflow.
+            // Other team members' workflows remain release-only.
             api.get(&format!("/workflow/team/{encoded}")).await
         } else {
             Ok(serde_json::to_value(feat::get_workflow(id).await?)?)
         }
     }
+    fn local_team_page(&self, args: &Value) -> Result<Option<Value>> {
+        let cursor = args["cursor"].as_str().unwrap_or("");
+        if self.team.is_none() || !(cursor.is_empty() || cursor.starts_with("local:")) {
+            return Ok(None);
+        }
+        let mut contracts = self
+            .workflows
+            .iter()
+            .map(super::capability::Contract::workflow)
+            .collect::<Result<Vec<_>>>()?;
+        let query = args["query"].as_str().unwrap_or("").to_lowercase();
+        sort_capability_summaries(&mut contracts, &self.workflows, query.is_empty());
+        contracts.retain(|contract| {
+            format!("{} {} {}", contract.id, contract.name, contract.description)
+                .to_lowercase()
+                .contains(&query)
+        });
+        if contracts.is_empty() && cursor.is_empty() {
+            return Ok(None);
+        }
+        let offset: usize = cursor.strip_prefix("local:").unwrap_or("0").parse()?;
+        let limit = args["limit"].as_u64().unwrap_or(20).clamp(1, 50) as usize;
+        let items = contracts
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(super::capability::Contract::summary)
+            .collect::<Vec<_>>();
+        let next = offset.saturating_add(items.len());
+        Ok(Some(json!({"items":items,"nextCursor":if next < contracts.len() {
+            format!("local:{next}")
+        } else { "team:".into() }})))
+    }
+
     pub async fn prepare(&self, workflow: &Value) -> Result<Value> {
         let mut dsl = document_dsl(workflow)?;
         if let Some(api) = &self.team {
@@ -650,10 +702,14 @@ impl super::tools::WorkflowDiscovery for Catalog {
             };
             return Ok(json!({"items":[contract],"nextCursor":null}));
         }
+        if let Some(page) = self.local_team_page(args)? {
+            return Ok(page);
+        }
         let limit = args["limit"].as_u64().unwrap_or(20).clamp(1, 50) as usize;
         let cursor = args["cursor"].as_str().unwrap_or("");
-        // Team workflow ACLs remain server-owned. Page that catalog first, then
-        // workspace-local Apps; never treat release installation caches as Apps.
+        let cursor = cursor.strip_prefix("team:").unwrap_or(cursor);
+        // After local definitions, page the server-owned Team catalog and then
+        // workspace-local Apps; release installation caches are not authored Apps.
         if let Some(api) = &self.team
             && !cursor.starts_with("apps:")
         {
@@ -668,6 +724,7 @@ impl super::tools::WorkflowDiscovery for Catalog {
                 .as_array()
                 .context("Invalid workflow catalog")?
                 .iter()
+                .filter(|entry| !self.workflows.iter().any(|local| local["id"] == entry["id"]))
                 .map(|entry| Contract::workflow(entry).map(|contract| contract.summary()))
                 .collect::<Result<Vec<_>>>()?;
             return Ok(
@@ -732,10 +789,18 @@ impl super::tools::WorkflowDiscovery for Catalog {
                 json!({"items":[{"id":cap.id,"name":cap.name,"description":cap.description,"inputSchema":cap.parameters}],"nextCursor":null}),
             );
         }
+        if let Some(mut page) = self.local_team_page(args)? {
+            for item in page["items"].as_array_mut().unwrap() {
+                let workflow = self.workflows.iter().find(|entry| entry["id"] == item["id"]).unwrap();
+                item["inputSchema"] = parameters(&workflow["document"]["settings"]);
+            }
+            return Ok(page);
+        }
         if let Some(api) = &self.team {
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 50);
             let query = args.get("query").and_then(Value::as_str).unwrap_or("");
             let cursor = args.get("cursor").and_then(Value::as_str).unwrap_or("");
+            let cursor = cursor.strip_prefix("team:").unwrap_or(cursor);
             let page = api
                 .get(&format!(
                     "/workflow/overview?view=published&pageSize={limit}&query={}&cursor={}",
@@ -743,7 +808,7 @@ impl super::tools::WorkflowDiscovery for Catalog {
                     encoded(cursor)
                 ))
                 .await?;
-            let items=page["items"].as_array().context("Invalid workflow catalog")?.iter().filter_map(capability).map(|cap|json!({"id":cap.id,"name":cap.name,"description":cap.description,"inputSchema":cap.parameters})).collect::<Vec<_>>();
+            let items=page["items"].as_array().context("Invalid workflow catalog")?.iter().filter(|entry| !self.workflows.iter().any(|local| local["id"] == entry["id"])).filter_map(capability).map(|cap|json!({"id":cap.id,"name":cap.name,"description":cap.description,"inputSchema":cap.parameters})).collect::<Vec<_>>();
             Ok(json!({"items":items,"nextCursor":page["nextCursor"]}))
         } else {
             super::tools::list_page(&self.capabilities(), args)
@@ -810,7 +875,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn team_execution_never_requests_the_author_draft() {
+    async fn team_workflows_without_a_local_definition_require_a_release() {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -839,8 +904,155 @@ mod tests {
             root: root.path().into(),
             workspace_id: "team:test".into(),
         };
-        assert_eq!(catalog.resolve("workflow-1").await.unwrap()["releaseId"], "release-1");
+        let mut author_catalog = catalog.clone();
+        author_catalog.workflows.push(json!({"id":"workflow-1"}));
+        assert!(author_catalog.scheduling_catalog().workflows.is_empty());
+        assert_eq!(
+            author_catalog.schedule_workflow("workflow-1").await.unwrap()["releaseId"],
+            "release-1"
+        );
         assert!(catalog.resolve("workflow-1").await.is_err());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn team_authors_can_discover_and_resolve_their_local_workflows() {
+        let root = tempfile::tempdir().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let local = json!({"id":id,"createdAt":"now","updatedAt":"now",
+            "document":{"settings":{"name":"Local draft","description":"private reusable rule",
+            "inputSchema":{"fields":[{"key":"amount","type":"number","required":true}]}},"nodes":[],"edges":[]}});
+        let file = root.path().join(format!("{id}.json"));
+        std::fs::write(&file, local.to_string()).unwrap();
+        let catalog = Catalog {
+            workflows: vec![
+                local.clone(),
+                json!({"id":"second","document":{"settings":{"name":"Second"}}}),
+            ],
+            // Local discovery and resolution must not depend on server availability.
+            team: Some(TeamApi {
+                base: "http://127.0.0.1:1".into(),
+                token: "test".into(),
+                client: Client::new(),
+            }),
+            root: root.path().into(),
+            workspace_id: dirs::active_workspace_id(),
+        };
+        let mut personal_catalog = catalog.clone();
+        personal_catalog.team = None;
+        assert_eq!(personal_catalog.scheduling_catalog().workflows.len(), 2);
+        let page = catalog
+            .list_capabilities(&json!({"query":"private reusable","limit":1}))
+            .await
+            .unwrap();
+        assert_eq!(page["items"][0]["id"], id);
+        assert_eq!(page["nextCursor"], "team:");
+        let page = catalog.list_capabilities(&json!({"limit":1})).await.unwrap();
+        assert_eq!(page["nextCursor"], "local:1");
+        let next = catalog
+            .list_capabilities(&json!({"limit":1,"cursor":"local:1"}))
+            .await
+            .unwrap();
+        assert_ne!(page["items"][0]["id"], next["items"][0]["id"]);
+        assert_eq!(next["nextCursor"], "team:");
+        let legacy = catalog.list(&json!({"query":"private reusable"})).await.unwrap();
+        assert_eq!(legacy["items"][0]["inputSchema"]["required"], json!(["amount"]));
+        crate::module::workflow::TEST_SUBWORKFLOW_CATALOG
+            .scope(root.path().into(), async {
+                let exact = catalog.list_capabilities(&json!({"capability_id":id})).await.unwrap();
+                assert_eq!(exact["items"][0]["name"], "Local draft");
+                assert_eq!(catalog.resolve(&id).await.unwrap()["document"], local["document"]);
+                // Edits after discovery must reach execution rather than the cached summary.
+                let mut edited = local.clone();
+                let fixture: Value =
+                    serde_json::from_str(include_str!("fixtures/expense-review.workflow.json")).unwrap();
+                edited["document"] = fixture["document"].clone();
+                std::fs::write(&file, edited.to_string()).unwrap();
+                let resolved = catalog.resolve(&id).await.unwrap();
+                assert_eq!(resolved["document"], edited["document"]);
+                let dsl = document_dsl(&resolved).unwrap();
+                let checkpoint = root.path().join("reuse-checkpoint.sqlite");
+                std::fs::File::create(&checkpoint).unwrap();
+                for amount in [500, 1500] {
+                    let graph = crate::module::workflow::TEST_CHECKPOINT_DB
+                        .scope(
+                            format!("sqlite://{}", checkpoint.display()),
+                            crate::module::workflow::compile(
+                                serde_json::from_value(dsl.clone()).unwrap(),
+                                &Default::default(),
+                                None,
+                            ),
+                        )
+                        .await
+                        .unwrap();
+                    let result = graph
+                        .run_stream(
+                            serde_json::from_value(json!({"amount":amount})).unwrap(),
+                            &format!("reuse-{amount}"),
+                            false,
+                            None,
+                            |_| {},
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!result.interrupted);
+                    let state = serde_json::to_value(result.state).unwrap();
+                    assert_eq!(state["global"]["amount"], amount);
+                    assert_eq!(
+                        state["workflow"]["workflow.trace"][0]["result"]["route"],
+                        if amount >= 1000 { "true" } else { "false" }
+                    );
+                }
+                std::fs::remove_file(file).unwrap();
+                // Deletion must fail rather than silently run a different published snapshot.
+                assert!(catalog.resolve(&id).await.is_err());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn team_release_pages_skip_local_duplicates_and_keep_pagination() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for cursor in ["", "next-page"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = [0; 4096];
+                let count = stream.read(&mut bytes).unwrap();
+                assert!(String::from_utf8_lossy(&bytes[..count]).starts_with(&format!(
+                    "GET /api/v1/workflow/overview?view=published&pageSize=20&query=&cursor={cursor} "
+                )));
+                let body = json!({"errorCode":0,"payload":{"items":[
+                    {"id":"mine","document":{"settings":{"name":"Old release"}}},
+                    {"id":"other","document":{"settings":{"name":"Shared workflow"}}}
+                ],"nextCursor":if cursor.is_empty(){Some("next-page")}else{None}}})
+                .to_string();
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            }
+        });
+        let root = tempfile::tempdir().unwrap();
+        let catalog = Catalog {
+            workflows: vec![json!({"id":"mine","document":{"settings":{"name":"Local draft"}}})],
+            team: Some(TeamApi {
+                base,
+                token: "test".into(),
+                client: Client::new(),
+            }),
+            root: root.path().into(),
+            workspace_id: dirs::active_workspace_id(),
+        };
+        let page = catalog.list_capabilities(&json!({"cursor":"team:"})).await.unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        assert_eq!(page["items"][0]["id"], "other");
+        assert_eq!(page["nextCursor"], "next-page");
+        let legacy = catalog.list(&json!({"cursor":"next-page"})).await.unwrap();
+        assert_eq!(legacy["items"].as_array().unwrap().len(), 1);
+        assert_eq!(legacy["items"][0]["id"], "other");
+        assert!(legacy["nextCursor"].is_null());
         server.join().unwrap();
     }
 
