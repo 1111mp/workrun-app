@@ -128,6 +128,8 @@ async fn start_workflow_owned(mut request: StartWorkflowRun, workspace: &str) ->
             "type": "schedule",
             "scheduleId": trigger.schedule_id,
             "scheduledFor": trigger.scheduled_for,
+            "occurrenceId": trigger.occurrence_id,
+            "traceparent": trigger.traceparent,
         }))),
     });
     let record = CreateRunRecord {

@@ -78,6 +78,7 @@ pub(crate) async fn workflow_parent(
 ) {
     use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState};
     use tracing_opentelemetry::OpenTelemetrySpanExt;
+    super::telemetry_langfuse::record_user(span);
     if let Some(header) = runtime
         .pointer("/observability/traceparent")
         .and_then(serde_json::Value::as_str)

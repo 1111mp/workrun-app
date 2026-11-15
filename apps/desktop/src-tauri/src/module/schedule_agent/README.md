@@ -105,3 +105,48 @@ existing run. Batch requests are clarified and managed one task per confirmation
   configured in Workrun; automated tests do not make paid provider calls.
 
 One-time schedules use `schedule_kind=once` and an absolute UTC `run_at`, with an IANA timezone for presentation and local date editing. `ScheduleTiming` validates timing and `ScheduleDispatcher` atomically claims occurrences. Claiming disables a one-time task and records its terminal reason separately from the execution result. Startup recovery marks overdue enabled one-time tasks missed without running them. Rescheduling clears terminal state; pause/resume cannot revive a finished task. Five-field Cron remains exclusively for recurring schedules.
+
+## Langfuse troubleshooting
+
+Scheduling uses the existing desktop OTLP exporter; no additional service, database
+migration or model gateway is introduced. Enable the collector endpoint in desktop
+settings. Prompt, result and error content follows the existing capture-content
+opt-in and redaction; reasoning is never included in the scheduling boundaries.
+
+Each conversation turn has an agent observation and a unique `turnId`. Model
+rounds and tool calls are children, including failed reads and proposal previews.
+Confirmation is a separate observation: `saved` means the native transaction
+committed, while `cancelled` or `failed` never implies a successful save. The
+post-confirmation model reply is another turn in the same conversation session.
+Use `proposalId` to connect a preview, decision and confirmation reply.
+
+Each scheduled occurrence has a fresh trace: dispatch → execution → existing
+Workflow/node/model/tool observations. `scheduleId`, `occurrenceId`, `scheduledFor`
+and `runId` identify it. Dispatch context is saved in the existing run trigger
+before enqueueing, so background execution restores the parent even after the
+producer span closes. Workflow pause/resume retains its existing durable trace
+context. Old runs without a trace header continue normally.
+
+To investigate a task, locate its `scheduleId` in the preview or confirmation,
+then find that task's dispatch/execution observations by the same metadata. The
+conversation and later occurrences are intentionally separate traces; recurring
+tasks do not leave a trace open between runs. A busy target produces `skipped`,
+startup recovery produces `missed`, and dispatch validation/network errors produce
+`failed`. A queued occurrence is not yet successful execution: inspect its run
+observation for the actual durable run status. Stops/timeouts close in-flight
+observations without marking them completed. Detailed App process output remains
+in the existing local run history; the scheduled App observation covers its
+execution boundary and final status.
+
+Offline regression tests use an in-memory OpenTelemetry exporter to verify trace
+parents, cancellation, tool failures, confirmation receipts and legacy trigger
+compatibility. These tests do not verify ingestion by a deployed Langfuse server;
+that still requires a collector-backed integration check.
+
+
+Collector-backed checks are explicit ignored tests (`cargo test --lib export_
+-- --ignored --nocapture --test-threads=1`), requiring the local OTLP/Langfuse
+stack. They cover scripted scheduling conversation/confirmation and real rule-only
+Workflow execution, then ingestion is checked through the Langfuse API.
+The [verification report](../../../../../../infra/langfuse/schedule-verification.json)
+records trace IDs, statuses and the remaining native/provider verification limits.

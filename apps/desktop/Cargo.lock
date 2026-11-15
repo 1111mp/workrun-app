@@ -10888,6 +10888,7 @@ dependencies = [
  "once_cell",
  "open",
  "opentelemetry",
+ "opentelemetry_sdk",
  "parking_lot",
  "regex",
  "rmcp",

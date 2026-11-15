@@ -439,6 +439,10 @@ pub struct StartAppRun {
 pub struct ScheduleTrigger {
     pub schedule_id: String,
     pub scheduled_for: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,0 +1,507 @@
+{
+  "verifiedAt": "2026-11-15",
+  "scope": "Scheduling agent, homepage orchestration, LiteLLM and Langfuse",
+  "automated": {
+    "desktopFrontend": {
+      "files": 95,
+      "passed": 601
+    },
+    "rust": {
+      "passed": 668,
+      "ignored": 31
+    },
+    "server": {
+      "files": 12,
+      "passed": 92
+    },
+    "collectorProbes": {
+      "passed": 6,
+      "note": "Isolated scripted model fixtures; actual exporter and real rule-only workflow execution."
+    }
+  },
+  "checks": [
+    "Desktop and Server typecheck and lint",
+    "Workflow generated references",
+    "Rust production cargo check",
+    "Frontend, Server and native E2E application builds",
+    "Rust formatting and git diff whitespace"
+  ],
+  "gateway": {
+    "model": "gemini-3.5-flash-lite",
+    "catalogSize": 2,
+    "authenticationLayer": "covered separately by HTTP regression tests; this probe invokes the production service",
+    "results": [
+      {
+        "test": "chat_stream_tool",
+        "status": 200,
+        "passed": true,
+        "usage": {
+          "completion_tokens": 14,
+          "prompt_tokens": 61,
+          "total_tokens": 75,
+          "completion_tokens_details": {
+            "text_tokens": 14
+          },
+          "prompt_tokens_details": {
+            "text_tokens": 61
+          },
+          "cost": 5.33e-05
+        }
+      },
+      {
+        "test": "chat_json_schema",
+        "status": 200,
+        "passed": true,
+        "usage": {
+          "completion_tokens": 11,
+          "prompt_tokens": 13,
+          "total_tokens": 24,
+          "completion_tokens_details": {
+            "text_tokens": 11
+          },
+          "prompt_tokens_details": {
+            "text_tokens": 13
+          }
+        }
+      },
+      {
+        "test": "responses_stream",
+        "status": 200,
+        "passed": true,
+        "usage": {
+          "input_tokens": 5,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 5
+          },
+          "output_tokens": 1,
+          "output_tokens_details": {
+            "reasoning_tokens": 0,
+            "text_tokens": 1
+          },
+          "total_tokens": 6,
+          "cost": 4.000000000000001e-06
+        }
+      }
+    ]
+  },
+  "langfuse": {
+    "native": {
+      "sessionId": "4c4f2661-b943-4781-bba7-fc578f47927b",
+      "traceIds": [
+        "e73828d3769bd38607c2eb3fa113d3d3"
+      ],
+      "observationCount": 2,
+      "secretSentinelAbsent": true,
+      "thoughtSignatureAbsent": true,
+      "observations": [
+        {
+          "id": "0ee6ede371770b8a",
+          "parent": "c526c7a920ff9a2d",
+          "traceId": "e73828d3769bd38607c2eb3fa113d3d3",
+          "name": "LLM · native-probe",
+          "type": "GENERATION",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "c526c7a920ff9a2d",
+          "parent": null,
+          "traceId": "e73828d3769bd38607c2eb3fa113d3d3",
+          "name": "native.adk.probe",
+          "type": "CHAIN",
+          "status": null,
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        }
+      ]
+    },
+    "homepage": {
+      "sessionId": "866e9e22-408a-4ace-990d-d93cd3cab21f",
+      "traceIds": [
+        "25ab855ead7ef4b699425154e34ab0c5"
+      ],
+      "observationCount": 5,
+      "secretSentinelAbsent": true,
+      "thoughtSignatureAbsent": true,
+      "observations": [
+        {
+          "id": "ae24ab1be8ce3f1d",
+          "parent": "dd7b644982c4cebc",
+          "traceId": "25ab855ead7ef4b699425154e34ab0c5",
+          "name": "LLM · task",
+          "type": "GENERATION",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "ec56757aafbdc096",
+          "parent": "dd7b644982c4cebc",
+          "traceId": "25ab855ead7ef4b699425154e34ab0c5",
+          "name": "report_progress",
+          "type": "TOOL",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "8dec4d063cb59c7a",
+          "parent": "dd7b644982c4cebc",
+          "traceId": "25ab855ead7ef4b699425154e34ab0c5",
+          "name": "LLM · task",
+          "type": "GENERATION",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "66f664f82044c7d0",
+          "parent": "dd7b644982c4cebc",
+          "traceId": "25ab855ead7ef4b699425154e34ab0c5",
+          "name": "LLM · routing",
+          "type": "GENERATION",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "dd7b644982c4cebc",
+          "parent": null,
+          "traceId": "25ab855ead7ef4b699425154e34ab0c5",
+          "name": "对话",
+          "type": "AGENT",
+          "status": null,
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        }
+      ]
+    },
+    "schedule_execution": {
+      "sessionId": "93939e43-fb87-4074-ae50-e70edaa9bd42",
+      "traceIds": [
+        "83bddecac667d84eb22323cc4098b14f"
+      ],
+      "observationCount": 3,
+      "secretSentinelAbsent": true,
+      "thoughtSignatureAbsent": true,
+      "observations": [
+        {
+          "id": "2dd8ac3f3de45c34",
+          "parent": "d411f48c8ca01612",
+          "traceId": "83bddecac667d84eb22323cc4098b14f",
+          "name": "set",
+          "type": "CHAIN",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": "case:adult",
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "d411f48c8ca01612",
+          "parent": "ce672f8ab3907c45",
+          "traceId": "83bddecac667d84eb22323cc4098b14f",
+          "name": "定时任务执行",
+          "type": "CHAIN",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": "probe-93939e43-fb87-4074-ae50-e70edaa9bd42",
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        },
+        {
+          "id": "ce672f8ab3907c45",
+          "parent": null,
+          "traceId": "83bddecac667d84eb22323cc4098b14f",
+          "name": "定时任务触发验收",
+          "type": "CHAIN",
+          "status": "queued",
+          "level": "DEFAULT",
+          "scheduleId": "probe-93939e43-fb87-4074-ae50-e70edaa9bd42",
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        }
+      ]
+    },
+    "schedule_conversation": {
+      "sessionId": "60c943da-03df-4739-87e3-87b04ebb322f",
+      "traceIds": [
+        "cf4a9f658a62605c7e6eb1766e4134cf",
+        "e3fe471f71626b56ac1683d93e4c77f8"
+      ],
+      "observationCount": 7,
+      "secretSentinelAbsent": true,
+      "thoughtSignatureAbsent": true,
+      "observations": [
+        {
+          "id": "0259549f4a0ad490",
+          "parent": null,
+          "traceId": "e3fe471f71626b56ac1683d93e4c77f8",
+          "name": "定时任务确认",
+          "type": "SPAN",
+          "status": "saved",
+          "level": "DEFAULT",
+          "scheduleId": "probe-60c943da-03df-4739-87e3-87b04ebb322f",
+          "proposalId": "e6925ed8-8a01-477e-acc4-092f377334d3",
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "2e0324f297b041f7",
+          "parent": "521bc3be0bb39364",
+          "traceId": "cf4a9f658a62605c7e6eb1766e4134cf",
+          "name": "LLM · schedule_agent",
+          "type": "GENERATION",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "b722e1773c71b422",
+          "parent": "521bc3be0bb39364",
+          "traceId": "cf4a9f658a62605c7e6eb1766e4134cf",
+          "name": "定时任务工具 · preview_change",
+          "type": "TOOL",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": "probe-60c943da-03df-4739-87e3-87b04ebb322f",
+          "proposalId": "e6925ed8-8a01-477e-acc4-092f377334d3",
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "6dbdb5d8d553300e",
+          "parent": "521bc3be0bb39364",
+          "traceId": "cf4a9f658a62605c7e6eb1766e4134cf",
+          "name": "LLM · schedule_agent",
+          "type": "GENERATION",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "d999eb5cd85a259b",
+          "parent": "521bc3be0bb39364",
+          "traceId": "cf4a9f658a62605c7e6eb1766e4134cf",
+          "name": "定时任务工具 · get_schedule",
+          "type": "TOOL",
+          "status": "failed",
+          "level": "ERROR",
+          "scheduleId": "missing",
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": false
+        },
+        {
+          "id": "16facdbded7ef63e",
+          "parent": "521bc3be0bb39364",
+          "traceId": "cf4a9f658a62605c7e6eb1766e4134cf",
+          "name": "LLM · schedule_agent",
+          "type": "GENERATION",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "521bc3be0bb39364",
+          "parent": null,
+          "traceId": "cf4a9f658a62605c7e6eb1766e4134cf",
+          "name": "定时任务对话验收",
+          "type": "AGENT",
+          "status": "waiting_for_input",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        }
+      ]
+    },
+    "workflow_resume": {
+      "sessionId": "d735481f-e039-4f34-92cc-3d44b2b31822",
+      "traceIds": [
+        "ac094fd1b1d9e343ead8bbd5c824caa6"
+      ],
+      "observationCount": 4,
+      "secretSentinelAbsent": true,
+      "thoughtSignatureAbsent": true,
+      "observations": [
+        {
+          "id": "54b8f9da9dee46d5",
+          "parent": "01b604dfad406021",
+          "traceId": "ac094fd1b1d9e343ead8bbd5c824caa6",
+          "name": "人工确认",
+          "type": "CHAIN",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": "approved",
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "01b604dfad406021",
+          "parent": "c001c33ef3e1ed3a",
+          "traceId": "ac094fd1b1d9e343ead8bbd5c824caa6",
+          "name": "恢复执行",
+          "type": "CHAIN",
+          "status": null,
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        },
+        {
+          "id": "16a725b7077b5e44",
+          "parent": "c001c33ef3e1ed3a",
+          "traceId": "ac094fd1b1d9e343ead8bbd5c824caa6",
+          "name": "人工确认",
+          "type": "CHAIN",
+          "status": "waiting_for_input",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "c001c33ef3e1ed3a",
+          "parent": null,
+          "traceId": "ac094fd1b1d9e343ead8bbd5c824caa6",
+          "name": "原生观测验收",
+          "type": "CHAIN",
+          "status": null,
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        }
+      ]
+    },
+    "tool": {
+      "sessionId": "fab26c84-3089-4bc5-a486-bd5255224c74",
+      "traceIds": [
+        "3ba4701afb0c9c6867faacfded436081"
+      ],
+      "observationCount": 2,
+      "secretSentinelAbsent": true,
+      "thoughtSignatureAbsent": true,
+      "observations": [
+        {
+          "id": "87eab73a69823fe6",
+          "parent": "47775c89ebfa5a8b",
+          "traceId": "3ba4701afb0c9c6867faacfded436081",
+          "name": "文件上传 · upload",
+          "type": "TOOL",
+          "status": "completed",
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": true,
+          "hasOutput": true
+        },
+        {
+          "id": "47775c89ebfa5a8b",
+          "parent": null,
+          "traceId": "3ba4701afb0c9c6867faacfded436081",
+          "name": "文件上传",
+          "type": "CHAIN",
+          "status": null,
+          "level": "DEFAULT",
+          "scheduleId": null,
+          "proposalId": null,
+          "selectedRoute": null,
+          "hasInput": false,
+          "hasOutput": false
+        }
+      ]
+    }
+  },
+  "limits": [
+    "Real-provider calls verify gateway tools, structured output and Responses separately; the full natural-language scheduling conversation uses scripted models.",
+    "Native account/scheduler E2E timed out preparing the first Python node; actual cron firing in the native app has not been verified.",
+    "Native Python Workflow execution and restart persistence were not verified because initial runtime preparation exceeded the test timeout."
+  ],
+  "nativeE2E": {
+    "account": {
+      "status": "failed",
+      "boundary": "create_process_node",
+      "error": "Embedded driver script execution timed out after 30 seconds",
+      "schedulerAssertionsReached": false
+    },
+    "workflow": {
+      "status": "failed",
+      "error": "Python workflow did not complete within 180 seconds",
+      "restartAssertionsReached": false
+    },
+    "diagnosis": "Managed Python installation remained under runtime/python/.temp and grew during the test. Preparation did not finish; no final provider/runtime error was observed. This is not evidence that scheduling execution succeeds."
+  },
+  "developmentStartup": {
+    "command": "pnpm app:dev",
+    "status": "passed",
+    "fix": "Box the App execution future before supervisor/tracing layers to avoid Send trait proof overflow in no-default-features development builds.",
+    "relatedRegression": {
+      "passed": 2,
+      "ignored": 1
+    }
+  }
+}

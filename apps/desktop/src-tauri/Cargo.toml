@@ -107,6 +107,9 @@ uuid = { workspace = true, features = ["v4"] }
 walkdir = { workspace = true }
 zip = { workspace = true, default-features = false, features = ["deflate-flate2"] }
 
+[dev-dependencies]
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["testing", "trace"] }
+
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 

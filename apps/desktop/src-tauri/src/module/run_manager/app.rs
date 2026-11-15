@@ -19,7 +19,7 @@ pub(crate) async fn start_app_in_workspace(request: StartAppRun, workspace: &str
         input: None,
         output_view: request.output_view,
         target_snapshot: request.target_snapshot,
-        runtime: json!({ "kind": "app", "trigger": request.deeplink_trigger.or_else(|| request.schedule_trigger.map(|trigger| json!({ "type": "schedule", "scheduleId": trigger.schedule_id, "scheduledFor": trigger.scheduled_for }))) }),
+        runtime: json!({ "kind": "app", "trigger": request.deeplink_trigger.or_else(|| request.schedule_trigger.map(|trigger| json!({ "type": "schedule", "scheduleId": trigger.schedule_id, "scheduledFor": trigger.scheduled_for, "occurrenceId": trigger.occurrence_id, "traceparent": trigger.traceparent }))) }),
     }, workspace)
     .await?;
     publish_run_status(&request.run_id, RunStatus::Queued)?;

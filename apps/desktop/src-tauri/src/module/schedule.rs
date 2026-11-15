@@ -23,11 +23,13 @@ use std::{
     },
     time::Duration,
 };
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 mod dispatch;
 mod events;
 pub(crate) use events::ScheduleEvents;
+pub(crate) mod telemetry;
 mod timing;
 use dispatch::ScheduleDispatcher;
 pub use timing::ScheduleKind;
@@ -491,15 +493,24 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
     else {
         return Ok(());
     };
+    let run_id = Uuid::new_v4().to_string();
+    let span = telemetry::observation("定时任务触发", "chain", &due.workspace, &run_id);
+    span.record("langfuse.observation.metadata.scheduleId", &due.summary.id);
+    span.record("langfuse.observation.metadata.occurrenceId", &claim.occurrence_id);
+    span.record("langfuse.observation.metadata.scheduledFor", &claim.scheduled_for);
     if claim.skipped {
+        telemetry::finish(&span, "skipped", None);
+        span.record("langfuse.observation.metadata.reason", "target_busy");
         return Ok(());
     }
+    span.record("langfuse.observation.metadata.runId", &run_id);
     let scheduled_for = claim.scheduled_for;
     let occurrence_id = claim.occurrence_id;
-    let run_id = Uuid::new_v4().to_string();
     let trigger = ScheduleTrigger {
         schedule_id: due.summary.id.clone(),
         scheduled_for,
+        occurrence_id: Some(occurrence_id.clone()),
+        traceparent: telemetry::traceparent(&span),
     };
     let task_id = due.summary.id.clone();
     let mut pause_on_failure = false;
@@ -585,8 +596,11 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
         }
         Ok(())
     }
+    .instrument(span.clone())
     .await;
     if let Err(error) = dispatch {
+        telemetry::finish(&span, "failed", Some(&error));
+        telemetry::output(&span, &json!({"paused":pause_on_failure}));
         ScheduleDispatcher::new(pool, &due.workspace)
             .failed(
                 &task_id,
@@ -598,6 +612,7 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
             .await?;
         return Ok(());
     }
+    telemetry::finish(&span, "queued", None);
     sqlx::query("UPDATE schedule_occurrences SET run_id = ? WHERE id = ?")
         .bind(run_id)
         .bind(occurrence_id)

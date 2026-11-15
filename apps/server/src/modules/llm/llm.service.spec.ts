@@ -721,3 +721,40 @@ it('retains deployment levels when the optional group endpoint is unavailable', 
     (await service.models()).data[0].capabilities?.reasoningEfforts,
   ).toEqual(['low', 'high']);
 });
+
+it.each([
+  { supported: ['temperature'], included: false },
+  { supported: ['safety_identifier'], included: true },
+  { supported: null, included: true },
+])(
+  'uses Responses safety identity only when capabilities permit: $supported',
+  async ({ supported, included }) => {
+    groupMock.mockResolvedValue(
+      Response.json({
+        data: [{ model_group: 'fast', supported_openai_params: supported }],
+      }),
+    );
+    fetchMock
+      .mockResolvedValueOnce(models())
+      .mockResolvedValueOnce(Response.json({ output: [] }));
+    await service.responses(
+      'user-1',
+      {
+        model: 'fast',
+        input: 'hello',
+        safety_identifier: 'forged',
+        user: 'forged',
+        metadata: { workrun_team_id: 'forged' },
+      },
+      new Downstream().response(),
+    );
+    const sent = JSON.parse(fetchMock.mock.calls[1][1]!.body as string);
+    if (included) expect(sent.safety_identifier).toMatch(/^[a-f0-9]{64}$/);
+    else expect(sent).not.toHaveProperty('safety_identifier');
+    expect(sent.user).toBe('workrun:deployment-a:user-1');
+    expect(sent.metadata.workrun_team_id).toBe('team-1');
+    expect(JSON.stringify(await service.models())).not.toContain(
+      'supported_openai_params',
+    );
+  },
+);

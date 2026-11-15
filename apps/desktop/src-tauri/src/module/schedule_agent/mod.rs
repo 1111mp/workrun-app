@@ -5,6 +5,7 @@ mod stream;
 #[cfg(test)]
 mod tests;
 mod tools;
+use crate::module::schedule::telemetry;
 use crate::{
     config::BaseConfig,
     core::db::DBManager,
@@ -22,6 +23,7 @@ use store::SchedulingStore;
 use stream::ScheduleResponseStream;
 use tauri::ipc::Channel;
 use tools::ScheduleTools;
+use tracing::Instrument as _;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -244,12 +246,37 @@ impl ScheduleAgent {
             self.runtime.finish(workspace, &request.session_id);
             return Err(error);
         }
-        let outcome = tokio::select! {
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let span = telemetry::observation("定时任务对话", "agent", workspace, &request.session_id);
+        span.record("langfuse.observation.metadata.turnId", &turn_id);
+        span.record(
+            "langfuse.observation.metadata.scheduleId",
+            state["scheduleId"].as_str().unwrap_or_default(),
+        );
+        telemetry::input(&span, &json!({"text":request.text}));
+        let outcome = async { tokio::select! {
             _=cancel.cancelled()=>Err(anyhow::anyhow!("Response stopped")),
             result=tokio::time::timeout(Duration::from_secs(240), crate::module::model_usage::scope(crate::module::model_usage::CallContext {
-                workspace_id: workspace.to_owned(), session_kind: Some("schedule_agent".into()), session_id: Some(request.session_id.clone()), purpose: "schedule_agent".into(), model_profile_id: Some(request.model_id.clone()), ..Default::default()
+                workspace_id: workspace.to_owned(), session_kind: Some("schedule_agent".into()), session_id: Some(request.session_id.clone()), turn_id: Some(turn_id), purpose: "schedule_agent".into(), model_profile_id: Some(request.model_id.clone()), ..Default::default()
             }, self.run(model.as_ref(),&definition.provider,&catalog,&request.timezone,&mut state,&channel)))=>result.context("Scheduling response timed out").and_then(|r|r),
-        };
+        }}.instrument(span.clone()).await;
+        telemetry::finish(
+            &span,
+            if cancel.is_cancelled() {
+                "interrupted"
+            } else if outcome.is_err() {
+                "failed"
+            } else if state["pending"].is_string() || state["questions"].as_array().is_some_and(|q| !q.is_empty()) {
+                "waiting_for_input"
+            } else {
+                "completed"
+            },
+            outcome.as_ref().err().filter(|_| !cancel.is_cancelled()),
+        );
+        telemetry::output(
+            &span,
+            &json!({"text":state["messages"].as_array().and_then(|m| m.last()).filter(|m| m["role"] == "assistant").map(|m| &m["text"]),"pendingProposalId":state["pending"]}),
+        );
         state["status"] = json!(if cancel.is_cancelled() { "interrupted" } else { "idle" });
         if let Err(error) = outcome {
             state["error"] = json!(error.to_string());
@@ -257,6 +284,9 @@ impl ScheduleAgent {
         // Readers must not see a stopped runtime before the final reply is durable.
         let saved = self.store.save_session(&mut state).await;
         self.runtime.finish(workspace, &request.session_id);
+        if let Err(error) = &saved {
+            telemetry::finish(&span, "failed", Some(error));
+        }
         saved?;
         Ok(Self::public_state(state))
     }
@@ -413,21 +443,48 @@ impl ScheduleAgent {
         }
         let response_stream = ScheduleResponseStream::new(&channel);
         let forward = |event| response_stream.forward(event);
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let span = telemetry::observation("定时任务确认回复", "agent", workspace, session_id);
+        span.record("langfuse.observation.metadata.turnId", &turn_id);
+        span.record(
+            "langfuse.observation.metadata.proposalId",
+            receipt["proposalId"].as_str().unwrap_or_default(),
+        );
+        span.record(
+            "langfuse.observation.metadata.scheduleId",
+            state["scheduleId"].as_str().unwrap_or_default(),
+        );
+        telemetry::input(&span, &receipt);
         let inference = crate::module::model_usage::scope(
             crate::module::model_usage::CallContext {
                 workspace_id: workspace.to_owned(),
                 session_kind: Some("schedule_agent".into()),
                 session_id: Some(session_id.to_owned()),
+                turn_id: Some(turn_id),
                 purpose: "schedule_agent".into(),
                 model_profile_id: Some(definition.id.clone()),
                 ..Default::default()
             },
             assistant::generate_agent_stream(model.as_ref(), request, &forward),
         );
-        let result = tokio::select! {
+        let result = async { tokio::select! {
             _ = cancel.cancelled() => Err(anyhow::anyhow!("Response stopped")),
             result = tokio::time::timeout(Duration::from_secs(120), inference) => result.context("Scheduling response timed out").and_then(|result| result),
-        };
+        }}.instrument(span.clone()).await;
+        telemetry::finish(
+            &span,
+            if cancel.is_cancelled() {
+                "interrupted"
+            } else if result.is_err() {
+                "failed"
+            } else {
+                "completed"
+            },
+            result.as_ref().err().filter(|_| !cancel.is_cancelled()),
+        );
+        if let Ok(reply) = &result {
+            telemetry::output(&span, &json!({"text":assistant::agent_text(reply)}));
+        }
         response_stream.finish(false);
         state["status"] = json!(if cancel.is_cancelled() { "interrupted" } else { "idle" });
         match result {
@@ -443,6 +500,9 @@ impl ScheduleAgent {
         }
         let saved = self.store.save_session(&mut state).await;
         self.runtime.finish(workspace, session_id);
+        if let Err(error) = &saved {
+            telemetry::finish(&span, "failed", Some(error));
+        }
         saved?;
         Ok(Self::public_state(state))
     }
@@ -467,6 +527,44 @@ impl ScheduleAgent {
     }
 
     pub async fn decide(
+        &self,
+        session_id: &str,
+        proposal_id: &str,
+        approve: bool,
+        token: Option<&str>,
+    ) -> Result<Value> {
+        let span = telemetry::observation("定时任务确认", "span", self.store.workspace(), session_id);
+        span.record("langfuse.observation.metadata.proposalId", proposal_id);
+        telemetry::input(&span, &json!({"approve":approve}));
+        let result = self
+            .decide_inner(session_id, proposal_id, approve, token)
+            .instrument(span.clone())
+            .await;
+        telemetry::finish(
+            &span,
+            if result.is_ok() {
+                if approve { "saved" } else { "cancelled" }
+            } else {
+                "failed"
+            },
+            result.as_ref().err(),
+        );
+        if let Ok(state) = &result
+            && let Some(proposal) = state["proposals"]
+                .as_array()
+                .and_then(|items| items.iter().find(|p| p["id"] == proposal_id))
+        {
+            span.record(
+                "langfuse.observation.metadata.scheduleId",
+                proposal["after"]["id"].as_str().unwrap_or_default(),
+            );
+            telemetry::finish(&span, proposal["status"].as_str().unwrap_or("completed"), None);
+            telemetry::output(&span, proposal);
+        }
+        result
+    }
+
+    async fn decide_inner(
         &self,
         session_id: &str,
         proposal_id: &str,

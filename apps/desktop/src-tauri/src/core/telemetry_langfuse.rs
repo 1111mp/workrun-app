@@ -73,6 +73,16 @@ pub(crate) async fn user<T>(identity: User, future: impl Future<Output = T>) -> 
     USER.scope(identity, future).await
 }
 
+pub(crate) fn record_user(span: &tracing::Span) {
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+    let _ = USER.try_with(|user| {
+        for attribute in user.attributes() {
+            // set_attribute updates the builder without starting the span.
+            span.set_attribute(attribute.key, attribute.value);
+        }
+    });
+}
+
 #[derive(Clone)]
 pub(crate) struct ModelTrace(Arc<ModelData>);
 struct ModelData {
@@ -235,6 +245,11 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for NativeAdapter {
         let _ = self.0.set(dispatch.downgrade());
     }
     fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::Id, _: LayerContext<'_, S>) {
+        // These boundaries restore durable parents after creation and stamp identity lazily.
+        // Resolving the OTel context here would start them before set_parent can run.
+        if matches!(attrs.metadata().name(), "workrun.schedule" | "workrun.workflow.run") {
+            return;
+        }
         let model = attrs.metadata().name() == "gen_ai.generate";
         let mut tool = ToolName::default();
         attrs.record(&mut tool);

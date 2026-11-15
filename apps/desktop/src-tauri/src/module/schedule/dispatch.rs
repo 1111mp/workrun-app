@@ -47,6 +47,14 @@ impl<'a> ScheduleDispatcher<'a> {
             }
             tx.commit().await?;
             if changed.rows_affected() == 1 {
+                let span = super::telemetry::observation("定时任务错过触发", "span", self.workspace, &id);
+                span.record("langfuse.observation.metadata.scheduleId", &id);
+                span.record("langfuse.observation.metadata.scheduledFor", &scheduled_for);
+                span.record(
+                    "langfuse.observation.metadata.reason",
+                    "workspace_inactive_or_app_closed",
+                );
+                super::telemetry::finish(&span, "missed", None);
                 super::ScheduleEvents::tasks(self.workspace);
             }
         }

@@ -1,19 +1,36 @@
 use super::events::{execute_app, finish_run, persist_events, publish_error, publish_value_event};
 use super::workflow::workflow_session_from_runtime;
 use super::*;
+use futures::FutureExt as _;
 use tracing::Instrument as _;
 
 pub(super) async fn execute_claimed_run(run_id: &str) {
     let workspace = crate::utils::dirs::active_workspace_id();
+    let mut schedule_span = None;
     let result = async {
         let record = RunHistoryStore::inspect(run_id).await?;
-        match record.summary.target_type.as_str() {
-            "app" => execute_claimed_app(run_id, &record.summary.target_id).await,
-            "workflow" => execute_claimed_workflow(run_id, &record.summary.target_id, record.runtime, &workspace).await,
-            target_type => bail!("unsupported queued run target type: {target_type}"),
+        // Only scheduled runs get this boundary; ordinary runs retain their existing tracing.
+        schedule_span = scheduled_run_span(&record.runtime, &workspace, run_id);
+        async {
+            match record.summary.target_type.as_str() {
+                "app" => execute_claimed_app(run_id, &record.summary.target_id).await,
+                "workflow" => {
+                    execute_claimed_workflow(run_id, &record.summary.target_id, record.runtime, &workspace).await
+                },
+                target_type => bail!("unsupported queued run target type: {target_type}"),
+            }
         }
+        .instrument(schedule_span.clone().unwrap_or_else(tracing::Span::current))
+        .await
     }
     .await;
+    if let Some(span) = &schedule_span {
+        crate::module::schedule::telemetry::finish(
+            span,
+            if result.is_ok() { "completed" } else { "failed" },
+            result.as_ref().err(),
+        );
+    }
     if let Err(error) = result {
         RunManager::global().workflow_sessions.lock().remove(run_id);
         let message = error.to_string();
@@ -21,6 +38,42 @@ pub(super) async fn execute_claimed_run(run_id: &str) {
             let _ = finish_run(run_id, RunStatus::Failed, Some(message)).await;
         }
     }
+    if let Some(span) = &schedule_span {
+        // Execution may return Ok after recording an interrupted, cancelled or failed run.
+        if let Ok(pool) = crate::core::db::DBManager::global().pool()
+            && let Ok((status, error)) = sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT status,error FROM run_records WHERE id=? AND workspace_id=?",
+            )
+            .bind(run_id)
+            .bind(&workspace)
+            .fetch_one(&pool)
+            .await
+        {
+            let error = error.filter(|_| status == "failed").map(anyhow::Error::msg);
+            crate::module::schedule::telemetry::finish(span, &status, error.as_ref());
+            if status == "failed" {
+                span.record("langfuse.observation.level", "ERROR");
+            }
+        }
+    }
+}
+
+fn scheduled_run_span(runtime: &Value, workspace: &str, run_id: &str) -> Option<tracing::Span> {
+    let trigger = &runtime["trigger"];
+    if trigger["type"] != "schedule" {
+        return None;
+    }
+    let span = crate::module::schedule::telemetry::observation("定时任务执行", "chain", workspace, run_id);
+    span.record("langfuse.observation.metadata.runId", run_id);
+    for (field, value) in [
+        ("langfuse.observation.metadata.scheduleId", &trigger["scheduleId"]),
+        ("langfuse.observation.metadata.occurrenceId", &trigger["occurrenceId"]),
+        ("langfuse.observation.metadata.scheduledFor", &trigger["scheduledFor"]),
+    ] {
+        span.record(field, value.as_str().unwrap_or_default());
+    }
+    crate::module::schedule::telemetry::restore_parent(&span, trigger["traceparent"].as_str());
+    Some(span)
 }
 
 async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
@@ -29,7 +82,9 @@ async fn execute_claimed_app(run_id: &str, target_id: &str) -> Result<()> {
         .app_runs
         .lock()
         .insert(run_id.to_string(), Arc::clone(&handle));
-    let result = execute_app(run_id, target_id, Arc::clone(&handle)).await;
+    // Erase the deep HTTP/runtime future before adding supervisor and tracing layers.
+    // Otherwise the no-default-features dev build exceeds Rust's Send proof depth.
+    let result = execute_app(run_id, target_id, Arc::clone(&handle)).boxed().await;
     handle.is_finished.store(true, Ordering::Release);
     handle.finished_notify.notify_waiters();
     RunManager::global().app_runs.lock().remove(run_id);
@@ -384,5 +439,84 @@ mod stack_tests {
             bytes <= 32 * 1024,
             "queued dispatcher embeds {bytes} bytes of nested futures"
         );
+    }
+}
+
+#[cfg(test)]
+mod scheduling_trace_tests {
+    use super::*;
+    use crate::module::schedule::telemetry::{
+        self,
+        tests::{attribute, exporter},
+    };
+    use tracing::instrument::WithSubscriber;
+
+    #[tokio::test]
+    async fn scheduled_execution_and_workflow_restore_dispatch_trace_without_affecting_manual_runs() {
+        let (subscriber, exporter, _provider) = exporter();
+        async {
+            assert!(scheduled_run_span(&json!({"kind":"workflow"}), "personal", "manual").is_none());
+            let dispatch = telemetry::observation("dispatch fixture", "chain", "personal", "run-1");
+            let runtime = json!({"trigger":{"type":"schedule","scheduleId":"task-1","occurrenceId":"occurrence-1","scheduledFor":"2026-11-15T09:00:00Z","traceparent":telemetry::traceparent(&dispatch)}});
+            drop(dispatch);
+            let execute = scheduled_run_span(&runtime, "personal", "run-1").unwrap();
+            async {
+                let node = telemetry::observation("workflow fixture", "chain", "personal", "run-1");
+                telemetry::finish(&node, "completed", None);
+            }.instrument(execute.clone()).await;
+            telemetry::finish(&execute, "completed", None);
+        }.with_subscriber(subscriber).await;
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 3);
+        let dispatch = spans.iter().find(|s| s.name == "dispatch fixture").unwrap();
+        let execute = spans.iter().find(|s| s.name == "定时任务执行").unwrap();
+        let workflow = spans.iter().find(|s| s.name == "workflow fixture").unwrap();
+        assert!(
+            spans
+                .iter()
+                .all(|s| s.span_context.trace_id() == dispatch.span_context.trace_id())
+        );
+        assert_eq!(execute.parent_span_id, dispatch.span_context.span_id());
+        assert_eq!(workflow.parent_span_id, execute.span_context.span_id());
+        assert_eq!(
+            attribute(execute, "langfuse.observation.metadata.scheduleId").as_deref(),
+            Some("task-1")
+        );
+        assert_eq!(
+            attribute(execute, "langfuse.observation.metadata.occurrenceId").as_deref(),
+            Some("occurrence-1")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Collector/Langfuse; real rule-only workflow in temporary checkpoint storage"]
+    async fn export_scheduled_workflow_execution() {
+        use crate::module::workflow::{TEST_CHECKPOINT_DB, compile};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.sqlite");
+        std::fs::File::create(&path).unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let task_id = format!("probe-{session_id}");
+        let subscriber = crate::core::telemetry::subscriber("http://127.0.0.1:4317").unwrap();
+        crate::core::telemetry::test_capture(true);
+        println!("schedule_execution_probe={session_id}");
+        async {
+            let dispatch = telemetry::observation("定时任务触发验收", "chain", "personal", &session_id);
+            dispatch.record("langfuse.observation.metadata.scheduleId", &task_id);
+            dispatch.record("langfuse.observation.metadata.runId", &session_id);
+            let runtime = json!({"trigger":{"type":"schedule","scheduleId":task_id,"occurrenceId":session_id,"scheduledFor":"2026-11-15T08:00:00Z","traceparent":telemetry::traceparent(&dispatch)}});
+            telemetry::finish(&dispatch,"queued",None);
+            drop(dispatch);
+            let execute = scheduled_run_span(&runtime,"personal",&session_id).unwrap();
+            let origin = crate::module::model_usage::CallContext {workspace_id:"personal".into(),run_id:Some(session_id.clone()),session_id:Some(session_id.clone()),purpose:"workflow".into(),..Default::default()};
+            TEST_CHECKPOINT_DB.scope(format!("sqlite://{}",path.display()),crate::module::model_usage::scope(origin,async {
+                let dsl = serde_json::from_value(json!({"id":"schedule-probe","name":"Scheduled rule fixture","nodes":[{"id":"start","type":"start"},{"id":"set","type":"switch","data":{"cases":[{"id":"adult","label":"Adult","condition":"age >= 18"}],"defaultCase":{"label":"Minor","condition":""}}},{"id":"end","type":"end"}],"edges":[{"source":"start","target":"set"},{"source":"set","target":"end","sourceHandle":"case:adult"},{"source":"set","target":"end","sourceHandle":"default"}]})).unwrap();
+                let result = compile(dsl,&Default::default(),None).await.unwrap().run_stream(adk_rust::graph::State::from_iter([("age".into(),json!(20))]),"schedule-probe",false,None,|_|{}).await.unwrap();
+                assert!(!result.interrupted);
+            }).instrument(execute.clone())).await;
+            telemetry::finish(&execute,"completed",None);
+        }.with_subscriber(subscriber).await;
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        crate::core::telemetry::test_capture(false);
     }
 }

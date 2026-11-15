@@ -61,6 +61,7 @@ export const modelGroupSchema = z.object({
   data: z.array(
     z.object({
       model_group: z.string(),
+      supported_openai_params: z.array(z.string()).optional().catch(undefined),
       supported_reasoning_efforts: z
         .array(z.string())
         .optional()

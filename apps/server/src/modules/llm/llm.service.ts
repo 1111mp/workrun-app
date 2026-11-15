@@ -31,6 +31,7 @@ import { ChatUsageStream } from './llm.stream';
 @Injectable()
 export class LlmService {
   private sdk?: OpenAI;
+  private readonly withoutSafetyIdentifier = new WeakSet<TeamModel>();
   private cachedModels?: { expires: number; models: TeamModel[] };
   private loadingModels?: Promise<TeamModel[]>;
 
@@ -209,6 +210,18 @@ export class LlmService {
           groups.filter((group) => group.model_group === id),
         ),
     );
+    // Keep routing-only metadata private and tied to the same catalog snapshot.
+    for (const model of models) {
+      if (
+        groups.some(
+          (group) =>
+            group.model_group === model.id &&
+            group.supported_openai_params !== undefined &&
+            !group.supported_openai_params.includes('safety_identifier'),
+        )
+      )
+        this.withoutSafetyIdentifier.add(model);
+    }
     this.cachedModels = { models, expires: Date.now() + 30_000 };
     return models;
   }
@@ -319,11 +332,17 @@ export class LlmService {
                 {
                   ...request,
                   store: false,
-                  // Responses also has a provider-facing safety identity. Do not let
-                  // it diverge from the Workrun user, and keep it within 128 characters.
-                  safety_identifier: createHash('sha256')
-                    .update(endUser)
-                    .digest('hex'),
+                  // Some LiteLLM adapters reject this optional provider field.
+                  // Unknown capabilities retain the existing hashed identity;
+                  // managed user/metadata attribution is always preserved.
+                  safety_identifier: undefined,
+                  ...(!this.withoutSafetyIdentifier.has(model)
+                    ? {
+                        safety_identifier: createHash('sha256')
+                          .update(endUser)
+                          .digest('hex'),
+                      }
+                    : {}),
                 } as OpenAI.Responses.ResponseCreateParams,
                 options,
               )

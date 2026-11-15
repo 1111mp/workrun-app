@@ -249,7 +249,7 @@ mod tests {
         async {
             TEST_CHECKPOINT_DB.scope(url,async {
                 let origin=crate::module::model_usage::CallContext{workspace_id:"personal".into(),run_id:Some(run.clone()),session_id:Some(run.clone()),..Default::default()};
-                let first=tracing::info_span!("workrun.workflow.phase","otel.name"="原生观测验收","langfuse.observation.type"="chain","langfuse.session.id"=%run,"langfuse.observation.metadata.runId"=%run);
+                let first=tracing::info_span!("workrun.workflow.run","otel.name"="原生观测验收","langfuse.observation.type"="chain","langfuse.session.id"=%run,"langfuse.observation.metadata.runId"=%run);
                 config::workflow_parent(&pool,&run,&json!({}),&first).await;
                 crate::module::model_usage::scope(origin.clone(),async {
                     let dsl=serde_json::from_value(document.clone()).unwrap();
@@ -259,7 +259,7 @@ mod tests {
                 let runtime:String=sqlx::query_scalar("SELECT runtime_json FROM run_records WHERE id=?").bind(&run).fetch_one(&pool).await.unwrap();
                 let runtime:Value=serde_json::from_str(&runtime).unwrap();
                 assert!(runtime.pointer("/observability/traceparent").and_then(Value::as_str).unwrap().starts_with("00-"));
-                let second=tracing::info_span!("workrun.workflow.phase","otel.name"="恢复执行","langfuse.observation.type"="chain","langfuse.session.id"=%run,"langfuse.observation.metadata.runId"=%run);
+                let second=tracing::info_span!("workrun.workflow.run","otel.name"="恢复执行","langfuse.observation.type"="chain","langfuse.session.id"=%run,"langfuse.observation.metadata.runId"=%run);
                 config::workflow_parent(&pool,&run,&runtime,&second).await;
                 crate::module::model_usage::scope(origin,async {
                     let dsl=serde_json::from_value(document.clone()).unwrap();
