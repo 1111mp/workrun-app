@@ -224,6 +224,10 @@ it.each([
       expect(option).toBeDefined();
       expect(option?.getAttribute('aria-disabled') === 'true').toBe(!enabled);
       if (enabled) {
+        // The popup mounts before Base UI enables pointer interaction.
+        await waitFor(() =>
+          expect(getComputedStyle(option!).pointerEvents).not.toBe('none'),
+        );
         await user.click(option!);
         expect(ui.onChange).toHaveBeenCalledWith({
           type: 'bearer',
@@ -255,6 +259,10 @@ it('reloads the saved credential when configuring a node again', async () => {
       ...document.querySelectorAll<HTMLElement>('[role="option"]'),
     ].find((item) => item.textContent === 'Service key');
     expect(option).toBeDefined();
+    // The popup mounts before Base UI enables pointer interaction.
+    await waitFor(() =>
+      expect(getComputedStyle(option!).pointerEvents).not.toBe('none'),
+    );
     await user.click(option!);
     expect(next.onChange).toHaveBeenCalledWith({
       type: 'bearer',
