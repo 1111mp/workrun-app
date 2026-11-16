@@ -257,12 +257,13 @@ export function AssistantWorkflowPlan({
             </CardContent>
           </CollapsibleContent>
           <CardFooter className='flex-wrap gap-2'>
-            {plan.outcome?.after_revision_id && (
-              <WorkflowChangeCard
-                beforeRevisionId={plan.outcome.before_revision_id}
-                afterRevisionId={plan.outcome.after_revision_id}
-              />
-            )}
+            {plan.outcome?.before_revision_id &&
+              plan.outcome.after_revision_id && (
+                <WorkflowChangeCard
+                  beforeRevisionId={plan.outcome.before_revision_id}
+                  afterRevisionId={plan.outcome.after_revision_id}
+                />
+              )}
             {editable && active && (
               <>
                 <Button
