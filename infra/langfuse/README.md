@@ -99,8 +99,8 @@ of Workrun application instrumentation.
 
 ### Application verification
 
-`verification.json` 记录原生模型、原生工具及检查点暂停恢复的本地 API 验收结果。
-这些隔离样本不执行用户业务工具；真实订单流程需要在新桌面端和 Server 上复测。
+以下隔离测试覆盖原生模型、原生工具及检查点暂停恢复，不执行用户业务工具。
+真实订单流程需要在新桌面端和 Server 上复测；验收结果应记录在对应 PR 中。
 
 ```sh
 cargo test --manifest-path apps/desktop/Cargo.toml --lib export_native_adk_model --offline -- --ignored --nocapture

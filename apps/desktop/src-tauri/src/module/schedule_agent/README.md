@@ -148,5 +148,6 @@ Collector-backed checks are explicit ignored tests (`cargo test --lib export_
 -- --ignored --nocapture --test-threads=1`), requiring the local OTLP/Langfuse
 stack. They cover scripted scheduling conversation/confirmation and real rule-only
 Workflow execution, then ingestion is checked through the Langfuse API.
-The [verification report](../../../../../../infra/langfuse/schedule-verification.json)
-records trace IDs, statuses and the remaining native/provider verification limits.
+Record trace IDs, statuses and verification limits in the corresponding PR.
+Full scheduling conversations with a real model, native cron firing, Python
+Workflow execution and restart persistence still require end-to-end verification.
