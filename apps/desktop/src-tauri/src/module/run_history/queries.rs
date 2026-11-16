@@ -827,6 +827,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recent_runs_and_conversations_are_scoped_to_the_account_and_server() {
+        use crate::utils::dirs::{WorkspaceScope, team_account_scope};
+        let key = |server, user| match team_account_scope(server, user) {
+            WorkspaceScope::Team { account_key } => format!("team:{account_key}"),
+            _ => unreachable!(),
+        };
+        let pool = timeline_pool().await;
+        let alice = key("https://one.example", "alice");
+        sqlx::query("UPDATE run_records SET workspace_id=? WHERE workspace_id='team:default'")
+            .bind(&alice)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE chat_sessions SET workspace_id=? WHERE workspace_id='team:default'")
+            .bind(&alice)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let query = || RunHistoryTimelineQuery {
+            target_type: None,
+            target_id: None,
+            status: None,
+            query: None,
+            mode: None,
+            page_size: Some(30),
+            cursor: None,
+        };
+        for other in [key("https://one.example", "bob"), key("https://two.example", "alice")] {
+            let page = super::list_timeline_for_workspace(&pool, query(), &other)
+                .await
+                .unwrap();
+            assert_eq!(page.total_count, 0);
+            assert!(page.items.is_empty());
+            assert!(
+                super::super::ensure_workspace_in_pool(&pool, "team-task", &other)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            super::list_timeline_for_workspace(&pool, query(), &alice)
+                .await
+                .unwrap()
+                .total_count,
+            2
+        );
+        super::super::ensure_workspace_in_pool(&pool, "team-task", &alice)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn timeline_mixes_sessions_and_tasks_without_exposing_chat_turn_runs() {
         let pool = timeline_pool().await;
         let first_page = list_timeline_from_pool(

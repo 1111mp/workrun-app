@@ -8,17 +8,19 @@ shared instructions or Skills.
 
 ## Roles and SDK composition
 
-`main_agent/` owns conversation, intent assessment, clarification, capability routing
-and delivery. `planning_agent/` owns its English instructions, Skill, independent
-read/proposal tool catalog and the versioned plan store. `workflow_agent/` owns its
-English authoring Skill, progressive node references and graph validation/save tools.
-The main agent cannot directly write a plan or graph. Neither specialist can execute
-or approve its own work.
+`runtime.rs` owns request entry, native session-state inspection and handler dispatch.
+`router/` chooses conversation, task or workflow without tools or Skills.
+`conversation_agent/` answers with a small instruction set and can request a one-way
+handoff to task handling. `task_agent/` owns capability-backed fulfillment, tools,
+optional Skills and SDK execution. `authorization.rs` checks the current request's
+scope independently of routing. Each role's AGENT.md lives beside its implementation.
 
-`orchestration.rs` registers the permitted specialist through ADK 2.3
-`LlmAgentBuilder::sub_agent` and runs the tree with `Runner`. Before acceptance,
-only workflow_planner is registered. A current-turn native plan approval enables
-workflow_author. No AgentTool or custom subagent invocation loop is used.
+`planning_agent/` owns proposal instructions, read/proposal tools and the plan store.
+`workflow_agent/` owns authoring instructions, progressive node references and save tools.
+Neither specialist can approve or execute its own work. `task_agent/runner.rs`
+registers permitted specialists with ADK LlmAgentBuilder::sub_agent and runs the tree.
+Routing to Workflow selects the planner through the native transfer path without an
+initial task-model request; current-turn native plan approval enables the author.
 `sdk.rs` transports role-bound native requests and returns specialist outcomes through
 SDK transfer events. A parent can delegate once per user turn; specialists cannot
 transfer to peers. SDK transfers must be isolated from sibling calls. Malformed mixed
@@ -84,7 +86,7 @@ plan ID and exact version; it rechecks dependencies. It creates only, never runs
 An explicit natural-language acceptance can also bind the current ready version through
 structured intent with exact current-user evidence. That interpretation remains fallible;
 the native button provides a deterministic approval path. An explicit separate run
-request may authorize the main agent to dispatch the newly saved definition after
+request may authorize the task agent to dispatch the newly saved definition after
 creation. An initial create-and-run request still needs planning/review first.
 
 Native state transitions are ready/needs_clarification → approved → building → saved
@@ -119,7 +121,7 @@ also records interpretation and effective grants, specialist progress and operat
 outcomes under `assistant/operations`. Only public progress events are streamed from
 specialists; their internal thinking is not included in the user answer.
 
-`main_agent/intent.rs` distinguishes conversation, one-off task, planning, authoring,
+`authorization.rs` distinguishes conversation, one-off task, planning, authoring,
 execution, status, explanation and clarification. Confirmation schema fields are
 contextual. Empty optional confirmation placeholders do not create authorization.
 Task requests can authorize a matching existing workflow within their scope, never
@@ -145,7 +147,7 @@ binary/oversized references and stale content identity are rejected. Installed S
 remain untrusted guidance and cannot grant tools, override roles or authorize effects.
 Explicit-trigger Skills require explicit invocation. Built-in role Skills remain separate.
 
-Only the main agent receives `call_workspace_tool` during eligible direct-work turns.
+Only the task agent receives `call_workspace_tool` during eligible direct-work turns.
 It reuses ProcessNodeRegistry and ADK MCP Tool implementations. Auto honors existing
 policy; AskEveryTime saves an exact pending call without executing. Conversational
 approval is session/tool/argument/catalog-configuration bound. Refusal closes it
@@ -393,7 +395,7 @@ External model runs remain opt-in and require the applicable external-call scope
 `evaluation::local_cross_task_prompt_comparison` is an opt-in offline check over
 all baseline cases. Set `WORKRUN_ASSISTANT_BASELINE_DIR` to a prompt snapshot and
 optionally `WORKRUN_ASSISTANT_BUDGET_OUTPUT` to a temporary report path. It replaces
-only the intent, main-agent and capability-orchestration instruction texts while
+only the intent, task-agent and capability-orchestration instruction texts while
 asserting unchanged history, tools and model configuration. Reports retain resource
 fingerprints and label the scope as prompt text only. They measure serialized
 character counts, excluding other changed resources and historical routing behavior;

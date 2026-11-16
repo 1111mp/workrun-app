@@ -61,14 +61,21 @@ pub(super) async fn add_codeact_agent_node(
     let tool_timeout_seconds = integer_data(node, "toolTimeoutSeconds", 60, 1, 600)?;
     let tools = ToolRegistry::resolve(&tool_ids).await?;
     validate_tool_state_binding_schemas(node, &tools, &state_bindings)?;
-    let model = model_catalog()
+    let model = crate::module::team_model::active_catalog()
+        .await?
         .into_iter()
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("codeact_agent node `{id}` references unknown model `{profile_id}`"))?;
     let label = format!("{}/{}", model.id, model.model);
     // Forward the SDK's requested transport mode for every provider. Progress
     // instrumentation must not change generation policy or usage accounting.
-    let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
+    let model = instrumented_model(
+        create_model(&model, config)?,
+        &id,
+        &label,
+        on_event.clone(),
+        Some(&model),
+    );
     let tool_calls = Arc::new(AtomicU32::new(0));
     let tool_trace = Arc::new(Mutex::new(Vec::new()));
     let workspace = Arc::new(CodeActWorkspace::new(ArtifactStore::active()?)?);
@@ -792,6 +799,7 @@ Path("/outputs/report.txt").write_text(text + " processed")
                 "codeact",
                 "test",
                 Some(on_event),
+                None,
             ))
             .runtime(runtime(&workspace))
             .max_iterations(1)
@@ -891,7 +899,7 @@ Path("/outputs/report.txt").write_text(text + " processed")
             .instruction("Read sales data from /artifacts/manifest.json. Calculate total sales, sales per product, and the product with the highest sales using Python. Publish these values to global state keys: total_sales, product_sales, top_product.")
             .input_guardrails(input_guardrails())
             .output_guardrails(output_guardrails())
-            .model(instrumented_model(Arc::new(LiveSalesModel { inner:crate::module::assistant::codeact_live_test_model(), requests:requests.clone() }), "codeact_calc", "gemini-test", None))
+            .model(instrumented_model(Arc::new(LiveSalesModel { inner:crate::module::assistant::codeact_live_test_model(), requests:requests.clone() }), "codeact_calc", "gemini-test", None, None))
             .runtime(runtime(&workspace)).max_iterations(8).build().unwrap();
         let node = StreamingAgentNode::new(
             AdkAgentNode::new(Arc::new(agent))

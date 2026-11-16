@@ -33,6 +33,24 @@ minimumReleaseAgeExclude:
   - '@vitest/mocker@5.0.4'
   - '@vitest/spy@5.0.4'
   - cronstrue@3.32.0
-  - lucide-react@1.56.0
+  - lucide-react@1.56.0 || 1.71.0 || 1.72.0
   - vitest@5.0.4
   - '@testing-library/user-event@14.6.8'
+  - '@better-auth/core@1.7.20'
+  - '@better-auth/drizzle-adapter@1.7.20'
+  - '@better-auth/kysely-adapter@1.7.20'
+  - '@better-auth/memory-adapter@1.7.20'
+  - '@better-auth/mongo-adapter@1.7.20'
+  - '@better-auth/prisma-adapter@1.7.20'
+  - '@better-auth/telemetry@1.7.20'
+  - better-auth@1.7.20
+  - openai@7.55.0
+  - '@astrojs/internal-helpers@0.13.2'
+  - '@astrojs/markdown-satteri@0.4.8'
+  - '@astrojs/runtime@0.1.0'
+  - '@astrojs/vite-plugin-astro@0.1.1'
+  - '@tauri-apps/plugin-http@2.9.0'
+  - astro@7.4.10
+  - i18next@27.1.1
+  - immer@11.2.10
+  - vite@8.3.8

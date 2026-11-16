@@ -67,8 +67,11 @@ impl ProcessNodeRegistry {
     /// Removes a local project only after its catalog entry has been committed away.
     /// If this fails, the caller can recover the orphaned directory from the returned path.
     pub async fn delete_project(definition: &IProcessNode) -> Result<()> {
-        let project_path = Self::project_path(definition)?;
-        match tokio::fs::metadata(&project_path).await {
+        Self::delete_project_at(&Self::project_path(definition)?).await
+    }
+
+    pub async fn delete_project_at(project_path: &Path) -> Result<()> {
+        match tokio::fs::metadata(project_path).await {
             Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(&project_path)
                 .await
                 .with_context(|| format!("failed to delete Process Node project {}", project_path.display())),

@@ -66,6 +66,12 @@ Workrun 需要 Microsoft Edge WebView2 Runtime 来渲染界面。
 
 先启用 Windows Update，再重试安装 WebView2。如果仍然失败，请在 Release 的 Assets 中使用内置 WebView2 Runtime 的安装包（如有）。
 
+## 团队服务与模型连接
+
+加入已有团队只需要管理员提供的 Server URL 和 Workrun 账号，不需要自己部署 LiteLLM 或 Langfuse。自托管时，Server 启动检查、模型不可见、容器网络和 Trace 排障步骤见[部署指南](/zh-cn/team/deployment/#常见问题)。
+
+若模型列表为空，先确认当前登录身份、模型来源和 Server 的网关配置；不要把 LiteLLM master key 填到桌面端。模型直连与团队网关的区别见[配置模型访问](/zh-cn/getting-started/model-profiles/)。
+
 ## 仍然需要帮助？
 
 请[创建 GitHub issue](https://github.com/1111mp/workrun-app/issues/new/choose)，并附上操作系统版本、Workrun 版本、安装包架构以及完整的错误信息。

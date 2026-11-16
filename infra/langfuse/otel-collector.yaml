@@ -1,0 +1,26 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  batch: {}
+exporters:
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: ${env:LANGFUSE_AUTH}
+      x-langfuse-ingestion-version: "4"
+  nop: {}
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/langfuse]
+    # ADK also exports metrics; Langfuse ingests traces only.
+    metrics:
+      receivers: [otlp]
+      exporters: [nop]

@@ -44,31 +44,30 @@ export class AppService {
 
   async create(ownerId: string, dto: CreateAppDto) {
     const owner = this.toOwnerId(ownerId);
+    const findRetry = () =>
+      this.appModel
+        .findOne({ id: dto.id, ownerId: owner, isDelete: false })
+        .lean();
+    // The App ID is stable across saves, publication attempts and name changes.
+    const previous = await findRetry();
+    if (previous) return previous;
     const name = dto.name.trim();
     const version = dto.version ?? '0.1.0';
-    const existing = await this.appModel.exists({
-      ownerId: owner,
-      name,
-      version,
-      isDelete: false,
-    });
-    if (existing) {
-      throw new ConflictException(`App ${name}@${version} already exists`);
-    }
 
     try {
       return await this.appModel.create({
         ...dto,
-        id: randomUUID(),
+        id: dto.id,
         name,
         ownerId: owner,
         version,
       });
     } catch (error) {
-      // The lookup provides a clear error; the database index closes the
-      // concurrent-create race between that lookup and the insert.
+      // Concurrent attempts share an ID; only the authenticated owner can reuse it.
       if (this.isDuplicateKey(error)) {
-        throw new ConflictException(`App ${name}@${version} already exists`);
+        const previous = await findRetry();
+        if (previous) return previous;
+        throw new ConflictException(`App ID ${dto.id} already exists`);
       }
       throw error;
     }
@@ -515,9 +514,10 @@ export class AppService {
   }
 
   async remove(ownerId: string, id: string) {
+    // A previous attempt may have deleted the server App before local cleanup failed.
     const app = await this.appModel
       .findOneAndUpdate(
-        { id, ownerId: this.toOwnerId(ownerId), isDelete: false },
+        { id, ownerId: this.toOwnerId(ownerId) },
         { isDelete: true, deletedAt: new Date() },
         { new: true },
       )

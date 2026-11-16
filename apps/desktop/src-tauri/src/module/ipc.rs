@@ -1,7 +1,5 @@
 //! Application-wide local IPC transport for SDK and extension processes.
 
-#[cfg(unix)]
-use crate::utils::dirs;
 use crate::{core::handle, logging, singleton, utils::logging::Type};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -40,6 +38,7 @@ pub struct IpcSession {
 
 #[derive(Debug)]
 struct IpcSessionEntry {
+    workspace: String,
     token: String,
     messages: mpsc::Sender<Value>,
     artifacts: Option<ArtifactAccess>,
@@ -194,12 +193,8 @@ impl IpcServer {
             return Ok(());
         }
 
-        let path = dirs::runtime_dir()?.join("ipc.sock");
-        if path.exists() {
-            tokio::fs::remove_file(&path)
-                .await
-                .with_context(|| format!("failed to remove stale IPC socket {}", path.display()))?;
-        }
+        let socket_dir = tempfile::Builder::new().prefix("wr-ipc-").tempdir()?;
+        let path = socket_dir.path().join("ipc.sock");
 
         let listener =
             UnixListener::bind(&path).with_context(|| format!("failed to bind IPC socket {}", path.display()))?;
@@ -212,6 +207,8 @@ impl IpcServer {
         logging!(info, Type::IpcServer, "Listening on {}", path.display());
 
         tokio::spawn(async move {
+            // Keep this process-wide endpoint alive across account switches.
+            let _socket_dir = socket_dir;
             loop {
                 let stream = match listener.accept().await {
                     Ok((stream, _)) => stream,
@@ -286,7 +283,21 @@ impl IpcServer {
     }
 
     /// Allocate credentials for one client before it is launched.
+    pub async fn ensure_active_workspace(&self, id: &str) -> Result<()> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions.get(id).context("IPC session closed")?;
+        anyhow::ensure!(
+            crate::utils::dirs::workspace_available() && session.workspace == crate::utils::dirs::active_workspace_id(),
+            "IPC session belongs to another account"
+        );
+        Ok(())
+    }
+
     pub async fn create_session(&self) -> Result<IpcSession> {
+        anyhow::ensure!(
+            crate::utils::dirs::workspace_available(),
+            "Sign in to use Team resources"
+        );
         if !self.started.load(Ordering::Acquire) {
             bail!("IPC server has not been started")
         }
@@ -296,6 +307,7 @@ impl IpcServer {
         self.sessions.lock().await.insert(
             id.clone(),
             IpcSessionEntry {
+                workspace: crate::utils::dirs::active_workspace_id(),
                 token: token.clone(),
                 messages,
                 artifacts: None,
@@ -346,10 +358,17 @@ async fn handle_connection(
 ) -> Result<()> {
     let hello = receive_message(&mut stream).await?;
     let (session_id, message_sender) = authenticate_hello(&hello, &sessions).await?;
+    let workspace = sessions
+        .lock()
+        .await
+        .get(&session_id)
+        .context("IPC session closed")?
+        .workspace
+        .clone();
     let (reader, writer) = tokio::io::split(stream);
     let writer = Arc::new(Mutex::new(writer));
     register_connection(&session_id, Arc::clone(&writer), &connections).await?;
-    handle_messages(reader, session_id, message_sender, writer, connections).await
+    handle_messages(reader, session_id, message_sender, writer, connections, workspace).await
 }
 
 #[cfg(unix)]
@@ -360,12 +379,19 @@ async fn handle_connection(
 ) -> Result<()> {
     let hello = receive_message(&mut stream).await?;
     let (session_id, message_sender) = authenticate_hello(&hello, &sessions).await?;
+    let workspace = sessions
+        .lock()
+        .await
+        .get(&session_id)
+        .context("IPC session closed")?
+        .workspace
+        .clone();
 
     let (mut reader, writer) = stream.into_split();
     let writer = Arc::new(Mutex::new(writer));
     register_connection(&session_id, Arc::clone(&writer), &connections).await?;
 
-    handle_messages(&mut reader, session_id, message_sender, writer, connections).await
+    handle_messages(&mut reader, session_id, message_sender, writer, connections, workspace).await
 }
 
 #[cfg(any(unix, windows))]
@@ -409,6 +435,7 @@ async fn handle_messages<R>(
     message_sender: mpsc::Sender<Value>,
     writer: IpcWriter,
     connections: Arc<Mutex<HashMap<String, IpcWriter>>>,
+    workspace: String,
 ) -> Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -446,10 +473,16 @@ where
                     .send(&session_id, serde_json::json!({ "id": id, "type": accepted_type }))
                     .await?;
             }
+            let emit_workspace = workspace.clone();
             let emit_app = app_handle.clone();
             let emit_session_id = session_id.clone();
             app_handle
                 .run_on_main_thread(move || {
+                    if !crate::utils::dirs::workspace_available()
+                        || crate::utils::dirs::active_workspace_id() != emit_workspace
+                    {
+                        return;
+                    }
                     if let Err(error) = emit_app.emit(
                         IPC_EVENT_MESSAGE,
                         IpcMessageEvent {
@@ -544,6 +577,7 @@ mod tests {
             sessions.lock().await.insert(
                 id.to_owned(),
                 IpcSessionEntry {
+                    workspace: crate::utils::dirs::active_workspace_id(),
                     token: format!("token-{id}"),
                     messages,
                     artifacts: None,
@@ -607,6 +641,7 @@ mod tests {
         sessions.lock().await.insert(
             "cancelled".into(),
             IpcSessionEntry {
+                workspace: crate::utils::dirs::active_workspace_id(),
                 token: "token".into(),
                 messages,
                 artifacts: None,
@@ -705,6 +740,7 @@ mod tests {
             sessions.lock().await.insert(
                 id.into(),
                 IpcSessionEntry {
+                    workspace: crate::utils::dirs::active_workspace_id(),
                     token: format!("token-{id}"),
                     messages: sender,
                     artifacts: None,
@@ -816,6 +852,7 @@ mod artifact_capability_tests {
         server.sessions.lock().await.insert(
             id.clone(),
             IpcSessionEntry {
+                workspace: crate::utils::dirs::active_workspace_id(),
                 token: "test".into(),
                 messages,
                 artifacts: Some(access),
@@ -892,6 +929,7 @@ mod process_pdf_integration_tests {
         server.sessions.lock().await.insert(
             id.clone(),
             IpcSessionEntry {
+                workspace: crate::utils::dirs::active_workspace_id(),
                 token: token.clone(),
                 messages,
                 artifacts: Some(ArtifactAccess {

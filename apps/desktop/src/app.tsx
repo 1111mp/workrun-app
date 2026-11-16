@@ -13,6 +13,12 @@ import { useWorkrunStore } from '@/stores';
 
 function App() {
   const config = useWorkrunStore((s) => s.config);
+  const account = useWorkrunStore((s) => s.teamUser?.id);
+  const scope = JSON.stringify([
+    config?.workspace_mode,
+    config?.team?.server_url,
+    account,
+  ]);
 
   useTheme();
 
@@ -32,8 +38,8 @@ function App() {
       {config.workspace_mode === 'team' && config.team?.server_url ? (
         <TeamAuthTauriHandler />
       ) : null}
-      <PythonUiRequestDialog />
-      <RunWorkspace key={`runs:${config.workspace_mode ?? 'personal'}`} />
+      <PythonUiRequestDialog key={`python:${scope}`} />
+      <RunWorkspace key={`runs:${scope}`} />
     </>
   );
 }

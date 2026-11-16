@@ -1,10 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
 import { cn } from '@workspace/ui/lib/utils';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { CodeXmlIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { getModelCatalog } from '@/services/cmd';
+import { useModelCatalog } from '@/hooks/use-model-catalog';
 
 function CodeActAgentNode({
   data,
@@ -12,10 +11,7 @@ function CodeActAgentNode({
   selected,
 }: NodeProps<Node<WorkflowCodeActAgentNodeData>>) {
   const { t } = useTranslation();
-  const { data: modelProfiles = [] } = useQuery({
-    queryKey: ['modelCatalog'],
-    queryFn: getModelCatalog,
-  });
+  const { data: modelProfiles = [] } = useModelCatalog();
   const modelProfile = modelProfiles.find(
     (profile) => profile.id === data.modelProfileId,
   );

@@ -1,0 +1,8 @@
+# This alias is an example, not a required Workrun model name.
+model_list:
+  - model_name: example-model
+    litellm_params:
+      model: os.environ/UPSTREAM_MODEL
+      api_key: os.environ/UPSTREAM_API_KEY
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

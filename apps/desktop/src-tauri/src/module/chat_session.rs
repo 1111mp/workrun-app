@@ -72,7 +72,20 @@ async fn summarize(
     older_messages: &[ConversationMessage],
 ) -> Result<String> {
     let config = BaseConfig::workrun().await.data_arc();
-    let model = internal_summary_model(&config)?;
+    let model = if crate::utils::dirs::is_team_workspace() {
+        let id = config
+            .team
+            .as_ref()
+            .and_then(|team| team.summary_model_id.as_deref())
+            .context("team conversation summary model is not configured")?;
+        crate::module::team_model::active_catalog()
+            .await?
+            .into_iter()
+            .find(|model| model.id == id)
+            .context("Select a valid team summary model")?
+    } else {
+        internal_summary_model(&config)?
+    };
     let llm = create_model(&model, &config)?;
     let prompt = format!(
         "{SUMMARY_PROMPT}\n\nPrevious summary:\n{}\n\nOlder conversation JSON:\n{}",
@@ -563,12 +576,13 @@ impl ChatSessionStore {
 }
 
 async fn summary_model_is_configured() -> bool {
-    BaseConfig::workrun()
-        .await
-        .data_arc()
-        .summary_model_profile_id
-        .as_deref()
-        .is_some_and(|id| !id.trim().is_empty())
+    let config = BaseConfig::workrun().await.data_arc();
+    let id = if crate::utils::dirs::is_team_workspace() {
+        config.team.as_ref().and_then(|team| team.summary_model_id.as_deref())
+    } else {
+        config.summary_model_profile_id.as_deref()
+    };
+    id.is_some_and(|id| !id.trim().is_empty())
 }
 
 #[cfg(test)]

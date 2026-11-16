@@ -7,7 +7,7 @@ import {
   type WorkflowRunEvent,
 } from '@/services/workflow';
 import {
-  replayWorkflowRunProjection,
+  restoreWorkflowRunProjection,
   useWorkflowRunStore,
 } from '@/stores/workflow-run.store';
 
@@ -50,11 +50,12 @@ export function useWorkflowRunSnapshot(
         (event) => event.sequence > store.projection.eventSequence,
       );
       if (newer.length) store.applyRunEvents(newer, context);
+      store.reconcileRunRecord(record);
       return;
     }
     restored.current = identity;
     store.restoreWorkflowRun(
-      replayWorkflowRunProjection(record.id, events, context),
+      restoreWorkflowRunProjection(record, context),
       false,
     );
   }, [record, nodes, mode, live]);

@@ -155,6 +155,14 @@ workflow 失败后，先查看失败原因、App 自动补偿及远程取消消�
 
 OTLP 是诊断导出，不替代本地运行记录、状态边界或逐次结果检查。
 
+### 使用 Langfuse
+
+可独立部署 `infra/langfuse` 的 Langfuse 与 Collector，也可使用已有 OTLP 后端，详见[部署指南](/zh-cn/team/deployment/)。桌面端连接 OTLP/gRPC Collector，而非直接填写 Langfuse UI URL：同机默认 `http://127.0.0.1:4317`。Collector 保管项目认证，转发至 Langfuse 的 `/api/public/otel`；远程桌面应使用可达且受保护的 collector 地址。
+
+导出覆盖对话、工作流、节点、模型 generation 与工具 observation，并关联 session/run/node/call ID。metadata 可能包含当前账号身份；输入输出正文默认关闭，可在 **设置 → 日志 → 导出对话和工作流正文** 单独开启，重启后生效。关闭正文不等于停止 metadata 导出。配套配置丢弃 metrics，不需要启用 Langfuse AI Gateway，也不需要同时配置 LiteLLM Langfuse callback。
+
+Langfuse 用于排查模型、工具和编排耗时，不代替本地检查点或运行记录；当前 Server 也没有额外接入 NestJS 分布式 Trace。
+
 ## 文件结果与本地存储
 
 文件输出在历史中保存为 artifact 引用，实际文件保存在本机当前工作区的 artifacts 目录。可在结果中导出文件、预览图片和视频，或打开 PDF。查看文件依赖对应的本地快照；只保留运行记录而丢失 artifacts 文件，无法恢复文件内容。

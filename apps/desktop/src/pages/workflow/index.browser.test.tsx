@@ -88,6 +88,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 vi.mock('@/services/cmd', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/cmd')>()),
+  getModelCatalogStatus: async () => ({
+    models: await (await import('@/services/cmd')).getModelCatalog(),
+    serverError: null,
+  }),
   getModelCatalog: async () => [],
 }));
 vi.mock('@/services/evaluation', async (importOriginal) => ({

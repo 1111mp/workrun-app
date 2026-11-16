@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import {
   Button,
   Field,
@@ -12,6 +11,7 @@ import {
   Item,
   ItemActions,
   ItemContent,
+  ItemDescription,
   ItemTitle,
   Select,
   SelectContent,
@@ -20,11 +20,12 @@ import {
   SelectLabel,
   SelectTrigger,
 } from '@workspace/ui/components';
-import { PlusIcon, Trash2Icon } from 'lucide-react';
+import { PlusIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react';
 import { Controller, type UseFormReturn, FieldArray } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 
-import { getModelCatalog } from '@/services/cmd';
+import { useModelCatalog } from '@/hooks/use-model-catalog';
+import { useWorkrunStore } from '@/stores';
 
 import type { SettingsForm } from './settings-schema';
 
@@ -36,6 +37,7 @@ const PROVIDER_SETTING_KEY = {
   deep_seek: 'deepSeek',
   groq: 'groq',
   ollama: 'ollama',
+  team: 'team',
 } as const satisfies Record<ModelProvider, string>;
 
 const NO_SUMMARY_MODEL = '__none__';
@@ -48,6 +50,7 @@ const MODEL_PROVIDER_LABEL: Record<ModelProvider, string> = {
   deep_seek: 'DeepSeek',
   groq: 'Groq',
   ollama: 'Ollama',
+  team: 'Workrun Server',
 };
 
 function ModelProfilesSettings({
@@ -56,17 +59,106 @@ function ModelProfilesSettings({
   form: UseFormReturn<SettingsForm>;
 }) {
   const { t } = useTranslation();
-  const { data: modelProfiles = [] } = useQuery({
-    queryKey: ['modelCatalog'],
-    queryFn: getModelCatalog,
-  });
+  const team = useWorkrunStore(
+    (state) => state.config?.workspace_mode === 'team',
+  );
+  const serverUrl = useWorkrunStore((state) => state.config?.team?.server_url);
+  const {
+    data: modelProfiles = [],
+    error: modelError,
+    serverError,
+    isFetching,
+    refresh,
+  } = useModelCatalog();
+  const teamModels = modelProfiles.filter((model) => model.provider === 'team');
 
   return (
     <FieldSet className='gap-1'>
       <FieldLegend className='text-muted-foreground'>
         {t('settings.models.title')}
       </FieldLegend>
-      <FieldDescription>{t('settings.models.description')}</FieldDescription>
+      <FieldDescription>
+        {t(
+          team
+            ? 'settings.models.teamDescription'
+            : 'settings.models.description',
+        )}
+      </FieldDescription>
+      {modelError && <FieldError>{String(modelError)}</FieldError>}
+      {team && (
+        <FieldSet
+          className='my-3 rounded-xl border p-3'
+          aria-label='Workrun Server'
+        >
+          <Item size='sm'>
+            <ItemContent>
+              <ItemTitle>Workrun Server</ItemTitle>
+              <ItemDescription className='break-all'>
+                {serverUrl || t('settings.models.serverNotConfigured')}
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Button
+                type='button'
+                variant='ghost'
+                size='sm'
+                onClick={() => {
+                  const input = document.getElementById('team-server-url');
+                  input?.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                  });
+                  input?.focus({ preventScroll: true });
+                }}
+              >
+                {t('settings.models.serverConnectionSettings')}
+              </Button>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                disabled={isFetching || !serverUrl}
+                onClick={() => {
+                  void refresh().catch(() => {});
+                }}
+              >
+                <RefreshCwIcon data-icon='inline-start' />
+                {t(
+                  isFetching
+                    ? 'settings.models.serverLoading'
+                    : 'settings.models.serverRefresh',
+                )}
+              </Button>
+            </ItemActions>
+          </Item>
+          <FieldDescription aria-live='polite'>
+            {t(
+              isFetching
+                ? 'settings.models.serverLoading'
+                : serverError || modelError
+                  ? 'settings.models.serverUnavailable'
+                  : teamModels.length
+                    ? 'settings.models.serverReady'
+                    : 'settings.models.serverEmpty',
+            )}
+          </FieldDescription>
+          {serverError && <FieldError>{serverError}</FieldError>}
+          {teamModels.length > 0 && (
+            <ul
+              className='flex flex-col gap-1'
+              aria-label={t('settings.models.serverModels')}
+            >
+              {teamModels.map((model) => (
+                <li key={model.id} className='text-sm'>
+                  {model.name} · {model.model}
+                </li>
+              ))}
+            </ul>
+          )}
+          <FieldDescription>{t('settings.models.serverHelp')}</FieldDescription>
+        </FieldSet>
+      )}
+      {team && <FieldLabel>{t('settings.models.directProviders')}</FieldLabel>}
       <div className='overflow-hidden rounded-xl'>
         <FieldGroup className='gap-2'>
           <FieldArray

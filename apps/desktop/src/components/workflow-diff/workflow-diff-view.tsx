@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import {
   Badge,
   Button,
@@ -28,8 +27,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useModelCatalog } from '@/hooks/use-model-catalog';
 import { normalizeWorkflowNodeName } from '@/lib/workflow-node-name';
-import { getModelCatalog } from '@/services/cmd';
 import type { WorkflowComparison } from '@/services/workflow-revision';
 import { useWorkrunStore } from '@/stores';
 
@@ -200,11 +199,7 @@ function FieldDetail({
     .replace(/\[.*?\]/g, '')
     .split('.')
     .at(-1)!;
-  const { data: models = [] } = useQuery({
-    queryKey: ['modelCatalog'],
-    queryFn: getModelCatalog,
-    enabled: fieldKey === 'modelProfileId',
-  });
+  const { data: models = [] } = useModelCatalog(fieldKey === 'modelProfileId');
   const format = (value: unknown): string => {
     if (value === undefined) return t('workflowDiff.unset');
     if (typeof value === 'string') {

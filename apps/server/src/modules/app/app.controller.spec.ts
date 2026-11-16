@@ -21,7 +21,11 @@ describe('AppController', () => {
   });
 
   it('passes the authenticated user and body when creating an app', () => {
-    const dto = { name: 'Process data', kind: 'tool' as const };
+    const dto = {
+      id: '01a1caa4-f9b8-7040-bf2e-36bce96be908',
+      name: 'Process data',
+      kind: 'tool' as const,
+    };
     void controller.create(session, dto);
 
     expect(appService.create).toHaveBeenCalledWith('user-1', dto);

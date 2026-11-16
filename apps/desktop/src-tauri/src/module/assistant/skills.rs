@@ -96,8 +96,24 @@ impl SkillCatalog {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn main_catalog_always_loads_skill_bodies_on_demand() {
+        let main = super::super::task_agent::skills::TaskSkills::builtin();
+        assert!(main.mandatory_instructions().unwrap().is_empty());
+        for name in [
+            "conversation",
+            "task-planning",
+            "capability-orchestration",
+            "execution-collaboration",
+            "result-delivery",
+        ] {
+            let response = main.read_for_model(name).unwrap();
+            assert_eq!(response["content"], main.read(name).unwrap());
+            assert!(response.get("alreadyInInstructions").is_none());
+        }
+    }
+    #[test]
     fn repair_guidance_is_discoverable_without_expanding_ordinary_turn_instructions() {
-        let main = super::super::main_agent::skills::MainSkills::builtin();
+        let main = super::super::task_agent::skills::TaskSkills::builtin();
         let repair = main.read("workflow-repair").unwrap();
         assert!(main.summaries().to_string().contains("workflow-repair"));
         assert!(!main.mandatory_instructions().unwrap().contains(&repair));
@@ -105,7 +121,7 @@ mod tests {
     }
     #[test]
     fn main_and_author_keep_required_instructions_without_duplicate_tool_bodies() {
-        let main = super::super::main_agent::skills::MainSkills::builtin();
+        let main = super::super::task_agent::skills::TaskSkills::builtin();
         let author = super::super::workflow_agent::skills::catalog();
         for catalog in [&*main, &author] {
             let instructions = catalog.mandatory_instructions().unwrap();

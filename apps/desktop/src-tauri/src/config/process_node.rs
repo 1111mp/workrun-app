@@ -128,7 +128,7 @@ impl IProcessNodes {
 
     async fn load(path: Result<PathBuf>) -> Self {
         match path {
-            Ok(path) => match help::read_json::<Self>(&path).await {
+            Ok(path) => match Self::load_file(&path).await {
                 Ok(nodes) => nodes,
                 Err(error) => {
                     logging!(error, Type::Config, "{error}");
@@ -140,6 +140,20 @@ impl IProcessNodes {
                 Self::default()
             },
         }
+    }
+
+    async fn load_file(path: &PathBuf) -> Result<Self> {
+        // Catalogs are created on first save; absence is normal in a new workspace.
+        if !tokio::fs::try_exists(path).await? {
+            logging!(
+                info,
+                Type::Config,
+                "catalog not created yet, using empty catalog: {}",
+                path.display()
+            );
+            return Ok(Self::default());
+        }
+        help::read_json(path).await
     }
 
     /// Writes the complete catalog. Callers use `Draft::with_data_modify` so
@@ -269,6 +283,26 @@ fn validate_schemas(kind: &str, schemas: &BTreeMap<String, Value>) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::IProcessNodes;
+
+    #[tokio::test]
+    async fn catalog_missing_is_empty_but_invalid_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("team-releases.json");
+        assert!(
+            IProcessNodes::load_file(&path)
+                .await
+                .unwrap()
+                .get_process_nodes()
+                .is_empty()
+        );
+        assert!(!path.exists());
+        tokio::fs::write(&path, "invalid json").await.unwrap();
+        assert!(IProcessNodes::load_file(&path).await.is_err());
+        tokio::fs::write(&path, r#"{"nodes":[]}"#).await.unwrap();
+        assert!(IProcessNodes::load_file(&path).await.is_ok());
+        // A directory at the file path is a read error, not an empty catalog.
+        assert!(IProcessNodes::load_file(&dir.path().to_path_buf()).await.is_err());
+    }
 
     #[tokio::test]
     async fn personal_workspace_skips_team_release_cache_io() {

@@ -646,6 +646,7 @@ async fn validate_bindings(
             "skill" => SkillRegistry::inspect(value).is_ok(),
             "credential" => credentials.iter().any(|credential| {
                 &credential.id == value
+                    && credential.workspace_id == crate::utils::dirs::active_workspace_id()
                     && requirement.credential_kind.as_deref()
                         == Some(match credential.kind {
                             crate::config::RemoteCredentialKind::Bearer => "bearer",

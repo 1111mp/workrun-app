@@ -17,6 +17,12 @@ Could you run it for me now?
 
 You do not need to choose nodes and connections up front. First check the analysis, then work with the assistant to decide which steps to keep.
 
+## Discover reusable capabilities first
+
+The homepage discovers existing capabilities and inspects plausible exact contracts. Personal mode can reuse saved local workflows; Team mode also includes the current account's saved local workflows in that workspace, without publishing. When the same ID has both a local definition and a release, homepage reuse reads the latest local definition; other members continue to use team releases.
+
+When an existing definition fits, the assistant can return it or proceed to separate execution confirmation without proposing a new workflow. The model still needs to assess the input/output contract; a matching name alone does not establish suitability. Unsaved editor edits are not candidates. Publishing shares versions, and Team schedules continue to use published definitions. See [Architecture](/concepts/architecture/).
+
 ## Watch the full walkthrough
 
 The recording follows the full sequence: attach the sales CSV, analyze it once, approve and save a workflow, then separately confirm execution. The recorded conversation is in Chinese.

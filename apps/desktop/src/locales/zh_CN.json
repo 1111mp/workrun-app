@@ -1545,6 +1545,8 @@
       "maxCount": "最大日志数量",
       "otlpEndpoint": "OTLP 端点",
       "otlpEndpointDescription": "可选的诊断追踪采集器地址。修改后请重启 Workrun 生效。",
+      "otlpCaptureContent": "导出对话和工作流正文",
+      "otlpCaptureContentDescription": "在追踪中记录模型、工具和节点输入输出，可能包含隐私内容。修改后重启生效。",
       "otlpEndpointPlaceholder": "http://127.0.0.1:4317",
       "fileCount": "个",
       "autoClean": {
@@ -1556,6 +1558,19 @@
       }
     },
     "models": {
+      "teamDescription": "可使用 Workrun Server 提供的团队模型，也可配置本机 Provider 凭据直连模型。",
+      "serverConnectionSettings": "连接设置",
+      "directProviders": "直连 Provider",
+      "serverNotConfigured": "尚未配置团队 Server 地址",
+      "serverRefresh": "刷新模型",
+      "serverLoading": "正在获取模型…",
+      "serverUnavailable": "Server 模型暂不可用，仍可使用下方配置的直连 Provider。",
+      "serverReady": "Server 模型已就绪，可在模型选择器中使用。",
+      "serverEmpty": "Server 尚未提供可用模型，请联系管理员检查模型网关配置。",
+      "serverModels": "可用 Server 模型",
+      "serverHelp": "连接地址在「工作空间」设置中配置。模型、权限和额度由 Server 管理员配置，无需在此填写 LiteLLM Key。",
+      "teamSessionFailed": "团队模型身份验证失败，请重新登录或检查 Server 连接。",
+
       "title": "模型",
       "description": "为每个提供商配置凭证；兼容 API 或远程 Ollama 可填写自定义端点，修改会自动保存。",
       "gatewaySettings": "{{provider}} 服务地址与自定义请求头",
@@ -2136,6 +2151,11 @@
       "failed": "工具确认失败，请重新查看当前请求。"
     },
     "plan": {
+      "readyReply": "规划方案已准备好，请查看上方卡片。确认后我会创建工作流，本次不会运行。",
+      "revisionReadyReply": "修改方案已准备好，请查看上方卡片。确认后我会保存修改，本次不会运行。",
+      "clarificationReply": "方案已整理，请先补充卡片中需要确认的信息，我会据此完善方案。",
+      "createdReply": "已按确认的方案创建并保存工作流草稿，配置校验通过。你可以打开工作流查看，或继续告诉我需要调整的地方。本次未发布、未执行，实际运行结果尚未验证。",
+      "updatedReply": "已按确认的方案更新并保存工作流草稿，配置校验通过。你可以打开工作流查看修改，或继续告诉我需要调整的地方。本次未发布、未执行，实际运行结果尚未验证。",
       "viewOutcome": "查看保存详情",
       "hideOutcome": "收起保存详情",
       "viewPlan": "查看完整方案",
@@ -2262,6 +2282,8 @@
     "turn": "轮次 {{id}}",
     "empty": "暂无模型调用记录，不代表没有消耗 token。",
     "purposes": {
+      "routing": "请求分流",
+      "task": "任务处理",
       "schedule_agent": "定时任务对话",
       "conversation": "对话",
       "intent": "理解需求",

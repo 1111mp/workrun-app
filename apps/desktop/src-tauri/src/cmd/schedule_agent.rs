@@ -44,9 +44,9 @@ pub async fn schedule_agent_list() -> CmdResult<Value> {
 }
 #[tauri::command]
 pub async fn schedule_agent_turn(request: Turn, channel: Channel<Value>) -> CmdResult<Value> {
-    ScheduleAgent::active()
-        .stringify_err()?
-        .turn(request, channel)
+    let owner = crate::module::team_model::owner_for(&crate::utils::dirs::active_workspace_id()).stringify_err()?;
+    let agent = ScheduleAgent::active().stringify_err()?;
+    crate::module::team_model::with_owner(owner, agent.turn(request, channel))
         .await
         .stringify_err()
 }
@@ -77,9 +77,9 @@ pub async fn schedule_agent_decide(
 }
 #[tauri::command]
 pub async fn schedule_agent_reply_receipt(session_id: String, channel: Channel<Value>) -> CmdResult<Value> {
-    ScheduleAgent::active()
-        .stringify_err()?
-        .reply_receipt(&session_id, channel)
+    let owner = crate::module::team_model::owner_for(&crate::utils::dirs::active_workspace_id()).stringify_err()?;
+    let agent = ScheduleAgent::active().stringify_err()?;
+    crate::module::team_model::with_owner(owner, agent.reply_receipt(&session_id, channel))
         .await
         .stringify_err()
 }

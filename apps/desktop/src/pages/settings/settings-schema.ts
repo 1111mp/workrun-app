@@ -89,6 +89,7 @@ export const formSchema = z.object({
   app_log_max_size: z.number().min(1),
   app_log_max_count: z.number().min(1),
   otlp_endpoint: z.string().trim(),
+  otlp_capture_content: z.boolean(),
   // model
   provider_credentials: z.array(providerCredentialSchema),
   summary_model_profile_id: z.string(),

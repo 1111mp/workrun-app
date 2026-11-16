@@ -4,7 +4,7 @@ import { useWorkrunStore } from '@/stores';
 
 type ApiResponse<T> = {
   errorCode: number;
-  message?: string | string[];
+  message?: unknown;
   payload?: T;
 };
 
@@ -127,12 +127,14 @@ function normalizePath(path: string) {
   return `${API_PREFIX}${resourcePath}`;
 }
 
-function getErrorMessage(
-  message: ApiResponse<unknown>['message'],
-  status: number,
-) {
-  if (Array.isArray(message)) return message.join(', ');
-  return message ?? `Request failed with status ${status}`;
+function getErrorMessage(message: unknown, status: number): string {
+  if (typeof message === 'string' && message.trim()) return message;
+  if (Array.isArray(message))
+    return message.map((item) => getErrorMessage(item, status)).join(', ');
+  // Nest HTTP exceptions may be wrapped inside the API envelope's message.
+  if (message && typeof message === 'object' && 'message' in message)
+    return getErrorMessage(message.message, status);
+  return `Request failed with status ${status}`;
 }
 
 async function responseError(response: Response) {

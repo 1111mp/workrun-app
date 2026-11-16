@@ -44,6 +44,9 @@ pub(super) async fn claim_next_queued_run_from_pool(
     pool: &sqlx::SqlitePool,
     include_apps: bool,
 ) -> Result<Option<String>> {
+    if !crate::utils::dirs::workspace_available() {
+        return Ok(None);
+    }
     claim_next_queued_run_for_workspace(pool, include_apps, &crate::utils::dirs::active_workspace_id()).await
 }
 

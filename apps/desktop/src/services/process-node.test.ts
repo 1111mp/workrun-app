@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { readFile, remove } from '@tauri-apps/plugin-fs';
+import { readFile, remove, writeFile } from '@tauri-apps/plugin-fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isTeamMode } from '@/lib/constant';
@@ -17,14 +17,24 @@ vi.mock('@tauri-apps/api/core', () => ({
   Channel: class {},
   invoke: vi.fn(),
 }));
+vi.mock('@tauri-apps/api/path', () => ({
+  tempDir: async () => '/tmp',
+  join: async (...parts: string[]) => parts.join('/'),
+}));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: vi.fn(),
   remove: vi.fn(),
+  writeFile: vi.fn(),
 }));
 vi.mock('@/lib/constant', () => ({ isTeamMode: vi.fn() }));
 vi.mock('@/services/fetch-api', () => ({
-  fetchApi: { get: vi.fn(), post: vi.fn(), postForm: vi.fn() },
+  fetchApi: {
+    get: vi.fn(),
+    post: vi.fn(),
+    postForm: vi.fn(),
+    downloadStream: vi.fn(),
+  },
 }));
 
 const definition = {
@@ -130,10 +140,12 @@ describe('getProcessNodes', () => {
         publicationStatus: 'draft',
         remoteAppId: 'remote-app-1',
         projectRoot: '/team/default/process-nodes',
+        teamInstallationScope: 'release-local-scope',
       }),
     ).resolves.toEqual({ id: 'remote-app-1' });
 
     expect(fetchApi.post).toHaveBeenCalledWith('/app', {
+      id: definition.id,
       compensation: null,
       name: definition.name,
       description: definition.description,
@@ -313,6 +325,124 @@ describe('prepareWorkflowProcessApps', () => {
       releaseId: 'app-release-1',
       installationScope: 'release-workflow-1',
     });
+    expect(fetchApi.get).not.toHaveBeenCalled();
+  });
+});
+
+describe('Team Agent Tool preparation', () => {
+  const toolId = '01a1cad2-593a-7751-b81e-773081d747ec';
+  const tool = {
+    ...definition,
+    id: toolId,
+    kind: 'tool' as const,
+    catalogVersionId: 'tool-release',
+    archiveSha256: 'a'.repeat(64),
+    inputs: { message: { type: 'string' } },
+    outputs: { message: { type: 'string' } },
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isTeamMode).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'get_process_node')
+        throw new Error('Not in local registry');
+      if (command === 'process_node_install_archive')
+        return {
+          definition: tool,
+          installStatus: 'installed',
+          projectPath: '/account/tool',
+        };
+    });
+    vi.mocked(fetchApi.get).mockResolvedValue(tool);
+    vi.mocked(fetchApi.downloadStream).mockImplementation(async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+          controller.close();
+        },
+      }),
+      headers: new Headers({ 'x-workrun-sha256': tool.archiveSha256 }),
+    }));
+    vi.mocked(writeFile).mockResolvedValue(undefined);
+    vi.mocked(remove).mockResolvedValue(undefined);
+  });
+
+  it('installs a missing Tool once for Agent and CodeAct, preserving IDs, bindings and MCP references', async () => {
+    const dsl = {
+      nodes: [
+        {
+          type: 'agent',
+          data: {
+            toolIds: [toolId, 'mcp:server:lookup'],
+            toolStateBindings: [
+              { toolId, statePath: 'orderId', parameter: 'orderId' },
+            ],
+          },
+        },
+        { type: 'codeact_agent', data: { toolIds: [toolId] } },
+      ],
+    };
+    const result = await prepareWorkflowProcessApps(dsl, 'workflow-release');
+    expect(result).toEqual(dsl);
+    const installs = vi
+      .mocked(invoke)
+      .mock.calls.filter(([name]) => name === 'process_node_install_archive');
+    expect(installs).toHaveLength(1);
+    expect(installs[0]?.[1]).toEqual(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          definition: expect.objectContaining({ id: toolId, kind: 'tool' }),
+          installationScope: undefined,
+        }),
+      }),
+    );
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([name]) => name === 'get_process_node'),
+    ).toHaveLength(1);
+  });
+
+  it('reuses an available Tool without contacting the server', async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      definition: tool,
+      installStatus: 'installed',
+      projectPath: '/account/tool',
+    });
+    await prepareWorkflowProcessApps(
+      { nodes: [{ type: 'agent', data: { toolIds: [toolId] } }] },
+      'workflow-release',
+    );
+    expect(fetchApi.get).not.toHaveBeenCalled();
+    expect(fetchApi.downloadStream).not.toHaveBeenCalled();
+  });
+
+  it('stops before execution if downloading a missing Tool fails', async () => {
+    vi.mocked(fetchApi.downloadStream).mockRejectedValueOnce(
+      new Error('Download failed'),
+    );
+    await expect(
+      prepareWorkflowProcessApps(
+        { nodes: [{ type: 'agent', data: { toolIds: [toolId] } }] },
+        'workflow-release',
+      ),
+    ).rejects.toThrow('Download failed');
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([name]) => name === 'process_node_install_archive'),
+    ).toBe(false);
+  });
+
+  it('keeps no-install link execution from downloading missing Tools', async () => {
+    await expect(
+      prepareWorkflowProcessApps(
+        { nodes: [{ type: 'agent', data: { toolIds: [toolId] } }] },
+        'workflow-release',
+        undefined,
+        { allowInstall: false },
+      ),
+    ).rejects.toThrow('Prepare Tool App');
     expect(fetchApi.get).not.toHaveBeenCalled();
   });
 });

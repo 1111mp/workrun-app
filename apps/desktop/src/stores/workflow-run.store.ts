@@ -2,6 +2,7 @@ import type { Node } from '@xyflow/react';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 
+import type { RunRecord } from '@/services/run-history';
 import type {
   WorkflowRunEvent,
   WorkflowRunEventEnvelope,
@@ -154,6 +155,62 @@ export function replayWorkflowRunProjection(
   return projection;
 }
 
+/** A restart can finalize the durable record without writing a terminal event. */
+export function restoreWorkflowRunProjection(
+  record: RunRecord,
+  context: WorkflowRunEventContext,
+) {
+  const projection = replayWorkflowRunProjection(
+    record.id,
+    record.events.map(({ sequence, event }) => ({
+      runId: record.id,
+      sequence,
+      event: event as WorkflowRunEvent,
+    })),
+    context,
+  );
+  applyRunRecordState(projection, record);
+  return projection;
+}
+
+function applyRunRecordState(
+  projection: WorkflowRunProjection,
+  record: RunRecord,
+) {
+  if (
+    projection.runId !== record.id ||
+    record.lastSequence < projection.eventSequence ||
+    !['completed', 'failed', 'cancelled', 'interrupted'].includes(record.status)
+  )
+    return;
+  projectTerminal(
+    projection,
+    record.status as WorkflowRunStatus,
+    projection.finalState,
+    record.error,
+  );
+  projection.awaitingInput = false;
+  projection.contextCompactionStage = undefined;
+  const startedAt = Date.parse(record.startedAt);
+  if (Number.isFinite(startedAt)) projection.startedAt = startedAt;
+  const endedAt =
+    record.durationMs !== undefined && projection.startedAt !== undefined
+      ? projection.startedAt + record.durationMs
+      : record.endedAt
+        ? Date.parse(record.endedAt)
+        : undefined;
+  if (endedAt !== undefined && Number.isFinite(endedAt))
+    projection.endedAt = endedAt;
+  if (record.durationMs !== undefined)
+    projection.durationMs = record.durationMs;
+  for (const turn of Object.values(projection.turnsById)) {
+    if (turn.status === 'running') {
+      turn.status = projection.status;
+      turn.endedAt = projection.endedAt;
+    }
+  }
+}
+
 // Live timing freezes on the terminal event, independently of text animation.
 // History replay has no event timestamps here and must not invent durations.
 function finishLiveTiming(projection: WorkflowRunProjection) {
@@ -192,6 +249,7 @@ type WorkflowRunStore = {
     projection: WorkflowRunProjection,
     openPanel?: boolean,
   ) => void;
+  reconcileRunRecord: (record: RunRecord) => void;
   resumeWorkflowRun: () => void;
   applyRunEvents: (
     events: WorkflowRunEventEnvelope[],
@@ -298,6 +356,11 @@ export const useWorkflowRunStore = create<WorkflowRunStore>()(
           state.showRunOutput = true;
           state.runPanelOpen = true;
         }
+      }),
+    reconcileRunRecord: (record) =>
+      set((state) => {
+        applyRunRecordState(state.projection, record);
+        state.runningNodeId = state.projection.activeNodeId ?? null;
       }),
     resumeWorkflowRun: () =>
       set((state) => {

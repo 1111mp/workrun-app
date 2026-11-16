@@ -66,6 +66,7 @@ type RunValues = Record<
 >;
 
 type WorkflowRunPanelProps = {
+  runId?: string;
   settings: WorkflowSettings;
   nodes: Node[];
   onRun: (initialState: Record<string, unknown>) => void;
@@ -316,6 +317,7 @@ export function WorkflowRunForm({
 }
 
 function WorkflowRunPanel({
+  runId,
   settings,
   nodes,
   onRun,
@@ -582,7 +584,7 @@ function WorkflowRunPanel({
                 </p>
               ) : null}
               <WorkflowRunOutput
-                run={run!}
+                run={readOnly ? run! : { ...run!, runId }}
                 workflowNodes={nodes}
                 isRunning={isRunning}
                 isChat
@@ -614,6 +616,7 @@ function WorkflowRunPanel({
               />
             ) : (
               <LiveWorkflowTaskOutput
+                runId={runId}
                 workflowNodes={nodes}
                 readOnly={readOnly}
                 onRunAgain={runAgain}

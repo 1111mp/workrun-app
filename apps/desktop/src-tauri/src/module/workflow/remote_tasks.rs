@@ -216,8 +216,8 @@ fn record_from_row(row: sqlx::sqlite::SqliteRow) -> Result<RemoteTaskRecord> {
 }
 
 pub(crate) async fn remote_task_warnings(pool: &SqlitePool, workflow_id: &str) -> Result<Vec<RemoteTaskRecord>> {
-    let rows = sqlx::query("SELECT t.id, t.run_id, t.node_id, t.message_id, t.service_origin, t.task_id, t.status, t.last_known_state, NULL AS result_json, t.created_at, t.updated_at, t.last_checked_at FROM remote_tasks t JOIN run_records r ON r.id = t.run_id WHERE r.target_type = 'workflow' AND r.target_id = ? AND r.status IN ('failed', 'cancelled', 'interrupted') AND (t.status IN ('unknown', 'submitted', 'working', 'input_required', 'auth_required') OR t.status = 'completed') ORDER BY t.created_at DESC, t.id DESC")
-        .bind(workflow_id).fetch_all(pool).await?;
+    let rows = sqlx::query("SELECT t.id, t.run_id, t.node_id, t.message_id, t.service_origin, t.task_id, t.status, t.last_known_state, NULL AS result_json, t.created_at, t.updated_at, t.last_checked_at FROM remote_tasks t JOIN run_records r ON r.id = t.run_id WHERE r.workspace_id = ? AND r.target_type = 'workflow' AND r.target_id = ? AND r.status IN ('failed', 'cancelled', 'interrupted') AND (t.status IN ('unknown', 'submitted', 'working', 'input_required', 'auth_required') OR t.status = 'completed') ORDER BY t.created_at DESC, t.id DESC")
+        .bind(crate::utils::dirs::active_workspace_id()).bind(workflow_id).fetch_all(pool).await?;
     rows.into_iter().map(record_from_row).collect()
 }
 

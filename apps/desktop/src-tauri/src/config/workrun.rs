@@ -17,6 +17,7 @@ pub enum ModelProvider {
     DeepSeek,
     Groq,
     Ollama,
+    Team,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,12 +46,17 @@ pub struct ModelDefinition {
     pub name: String,
     pub provider: ModelProvider,
     pub model: String,
+    #[serde(skip)]
+    pub team: Option<crate::module::team_model::ModelBinding>,
 }
 
 impl ModelDefinition {
     /// Only advertise effort levels our provider adapter actually forwards.
-    pub fn effort_options(&self) -> &'static [&'static str] {
-        match self.provider {
+    pub fn effort_options(&self) -> Vec<&str> {
+        if let Some(team) = &self.team {
+            return team.effort_options.iter().map(String::as_str).collect();
+        }
+        let options: &[&str] = match self.provider {
             ModelProvider::OpenAi | ModelProvider::OpenAiStrict if self.model.starts_with("gpt-5") => {
                 &["low", "medium", "high"]
             },
@@ -65,7 +71,8 @@ impl ModelDefinition {
             ModelProvider::Gemini if self.model.starts_with("gemini-3") => &["low", "high"],
             ModelProvider::DeepSeek if self.model.starts_with("deepseek-v4") => &["high", "max"],
             _ => &[],
-        }
+        };
+        options.to_vec()
     }
 }
 
@@ -79,6 +86,9 @@ pub struct ProviderHeader {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCredential {
+    // Team saves replace this with the verified account's workspace.
+    #[serde(default = "crate::utils::dirs::personal_credential_workspace")]
+    pub workspace_id: String,
     pub provider: ModelProvider,
     #[serde(default)]
     pub base_url: Option<String>,
@@ -205,6 +215,7 @@ pub fn model_catalog() -> Vec<ModelDefinition> {
             name: profile.name,
             provider: profile.provider,
             model: profile.model,
+            team: None,
         })
         .collect()
 }
@@ -226,6 +237,8 @@ pub struct LocalProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamSettings {
     pub server_url: String,
+    #[serde(default)]
+    pub summary_model_id: Option<String>,
 }
 
 /// Workrun configuration
@@ -260,6 +273,8 @@ pub struct IWorkrun {
 
     /// Optional OTLP/gRPC collector endpoint used for diagnostic trace export.
     pub otlp_endpoint: Option<String>,
+    /// Opt-in model/tool/node content export; restart to apply.
+    pub otlp_capture_content: Option<bool>,
 
     /// i18n
     pub locale: Option<String>,
@@ -297,6 +312,8 @@ pub struct WorkrunPatch {
     pub app_log_max_size: Option<u64>,
     pub app_log_max_count: Option<usize>,
     pub otlp_endpoint: Option<String>,
+    /// Opt-in model/tool/node content export; restart to apply.
+    pub otlp_capture_content: Option<bool>,
     pub locale: Option<String>,
     pub theme: Option<String>,
     pub enable_auto_launch: Option<bool>,
@@ -308,7 +325,7 @@ pub struct WorkrunPatch {
 impl IWorkrun {
     pub async fn new() -> Self {
         match dirs::workrun_path() {
-            Ok(path) => match help::read_yaml::<Self>(&path).await {
+            Ok(path) => match Self::load_file(&path).await {
                 Ok(config) => config,
                 Err(err) => {
                     logging!(error, Type::Config, "{err}");
@@ -320,6 +337,20 @@ impl IWorkrun {
                 Self::template()
             },
         }
+    }
+
+    async fn load_file(path: &std::path::PathBuf) -> anyhow::Result<Self> {
+        // On first launch the main configuration has not been saved yet.
+        if !tokio::fs::try_exists(path).await? {
+            logging!(
+                info,
+                Type::Config,
+                "configuration not created yet, using defaults: {}",
+                path.display()
+            );
+            return Ok(Self::template());
+        }
+        help::read_yaml(path).await
     }
 
     pub fn template() -> Self {
@@ -362,12 +393,13 @@ impl IWorkrun {
                 let provider = credential_provider(&credential.provider);
                 let mut credential = credential.clone();
                 credential.provider = provider.clone();
+                credential.workspace_id = dirs::active_workspace_id();
                 credential.api_key = credential.api_key.filter(|key| !key.trim().is_empty());
                 credential.base_url = credential.base_url.filter(|url| !url.trim().is_empty());
                 if let Some(existing) = self
                     .provider_credentials
                     .iter_mut()
-                    .find(|item| item.provider == provider)
+                    .find(|item| item.provider == provider && item.workspace_id == dirs::active_workspace_id())
                 {
                     *existing = credential;
                 } else {
@@ -389,6 +421,7 @@ impl IWorkrun {
         patch!(app_log_max_size);
         patch!(app_log_max_count);
         patch!(otlp_endpoint);
+        patch!(otlp_capture_content);
         patch!(locale);
         patch!(theme);
         patch!(enable_auto_launch);
@@ -399,7 +432,9 @@ impl IWorkrun {
 
     pub fn credential_for(&self, provider: &ModelProvider) -> Option<&ProviderCredential> {
         let provider = credential_provider(provider);
-        self.provider_credentials.iter().find(|item| item.provider == provider)
+        self.provider_credentials.iter().find(|item| {
+            item.provider == provider && item.workspace_id == crate::module::team_model::credential_workspace()
+        })
     }
 
     /// get app log level
@@ -499,5 +534,23 @@ mod effort_tests {
         assert_eq!(options("claude-opus-5"), &["low", "medium", "high"]);
         assert_eq!(options("deepseek-v4-flash"), &["high", "max"]);
         assert_eq!(options("gemini-3.1-pro-preview"), &["low", "high"]);
+    }
+}
+
+#[cfg(test)]
+mod missing_config_tests {
+    use super::IWorkrun;
+
+    #[tokio::test]
+    async fn missing_config_uses_template_but_invalid_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workrun.yaml");
+        let config = IWorkrun::load_file(&path).await.unwrap();
+        assert!(!config.onboarding_completed);
+        assert!(config.workspace_mode.is_none());
+        assert!(!path.exists());
+        tokio::fs::write(&path, "[invalid yaml").await.unwrap();
+        assert!(IWorkrun::load_file(&path).await.is_err());
+        assert!(IWorkrun::load_file(&dir.path().to_path_buf()).await.is_err());
     }
 }

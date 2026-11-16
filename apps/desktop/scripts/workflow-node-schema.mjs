@@ -124,8 +124,13 @@ export function workflowNodeSchemas(source = editorSource) {
         return resolve(node.typeName.name, file);
       }
       case 'TSImportType': {
-        const path = node.argument.value;
-        if (!path.startsWith('@/') || node.qualifier.type !== 'Identifier')
+        // Babel 8 renamed TSImportType.argument to source; retain Babel 7 support.
+        const path = (node.source ?? node.argument)?.value;
+        if (
+          typeof path !== 'string' ||
+          !path.startsWith('@/') ||
+          node.qualifier?.type !== 'Identifier'
+        )
           throw new Error(`Unsupported workflow import ${path}`);
         return resolve(
           node.qualifier.name,

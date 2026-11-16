@@ -1,7 +1,21 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsNotEmpty,
+  IsString,
+  Matches,
+  IsOptional,
+  ValidateNested,
+} from 'class-validator';
+
+import { WorkflowDocumentDto } from './create-workflow.dto';
 
 export class PublishWorkflowDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => WorkflowDocumentDto)
+  document?: WorkflowDocumentDto;
+
   @ApiProperty({ example: '1.2.3' })
   @IsString()
   @Matches(

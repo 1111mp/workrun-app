@@ -83,6 +83,7 @@ const modelProviderLabels: Record<ModelDefinition['provider'], string> = {
   deep_seek: 'DeepSeek',
   groq: 'Groq',
   ollama: 'Ollama',
+  team: 'Workrun Server',
 };
 
 function groupModelProfiles(modelProfiles: ModelDefinition[]) {

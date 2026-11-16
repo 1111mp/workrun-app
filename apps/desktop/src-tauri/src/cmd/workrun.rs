@@ -22,6 +22,7 @@ pub struct PublicWorkrunConfig {
     app_log_max_size: Option<u64>,
     app_log_max_count: Option<usize>,
     otlp_endpoint: Option<String>,
+    otlp_capture_content: Option<bool>,
     locale: Option<String>,
     theme: Option<String>,
     enable_auto_launch: Option<bool>,
@@ -37,12 +38,21 @@ impl From<&IWorkrun> for PublicWorkrunConfig {
             onboarding_completed: config.onboarding_completed,
             local_profile: config.local_profile.clone(),
             team: config.team.clone(),
-            provider_credentials: config.provider_credentials.clone(),
+            provider_credentials: config
+                .provider_credentials
+                .iter()
+                .filter(|credential| {
+                    crate::utils::dirs::workspace_available()
+                        && credential.workspace_id == crate::utils::dirs::active_workspace_id()
+                })
+                .cloned()
+                .collect(),
             summary_model_profile_id: config.summary_model_profile_id.clone(),
             app_log_level: config.app_log_level.clone(),
             app_log_max_size: config.app_log_max_size,
             app_log_max_count: config.app_log_max_count,
             otlp_endpoint: config.otlp_endpoint.clone(),
+            otlp_capture_content: config.otlp_capture_content,
             locale: config.locale.clone(),
             theme: config.theme.clone(),
             enable_auto_launch: config.enable_auto_launch,

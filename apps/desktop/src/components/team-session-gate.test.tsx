@@ -7,12 +7,27 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const session = vi.hoisted(() => ({ getUser: vi.fn() }));
+const session = vi.hoisted(() => ({
+  getUser: vi.fn(),
+  sync: vi.fn(),
+  token: 'a',
+  pending: false,
+}));
+vi.mock('@/services/team-model-session', () => ({
+  syncTeamModelSession: session.sync,
+}));
 vi.mock('@/services/session', () => ({
   getTeamUser: session.getUser,
   normalizeServerUrl: (url: string) => url,
 }));
-vi.mock('@/lib/auth-client', () => ({ createTeamAuthClient: vi.fn() }));
+vi.mock('@/lib/auth-client', () => ({
+  createTeamAuthClient: () => ({
+    useSession: () => ({
+      data: { session: { token: session.token }, user: { id: session.token } },
+      isPending: session.pending,
+    }),
+  }),
+}));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -34,6 +49,9 @@ vi.mock('@/stores', async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     },
   }));
+  Object.assign(store, {
+    persist: { rehydrate: vi.fn().mockResolvedValue(undefined) },
+  });
   return { useWorkrunStore: store };
 });
 
@@ -45,6 +63,9 @@ import { TeamSessionGate } from './team-session-gate';
 beforeEach(() => {
   vi.stubGlobal('OS_PLATFORM', 'darwin');
   session.getUser.mockReset();
+  session.sync.mockReset().mockResolvedValue(undefined);
+  session.token = 'a';
+  session.pending = false;
   useWorkrunStore.setState((state) => ({
     config: { ...state.config!, workspace_mode: 'personal' },
   }));
@@ -104,4 +125,35 @@ it('does not pause session verification forever when the browser reports offline
   setup();
   expect(await screen.findByText('Team login')).toBeVisible();
   expect(session.getUser).toHaveBeenCalledTimes(1);
+});
+
+it('does not mount business pages until native account storage is ready', async () => {
+  let finish!: () => void;
+  session.sync.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  session.getUser.mockResolvedValue({ id: 'a', name: 'Alice' });
+  useWorkrunStore.setState((state) => ({
+    config: { ...state.config!, workspace_mode: 'team' },
+  }));
+  setup();
+  expect(screen.getByRole('status')).toBeVisible();
+  expect(session.getUser).not.toHaveBeenCalled();
+  finish();
+  expect(
+    await screen.findByRole('button', { name: 'settings.workspace.save' }),
+  ).toBeVisible();
+});
+
+it('rejects entry when native account verification fails', async () => {
+  session.sync.mockRejectedValue(new Error('Bad session'));
+  useWorkrunStore.setState((state) => ({
+    config: { ...state.config!, workspace_mode: 'team' },
+  }));
+  setup();
+  expect(await screen.findByText('Team login')).toBeVisible();
+  expect(session.getUser).not.toHaveBeenCalled();
 });

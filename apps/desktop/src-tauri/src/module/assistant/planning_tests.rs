@@ -144,7 +144,7 @@ async fn planning_clarification_revision_native_approval_and_creation_are_separa
         |event| matches!(event,AssistantStreamEvent::WorkflowPlan{plan} if plan["status"]=="needs_clarification")
     ));
     {
-        let requests = planner.requests.lock().unwrap();
+        let requests = planner.handler_requests();
         let child = requests
             .iter()
             .find(|r| r.tools.contains_key("save_workflow_plan"))
@@ -235,9 +235,9 @@ async fn planning_clarification_revision_native_approval_and_creation_are_separa
     let saved = store.current(sid).unwrap().unwrap();
     assert_eq!(saved.status, "saved");
     assert!(saved.workflow_id.is_some());
-    let calls = author.requests.lock().unwrap();
+    let calls = author.handler_requests();
     assert!(!calls[0].tools.contains_key("execute_capability"));
-    assert!(!calls[1].tools.contains_key("save_workflow_plan"));
+    assert_eq!(calls.len(), 1); // Save receipt ends authoring without parent delivery.
     let turns = workspace.turns.lock().unwrap();
     assert_eq!(turns.len(), 3);
     assert_eq!(turns[0]["result"]["planningAllowed"], true);
@@ -340,8 +340,8 @@ async fn natural_acceptance_binds_the_current_plan_version_and_creates_without_e
     assert!(reply.call.is_none());
     assert_eq!(store.current(sid).unwrap().unwrap().status, "saved");
     {
-        let requests = model.requests.lock().unwrap();
-        assert_eq!(requests.len(), 4); // Intent, save, specialist outcome, delivery.
+        let requests = model.handler_requests();
+        assert_eq!(requests.len(), 2); // Intent and save only.
         assert!(requests[0].config.as_ref().unwrap().response_schema.is_some());
         assert!(requests[1].tools.contains_key("save_workflow_draft"));
         assert!(!requests[1].tools.contains_key("execute_capability"));
@@ -365,11 +365,7 @@ async fn natural_acceptance_binds_the_current_plan_version_and_creates_without_e
         .unwrap();
     assert!(reply.call.is_none());
     assert_eq!(store.current(sid).unwrap().unwrap().version, 1);
-    assert!(
-        !replay.requests.lock().unwrap()[0]
-            .tools
-            .contains_key("transfer_to_agent")
-    );
+    assert!(!replay.handler_requests()[0].tools.contains_key("transfer_to_agent"));
 }
 
 #[test]
@@ -567,7 +563,7 @@ async fn hard_pause_repairs_invalid_plan_then_accepts_unspecified_nodes_and_pres
     assert_eq!(reply.pause.as_ref().unwrap()["reason"], "review_required");
     assert!(reply.text.is_empty());
     assert!(workspace.saved.lock().unwrap().is_none());
-    assert_eq!(model.requests.lock().unwrap().len(), 4);
+    assert_eq!(model.handler_requests().len(), 4);
     let store = Store::new(workspace.root.path());
     let plan = store.current(sid).unwrap().unwrap();
     assert_eq!(plan.version, 1);
@@ -592,7 +588,7 @@ async fn hard_pause_repairs_invalid_plan_then_accepts_unspecified_nodes_and_pres
         .await
         .unwrap();
     assert!(retried.pause.is_some());
-    assert!(retry.requests.lock().unwrap().is_empty());
+    assert!(retry.handler_requests().is_empty());
     // Match the real session's recorded intent=execution + authoring quote:
     // a run request cannot manufacture another planning revision.
     let run = Content::new("user").with_text("执行一下呢");
@@ -618,7 +614,7 @@ async fn hard_pause_repairs_invalid_plan_then_accepts_unspecified_nodes_and_pres
         .await
         .unwrap();
     assert_eq!(blocked.pause.as_ref().unwrap()["reason"], "confirmation_required");
-    assert_eq!(model.requests.lock().unwrap().len(), 1);
+    assert_eq!(model.handler_requests().len(), 1);
     let current = store.current(sid).unwrap().unwrap();
     assert_eq!(current.version, 1);
     assert_eq!(current.document.summary, plan.document.summary);
@@ -693,7 +689,7 @@ async fn partial_answers_and_delegated_choices_revise_without_approval() {
         assert!(plan.approved_turn_key.is_none());
         if index > 0 {
             assert!(plan.document.constraints.iter().any(|value| value.contains("新同事")));
-            let requests = model.requests.lock().unwrap();
+            let requests = model.handler_requests();
             let child = requests
                 .iter()
                 .find(|request| request.tools.contains_key("save_workflow_plan"))
@@ -744,7 +740,7 @@ async fn planner_receives_source_labeled_conversation_without_historical_replay(
         .unwrap();
     assert!(reply.call.is_none());
     assert!(workspace.saved.lock().unwrap().is_none());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let request = requests
         .iter()
         .find(|request| request.tools.contains_key("save_workflow_plan"))

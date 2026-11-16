@@ -1,5 +1,5 @@
 //! Main-agent tools. No workflow-authoring schema is constructed here.
-use super::skills::MainSkills as SkillCatalog;
+use super::skills::TaskSkills as SkillCatalog;
 use crate::module::assistant::tools::{Capability, EXECUTE_WORKFLOW, list_page};
 use adk_rust::prelude::Content;
 use anyhow::{Result, bail};
@@ -15,6 +15,7 @@ fn execute_declaration() -> Value {
     json!({"name":EXECUTE_WORKFLOW,"description":"Request execution of an available workflow by ID. The native host requires user confirmation of the workflow and inputs before dispatch. Discover its exact inputSchema using list_workflow first. Supply input values matching that schema. The native runtime validates and owns execution, including required inputs and user interactions.","parameters":{"type":"object","properties":{"workflow_id":{"type":"string"},"input":{"type":"object","description":"Values following the selected workflow inputSchema"}},"required":["workflow_id","input"],"additionalProperties":false}})
 }
 
+#[derive(Clone)]
 pub(in crate::module::assistant) struct ToolRegistry<'a> {
     pub capabilities: &'a [Capability],
     pub skills: &'a SkillCatalog,
@@ -39,7 +40,7 @@ impl ToolRegistry<'_> {
             ),
             (
                 "read_skill".into(),
-                json!({"name":"read_skill","description":"Read an optional enabled main-agent skill. Core Skills are already in the instructions; do not reload them. Does not authorize execution.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
+                json!({"name":"read_skill","description":"Read an enabled task-agent Skill when its guidance is needed. Already supplied bodies return an acknowledgement instead of duplicate text. Does not authorize execution.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
             ),
             (
                 "inspect_execution".into(),

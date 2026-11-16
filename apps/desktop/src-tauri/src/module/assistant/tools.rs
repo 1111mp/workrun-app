@@ -1,4 +1,4 @@
-//! Registry and execution policy for main-agent tools. Skills cannot expand grants.
+//! Registry and execution policy for task-agent tools. Skills cannot expand grants.
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -94,7 +94,7 @@ pub(super) async fn discover_capabilities(discovery: &dyn WorkflowDiscovery, arg
     let mut fallback = discovery
         .list_capabilities(&json!({"limit":args["limit"].as_u64().unwrap_or(5).clamp(1,5)}))
         .await?;
-    fallback["searchFallback"] = json!({"query":args["query"],"reason":"No literal matches. These are unfiltered recent summaries, not semantic matches. Compare purpose and fetch the selected exact contract before reuse or new planning. For further pages omit query and use nextCursor."});
+    fallback["searchFallback"] = json!({"query":args["query"],"reason":"No literal matches. These are unfiltered recent summaries, not semantic matches. Inspect exact contracts only for plausible matches before reuse; unrelated entries need no further reads. For further pages omit query and use nextCursor."});
     Ok(fallback)
 }
 

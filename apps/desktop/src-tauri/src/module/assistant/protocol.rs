@@ -108,9 +108,32 @@ impl ReplyStream {
                 .and_then(|metadata| metadata.get("content_complete"))
                 .and_then(Value::as_bool)
                 == Some(true);
-        let Some(content) = response.content else {
+        // Responses carries encrypted reasoning and native item history outside
+        // visible content. Keep it in canonical history for stateless replay.
+        let history_parts: Vec<Part> = response
+            .provider_metadata
+            .as_ref()
+            .and_then(|metadata| {
+                metadata.get("conversation_history_parts").or_else(|| {
+                    metadata
+                        .get("openai")
+                        .and_then(|openai| openai.get("conversation_history_parts"))
+                })
+            })
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|part| serde_json::from_value(part.clone()).ok())
+            .collect();
+        let Some(mut content) = response
+            .content
+            .or_else(|| (!history_parts.is_empty()).then(|| Content::new("model")))
+        else {
             return Ok(None);
         };
+        let mut history = history_parts;
+        history.extend(content.parts);
+        content.parts = history;
         let text = content
             .parts
             .iter()
@@ -293,4 +316,31 @@ pub(super) fn normalize_assistant_contents(mut contents: Vec<Content>) -> Result
         }
     }
     Ok(contents)
+}
+
+#[cfg(test)]
+mod responses_history_tests {
+    use super::*;
+
+    #[test]
+    fn authoritative_snapshot_retains_encrypted_reasoning_before_tool_calls() {
+        let mut reply = ReplyStream::new();
+        let history = Part::ServerToolCall {
+            server_tool_call: serde_json::json!({"id":"rs-1","type":"reasoning","encrypted_content":"sealed-context","summary":[]}),
+        };
+        let content: Content = serde_json::from_value(
+            serde_json::json!({"role":"model","parts":[{"name":"lookup","args":{"value":42},"id":"call-1"}]}),
+        )
+        .unwrap();
+        reply.push(LlmResponse {
+            content: Some(content), partial: false, turn_complete: true,
+            provider_metadata: Some(serde_json::json!({"content_complete":true,"openai":{"conversation_history_parts":[serde_json::to_value(history).unwrap()]}})),
+            ..Default::default()
+        }).unwrap();
+        let content = reply.finish_content().unwrap();
+        assert!(
+            matches!(&content.parts[0], Part::ServerToolCall { server_tool_call } if server_tool_call["encrypted_content"] == "sealed-context")
+        );
+        assert!(matches!(&content.parts[1], Part::FunctionCall { id: Some(id), .. } if id == "call-1"));
+    }
 }

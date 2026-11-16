@@ -31,14 +31,12 @@ import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
-import { isTeamMode } from '@/lib/constant';
 import {
-  createTeamProcessNodeDraft,
   createProcessNode,
   getProcessNodeDefaultRoot,
-  updateProcessNode,
   type ProcessNodeCreateStage,
 } from '@/services/process-node';
+import { teamModelSessionVersion } from '@/services/team-model-session';
 
 function createAppSchema(nameRequired: string) {
   return z.object({
@@ -72,21 +70,14 @@ function CreateProcessNodePage() {
 
   const create = useMutation({
     mutationFn: async (request: CreateProcessNodeForm) => {
+      const session = teamModelSessionVersion();
       const node = await createProcessNode(
         { ...request, projectRoot: request.projectRoot || undefined },
         (progress) => setCreateStage(progress.stage),
       );
-      if (!isTeamMode()) return node;
-
-      setCreateStage('savingApp');
-      const remote = await createTeamProcessNodeDraft(node.definition);
-      // The local project remains the authoring source, while this ID binds
-      // its server Draft to later metadata saves and releases.
-      return updateProcessNode({
-        ...node.definition,
-        remoteAppId: remote.id,
-        publicationStatus: 'draft',
-      });
+      if (session !== teamModelSessionVersion())
+        throw new Error('Team account changed');
+      return node;
     },
     onMutate: () => setCreateStage('creatingProject'),
     onSuccess: (node) => {

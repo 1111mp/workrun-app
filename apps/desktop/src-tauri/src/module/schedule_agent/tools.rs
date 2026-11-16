@@ -1,9 +1,11 @@
 //! Tool catalog and execution for the independent scheduling agent.
 use super::store::SchedulingStore;
 use crate::module::assistant::catalog::Catalog;
+use crate::module::schedule::telemetry;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use tracing::Instrument as _;
 
 pub(super) struct ScheduleTools<'a> {
     store: &'a SchedulingStore,
@@ -16,6 +18,62 @@ impl<'a> ScheduleTools<'a> {
     }
 
     pub async fn call(&self, state: &mut Value, name: &str, args: &Value) -> Result<Value> {
+        let context = crate::module::model_usage::current();
+        let span = telemetry::observation(
+            &format!("定时任务工具 · {name}"),
+            "tool",
+            self.store.workspace(),
+            state["id"].as_str().unwrap_or_default(),
+        );
+        span.record(
+            "langfuse.observation.metadata.turnId",
+            context.turn_id.as_deref().unwrap_or_default(),
+        );
+        span.record(
+            "langfuse.observation.metadata.scheduleId",
+            args["id"].as_str().or(state["scheduleId"].as_str()).unwrap_or_default(),
+        );
+        telemetry::input(&span, args);
+        let result = self.call_inner(state, name, args).instrument(span.clone()).await;
+        telemetry::finish(
+            &span,
+            if result.is_ok() { "completed" } else { "failed" },
+            result.as_ref().err(),
+        );
+        if let Ok(value) = &result {
+            telemetry::output(&span, value);
+        }
+        if name == "preview_change" && result.is_ok() {
+            span.record(
+                "langfuse.observation.metadata.proposalId",
+                state["pending"].as_str().unwrap_or_default(),
+            );
+            if let Some(proposal) = state["proposals"]
+                .as_array()
+                .and_then(|items| items.iter().find(|p| p["id"] == state["pending"]))
+            {
+                span.record(
+                    "langfuse.observation.metadata.scheduleId",
+                    proposal["after"]["id"].as_str().unwrap_or_default(),
+                );
+                let after = &proposal["after"];
+                // Export the resolved timing/input, not executable snapshots or recipes.
+                telemetry::output(
+                    &span,
+                    &json!({
+                        "saved":false,"proposalId":proposal["id"],"operation":proposal["operation"],
+                        "scheduleId":after["id"],"targetType":after["targetType"],"targetId":after["targetId"],
+                        "scheduleKind":after["scheduleKind"],"runAt":after["runAt"],
+                        "cronExpression":after["cronExpression"],"timezone":after["timezone"],
+                        "enabled":after["enabled"],"input":after["recipe"]["input"],
+                    }),
+                );
+            }
+        }
+        result
+    }
+
+    async fn call_inner(&self, state: &mut Value, name: &str, args: &Value) -> Result<Value> {
         self.store.ensure_active()?;
         match name {
             "list_targets" => self.catalog.schedule_targets(args).await,

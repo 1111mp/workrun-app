@@ -23,11 +23,13 @@ use std::{
     },
     time::Duration,
 };
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 mod dispatch;
 mod events;
 pub(crate) use events::ScheduleEvents;
+pub(crate) mod telemetry;
 mod timing;
 use dispatch::ScheduleDispatcher;
 pub use timing::ScheduleKind;
@@ -102,6 +104,8 @@ pub struct WorkflowScheduleRequest {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkflowExecutionRecipe {
+    #[serde(default)]
+    pub(crate) team_model_owner: Option<crate::module::team_model::TeamOwner>,
     pub(crate) source: WorkflowScheduleSource,
     pub(crate) input: Value,
     pub(crate) initial_state: Value,
@@ -237,7 +241,8 @@ impl ScheduleStore {
     pub async fn save_workflow(request: WorkflowScheduleRequest) -> Result<ScheduleSummary> {
         let workspace = crate::utils::dirs::active_workspace_id();
         let pool = DBManager::global().pool()?;
-        Self::save_workflow_in(&pool, &workspace, request).await
+        let owner = crate::module::team_model::owner_for(&workspace)?;
+        crate::module::team_model::with_owner(owner, Self::save_workflow_in(&pool, &workspace, request)).await
     }
     async fn save_workflow_in(
         pool: &sqlx::SqlitePool,
@@ -255,6 +260,7 @@ impl ScheduleStore {
         let now = Utc::now().to_rfc3339();
         let id = request.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
         let recipe = WorkflowExecutionRecipe {
+            team_model_owner: crate::module::team_model::stored_owner(workspace),
             source: request.source,
             input: request.input,
             initial_state: request.initial_state,
@@ -361,7 +367,9 @@ pub fn start_scheduler() {
 }
 
 pub(crate) fn notify_scheduler() {
-    ScheduleEvents::tasks(&crate::utils::dirs::active_workspace_id());
+    if crate::utils::dirs::workspace_available() {
+        ScheduleEvents::tasks(&crate::utils::dirs::active_workspace_id());
+    }
     if let Some(sender) = SCHEDULE_CHANGES.get() {
         sender.send_modify(|version| *version = version.wrapping_add(1));
     }
@@ -370,6 +378,13 @@ pub(crate) fn notify_scheduler() {
 async fn run_scheduler(mut changes: tokio::sync::watch::Receiver<u64>) {
     let mut previous_workspace = None;
     loop {
+        if !crate::utils::dirs::workspace_available() {
+            previous_workspace = None;
+            if changes.changed().await.is_err() {
+                return;
+            }
+            continue;
+        }
         let workspace = crate::utils::dirs::active_workspace_id();
         if previous_workspace.as_ref() != Some(&workspace) {
             // Inactive workspace periods are missed occurrences, just like
@@ -469,7 +484,7 @@ async fn trigger_due_schedules() -> Result<()> {
 }
 
 async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Result<()> {
-    if crate::utils::dirs::active_workspace_id() != due.workspace {
+    if !crate::utils::dirs::workspace_available() || crate::utils::dirs::active_workspace_id() != due.workspace {
         return Ok(());
     }
     let Some(claim) = ScheduleDispatcher::new(pool, &due.workspace)
@@ -478,15 +493,24 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
     else {
         return Ok(());
     };
+    let run_id = Uuid::new_v4().to_string();
+    let span = telemetry::observation("定时任务触发", "chain", &due.workspace, &run_id);
+    span.record("langfuse.observation.metadata.scheduleId", &due.summary.id);
+    span.record("langfuse.observation.metadata.occurrenceId", &claim.occurrence_id);
+    span.record("langfuse.observation.metadata.scheduledFor", &claim.scheduled_for);
     if claim.skipped {
+        telemetry::finish(&span, "skipped", None);
+        span.record("langfuse.observation.metadata.reason", "target_busy");
         return Ok(());
     }
+    span.record("langfuse.observation.metadata.runId", &run_id);
     let scheduled_for = claim.scheduled_for;
     let occurrence_id = claim.occurrence_id;
-    let run_id = Uuid::new_v4().to_string();
     let trigger = ScheduleTrigger {
         schedule_id: due.summary.id.clone(),
         scheduled_for,
+        occurrence_id: Some(occurrence_id.clone()),
+        traceparent: telemetry::traceparent(&span),
     };
     let task_id = due.summary.id.clone();
     let mut pause_on_failure = false;
@@ -509,6 +533,13 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
             },
             ScheduleTargetType::Workflow => {
                 let recipe: WorkflowExecutionRecipe = serde_json::from_value(due.execution_recipe)?;
+                if let Some(owner) = recipe.team_model_owner.as_ref() {
+                    let current = crate::module::team_model::owner_for(&due.workspace)?;
+                    anyhow::ensure!(
+                        current.as_ref() == Some(owner),
+                        "Sign in with the original task account"
+                    );
+                }
                 let follows_latest = matches!(recipe.source, WorkflowScheduleSource::LatestPublished);
                 let resolved = async {
                     let resolved = resolve_workflow_recipe(
@@ -532,38 +563,44 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
                         return Err(error);
                     },
                 };
-                run_manager::start_workflow_in_workspace(
-                    StartWorkflowRun {
-                        chat_session_id: None,
-                        chat_turn_id: None,
-                        run_id: run_id.clone(),
-                        target_id: due.summary.target_id,
-                        target_name: dsl
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or(&due.summary.target_name)
-                            .to_owned(),
-                        input: recipe.input.clone(),
-                        target_snapshot,
-                        release_id,
-                        release_version,
-                        dsl,
-                        initial_state: recipe.initial_state,
-                        thread_id: Uuid::new_v4().to_string(),
-                        evaluation_profile: None,
-                        evaluation_result_id: None,
-                        schedule_trigger: Some(trigger),
-                        deeplink_trigger: None,
-                    },
-                    &due.workspace,
+                crate::module::team_model::with_owner(
+                    recipe.team_model_owner.clone(),
+                    run_manager::start_workflow_in_workspace(
+                        StartWorkflowRun {
+                            chat_session_id: None,
+                            chat_turn_id: None,
+                            run_id: run_id.clone(),
+                            target_id: due.summary.target_id,
+                            target_name: dsl
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&due.summary.target_name)
+                                .to_owned(),
+                            input: recipe.input.clone(),
+                            target_snapshot,
+                            release_id,
+                            release_version,
+                            dsl,
+                            initial_state: recipe.initial_state,
+                            thread_id: Uuid::new_v4().to_string(),
+                            evaluation_profile: None,
+                            evaluation_result_id: None,
+                            schedule_trigger: Some(trigger),
+                            deeplink_trigger: None,
+                        },
+                        &due.workspace,
+                    ),
                 )
                 .await?;
             },
         }
         Ok(())
     }
+    .instrument(span.clone())
     .await;
     if let Err(error) = dispatch {
+        telemetry::finish(&span, "failed", Some(&error));
+        telemetry::output(&span, &json!({"paused":pause_on_failure}));
         ScheduleDispatcher::new(pool, &due.workspace)
             .failed(
                 &task_id,
@@ -575,6 +612,7 @@ async fn trigger_due_schedule(pool: &sqlx::SqlitePool, due: DueSchedule) -> Resu
             .await?;
         return Ok(());
     }
+    telemetry::finish(&span, "queued", None);
     sqlx::query("UPDATE schedule_occurrences SET run_id = ? WHERE id = ?")
         .bind(run_id)
         .bind(occurrence_id)

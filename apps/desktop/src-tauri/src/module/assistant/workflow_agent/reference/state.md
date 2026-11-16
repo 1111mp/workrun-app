@@ -2,6 +2,21 @@
 
 Run inputs must be an object; each top-level key enters global state. Node outputs are private by default. Edges control execution order, not automatic transfer of private outputs.
 
+## Essentials
+
+Run input top-level keys enter global state. Nodes read a flat visible input object;
+private fields need producer.state.access.readers, while producer.state.globalKeys
+publishes named outputs globally. Edges establish order, not private visibility.
+Agent outputSchema and CodeAct final_result.value produce top-level private keys;
+publish the same keys and declare them in settings.outputSchema to return them.
+Schemas and End never create values. outputKey stores final text and cannot be
+combined with outputSchema. Python receives model-visible input, not automatic
+state variables or a global-state API; scripts use the actual visible values.
+For private sharing, redaction, exact tool binding or file access, read the relevant
+full contract. Do not invent producerId.key aliases or implicit output wrappers.
+
+## Details
+
 Publish explicit producer keys with data.state.globalKeys. For example, declare summary in an agent outputSchema and state.globalKeys:["summary"] so downstream nodes can read it globally. outputKey stores complete final text and is mutually exclusive with outputSchema. Structured output top-level fields become private keys directly; do not add a result wrapper.
 
 For private sharing, list consumer IDs in the producer's state.access.readers. Add consumers to rawReaders only when they need original unredacted data. rawReaders must be a subset of readers. Neither list may reference the producer itself, nonexistent nodes, start, end or layout nodes. state.sensitiveFields uses dotted paths. Published global keys cannot use the reserved workflow. prefix.

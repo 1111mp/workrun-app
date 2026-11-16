@@ -4,3 +4,5 @@ pub mod handle;
 pub mod logger;
 pub mod telemetry;
 pub mod tray;
+
+pub(crate) mod telemetry_langfuse;

@@ -123,22 +123,53 @@ impl Llm for AuthorModel {
         "scripted-author"
     }
     async fn generate_content(&self, request: LlmRequest, _: bool) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        if request
+            .config
+            .as_ref()
+            .and_then(|c| c.response_schema.as_ref())
+            .is_some_and(|s| s["properties"]["route"].is_object())
+        {
+            return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(
+                Content::new("model").with_text(r#"{"route":"task"}"#),
+            ))])));
+        }
+        if request.config.as_ref().is_some_and(|c| c.response_schema.is_some()) {
+            return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(
+                Content::new("model").with_text(
+                    json!({"intent":"execution","actionQuote":"执行保存的流程",
+                    "authoringQuote":"","reuseExisting":true,"summary":"运行已保存流程"})
+                    .to_string(),
+                ),
+            ))])));
+        }
         let step = self.step.fetch_add(1, Ordering::SeqCst) + 1;
         let mut document = document();
-        let (name,args)=match step {
-            1=>("read_skill",json!({"name":"workflow-authoring"})),
-            2=>("get_workflow_reference",json!({"topic":"nodes","node_types":["start","if_else","end"]})),
-            3=>{document["edges"][1]["sourceHandle"]=json!("invalid");("validate_workflow_draft",json!({"document_json":document.to_string()}))},
-            4=>("validate_workflow_draft",json!({"document_json":document.to_string()})),
-            5=>("save_workflow_draft",json!({"document_json":document.to_string()})),
-            6|7|10=>{
-                let text=if step==6 {json!({"status":"completed","summary":"流程已保存","assumptions":[]}).to_string()}
-                    else if step==7 {"流程已保存，没有运行。".into()}else{"1500 命中 true 分支。".into()};
-                return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(Content::new("model").with_text(text)))])));
+        let (name, args) = match step {
+            1 => ("read_skill", json!({"name":"workflow-authoring"})),
+            2 => (
+                "get_workflow_reference",
+                json!({"topic":"nodes","node_types":["start","if_else","end"]}),
+            ),
+            3 => {
+                document["edges"][1]["sourceHandle"] = json!("invalid");
+                ("validate_workflow_draft", json!({"document_json":document.to_string()}))
             },
-            8=>return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(Content::new("model").with_text(json!({"intent":"execution","actionQuote":"执行保存的流程","authoringQuote":"","reuseExisting":true,"summary":"运行已保存流程"}).to_string())))]))),
-            9=>{let saved=self.store.saved.lock().unwrap().clone().unwrap();("execute_capability",json!({"capability_id":saved["capability_id"],"bindings":[{"input":"amount","source":"message","message":0,"quote":"1500","value_json":"1500"}]}))},
-            _=>panic!("Unexpected model step"),
+            4 => ("validate_workflow_draft", json!({"document_json":document.to_string()})),
+            5 => ("save_workflow_draft", json!({"document_json":document.to_string()})),
+            7 => {
+                let text = "1500 命中 true 分支。".to_string();
+                return Ok(Box::pin(futures::stream::iter([Ok(adk_rust::LlmResponse::new(
+                    Content::new("model").with_text(text),
+                ))])));
+            },
+            6 => {
+                let saved = self.store.saved.lock().unwrap().clone().unwrap();
+                (
+                    "execute_capability",
+                    json!({"capability_id":saved["capability_id"],"bindings":[{"input":"amount","source":"message","message":0,"quote":"1500","value_json":"1500"}]}),
+                )
+            },
+            _ => panic!("Unexpected model step"),
         };
         assert!(request.tools.contains_key(name));
         Ok(Box::pin(futures::stream::iter([Ok(adk_rust::prelude::LlmResponse {
@@ -296,16 +327,16 @@ async fn generated_workflow_is_repaired_saved_and_executed_from_base_nodes() {
     .await
     .unwrap();
     let cost = model.costs_since(0);
-    assert_eq!(cost["phases"]["authoring"]["callCount"], 6);
+    assert_eq!(cost["phases"]["authoring"]["callCount"], 5);
     assert_eq!(cost["phases"]["intent"]["callCount"], 1);
-    assert_eq!(cost["phases"]["conversation"]["callCount"], 3);
+    assert_eq!(cost["phases"]["task"]["callCount"], 2);
     // This fixture executes a deterministic graph with no model nodes. Model
     // execution usage is still excluded; do not report an unmeasured zero cost.
     assert_eq!(cost["executionIncluded"], false);
-    assert_eq!(cost["missingUsageCalls"], 10);
+    assert_eq!(cost["missingUsageCalls"], 9);
     assert_eq!(store.rejected.load(Ordering::SeqCst), 1);
     assert_eq!(report["status"], "passed");
-    assert_eq!(scripted.step.load(Ordering::SeqCst), 10);
+    assert_eq!(scripted.step.load(Ordering::SeqCst), 7);
 }
 
 #[tokio::test]
@@ -340,9 +371,9 @@ async fn authoring_intent_can_save_but_cannot_dispatch() {
         .unwrap();
     assert!(reply.call.is_none());
     {
-        let requests = model.requests.lock().unwrap();
-        // Save, specialist outcome, delivery: no coordinator routing call.
-        assert_eq!(requests.len(), 3);
+        let requests = model.handler_requests();
+        // A successful save ends this turn without model-written summaries.
+        assert_eq!(requests.len(), 1);
         assert!(requests[0].tools.contains_key("save_workflow_draft"));
         assert!(!requests[0].tools.contains_key("execute_capability"));
         assert!(
@@ -585,7 +616,7 @@ async fn empty_confirmation_does_not_block_save_only_then_explicit_execution() {
     let call = result.call.unwrap();
     assert_eq!(call.workflow_id, saved["capability_id"].as_str().unwrap());
     assert_eq!(call.input["amount"], 1500);
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     assert!(!requests[1].tools.contains_key("transfer_to_agent"));
     assert!(!requests[1].tools.contains_key("prepare_workflow_task"));
     let turns = store.turns.lock().unwrap();
@@ -611,7 +642,7 @@ async fn explicit_specialist_return_delivers_native_outcome_without_replaying_tr
     };
     let model = super::tests::ScriptedModel::new(vec![
         super::tests::call("save_workflow_draft", json!({"document_json":document().to_string()})),
-        named_call("main_agent", "return-to-main"),
+        named_call("task_agent", "return-to-main"),
         Content::new("model").with_text("Saved without execution."),
     ]);
     let reply = super::tests::runtime()
@@ -633,7 +664,7 @@ async fn explicit_specialist_return_delivers_native_outcome_without_replaying_tr
         .unwrap();
     assert!(reply.call.is_none());
     assert!(store.saved.lock().unwrap().is_some());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let contents = &requests.last().unwrap().contents;
     let calls = contents
         .iter()
@@ -654,13 +685,13 @@ async fn explicit_specialist_return_delivers_native_outcome_without_replaying_tr
     assert_eq!(calls, 0);
     assert_eq!(receipts, 0);
     let serialized = serde_json::to_string(contents).unwrap();
-    assert!(serialized.contains("Native specialist outcome"));
-    assert!(serialized.contains("completed"));
+    assert_eq!(requests.len(), 1);
+    assert!(!serialized.contains("Native specialist outcome"));
     assert!(!serialized.contains("permissionDenied"));
 }
 
 #[tokio::test]
-async fn author_internals_are_isolated_but_coordinator_reads_and_signatures_survive() {
+async fn native_save_ends_delivery_and_keeps_author_internals_out_of_later_turns() {
     let store = DraftStore::new();
     let user = Content::new("user").with_text("创建草稿，不要运行");
     super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
@@ -713,29 +744,9 @@ async fn author_internals_are_isolated_but_coordinator_reads_and_signatures_surv
     assert!(reply.call.is_none());
     assert!(store.saved.lock().unwrap().is_some());
     {
-        let requests = model.requests.lock().unwrap();
-        let author_history = serde_json::to_string(&requests[2].contents).unwrap();
-        let delivery = &requests[3].contents;
-        let delivery_text = serde_json::to_string(delivery).unwrap();
-        assert!(author_history.contains("# Native resource configuration"));
-        assert!(author_history.contains("save_workflow_draft"));
-        assert!(!delivery_text.contains("# Native resource configuration"));
-        assert!(!delivery_text.contains("save_workflow_draft"));
-        assert!(!delivery_text.contains("permissionDenied"));
-        assert!(delivery_text.contains("Saved native draft."));
-        assert!(delivery_text.contains("创建草稿，不要运行"));
-        assert!(delivery_text.len() < author_history.len());
-        let final_contents = &requests.last().unwrap().contents;
-        assert!(final_contents.iter().flat_map(|c| &c.parts).any(|part| matches!(part,
-        Part::FunctionResponse { id:Some(id), function_response, .. } if id == "delivery-read-error" && function_response.response.get("error").is_some()
-    )));
-        for id in ["delivery-read-1", "delivery-read-error", "delivery-read-2"] {
-            assert!(final_contents.iter().flat_map(|c| &c.parts).any(|part| matches!(part,
-            Part::FunctionCall{id:Some(call_id),thought_signature:Some(signature),..}
-            if call_id==id && signature=="coordinator-signature")));
-            assert!(final_contents.iter().flat_map(|c| &c.parts).any(|part| matches!(part,
-            Part::FunctionResponse{id:Some(call_id),..} if call_id==id)));
-        }
+        let requests = model.handler_requests();
+        assert_eq!(requests.len(), 2); // Reference read, then save; no delivery LLM.
+        assert!(reply.text.is_empty());
     }
     // The session persists reply.content, not the SDK specialist transcript.
     // Starting another user turn must preserve that boundary and the user goal.
@@ -766,11 +777,11 @@ async fn author_internals_are_isolated_but_coordinator_reads_and_signatures_surv
         .await
         .unwrap();
     assert!(next_reply.call.is_none());
-    for request in next.requests.lock().unwrap().iter() {
+    for request in next.handler_requests().iter() {
         let history = serde_json::to_string(&request.contents).unwrap();
         assert!(!history.contains("# Native resource configuration"));
         assert!(!history.contains("document_json"));
-        assert!(history.contains("Saved without execution."));
+        assert!(!history.contains("delivery-read"));
         assert!(history.contains("创建草稿，不要运行"));
     }
 }
@@ -805,10 +816,120 @@ async fn saved_outcome_does_not_authorize_a_new_coordinator_write() {
         .unwrap();
     assert!(reply.call.is_none());
     assert!(store.saved.lock().unwrap().is_some());
-    let requests = model.requests.lock().unwrap();
+    let requests = model.handler_requests();
     let history = serde_json::to_string(&requests.last().unwrap().contents).unwrap();
-    assert!(history.contains("permissionDenied"));
-    assert!(history.contains("Native specialist outcome"));
-    assert!(history.contains("completed"));
-    assert!(!requests.last().unwrap().tools.contains_key("save_workflow_draft"));
+    assert_eq!(requests.len(), 1); // The queued unauthorized write is never requested.
+    assert!(!history.contains("Native specialist outcome"));
+    assert!(reply.text.is_empty());
+}
+
+#[tokio::test]
+async fn specialists_stream_provider_reasoning_without_exposing_tool_payloads() {
+    use futures::StreamExt;
+    struct ReasoningModel(super::tests::ScriptedModel);
+    #[async_trait::async_trait]
+    impl Llm for ReasoningModel {
+        fn name(&self) -> &str {
+            "reasoning-fixture"
+        }
+        async fn generate_content(
+            &self,
+            request: LlmRequest,
+            stream: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            let specialist =
+                request.tools.contains_key("save_workflow_plan") || request.tools.contains_key("save_workflow_draft");
+            let result = self.0.generate_content(request, stream).await?;
+            if !specialist {
+                return Ok(result);
+            }
+            let thinking = adk_rust::LlmResponse {
+                content: Some(Content {
+                    role: "model".into(),
+                    parts: vec![Part::Thinking {
+                        thinking: "Checking available contracts".into(),
+                        signature: Some("not-for-display".into()),
+                    }],
+                }),
+                partial: true,
+                turn_complete: false,
+                ..Default::default()
+            };
+            Ok(Box::pin(
+                futures::stream::once(async move { Ok(thinking) }).chain(result),
+            ))
+        }
+    }
+    for authoring in [false, true] {
+        let store = DraftStore::new();
+        let user = Content::new("user").with_text(if authoring {
+            "创建草稿，不要运行"
+        } else {
+            "先给工作流规划，不要创建或运行"
+        });
+        let responses = if authoring {
+            super::planning_tests::seed_approved(store.root.path(), &store.session_id, std::slice::from_ref(&user));
+            vec![super::tests::call(
+                "save_workflow_draft",
+                json!({"document_json":document().to_string()}),
+            )]
+        } else {
+            let proposal = json!({"goal":"Prepare an executable workflow","summary":"A reviewable proposal","inputs":[],"outputs":["result"],
+                "steps":[{"title":"Produce result","description":"Produce the requested result","dependencies":[],"configuration_notes":""}],
+                "constraints":[],"assumptions":[],"questions":[],"acceptance_criteria":["Result matches input"]});
+            vec![
+                Content::new("model").with_text(r#"{"route":"workflow"}"#),
+                super::tests::call(
+                    "save_workflow_plan",
+                    json!({"base_version":0,"document_json":proposal.to_string()}),
+                ),
+            ]
+        };
+        let model = ReasoningModel(super::tests::ScriptedModel::new(responses));
+        let events = Mutex::new(Vec::new());
+        let reply = super::tests::runtime()
+            .run_with_discovery(
+                &model,
+                &ModelProvider::OpenAi,
+                AssistantRequest {
+                    contents: vec![user],
+                    capabilities: vec![],
+                    context: protocol::AssistantContext {
+                        session_id: Some(store.session_id.clone()),
+                        ..Default::default()
+                    },
+                },
+                &|event| {
+                    events.lock().unwrap().push(event);
+                    Ok(())
+                },
+                &store,
+            )
+            .await
+            .unwrap();
+        assert!(reply.call.is_none());
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(event, protocol::AssistantStreamEvent::Reasoning {text,complete:false,..} if text=="Checking available contracts")));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, protocol::AssistantStreamEvent::Reasoning { complete: true, .. }))
+        );
+        assert!(!serde_json::to_string(&*events).unwrap().contains("not-for-display"));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            protocol::AssistantStreamEvent::TextDelta { .. } | protocol::AssistantStreamEvent::TextReplace { .. }
+        )));
+        if authoring {
+            let plan = super::planning_agent::plans::Store::new(store.root.path())
+                .current(&store.session_id)
+                .unwrap()
+                .unwrap();
+            let outcome = plan.outcome.unwrap();
+            assert_eq!(outcome["validation"]["valid"], true);
+            assert_eq!(outcome["published"], false);
+            assert_eq!(outcome["executed"], false);
+            assert_eq!(outcome["summary"], "");
+        }
+    }
 }

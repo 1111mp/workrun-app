@@ -13,6 +13,8 @@ pub enum RemoteCredentialKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteAgentCredential {
+    #[serde(default = "crate::utils::dirs::personal_credential_workspace")]
+    pub workspace_id: String,
     pub id: String,
     pub name: String,
     pub kind: RemoteCredentialKind,

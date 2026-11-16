@@ -16,6 +16,10 @@ pub struct PythonUiResponseRequest {
 /// Complete one pending Python UI interaction from the desktop frontend.
 #[tauri::command]
 pub async fn python_ui_respond(request: PythonUiResponseRequest) -> CmdResult {
+    IpcServer::global()
+        .ensure_active_workspace(&request.run_id)
+        .await
+        .stringify_err()?;
     let message = json!({
         "id": request.request_id,
         "type": "ui.response",

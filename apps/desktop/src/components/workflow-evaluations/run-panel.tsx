@@ -29,7 +29,10 @@ export function versionKey(version: EvaluationVersionSummary) {
 
 export function versionDisplayLabel(
   version: EvaluationVersionSummary,
-  t: (key: string, options?: Record<string, string>) => string,
+  t: {
+    (key: string): string;
+    (key: string, options: Record<string, string>): string;
+  },
 ) {
   if (version.releaseId) return `v${version.releaseVersion}`;
   const fingerprint = version.comparisonKey.slice(0, 8);

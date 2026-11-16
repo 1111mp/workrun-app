@@ -1,0 +1,35 @@
+name: workrun-litellm
+services:
+  litellm:
+    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm:main-stable}
+    command: ['--config', '/app/config.yaml', '--port', '4000']
+    environment:
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set LITELLM_SALT_KEY}
+      UPSTREAM_MODEL: ${UPSTREAM_MODEL:?Set UPSTREAM_MODEL}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - '${LITELLM_BIND:-127.0.0.1}:${LITELLM_PORT:-4000}:4000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_DB: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'litellm', '-d', 'litellm']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+volumes:
+  postgres_data:

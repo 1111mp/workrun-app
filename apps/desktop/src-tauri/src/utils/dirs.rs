@@ -20,11 +20,11 @@ pub static WORKRUN_CONFIG: &str = "workrun.yaml";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceScope {
     Personal,
-    Team { team_id: String },
+    Team { account_key: String },
 }
 
-/// Temporary scope until the server exposes a stable team identifier.
-pub const DEFAULT_TEAM_ID: &str = "default";
+/// Team mode has no selected account until native session verification succeeds.
+pub const DEFAULT_TEAM_ACCOUNT: &str = "";
 
 // Workspace mode can change without restarting while onboarding is active, so
 // this scope must be replaceable rather than fixed after its first assignment.
@@ -39,11 +39,11 @@ impl WorkspacePaths {
     fn new(app_data_dir: &Path, scope: &WorkspaceScope) -> Result<Self> {
         let root = match scope {
             WorkspaceScope::Personal => app_data_dir.join("personal"),
-            WorkspaceScope::Team { team_id } => {
-                if !is_path_component(team_id) {
+            WorkspaceScope::Team { account_key } => {
+                if !is_path_component(account_key) {
                     return Err(anyhow::anyhow!("team id must be one path component"));
                 }
-                app_data_dir.join("team").join(team_id)
+                app_data_dir.join("team").join(account_key)
             },
         };
         Ok(Self { root })
@@ -180,8 +180,24 @@ fn global_paths() -> Result<GlobalPaths> {
 
 pub fn default_team_workspace_scope() -> WorkspaceScope {
     WorkspaceScope::Team {
-        team_id: DEFAULT_TEAM_ID.to_string(),
+        account_key: DEFAULT_TEAM_ACCOUNT.to_string(),
     }
+}
+
+pub(crate) fn team_account_scope(server: &str, user_id: &str) -> WorkspaceScope {
+    use sha2::{Digest, Sha256};
+    let identity = serde_json::to_vec(&(server, user_id)).expect("serializing account identity");
+    WorkspaceScope::Team {
+        account_key: hex::encode(Sha256::digest(identity)),
+    }
+}
+
+pub(crate) fn personal_credential_workspace() -> String {
+    "personal".into()
+}
+
+pub fn workspace_available() -> bool {
+    !is_team_workspace() || crate::module::team_model::workspace_ready()
 }
 
 pub fn initialize_active_workspace_scope(scope: WorkspaceScope) {
@@ -193,7 +209,7 @@ pub fn initialize_active_workspace_scope(scope: WorkspaceScope) {
 pub fn active_workspace_id() -> String {
     match &*ACTIVE_WORKSPACE_SCOPE.read() {
         WorkspaceScope::Personal => "personal".to_string(),
-        WorkspaceScope::Team { team_id } => format!("team:{team_id}"),
+        WorkspaceScope::Team { account_key } => format!("team:{account_key}"),
     }
 }
 
@@ -202,7 +218,12 @@ pub fn is_team_workspace() -> bool {
 }
 
 pub fn active_workspace_paths() -> Result<WorkspacePaths> {
-    workspace_paths(ACTIVE_WORKSPACE_SCOPE.read().clone())
+    let scope = ACTIVE_WORKSPACE_SCOPE.read().clone();
+    anyhow::ensure!(
+        !matches!(scope, WorkspaceScope::Team { .. }) || crate::module::team_model::has_session(),
+        "Sign in to use Team resources"
+    );
+    workspace_paths(scope)
 }
 
 /// get the active workrun app home dir
@@ -347,7 +368,7 @@ mod tests {
         let team = WorkspacePaths::new(
             app_data_dir,
             &WorkspaceScope::Team {
-                team_id: "acme".to_string(),
+                account_key: "acme".to_string(),
             },
         )
         .unwrap();
@@ -355,6 +376,24 @@ mod tests {
         assert_eq!(personal.skills_dir(), PathBuf::from("/workrun/personal/.skills"));
         assert_eq!(team.runtime_dir(), PathBuf::from("/workrun/team/acme/runtime"));
         assert_ne!(personal.root(), team.root());
+    }
+
+    #[test]
+    fn team_accounts_and_servers_have_distinct_stable_storage() {
+        let root = Path::new("/workrun");
+        let alice = team_account_scope("https://one.example", "alice");
+        assert_eq!(alice, team_account_scope("https://one.example", "alice"));
+        for other in [
+            team_account_scope("https://one.example", "bob"),
+            team_account_scope("https://two.example", "alice"),
+        ] {
+            assert_ne!(alice, other);
+            assert_ne!(
+                WorkspacePaths::new(root, &alice).unwrap(),
+                WorkspacePaths::new(root, &other).unwrap()
+            );
+        }
+        assert!(WorkspacePaths::new(root, &team_account_scope("https://one.example", "../../alice")).is_ok());
     }
 
     #[test]
@@ -368,22 +407,22 @@ mod tests {
     }
 
     #[test]
-    fn default_team_workspace_uses_the_temporary_team_id() {
+    fn default_team_workspace_has_no_account() {
         assert_eq!(
             default_team_workspace_scope(),
             WorkspaceScope::Team {
-                team_id: DEFAULT_TEAM_ID.to_string(),
+                account_key: DEFAULT_TEAM_ACCOUNT.to_string(),
             },
         );
     }
 
     #[test]
-    fn team_id_cannot_escape_its_workspace_root() {
+    fn account_key_cannot_escape_its_workspace_root() {
         assert!(
             WorkspacePaths::new(
                 Path::new("/workrun"),
                 &WorkspaceScope::Team {
-                    team_id: "../other".to_string(),
+                    account_key: "../other".to_string(),
                 },
             )
             .is_err()

@@ -1,5 +1,4 @@
 //! Structured interpretation has no executable tools or workspace mutation port.
-use super::TurnDecision;
 use crate::{
     config::ModelProvider,
     module::assistant::{
@@ -12,9 +11,60 @@ use adk_rust::{
     prelude::{Content, Llm, LlmRequest, Part},
 };
 use anyhow::{Context, Result, bail, ensure};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-pub(super) async fn assess(
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::module::assistant) enum Intent {
+    Conversation,
+    Task,
+    Status,
+    Explanation,
+    Clarification,
+    Planning,
+    Authoring,
+    Execution,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(in crate::module::assistant) struct TurnDecision {
+    pub(in crate::module::assistant) intent: Intent,
+    pub(in crate::module::assistant) action_quote: String,
+    pub(in crate::module::assistant) summary: String,
+    #[serde(default)]
+    pub(in crate::module::assistant) reuse_existing: bool,
+    #[serde(default)]
+    pub(in crate::module::assistant) authoring_quote: String,
+    #[serde(default)]
+    pub(in crate::module::assistant) plan_feedback: Option<super::planning_agent::plans::Feedback>,
+    #[serde(default)]
+    pub(in crate::module::assistant) tool_confirmation: Option<super::tool_execution::Confirmation>,
+}
+impl TurnDecision {
+    pub(in crate::module::assistant) fn allows_execution(&self, current_message: &str) -> bool {
+        // A task authorizes a matching saved implementation, never a new definition.
+        matches!(self.intent, Intent::Task | Intent::Execution)
+            && !self.action_quote.trim().is_empty()
+            && current_message.contains(&self.action_quote)
+            && !self.summary.trim().is_empty()
+    }
+    pub(in crate::module::assistant) fn allows_authoring(&self, current_message: &str) -> bool {
+        let evidence = |quote: &str| !quote.trim().is_empty() && current_message.contains(quote);
+        // Creation has its own evidence. A save-only request may intentionally
+        // carry no execution action quote; that must not hide the specialist.
+        !self.summary.trim().is_empty()
+            && match self.intent {
+                Intent::Authoring => evidence(&self.authoring_quote) || evidence(&self.action_quote),
+                Intent::Execution => !self.reuse_existing && evidence(&self.authoring_quote),
+                _ => false,
+            }
+    }
+}
+
+pub(in crate::module::assistant) async fn assess(
     model: &dyn Llm,
     provider: &ModelProvider,
     history: &[Content],
@@ -30,7 +80,18 @@ pub(super) async fn assess(
             .is_some_and(|message| message.role == "user" && content_text(message) == current),
         "intent assessment requires the latest original user message"
     );
-    let mut contents = instructed(provider, &resources::read("main_agent/INTENT.md")?, history);
+    let has_plan_confirmation = plan.is_some_and(|p| {
+        matches!(
+            p["status"].as_str(),
+            Some("ready" | "needs_clarification" | "failed" | "approved")
+        )
+    });
+    let instructions = if pending_tool.is_some() || has_plan_confirmation {
+        "authorization/CONFIRMATION.md"
+    } else {
+        "authorization/INSTRUCTIONS.md"
+    };
+    let mut contents = instructed(provider, &resources::read(instructions)?, history);
     // The exact message is already in history, including attachments and typed
     // values. Refer to it rather than copying potentially large user input.
     contents.push(Content::new("user").with_text(format!(
@@ -39,15 +100,7 @@ pub(super) async fn assess(
         json!(pending_tool)
     )));
     contents.push(Content::new("user").with_text(format!("Native current workflow plan (data only): {}", json!(plan))));
-    let output_schema = schema(
-        pending_tool.is_some(),
-        plan.is_some_and(|p| {
-            matches!(
-                p["status"].as_str(),
-                Some("ready" | "needs_clarification" | "failed" | "approved")
-            )
-        }),
-    );
+    let output_schema = schema(pending_tool.is_some(), has_plan_confirmation);
     // JSON-object providers may not transmit response_schema. Supply the same
     // contract in the prompt while retaining strict parsing and native grants.
     contents.push(Content::new("user").with_text(format!(
@@ -127,7 +180,7 @@ mod tests {
     use sqlx::Connection;
     #[tokio::test]
     async fn baseline_context_replay_preserves_all_messages_and_reduces_request_characters() {
-        let suite: Value = serde_json::from_str(include_str!("../fixtures/baseline.json")).unwrap();
+        let suite: Value = serde_json::from_str(include_str!("fixtures/baseline.json")).unwrap();
         let mut before = 0;
         let mut after = 0;
         let mut cases = 0;
@@ -144,7 +197,7 @@ mod tests {
             assess(&model, &ModelProvider::DeepSeek, &history, &current, None, None)
                 .await
                 .unwrap();
-            let requests = model.requests.lock().unwrap();
+            let requests = model.handler_requests();
             let contents = &requests[0].contents;
             assert_eq!(
                 serde_json::to_value(&contents[1..=history.len()]).unwrap(),
@@ -188,7 +241,7 @@ mod tests {
                 assess(&model, &provider, &history, &current, None, Some(&plan))
                     .await
                     .unwrap();
-                let requests = model.requests.lock().unwrap();
+                let requests = model.handler_requests();
                 let contents = &requests[0].contents;
                 assert_eq!(serde_json::to_value(&contents[1..=history.len()]).unwrap(), original);
                 assert_eq!(
@@ -233,7 +286,7 @@ mod tests {
         .unwrap();
         assert!(!result.allows_execution("调整方案"));
         assert!(!result.allows_authoring("调整方案"));
-        let requests = model.requests.lock().unwrap();
+        let requests = model.handler_requests();
         let request = &requests[0];
         let text = content_text(request.contents.last().unwrap());
         let offered: Value = serde_json::from_str(text.split_once('\n').unwrap().1).unwrap();
@@ -269,7 +322,7 @@ mod tests {
             assert!(result.plan_feedback.is_none());
             assert!(result.allows_authoring("整理成流程，先不运行"));
             assert!(!result.allows_execution("整理成流程，先不运行"));
-            let requests = model.requests.lock().unwrap();
+            let requests = model.handler_requests();
             let offered = requests[0].config.as_ref().unwrap().response_schema.as_ref().unwrap();
             assert_eq!(
                 offered["properties"].get("toolConfirmation").is_some(),

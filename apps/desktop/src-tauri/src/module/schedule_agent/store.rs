@@ -95,7 +95,7 @@ impl SchedulingStore {
             )
         } else {
             ensure!(kind == "workflow", "Unknown target type");
-            let workflow = catalog.resolve(id).await?;
+            let workflow = catalog.schedule_workflow(id).await?;
             let document = &workflow["document"];
             let reason = schedule::validate_unattended_workflow(document).err().map(|_| "This workflow contains human review or user question nodes. Scheduled workflows must finish without interactive input.");
             // Verify that the saved graph is a valid execution definition, without installing or running it.
@@ -118,6 +118,7 @@ impl SchedulingStore {
     fn new_recipe(&self, kind: &str) -> Result<Value> {
         if kind == "workflow" {
             Ok(serde_json::to_value(schedule::WorkflowExecutionRecipe {
+                team_model_owner: crate::module::team_model::stored_owner(&self.workspace),
                 source: if self.workspace.starts_with("team:") {
                     schedule::WorkflowScheduleSource::LatestPublished
                 } else {

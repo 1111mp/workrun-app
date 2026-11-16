@@ -109,6 +109,10 @@ impl RunSupervisor {
                 if !self.accepting.load(Ordering::Acquire) {
                     break;
                 }
+                if !crate::utils::dirs::workspace_available() {
+                    self.wake.notified().await;
+                    continue;
+                }
                 if let Err(error) = super_recovery_tick().await {
                     log::warn!("recovery scheduler: {error:#}");
                 }
@@ -157,6 +161,9 @@ impl RunSupervisor {
     }
 
     async fn dispatch_compensation(&'static self) {
+        if !crate::utils::dirs::workspace_available() {
+            return;
+        }
         if !self.accepting.load(Ordering::Acquire) {
             return;
         }
@@ -432,6 +439,10 @@ pub struct StartAppRun {
 pub struct ScheduleTrigger {
     pub schedule_id: String,
     pub scheduled_for: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

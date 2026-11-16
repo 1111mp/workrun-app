@@ -4,14 +4,14 @@ use std::collections::HashMap;
 pub(in crate::module::assistant) fn declarations() -> HashMap<String, Value> {
     let mut tools = crate::module::assistant::workspace_resources::declarations();
     for declaration in [
-        json!({"name":"get_workflow_plan","description":"Read this conversation's current plan, or an immutable proposal revision by version. Never approves or creates a workflow.","parameters":{"type":"object","properties":{"version":{"type":"integer","minimum":1}},"additionalProperties":false}}),
-        json!({"name":"save_workflow_plan","description":"Save a new user-reviewable plan revision, not a Workflow. Supply document_json matching the workflow-planning Skill and base_version from get_workflow_plan (0 for first plan). Native checks identify unavailable dependencies and unauthorized attachment IDs. Unresolved questions remain visible and prevent approval. Cannot approve or execute.","parameters":{"type":"object","properties":{"document_json":{"type":"string","maxLength":65536},"base_version":{"type":"integer","minimum":0}},"required":["document_json","base_version"],"additionalProperties":false}}),
-        json!({"name":"get_workflow_reference","description":"Read base-node reference progressively for planning: capabilities (shared Workrun overview), configuration (native resource wiring), examples (summaries, or matching documents with node_types), index, nodes, node-schema, format, state, routing or recovery. For nodes, provide nonempty node_types, e.g. {topic:nodes,node_types:[codeact_agent]}. Default detail=summary returns semantic guides without authoring schemas/examples; use detail=full only for an unresolved feasibility question. Select only node_types needed for this design. Do not construct or save a workflow document.","parameters":{"type":"object","properties":{"topic":{"type":"string"},"node_types":{"type":"array","items":{"type":"string"}},"detail":{"type":"string","enum":["summary","full"]}},"additionalProperties":false}}),
-        json!({"name":"list_authoring_resources","description":"Discover native modelProfileId values. Discover tools and Skills with workspace resource tools.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["models"]},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}),
-        json!({"name":"list_capabilities","description":"Search workflows and Apps by summary (paginated, without input/output schemas). Use capability_id to retrieve the full exact contract before binding inputs or reusing a capability; summaries are not contracts.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}),
-        json!({"name":"read_artifact","description":"Inspect an authorized task attachment as bounded UTF-8 text to determine its real input structure.","parameters":{"type":"object","properties":{"artifact_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":32000}},"required":["artifact_id"],"additionalProperties":false}}),
-        json!({"name":"read_skill","description":"Read an optional built-in planning Skill. workflow-planning is already supplied in the initial instructions; do not reload it. Does not expose authoring/execution tools.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
-        json!({"name":"report_progress","description":"Publish concise observed planning progress for the user, without hidden reasoning.","parameters":{"type":"object","properties":{"summary":{"type":"string","maxLength":600}},"required":["summary"],"additionalProperties":false}}),
+        json!({"name":"get_workflow_plan","description":"Read the current proposal or a specified immutable version.","parameters":{"type":"object","properties":{"version":{"type":"integer","minimum":1}},"additionalProperties":false}}),
+        json!({"name":"save_workflow_plan","description":"Save a proposal matching workflow-planning. base_version is current version, or 0 initially. Questions block approval; no Workflow is created.","parameters":{"type":"object","properties":{"document_json":{"type":"string","maxLength":65536},"base_version":{"type":"integer","minimum":0}},"required":["document_json","base_version"],"additionalProperties":false}}),
+        json!({"name":"get_workflow_reference","description":"Read selected node semantics or the topic index. Node queries require node_types. Default summary; full only for unresolved feasibility.","parameters":{"type":"object","properties":{"topic":{"type":"string","enum":["index","capabilities","codeact-runtime","configuration","examples","nodes","node-schema","format","state","routing","recovery","compensation","execution-recovery"]},"node_types":{"type":"array","minItems":1,"items":{"type":"string","enum":crate::module::workflow::contracts::NODE_TYPES}},"detail":{"type":"string","enum":["summary","full"]}},"required":["topic"],"additionalProperties":false}}),
+        json!({"name":"list_authoring_resources","description":"List native modelProfileId values.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["models"]},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}),
+        json!({"name":"list_capabilities","description":"Search Workflow/App summaries; capability_id reads the exact contract before reuse.","parameters":{"type":"object","properties":{"capability_id":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"additionalProperties":false}}),
+        json!({"name":"read_artifact","description":"Read an authorized attachment as paginated UTF-8 text.","parameters":{"type":"object","properties":{"artifact_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":32000}},"required":["artifact_id"],"additionalProperties":false}}),
+        json!({"name":"read_skill","description":"Read an optional built-in Skill; workflow-planning is already supplied.","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}),
+        json!({"name":"report_progress","description":"Report brief public progress, not private reasoning.","parameters":{"type":"object","properties":{"summary":{"type":"string","maxLength":600}},"required":["summary"],"additionalProperties":false}}),
     ] {
         tools.insert(declaration["name"].as_str().unwrap().into(), declaration);
     }
@@ -25,36 +25,58 @@ pub(in crate::module::assistant) fn read(name: &str, args: &Value) -> anyhow::Re
         },
         "get_workflow_reference" => {
             let reference = crate::module::assistant::workflow_agent::authoring::reference;
-            if matches!(args["topic"].as_str(), Some("nodes" | "node-schema"))
-                && args["node_types"].as_array().is_none_or(Vec::is_empty)
-            {
-                // Discovery without a selection should return useful summaries,
-                // not force an avoidable model correction just to find node IDs.
-                return reference(&json!({"topic":"index"}));
+            let topic = args["topic"].as_str().ok_or_else(|| anyhow::anyhow!(
+                "topic is required: use topic=nodes with node_types for node semantics, or topic=index for discovery"
+            ))?;
+            // Never return an index for an incomplete contract read: the planner
+            // could mistake discovery summaries for implementation feasibility.
+            if matches!(topic, "nodes" | "node-schema") {
+                anyhow::ensure!(
+                    args["node_types"].as_array().is_some_and(|types| !types.is_empty()),
+                    "topic={topic} requires nonempty node_types; use topic=index to discover supported node types"
+                );
+            } else {
+                anyhow::ensure!(
+                    args.get("node_types").is_none() || matches!(topic, "examples" | "configuration"),
+                    "node_types requires topic=nodes, node-schema, configuration or examples"
+                );
             }
-            let mut value = reference(args)?;
-            if args["topic"] == "nodes" && args["detail"] != "full" {
-                if let Some(nodes) = value["nodes"].as_array_mut() {
-                    for node in nodes {
-                        if let Some(guide) = node["guide"].as_str() {
-                            let semantics = guide.split("\n## Configuration").next().unwrap_or(guide);
-                            // The runtime briefing is appended after configuration in the
-                            // author guide. Keep it, so planning needn't reload full schemas
-                            // merely to establish supported language/modules and file access.
-                            let runtime = guide
-                                .find("## Linked runtime language and OS briefing")
-                                .map(|offset| &guide[offset..]);
-                            node["guide"] = json!(match runtime {
-                                Some(runtime) => format!("{semantics}\n\n{runtime}"),
-                                None => semantics.to_owned(),
-                            });
-                        }
+            if matches!(topic, "nodes" | "node-schema") && args["detail"] != "full" {
+                let kinds = args["node_types"].as_array().unwrap();
+                anyhow::ensure!(
+                    kinds.len() <= crate::module::workflow::contracts::NODE_TYPES.len(),
+                    "Too many node types"
+                );
+                let nodes = kinds.iter().map(|kind| -> anyhow::Result<Value> {
+                    let kind = kind.as_str().ok_or_else(|| anyhow::anyhow!("Node type must be a string"))?;
+                    let contract = crate::module::workflow::contracts::node_contract(kind)?;
+                    let brief = &contract["planning"];
+                    Ok(json!({"type":kind,"guide":format!("Can: {}\nLimits: {}\nRequires: {}",
+                        brief["capability"].as_str().unwrap(), brief["limits"].as_str().unwrap(), brief["requires"].as_str().unwrap())}))
+                }).collect::<anyhow::Result<Vec<_>>>()?;
+                return Ok(json!({"schemaVersion":1,"nodes":nodes,"detail":"planning_semantics",
+                    "next":"Choose a feasible approach and save the proposal. Read full contracts only for an unresolved material feasibility question; configuration belongs to the author."}));
+            }
+            let mut selected = args.clone();
+            if args["detail"] != "full" {
+                selected["detail"] = json!("full");
+            }
+            let mut value = reference(&selected)?;
+            if args["detail"] == "full" {
+                return Ok(value);
+            }
+            if let Some(guide) = value["guide"].as_str() {
+                value["guide"] = json!(guide.split("\n\n").take(2).collect::<Vec<_>>().join("\n\n"));
+                value["detail"] = json!("planning_summary");
+                value["next"] = json!(
+                    "Read selected node semantics for feasibility; implementation details belong to the author. Use detail=full only for an unresolved material question."
+                );
+            } else if let Some(examples) = value["examples"].as_array_mut() {
+                for example in examples {
+                    if let Some(object) = example.as_object_mut() {
+                        object.remove("document");
                     }
                 }
-                value["detail"] = json!("planning_semantics");
-                value["next"] = json!(
-                    "Feasibility semantics and any linked runtime briefing are included. Leave field schemas, examples and exact setup to the author; do not reload full configuration merely to inspect runtime support."
-                );
             }
             Ok(value)
         },
@@ -89,18 +111,20 @@ mod tests {
         let mut full_args = args.clone();
         full_args["detail"] = json!("full");
         let full = read("get_workflow_reference", &full_args).unwrap();
-        let shared = crate::module::assistant::workflow_agent::authoring::reference(&args).unwrap();
+        let shared = crate::module::assistant::workflow_agent::authoring::reference(&full_args).unwrap();
         assert_eq!(full, shared);
         assert!(summary["nodes"][0]["guide"].as_str().unwrap().contains("Monty"));
         assert!(!summary.to_string().contains("export interface"));
         assert!(full.to_string().contains("export interface"));
         assert!(summary.to_string().len() < full.to_string().len());
-        assert!(
-            summary["nodes"][0]["guide"]
-                .as_str()
-                .unwrap()
-                .ends_with(&crate::module::workflow::codeact_agent::codeact_environment_guide())
-        );
+        assert!(!summary.to_string().contains("Linked runtime language"));
+        assert!(!full.to_string().contains("Linked runtime language"));
+        let runtime = read(
+            "get_workflow_reference",
+            &json!({"topic":"codeact-runtime","detail":"full"}),
+        )
+        .unwrap();
+        assert!(runtime.to_string().contains("Linked runtime language"));
         assert!(
             read(
                 "get_workflow_reference",
@@ -111,8 +135,62 @@ mod tests {
     }
 
     #[test]
-    fn node_discovery_without_a_selection_returns_the_index_instead_of_an_error() {
-        let index = read("get_workflow_reference", &json!({"topic":"nodes"})).unwrap();
+    fn every_planning_brief_covers_capability_limits_and_dependencies_without_configuration() {
+        let nodes = read(
+            "get_workflow_reference",
+            &json!({"topic":"nodes","node_types":crate::module::workflow::contracts::NODE_TYPES}),
+        )
+        .unwrap();
+        for node in nodes["nodes"].as_array().unwrap() {
+            let guide = node["guide"].as_str().unwrap();
+            assert!(guide.starts_with("Can: "));
+            assert!(guide.contains("\nLimits: "));
+            assert!(guide.contains("\nRequires: "));
+            assert!(!guide.contains("export interface"));
+            assert!(!guide.contains("maxIterations"));
+            let contract = crate::module::workflow::contracts::node_contract(node["type"].as_str().unwrap()).unwrap();
+            assert!(guide.contains(contract["planning"]["capability"].as_str().unwrap()));
+        }
+    }
+
+    #[test]
+    fn summary_reads_keep_full_manuals_and_examples_out_of_planning() {
+        for topic in ["state", "routing", "format", "configuration"] {
+            let summary = read("get_workflow_reference", &json!({"topic":topic})).unwrap();
+            let full = read("get_workflow_reference", &json!({"topic":topic,"detail":"full"})).unwrap();
+            assert!(summary["guide"].as_str().unwrap().len() < full["guide"].as_str().unwrap().len());
+            assert_eq!(
+                full,
+                crate::module::assistant::workflow_agent::authoring::reference(&json!({"topic":topic})).unwrap()
+            );
+        }
+        let examples = read(
+            "get_workflow_reference",
+            &json!({"topic":"examples","node_types":["codeact_agent"]}),
+        )
+        .unwrap();
+        assert!(examples["examples"][0].get("document").is_none());
+        let schema = read(
+            "get_workflow_reference",
+            &json!({"topic":"node-schema","node_types":["agent"]}),
+        )
+        .unwrap();
+        assert!(schema["nodes"][0].get("dataSchema").is_none());
+    }
+
+    #[test]
+    fn incomplete_node_reads_fail_instead_of_silently_returning_the_index() {
+        for args in [
+            json!({}),
+            json!({"node_types":["end"]}),
+            json!({"topic":"nodes"}),
+            json!({"topic":"nodes","node_types":[]}),
+            json!({"topic":"node-schema"}),
+            json!({"topic":"index","node_types":["end"]}),
+        ] {
+            assert!(read("get_workflow_reference", &args).is_err(), "{args}");
+        }
+        let index = read("get_workflow_reference", &json!({"topic":"index"})).unwrap();
         assert!(
             index["nodes"]
                 .as_array()
@@ -120,13 +198,35 @@ mod tests {
                 .iter()
                 .any(|node| node["type"] == "codeact_agent")
         );
-        assert!(index["next"].as_str().unwrap().contains("node_types"));
-        assert!(index.get("error").is_none());
+        let nodes = read(
+            "get_workflow_reference",
+            &json!({"topic":"nodes","node_types":["if_else","end"]}),
+        )
+        .unwrap();
+        assert!(nodes.get("topics").is_none());
+        assert!(
+            nodes["nodes"][0]["guide"]
+                .as_str()
+                .unwrap()
+                .contains("not a business boolean output")
+        );
+        assert!(
+            nodes["nodes"][1]["guide"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains("does not create output")
+        );
+        let parameters = declarations()["get_workflow_reference"]["parameters"].clone();
+        assert!(jsonschema::validate(&parameters, &json!({"node_types":["end"]})).is_err());
+        assert!(jsonschema::validate(&parameters, &json!({"topic":"unknown"})).is_err());
+        assert!(jsonschema::validate(&parameters, &json!({"topic":"nodes","node_types":["condition"]})).is_err());
+        assert!(jsonschema::validate(&parameters, &json!({"topic":"nodes","node_types":["end"]})).is_ok());
     }
 
     #[test]
     fn shared_capability_knowledge_is_progressive_and_keeps_role_boundaries() {
-        let main = crate::module::assistant::main_agent::skills::MainSkills::builtin();
+        let main = crate::module::assistant::task_agent::skills::TaskSkills::builtin();
         let planner = super::super::skills::catalog();
         let author = crate::module::assistant::workflow_agent::skills::catalog();
         let packaged = crate::module::assistant::resources::read("reference/workrun-capabilities.md").unwrap();
@@ -147,7 +247,11 @@ mod tests {
                     .contains("# Workrun capabilities")
             );
         }
-        let overview = read("get_workflow_reference", &json!({"topic":"capabilities"})).unwrap();
+        let overview = read(
+            "get_workflow_reference",
+            &json!({"topic":"capabilities","detail":"full"}),
+        )
+        .unwrap();
         assert_eq!(overview["guide"], packaged);
         let index = read("get_workflow_reference", &json!({"topic":"index"})).unwrap();
         assert!(

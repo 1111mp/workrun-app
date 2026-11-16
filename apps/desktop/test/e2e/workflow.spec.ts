@@ -34,11 +34,20 @@ async function waitForDatabase() {
 }
 
 async function inspect(id: string) {
-  return browser.tauri.execute(
+  const record = await browser.tauri.execute(
     ({ core }, runId) =>
       core.invoke('run_history_inspect', { id: runId }) as Promise<RunRecord>,
     id,
   );
+  // Inspection returns metadata; event bodies are loaded through the paged API.
+  const page = await browser.tauri.execute(
+    ({ core }, input) =>
+      core.invoke('run_history_events_page', input) as Promise<{
+        items: Array<{ event: unknown }>;
+      }>,
+    { id, after: -1, through: record.lastSequence },
+  );
+  return { ...record, events: page.items.map((item) => item.event) };
 }
 
 async function viewHistory() {

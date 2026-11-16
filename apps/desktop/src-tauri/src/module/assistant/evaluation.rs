@@ -1,4 +1,4 @@
-//! Test-only, data-driven main-agent evaluation. Scripted runs test the grader;
+//! Test-only, data-driven task-agent evaluation. Scripted runs test the grader;
 //! only opt-in provider runs measure semantic intent and routing quality.
 use super::*;
 use adk_rust::LlmResponseStream;
@@ -29,6 +29,7 @@ struct Expected {
     workflow_id: Option<String>,
     arguments: Option<Value>,
     answer_contains_any: Option<Vec<String>>,
+    max_model_calls: Option<u64>,
 }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,13 +45,20 @@ struct Checks {
     routing: Option<bool>,
     arguments: Option<bool>,
     delivery: Option<bool>,
+    efficiency: Option<bool>,
 }
 impl Checks {
     fn passed(&self) -> bool {
-        [self.intent, self.routing, self.arguments, self.delivery]
-            .into_iter()
-            .flatten()
-            .all(|pass| pass)
+        [
+            self.intent,
+            self.routing,
+            self.arguments,
+            self.delivery,
+            self.efficiency,
+        ]
+        .into_iter()
+        .flatten()
+        .all(|pass| pass)
     }
 }
 #[derive(Serialize)]
@@ -69,7 +77,7 @@ struct CaseResult {
 }
 
 fn baseline() -> Baseline {
-    serde_json::from_str(include_str!("fixtures/baseline.json")).expect("invalid main-agent baseline")
+    serde_json::from_str(include_str!("fixtures/baseline.json")).expect("invalid task-agent baseline")
 }
 
 // Use the production discovery boundary with an isolated catalog. The adapter
@@ -81,7 +89,7 @@ impl tools::WorkflowDiscovery for Catalog<'_> {
         tools::list_page(self.0, args)
     }
     async fn list_capabilities(&self, args: &Value) -> Result<Value> {
-        main_agent::tools::ToolRegistry {
+        task_agent::tools::ToolRegistry {
             capabilities: self.0,
             skills: &SkillCatalog::builtin(),
             history: &[],
@@ -107,20 +115,13 @@ async fn case_costs_preserve_calls_and_unknown_usage_without_claiming_execution(
     let suite = baseline();
     let case = suite.cases.iter().find(|case| case.id == "greeting").unwrap();
     let model = ProbeModel::new(
-        Arc::new(tests::ScriptedModel::new(vec![
-            Content::new("model").with_text(
-                json!({"intent":"conversation","actionQuote":"",
-            "summary":"问候","reuseExisting":false,"authoringQuote":""})
-                .to_string(),
-            ),
-            Content::new("model").with_text("你好"),
-        ])),
+        Arc::new(tests::ScriptedModel::new(vec![Content::new("model").with_text("你好")])),
         Duration::ZERO,
     );
     let result = evaluate_case(&tests::runtime(), &model, case, &suite.capabilities).await;
     assert!(result.checks.passed());
     assert_eq!(result.cost["calls"].as_array().unwrap().len(), 2);
-    assert_eq!(result.cost["calls"][0]["phase"], "intent");
+    assert_eq!(result.cost["calls"][0]["phase"], "routing");
     assert_eq!(result.cost["calls"][1]["phase"], "conversation");
     for call in result.cost["calls"].as_array().unwrap() {
         assert!(call["contentsChars"].as_u64().unwrap() > 0);
@@ -193,7 +194,9 @@ fn grade(case: &Case, intent: Option<Intent>, reply: &AssistantReply) -> Checks 
         Routing::Clarify => reply.call.is_none() && !reply.text.trim().is_empty(),
     };
     Checks {
-        intent: Some(intent.is_some_and(|intent| case.expected.intents.contains(&intent))),
+        // Direct entry answers deliberately have no separate classification.
+        // Do not manufacture a semantic label just to populate a metric.
+        intent: intent.map(|intent| case.expected.intents.contains(&intent)),
         routing: Some(routing),
         arguments: case.expected.arguments.as_ref().map(|expected| {
             reply.call.as_ref().is_some_and(|call| {
@@ -205,6 +208,7 @@ fn grade(case: &Case, intent: Option<Intent>, reply: &AssistantReply) -> Checks 
             })
         }),
         delivery: None,
+        efficiency: None,
     }
 }
 
@@ -223,6 +227,8 @@ impl ProbeModel {
         let calls = self.calls.lock().unwrap()[first..].to_vec();
         let mut phases = serde_json::Map::new();
         for phase in [
+            "routing",
+            "task",
             "intent",
             "conversation",
             "planning",
@@ -291,7 +297,8 @@ impl Llm for ProbeModel {
         let is_intent = request
             .config
             .as_ref()
-            .is_some_and(|config| config.response_schema.is_some());
+            .and_then(|config| config.response_schema.as_ref())
+            .is_some_and(|schema| schema["properties"]["intent"].is_object());
         // Pace actual provider requests, not just cases: discovery can make many
         // requests in one case and otherwise exhaust the per-minute quota.
         let mut previous = self.last_request.lock().await;
@@ -301,14 +308,16 @@ impl Llm for ProbeModel {
         *previous = Some(tokio::time::Instant::now());
         drop(previous);
         let purpose = crate::module::model_usage::current().purpose;
-        let phase = if is_intent {
+        let phase = if purpose == "routing" {
+            "routing"
+        } else if is_intent {
             "intent"
         } else if matches!(purpose.as_str(), "planning" | "authoring") {
             purpose.as_str()
         } else if self.delivery.load(std::sync::atomic::Ordering::Relaxed) {
             "delivery"
-        } else if purpose == "conversation" {
-            "conversation"
+        } else if matches!(purpose.as_str(), "conversation" | "task") {
+            purpose.as_str()
         } else {
             "unclassified"
         };
@@ -356,9 +365,9 @@ impl Llm for ProbeModel {
             let mut records = calls.lock().unwrap();
             if records[call_index]["status"] == "started" { records[call_index]["status"] = json!("finished"); }
             drop(records);
-            if is_intent && let Ok(reply) = probe.finish(&[])
-                && let Ok(decision) = serde_json::from_str::<TurnDecision>(&reply.text) {
-                intents.lock().unwrap().push(decision.intent);
+            if is_intent && let Ok(content) = probe.finish_content() {
+                let decision = serde_json::from_str::<TurnDecision>(&content_text(&content)).ok();
+                if let Some(decision) = decision { intents.lock().unwrap().push(decision.intent); }
             }
         }))
     }
@@ -513,13 +522,18 @@ async fn evaluate_case(
         },
     }
     result.cost = model.costs_since(first_call);
+    if let Some(maximum) = case.expected.max_model_calls
+        && !result.infrastructure_error
+    {
+        result.checks.efficiency = Some(result.cost["callCount"].as_u64().is_some_and(|calls| calls <= maximum));
+    }
     result.cost["wallTimeMs"] = json!(started.elapsed().as_millis());
     model.set_delivery(false);
     result
 }
 
 fn report(results: &[CaseResult], selected: usize, model: &str) -> Value {
-    let metrics = ["intent", "routing", "arguments", "delivery"]
+    let metrics = ["intent", "routing", "arguments", "delivery", "efficiency"]
         .into_iter()
         .map(|name| {
             let values = results
@@ -529,7 +543,8 @@ fn report(results: &[CaseResult], selected: usize, model: &str) -> Value {
                     "intent" => result.checks.intent,
                     "routing" => result.checks.routing,
                     "arguments" => result.checks.arguments,
-                    _ => result.checks.delivery,
+                    "delivery" => result.checks.delivery,
+                    _ => result.checks.efficiency,
                 })
                 .collect::<Vec<_>>();
             let total = values.len();
@@ -625,10 +640,13 @@ async fn live_assistant_evaluation_baseline() {
     );
     let runtime = super::tests::runtime();
     let mut results = vec![];
+    let path = std::env::var_os("WORKRUN_ASSISTANT_EVAL_REPORT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("workrun-assistant-evaluation.json"));
     for case in &selected {
         let result = evaluate_case(&runtime, &model, case, &suite.capabilities).await;
         println!(
-            "{}: {}",
+            "{}: {} (checks={}, calls={})",
             case.id,
             if result.infrastructure_error {
                 result.error.as_deref().unwrap_or("provider error")
@@ -636,10 +654,19 @@ async fn live_assistant_evaluation_baseline() {
                 "passed"
             } else {
                 "failed"
-            }
+            },
+            serde_json::to_string(&result.checks).unwrap(),
+            result.cost["callCount"],
         );
         let failed_request = result.infrastructure_error;
         results.push(result);
+        // Preserve partial evidence if a later provider request stalls or the
+        // evaluation is interrupted; never turn an incomplete run into a pass.
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&report(&results, selected.len(), model.name())).unwrap(),
+        )
+        .unwrap();
         if failed_request {
             break;
         }
@@ -647,9 +674,6 @@ async fn live_assistant_evaluation_baseline() {
     let mut output = report(&results, selected.len(), model.name());
     output["suiteSize"] = json!(suite.cases.len());
     output["selectedIds"] = json!(selected.iter().map(|case| &case.id).collect::<Vec<_>>());
-    let path = std::env::var_os("WORKRUN_ASSISTANT_EVAL_REPORT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("workrun-assistant-evaluation.json"));
     std::fs::write(&path, serde_json::to_string_pretty(&output).unwrap()).unwrap();
     println!("Evaluation report: {}", path.display());
     assert!(
@@ -781,7 +805,7 @@ async fn native_evaluation_discovers_exact_contract_and_delivers_success_and_fai
             serde_json::to_string(&result.checks).unwrap()
         );
         assert_eq!(result.cost["phases"]["intent"]["callCount"], 1);
-        assert_eq!(result.cost["phases"]["conversation"]["callCount"], 3);
+        assert_eq!(result.cost["phases"]["task"]["callCount"], 3);
         assert_eq!(result.cost["phases"]["delivery"]["callCount"], 1);
         assert_eq!(
             model
@@ -791,9 +815,8 @@ async fn native_evaluation_discovers_exact_contract_and_delivers_success_and_fai
                 .count(),
             1
         );
-        let requests = scripted.requests.lock().unwrap();
-        // These tools were removed by the old no-discovery evaluator entry.
-        assert!(requests[1].tools.contains_key("inspect_operations"));
+        let requests = scripted.handler_requests();
+        assert!(requests[0].tools.contains_key("inspect_operations"));
         assert!(
             requests[2]
                 .contents
@@ -801,12 +824,12 @@ async fn native_evaluation_discovers_exact_contract_and_delivers_success_and_fai
                 .any(|c| content_text(c).contains("searchFallback")
                     || serde_json::to_string(c).unwrap().contains("searchFallback"))
         );
-        assert!(
-            requests[3]
+        assert!(requests.iter().any(|request| {
+            request
                 .contents
                 .iter()
                 .any(|c| serde_json::to_string(c).unwrap().contains("inputSchema"))
-        );
+        }));
     }
 }
 
@@ -858,9 +881,9 @@ async fn local_cross_task_prompt_comparison() {
         std::env::var_os("WORKRUN_ASSISTANT_BASELINE_DIR").expect("Explicit baseline required"),
     );
     let paths = [
-        "main_agent/INTENT.md",
-        "main_agent/AGENT.md",
-        "main_agent/skills/capability-orchestration.md",
+        "authorization/INSTRUCTIONS.md",
+        "task_agent/AGENT.md",
+        "task_agent/skills/capability-orchestration.md",
     ];
     let replacements = paths
         .iter()
@@ -900,7 +923,7 @@ async fn local_cross_task_prompt_comparison() {
             )
             .await
             .unwrap();
-        let requests = scripted.requests.lock().unwrap();
+        let requests = scripted.handler_requests();
         assert_eq!(requests.len(), 2, "{}", case.id);
         let mut phases = vec![];
         for (index, request) in requests.iter().enumerate() {

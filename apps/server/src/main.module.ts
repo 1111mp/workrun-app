@@ -9,6 +9,7 @@ import { createAuth } from './lib/auth';
 import { LoggerMiddleware } from './middlewares/logger.middleware';
 import { AppModule } from './modules/app/app.module';
 import { FileModule } from './modules/file/file.module';
+import { LlmModule } from './modules/llm/llm.module';
 import { UserModule } from './modules/user/user.module';
 import { WorkflowModule } from './modules/workflow/workflow.module';
 
@@ -48,6 +49,7 @@ import { WorkflowModule } from './modules/workflow/workflow.module';
     UserModule,
     FileModule,
     WorkflowModule,
+    LlmModule,
   ],
   providers: [Logger],
 })

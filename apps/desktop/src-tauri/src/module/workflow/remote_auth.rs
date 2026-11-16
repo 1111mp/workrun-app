@@ -94,7 +94,7 @@ impl RemoteAuth {
         let credential = config
             .remote_agent_credentials
             .iter()
-            .find(|c| &c.id == id)
+            .find(|c| &c.id == id && c.workspace_id == crate::module::team_model::credential_workspace())
             .context("A2A credential missing; select a local credential on this installation")?;
         if credential.kind != kind {
             bail!("A2A credential type does not match the node's authentication mode");
@@ -247,6 +247,7 @@ mod tests {
         let key = [7u8; 32];
         let config = IWorkrun {
             remote_agent_credentials: vec![RemoteAgentCredential {
+                workspace_id: "personal".into(),
                 id: "credential-id".into(),
                 name: "Production service".into(),
                 kind: RemoteCredentialKind::Bearer,

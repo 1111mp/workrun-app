@@ -14,6 +14,7 @@ pub mod run_manager;
 pub mod schedule;
 pub mod skill;
 pub mod state;
+pub(crate) mod team_model;
 pub mod tool_registry;
 pub mod workflow;
 

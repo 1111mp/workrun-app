@@ -5,7 +5,7 @@ use super::{
     catalog::{Catalog, validate_input},
 };
 use crate::{
-    config::{BaseConfig, model_catalog},
+    config::BaseConfig,
     core::db::DBManager,
     module::{
         run_history::RunHistoryStore,
@@ -23,6 +23,7 @@ use sqlx::SqlitePool;
 use std::time::Duration;
 use std::{collections::HashMap, sync::LazyLock};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 #[derive(Clone, Default)]
 struct TurnControl {
@@ -213,7 +214,8 @@ pub async fn renderer_save(session: Value) -> Result<()> {
     super::storage::with_writer(Default::default(), renderer_save_inner(session)).await
 }
 async fn renderer_save_inner(session: Value) -> Result<()> {
-    let definition = model_catalog()
+    let definition = crate::module::team_model::active_catalog()
+        .await?
         .into_iter()
         .find(|model| Some(model.id.as_str()) == session["modelId"].as_str())
         .context("Select a valid assistant model")?;
@@ -244,7 +246,11 @@ async fn renderer_save_inner(session: Value) -> Result<()> {
         }
         if session["modelId"] != old["modelId"] {
             let model_id = session["modelId"].as_str().context("Model is missing")?;
-            if !model_catalog().iter().any(|model| model.id == model_id) {
+            if !crate::module::team_model::active_catalog()
+                .await?
+                .iter()
+                .any(|model| model.id == model_id)
+            {
                 bail!("Select a valid assistant model");
             }
             old["modelId"] = json!(model_id);
@@ -326,6 +332,7 @@ pub async fn start(request: TurnRequest) -> Result<Value> {
 }
 async fn start_inner(request: TurnRequest) -> Result<Value> {
     let workspace = dirs::active_workspace_id();
+    let model_owner = crate::module::team_model::owner_for(&workspace)?;
     let pool = DBManager::global().pool()?;
     let lease = acquire(&workspace, &request.session_id)?;
     // Read before spawning and acknowledge the durable state. No task is owned by
@@ -561,25 +568,28 @@ async fn start_inner(request: TurnRequest) -> Result<Value> {
         return Ok(acknowledged);
     }
     let writer = super::storage::writer(&workspace, &session)?;
-    tauri::async_runtime::spawn(super::storage::with_writer(writer, async move {
-        let _lease = lease;
-        let control = OWNERS.lock().get(&_lease.0).unwrap().clone();
-        let partial = Mutex::new(None);
-        let result = tokio::select! {
-            biased;
-            _ = control.cancel.cancelled() => finish_stopped(&pool, &workspace, &mut session, &partial).await,
-            result = drive(&pool, &workspace, &mut session, request.team_token.as_deref(), input, &partial) => result,
-        };
-        if let Err(error) = result {
-            session["status"] = json!("error");
-            // A rejected/uncertain tool directive must not trap subsequent user
-            // turns into repeatedly attempting it. Native receipts and claims
-            // remain available for inspection and still block duplicate effects.
-            session["pendingToolDecision"] = Value::Null;
-            session["error"] = json!(error.to_string());
-            let _ = commit(&pool, &workspace, &session).await;
-        }
-    }));
+    tauri::async_runtime::spawn(super::storage::with_writer(
+        writer,
+        crate::module::team_model::with_owner(model_owner, async move {
+            let _lease = lease;
+            let control = OWNERS.lock().get(&_lease.0).unwrap().clone();
+            let partial = Mutex::new(None);
+            let result = tokio::select! {
+                biased;
+                _ = control.cancel.cancelled() => finish_stopped(&pool, &workspace, &mut session, &partial).await,
+                result = drive(&pool, &workspace, &mut session, request.team_token.as_deref(), input, &partial) => result,
+            };
+            if let Err(error) = result {
+                session["status"] = json!("error");
+                // A rejected/uncertain tool directive must not trap subsequent user
+                // turns into repeatedly attempting it. Native receipts and claims
+                // remain available for inspection and still block duplicate effects.
+                session["pendingToolDecision"] = Value::Null;
+                session["error"] = json!(error.to_string());
+                let _ = commit(&pool, &workspace, &session).await;
+            }
+        }),
+    ));
     Ok(acknowledged)
 }
 
@@ -684,14 +694,15 @@ async fn drive(
         ensure_workspace(workspace)?;
         let config = BaseConfig::workrun().await.data_arc();
         let model_id = session["modelId"].as_str().context("Model is missing")?.to_owned();
-        let definition = model_catalog()
+        let definition = crate::module::team_model::active_catalog()
+            .await?
             .into_iter()
             .find(|definition| definition.id == model_id)
             .context("Select a valid assistant model")?;
         let model = create_model_with_effort(&definition, &config, true, session["reasoningEffort"].as_str())?;
         let runtime = AssistantRuntime::load(&dirs::app_home_dir()?)?;
         let catalog = Catalog::load(team_token).await?;
-        let contents = session["messages"]
+        let contents: Vec<adk_rust::Content> = session["messages"]
             .as_array()
             .context("messages missing")?
             .iter()
@@ -793,6 +804,31 @@ async fn drive(
             purpose: "conversation".into(),
             ..Default::default()
         };
+        let turn_name = session["title"]
+            .as_str()
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| session["id"].as_str())
+            .unwrap_or("workrun.turn");
+        let turn = tracing::info_span!(
+            "workrun.turn",
+            "otel.name" = turn_name,
+            "langfuse.trace.name" = turn_name,
+            "langfuse.observation.type" = "agent",
+            "langfuse.session.id" = session["id"].as_str().unwrap_or(""),
+            "langfuse.observation.metadata.turnId" = usage_context.turn_id.as_deref().unwrap_or(""),
+            "langfuse.observation.metadata.status" = tracing::field::Empty,
+            "langfuse.observation.level" = tracing::field::Empty,
+            "langfuse.observation.input" = tracing::field::Empty,
+            "langfuse.observation.output" = tracing::field::Empty
+        );
+        if crate::core::telemetry::capture_content()
+            && let Some(message) = contents.last()
+        {
+            turn.record(
+                "langfuse.observation.input",
+                crate::core::telemetry_langfuse::encoded(&crate::core::telemetry_langfuse::content(message)),
+            );
+        }
         let reply = {
             let inference = crate::module::model_usage::scope(
                 usage_context,
@@ -818,7 +854,8 @@ async fn drive(
                     &emit,
                     &catalog,
                 ),
-            );
+            )
+            .instrument(turn.clone());
             tokio::pin!(inference);
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
             let mut checkpointed = None;
@@ -837,6 +874,26 @@ async fn drive(
                 }
             }
         };
+        turn.record(
+            "langfuse.observation.metadata.status",
+            match &reply {
+                Ok(reply) if reply.pause.is_some() => "waiting_for_input",
+                Ok(reply) if reply.call.is_some() => "awaiting_workflow",
+                Ok(_) => "completed",
+                Err(_) => "failed",
+            },
+        );
+        if reply.is_err() {
+            turn.record("langfuse.observation.level", "ERROR");
+        }
+        if crate::core::telemetry::capture_content()
+            && let Ok(reply) = &reply
+        {
+            turn.record(
+                "langfuse.observation.output",
+                crate::core::telemetry_langfuse::encoded(&json!({"text":reply.text})),
+            );
+        }
         if !session["activities"].is_array() {
             session["activities"] = json!([]);
         }

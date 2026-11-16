@@ -89,10 +89,10 @@ import {
   publishProcessNodeVersion,
   setProcessNodeProjectVersion,
   updateProcessNode,
-  updatePublishedProcessNode,
   type ProcessNodeDefinition,
 } from '@/services/process-node';
 import { inspectRunRecord, type RunRecord } from '@/services/run-history';
+import { teamModelSessionVersion } from '@/services/team-model-session';
 import { useWorkrunStore } from '@/stores';
 
 import { copyProjectPath, openProjectDirectory } from './project-path';
@@ -549,7 +549,8 @@ function ProcessNodeDetailPage() {
           { replace: true },
         )
       }
-      readOnly={isCatalogApp && node.data.definition.ownerId !== teamUserId}
+      readOnly={isCatalogApp}
+      canDelete={!isCatalogApp || node.data.definition.ownerId === teamUserId}
       historicalRun={
         historicalRun.data?.targetType === 'app' &&
         historicalRun.data.targetId === node.data.definition.id
@@ -566,12 +567,14 @@ function ProcessNodeDetailEditor({
   onCloseRun,
   isCatalogApp = false,
   readOnly = false,
+  canDelete = !readOnly,
 }: {
   processNode: ProcessNodeDetails;
   historicalRun?: RunRecord;
   onCloseRun: () => void;
   isCatalogApp?: boolean;
   readOnly?: boolean;
+  canDelete?: boolean;
 }) {
   const { t } = useTranslation();
   const toolExecutionPolicyOptions = toolExecutionPolicies.map((policy) => ({
@@ -603,28 +606,23 @@ function ProcessNodeDetailEditor({
 
   const save = useMutation({
     mutationFn: async () => {
+      const session = teamModelSessionVersion();
       if (!draft.name.trim()) throw new Error(t('apps.new.nameRequired'));
       const definition = {
         ...draft,
         inputs: parseSchemas(draft.inputs, t('apps.detail.inputs'), t),
         outputs: parseSchemas(draft.outputs, t('apps.detail.outputs'), t),
       };
-      if (isCatalogApp) {
-        await updatePublishedProcessNode(processNode.definition.id, definition);
-        return { ...processNode, definition };
-      }
-      return updateProcessNode(definition);
+      const saved = await updateProcessNode(definition);
+      if (session !== teamModelSessionVersion())
+        throw new Error('Team account changed');
+      return saved;
     },
     onSuccess: (saved) => {
-      queryClient.setQueryData(
-        ['apps', saved.definition.id, isCatalogApp ? 'catalog' : 'local'],
-        saved,
-      );
+      queryClient.setQueryData(['apps', saved.definition.id, 'local'], saved);
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
       toast.success(t('apps.detail.saved'), { toasterId: 'global' });
-      if (!isCatalogApp) {
-        void navigate(`/apps/${saved.definition.id}`, { replace: true });
-      }
+      void navigate(`/apps/${saved.definition.id}`, { replace: true });
     },
     onError: (error) => {
       setFormError(error instanceof Error ? error.message : String(error));
@@ -639,6 +637,11 @@ function ProcessNodeDetailEditor({
       version: string;
       releaseNote: string;
     }) => {
+      const session = teamModelSessionVersion();
+      const ensureSession = () => {
+        if (session !== teamModelSessionVersion())
+          throw new Error('Team account changed');
+      };
       if (!draft.name.trim()) throw new Error(t('apps.new.nameRequired'));
 
       const remoteAppId = processNode.definition.remoteAppId;
@@ -648,23 +651,26 @@ function ProcessNodeDetailEditor({
           remoteAppId,
           version,
         );
+        ensureSession();
         if (exists)
           throw new Error(`Version ${version} has already been published`);
       }
 
-      // sync version to `pyproject.toml` file
-      await setProcessNodeProjectVersion(processNode.definition.id, version);
-
-      const saved = await updateProcessNode({
+      const definition = {
         ...draft,
         version,
         inputs: parseSchemas(draft.inputs, t('apps.detail.inputs'), t),
         outputs: parseSchemas(draft.outputs, t('apps.detail.outputs'), t),
-      });
+      };
+      await setProcessNodeProjectVersion(processNode.definition.id, version);
+      ensureSession();
+      const saved = await updateProcessNode(definition);
+      ensureSession();
 
       const remote = saved.definition.remoteAppId
         ? { id: saved.definition.remoteAppId }
         : await createTeamProcessNodeDraft(saved.definition);
+      ensureSession();
 
       const publishedDefinition = saved.definition.remoteAppId
         ? saved.definition
@@ -678,6 +684,15 @@ function ProcessNodeDetailEditor({
             })
           ).definition;
 
+      ensureSession();
+      // Retain the server identity in the open editor when upload fails, so a
+      // retry or local save cannot overwrite the persisted association.
+      setDraft(toDraft(publishedDefinition));
+      queryClient.setQueryData(['apps', saved.definition.id, 'local'], {
+        ...saved,
+        definition: publishedDefinition,
+      });
+
       await publishProcessNodeVersion(
         remote.id,
         saved.definition.id,
@@ -686,16 +701,19 @@ function ProcessNodeDetailEditor({
         saved.definition,
       );
 
-      return updateProcessNode({
+      ensureSession();
+      const published = await updateProcessNode({
         ...publishedDefinition,
         publicationStatus: 'published',
         remoteAppId: remote.id,
       });
+      ensureSession();
+      return published;
     },
     onSuccess: (saved) => {
       setPublishOpen(false);
       setDraft(toDraft(saved.definition));
-      queryClient.setQueryData(['apps', saved.definition.id], saved);
+      queryClient.setQueryData(['apps', saved.definition.id, 'local'], saved);
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
       toast.success(t('apps.detail.published'), { toasterId: 'global' });
       void navigate(`/apps/${saved.definition.id}`, { replace: true });
@@ -719,10 +737,29 @@ function ProcessNodeDetailEditor({
   };
 
   const remove = useMutation({
-    mutationFn: () =>
-      isCatalogApp
-        ? deletePublishedProcessNode(processNode.definition.id)
-        : deleteProcessNode(processNode.definition.id, deleteProjectFiles),
+    mutationFn: async () => {
+      const session = teamModelSessionVersion();
+      if (isCatalogApp) {
+        await deletePublishedProcessNode(processNode.definition.id);
+        if (session !== teamModelSessionVersion())
+          throw new Error('Team account changed');
+        return;
+      }
+      const { remoteAppId, remoteReleaseId } = processNode.definition;
+      // Authoring projects own their server App; downloaded releases only own
+      // a local installation and must leave the shared catalog entry intact.
+      if (isTeamMode() && remoteAppId && !remoteReleaseId)
+        await deletePublishedProcessNode(remoteAppId);
+      if (session !== teamModelSessionVersion())
+        throw new Error('Team account changed');
+      const removed = await deleteProcessNode(
+        processNode.definition.id,
+        deleteProjectFiles,
+      );
+      if (session !== teamModelSessionVersion())
+        throw new Error('Team account changed');
+      return removed;
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['apps'] });
       toast.success(
@@ -809,28 +846,28 @@ function ProcessNodeDetailEditor({
                 {t('apps.detail.publish')}
               </Button>
             ) : null}
+            {canDelete ? (
+              <Button
+                variant='destructive'
+                disabled={save.isPending || publish.isPending}
+                onClick={() => setDeleteOpen(true)}
+              >
+                <Trash2Icon data-icon='inline-start' />
+                {t('apps.detail.delete')}
+              </Button>
+            ) : null}
             {!readOnly ? (
-              <>
-                <Button
-                  variant='destructive'
-                  disabled={save.isPending || publish.isPending}
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  <Trash2Icon data-icon='inline-start' />
-                  {t('apps.detail.delete')}
-                </Button>
-                <Button
-                  disabled={save.isPending || publish.isPending}
-                  onClick={() => save.mutate()}
-                >
-                  {save.isPending ? (
-                    <Spinner data-icon='inline-start' />
-                  ) : (
-                    <SaveIcon data-icon='inline-start' />
-                  )}
-                  {t('apps.detail.save')}
-                </Button>
-              </>
+              <Button
+                disabled={save.isPending || publish.isPending}
+                onClick={() => save.mutate()}
+              >
+                {save.isPending ? (
+                  <Spinner data-icon='inline-start' />
+                ) : (
+                  <SaveIcon data-icon='inline-start' />
+                )}
+                {t('apps.detail.save')}
+              </Button>
             ) : null}
           </div>
         </section>

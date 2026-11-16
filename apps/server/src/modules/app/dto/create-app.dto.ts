@@ -7,6 +7,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
   ValidateNested,
 } from 'class-validator';
 
@@ -25,6 +26,12 @@ export class AppCompensationDto {
 }
 
 export class CreateAppDto {
+  @ApiProperty({
+    description: 'UUID assigned when the client creates the local App.',
+  })
+  @IsUUID('all')
+  id!: string;
+
   @ApiProperty({ example: 'Process data' })
   @IsString()
   @IsNotEmpty()

@@ -60,7 +60,14 @@ function WorkspaceSettings() {
       await updateConfig({
         workspace_mode: mode,
         ...(mode === 'team'
-          ? { team: { server_url: normalizeServerUrl(serverUrl)! } }
+          ? {
+              team: {
+                ...(config?.team?.server_url === normalizeServerUrl(serverUrl)
+                  ? config?.team
+                  : {}),
+                server_url: normalizeServerUrl(serverUrl)!,
+              },
+            }
           : {}),
       });
     } catch {

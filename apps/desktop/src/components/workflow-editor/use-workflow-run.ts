@@ -412,6 +412,8 @@ function useWorkflowRun(
     runThreadId.current = threadId;
     const id = crypto.randomUUID();
     runId.current = id;
+    // Preparation has an execution ID but no persisted record to inspect yet.
+    setActiveRunId(null);
     setTelemetryRevision(0);
     const initialState =
       settings.mode === 'chat'

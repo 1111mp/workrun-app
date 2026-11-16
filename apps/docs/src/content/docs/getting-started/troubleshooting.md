@@ -66,6 +66,12 @@ Workrun needs Microsoft Edge WebView2 Runtime to render its interface.
 
 Enable Windows Update, then retry the WebView2 installation. If it still fails, use the release asset that includes the bundled WebView2 runtime when available.
 
+## Team services and model connections
+
+To join an existing team, use the Server URL and Workrun account provided by your administrator; you do not need to deploy LiteLLM or Langfuse. For self-hosting, see [Deployment](/team/deployment/#troubleshooting) for Server startup checks, missing models, container networking, and trace troubleshooting.
+
+For an empty model catalog, check your current identity, selected model source, and Server gateway configuration. Do not enter a LiteLLM master key in the desktop. See [Model access](/getting-started/model-profiles/) for direct Provider versus team-gateway connections.
+
 ## Still need help?
 
 [Open a GitHub issue](https://github.com/1111mp/workrun-app/issues/new/choose) with your operating system version, Workrun version, installer architecture, and the complete error message.

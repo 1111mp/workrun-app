@@ -475,7 +475,7 @@ pub(super) async fn invoke(
     record["executionTurnKey"] = json!(turn);
     store(root, &record)?;
     let context = Arc::new(
-        SimpleToolContext::new("workrun-main-agent")
+        SimpleToolContext::new("workrun-task-agent")
             .with_session_id(session)
             .with_function_call_id(record["id"].as_str().unwrap()),
     );

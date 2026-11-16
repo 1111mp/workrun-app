@@ -8,7 +8,13 @@ use tokio::sync::{mpsc, oneshot};
 pub(super) enum Request {
     SpecialistFinished(String, String, Option<String>, oneshot::Sender<anyhow::Result<Value>>),
     Model(String, Box<LlmRequest>, oneshot::Sender<anyhow::Result<Content>>),
-    Tool(String, String, Value, oneshot::Sender<anyhow::Result<Value>>),
+    Tool(
+        String,
+        String,
+        Value,
+        tracing::Span,
+        oneshot::Sender<anyhow::Result<Value>>,
+    ),
 }
 
 pub(super) struct Model {
@@ -62,7 +68,13 @@ impl Tool for NativeTool {
     async fn execute(&self, _: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
         let (send, receive) = oneshot::channel();
         self.requests
-            .send(Request::Tool(self.agent.clone(), self.name().into(), args, send))
+            .send(Request::Tool(
+                self.agent.clone(),
+                self.name().into(),
+                args,
+                tracing::Span::current(),
+                send,
+            ))
             .await
             .map_err(|_| AdkError::tool("Scoped agent invocation ended"))?;
         receive
@@ -124,11 +136,95 @@ impl Agent for ReturningAgent {
                     yield Ok(result);
                     let mut transfer = Event::new(context.invocation_id());
                     transfer.author = agent.clone();
-                    transfer.actions.transfer_to_agent = Some("main_agent".into());
+                    transfer.actions.transfer_to_agent = Some("task_agent".into());
                     yield Ok(transfer);
                 },
                 _ => { yield Err(adk_rust::AdkError::agent("Specialist outcome could not be recorded")); },
             }
         }))
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+    use futures::StreamExt;
+    use serde_json::json;
+    use tracing::{Instrument, instrument::WithSubscriber};
+    struct Fixture(std::sync::atomic::AtomicUsize);
+    #[async_trait::async_trait]
+    impl Llm for Fixture {
+        fn name(&self) -> &str {
+            "fixture-native-adk"
+        }
+        async fn generate_content(&self, _: LlmRequest, stream: bool) -> adk_rust::Result<LlmResponseStream> {
+            let step = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let content = match step {
+                0 => Content::new("model").with_text(r#"{"route":"task"}"#),
+                1 => Content {
+                    role: "model".into(),
+                    parts: vec![adk_rust::Part::FunctionCall {
+                        name: "report_progress".into(),
+                        args: json!({"summary":"Verification progress"}),
+                        id: Some("fixture-call".into()),
+                        thought_signature: None,
+                    }],
+                },
+                _ => Content::new("model").with_text("Tool verification complete"),
+            };
+            let span = adk_telemetry::llm_generate_span("fixture", self.name(), stream);
+            let response = LlmResponse {
+                content: Some(content),
+                usage_metadata: Some(adk_rust::UsageMetadata {
+                    prompt_token_count: 10,
+                    candidates_token_count: 5,
+                    total_token_count: 15,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            Ok(Box::pin(futures::stream::iter(vec![Ok(response)]).map(
+                move |response| {
+                    let _entered = span.enter();
+                    adk_telemetry::record_llm_usage(&adk_telemetry::LlmUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        total_tokens: 15,
+                        ..Default::default()
+                    });
+                    response
+                },
+            )))
+        }
+    }
+    #[tokio::test]
+    #[ignore = "local Langfuse required; scripted provider and harmless report_progress tool"]
+    async fn export_homepage_tool_roundtrip() {
+        let subscriber = crate::core::telemetry::subscriber("http://127.0.0.1:4317").unwrap();
+        crate::core::telemetry::test_capture(true);
+        let session = uuid::Uuid::new_v4().to_string();
+        println!("homepage_probe={session}");
+        let origin = crate::module::model_usage::CallContext {
+            workspace_id: "personal".into(),
+            session_kind: Some("assistant".into()),
+            session_id: Some(session.clone()),
+            turn_id: Some(session.clone()),
+            purpose: "conversation".into(),
+            ..Default::default()
+        };
+        async {
+            let root=tracing::info_span!("workrun.homepage.probe","otel.name"="对话","langfuse.observation.type"="agent","langfuse.session.id"=%session);
+            crate::module::model_usage::scope(origin,async {
+                let workspace=tempfile::tempdir().unwrap();
+                let runtime=crate::module::assistant::AssistantRuntime::load(workspace.path()).unwrap();
+                let request=serde_json::from_value(json!({"contents":[{"role":"user","parts":[{"text":"Verify a harmless progress tool"}]}],"capabilities":[],"context":{"sessionId":session}})).unwrap();
+                let model=Fixture(std::sync::atomic::AtomicUsize::new(0));
+                let reply=runtime.run(&model,&crate::config::ModelProvider::Gemini,request,&|_|Ok(())).await.unwrap();
+                assert_eq!(reply.text,"Tool verification complete");
+                assert_eq!(model.0.load(std::sync::atomic::Ordering::Relaxed),3);
+            }).instrument(root).await;
+        }.with_subscriber(subscriber).await;
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        crate::core::telemetry::test_capture(false);
     }
 }

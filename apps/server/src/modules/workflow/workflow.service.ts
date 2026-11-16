@@ -86,10 +86,39 @@ export class WorkflowService {
   }
 
   async publish(ownerId: string, id: string, dto: PublishWorkflowDto) {
+    // A native draft first reaches the Server on explicit publication. Preserve
+    // its identity so local editing, release history and catalog links agree.
+    if (dto.document) {
+      this.validatePublishableDocument(dto.document);
+      await this.validateTeamAppReferences(dto.document);
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          id,
+        )
+      )
+        throw new BadRequestException('Workflow ID must be a UUID');
+      try {
+        await this.workflowModel.findOneAndUpdate(
+          { id, ownerId: this.toOwnerId(ownerId), isDelete: false },
+          {
+            $set: { document: dto.document },
+            $setOnInsert: { id, ownerId: this.toOwnerId(ownerId) },
+          },
+          { upsert: true },
+        );
+      } catch (error) {
+        if ((error as { code?: number }).code === 11000)
+          throw new ConflictException('Workflow ID is unavailable.');
+        throw error;
+      }
+    }
     const workflow = await this.getOwnedWorkflow(ownerId, id);
+    const document = dto.document ?? workflow.document;
     const version = dto.version.trim();
-    this.validatePublishableDocument(workflow.document);
-    await this.validateTeamAppReferences(workflow.document);
+    if (!dto.document) {
+      this.validatePublishableDocument(document);
+      await this.validateTeamAppReferences(document);
+    }
 
     try {
       const release = await this.workflowReleaseModel.create({
@@ -97,7 +126,7 @@ export class WorkflowService {
         workflowId: workflow.id,
         version,
         releaseNote: dto.releaseNote.trim(),
-        document: workflow.document,
+        document,
         publishedAt: new Date(),
       });
       await this.workflowModel.updateOne(

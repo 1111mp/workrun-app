@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
@@ -74,6 +75,10 @@ vi.mock('@/stores', () => ({
   useRunWorkspaceStore: { getState: () => ({ openRun: vi.fn() }) },
 }));
 vi.mock('@/services/cmd', () => ({
+  getModelCatalogStatus: async () => ({
+    models: await (await import('@/services/cmd')).getModelCatalog(),
+    serverError: null,
+  }),
   getModelCatalog: async () => {
     await host.catalogGate;
     return host.compactCatalog
@@ -2226,3 +2231,57 @@ for (const width of [1280, 390]) {
     client.clear();
   });
 }
+
+it('offers discovered team reasoning levels and resets an explicit selection to default', async () => {
+  const { AssistantModelSelector } =
+    await import('@/components/assistant-model-selector');
+  const changes = vi.fn();
+  const levels: ReasoningEffort[] = [
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ];
+  function Selector() {
+    const [effort, setEffort] = useState<ReasoningEffort>();
+    return (
+      <AssistantModelSelector
+        models={[
+          {
+            id: 'team-model',
+            name: 'Team model',
+            model: 'alias',
+            provider: 'team',
+            effortOptions: levels,
+          },
+        ]}
+        modelId='team-model'
+        effort={effort}
+        onModelChange={() => {}}
+        onEffortChange={(value) => {
+          setEffort(value);
+          changes(value);
+        }}
+      />
+    );
+  }
+  const screen = await render(<Selector />);
+  for (const level of levels) {
+    await screen.getByRole('button', { name: 'Effort', exact: true }).click();
+    await screen
+      .getByRole('menuitemradio', {
+        name: level[0].toUpperCase() + level.slice(1),
+        exact: true,
+      })
+      .click();
+    expect(changes).toHaveBeenLastCalledWith(level);
+  }
+  await screen.getByRole('button', { name: 'Effort', exact: true }).click();
+  await screen
+    .getByRole('menuitemradio', { name: 'Default', exact: true })
+    .click();
+  expect(changes).toHaveBeenLastCalledWith(undefined);
+});

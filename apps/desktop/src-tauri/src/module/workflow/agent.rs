@@ -63,14 +63,30 @@ pub(super) async fn add_local_agent_node(
         .filter(|tool| tool.execution_policy == ToolExecutionPolicy::AskEveryTime)
         .map(|tool| tool.name.clone())
         .collect::<Vec<_>>();
-    let model = model_catalog()
+    let model = crate::module::team_model::active_catalog()
+        .await?
         .into_iter()
         .find(|model| model.id == profile_id)
         .ok_or_else(|| anyhow!("agent node `{id}` references unknown model `{profile_id}`"))?;
     let attachment_paths = string_array_data(node, "attachmentPaths")?;
-    let provider = model.provider.clone();
+    let provider = if model.team.as_ref().is_some_and(|team| team.vision != Some(false)) {
+        ModelProvider::OpenAi
+    } else {
+        model.provider.clone()
+    };
     let label = format!("{}/{}", model.id, model.model);
-    let model = instrumented_model(create_model(&model, config)?, &id, &label, on_event.clone());
+    let model = instrumented_model_with_tools(
+        create_model(&model, config)?,
+        &id,
+        &label,
+        on_event.clone(),
+        Some(&model),
+        tools
+            .iter()
+            .filter(|tool| !tool.display_name.trim().is_empty())
+            .map(|tool| (tool.name.clone(), tool.display_name.clone()))
+            .collect(),
+    );
     let mut agent = LlmAgentBuilder::new(id.clone())
         .description(description)
         .instruction(instruction)
@@ -297,6 +313,13 @@ pub(crate) fn create_model_with_effort(
             "Unsupported reasoning effort for this model"
         );
     }
+    if model.provider == ModelProvider::Team {
+        anyhow::ensure!(
+            matches!(config.workspace_mode, Some(crate::config::WorkspaceMode::Team)),
+            "Team models require Team mode"
+        );
+        return crate::module::team_model::create_model(model, effort, include_thoughts);
+    }
     let credential = config.credential_for(&model.provider);
     let headers = credential
         .map(|credential| credential.request_headers())
@@ -311,6 +334,7 @@ pub(crate) fn create_model_with_effort(
     }
     let api_key = api_key.unwrap_or_default();
     Ok(match model.provider {
+        ModelProvider::Team => unreachable!("team model uses Workrun Server"),
         ModelProvider::Gemini => {
             let gemini = GeminiModel::new(api_key, &model.model)?;
             Arc::new(if include_thoughts {
@@ -417,6 +441,7 @@ impl Llm for HeaderOpenAi {
 }
 
 struct InstrumentedLlm {
+    tool_names: HashMap<String, String>,
     inner: Arc<dyn Llm>,
     node_id: String,
     model: String,
@@ -453,9 +478,11 @@ impl Llm for InstrumentedLlm {
                 ),
             );
         }
-        let (call_id, response_stream) =
-            crate::module::model_usage::observe(self.inner.as_ref(), request, stream, self.usage_context.clone())
-                .await?;
+        let (call_id, response_stream) = crate::core::telemetry_langfuse::tool_names(
+            &self.tool_names,
+            crate::module::model_usage::observe(self.inner.as_ref(), request, stream, self.usage_context.clone()),
+        )
+        .await?;
         let node_id = self.node_id.clone();
         let model = self.model.clone();
         let on_event = self.on_event.clone();
@@ -524,20 +551,30 @@ pub(super) fn instrumented_model(
     node_id: &str,
     model_label: &str,
     on_event: Option<Channel<StreamEvent>>,
+    definition: Option<&ModelDefinition>,
+) -> Arc<dyn Llm> {
+    instrumented_model_with_tools(model, node_id, model_label, on_event, definition, HashMap::new())
+}
+
+fn instrumented_model_with_tools(
+    model: Arc<dyn Llm>,
+    node_id: &str,
+    model_label: &str,
+    on_event: Option<Channel<StreamEvent>>,
+    definition: Option<&ModelDefinition>,
+    tool_names: HashMap<String, String>,
 ) -> Arc<dyn Llm> {
     let mut usage_context = crate::module::model_usage::current();
     usage_context.purpose = "workflow".into();
     usage_context.node_id = Some(node_id.into());
-    if let Some(profile) = model_catalog()
-        .into_iter()
-        .find(|profile| model_label.starts_with(&format!("{}/", profile.id)))
-    {
+    if let Some(profile) = definition {
         usage_context.provider = serde_json::to_value(&profile.provider)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned));
-        usage_context.model_profile_id = Some(profile.id);
+        usage_context.model_profile_id = Some(profile.id.clone());
     }
     Arc::new(InstrumentedLlm {
+        tool_names,
         usage_context,
         inner: model,
         node_id: node_id.to_string(),
@@ -1149,6 +1186,7 @@ mod usage_snapshot_tests {
                 request
             });
             let credential = crate::config::ProviderCredential {
+                workspace_id: "personal".into(),
                 provider: provider.clone(),
                 base_url: Some(format!("http://{address}/v1")),
                 api_key: Some("test-key".into()),
@@ -1180,6 +1218,7 @@ mod usage_snapshot_tests {
                     name: "test".into(),
                     provider,
                     model: model_name.into(),
+                    team: None,
                 },
                 &config,
                 include_thoughts,
@@ -1264,6 +1303,13 @@ mod usage_snapshot_tests {
 
     #[tokio::test]
     async fn forwards_agent_text_before_model_completion_without_repeating_it() {
+        assert_agent_stream(false).await;
+    }
+    #[tokio::test]
+    async fn tracing_preserves_the_agent_streaming_contract() {
+        assert_agent_stream(true).await;
+    }
+    async fn assert_agent_stream(observed: bool) {
         let resume = Arc::new(tokio::sync::Notify::new());
         let agent = LlmAgentBuilder::new("agent")
             .model(Arc::new(PausedStreamingLlm {
@@ -1286,6 +1332,15 @@ mod usage_snapshot_tests {
                 sensitive_fields: BTreeSet::new(),
             },
         );
+        let node: Arc<dyn Node> = if observed {
+            let state = node.state.clone();
+            let mut graph = StateGraph::with_channels(&[]).add_node(node);
+            let dsl=serde_json::from_value(json!({"id":"stream-contract","nodes":[{"id":"agent","type":"agent","data":{"name":"流式节点"}}],"edges":[]})).unwrap();
+            super::super::telemetry::wrap(&mut graph, &dsl, &state);
+            graph.nodes.remove("agent").unwrap()
+        } else {
+            Arc::new(node)
+        };
         let context = NodeContext::new(HashMap::new(), adk_rust::graph::ExecutionConfig::new("stream-test"), 0);
         let mut stream = node.execute_stream(&context);
         // The model cannot finish until this first frontend-bound message arrives.
@@ -1437,6 +1492,7 @@ mod usage_snapshot_tests {
             "agent",
             "gemini-test",
             Some(on_event),
+            None,
         );
         let mut responses = model
             .generate_content(adk_rust::LlmRequest::new("test", vec![]), true)

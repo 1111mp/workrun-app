@@ -2,7 +2,7 @@ import { cp, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export async function createWorkspace(root, workflow) {
+export async function createWorkspace(root, workflow, team = false) {
   const dataDir = await mkdtemp(join(tmpdir(), 'workrun-e2e-'));
   // A preconfigured personal workspace needs its IPC socket parent at startup.
   await mkdir(join(dataDir, 'personal/runtime'), { recursive: true });
@@ -42,7 +42,8 @@ export async function createWorkspace(root, workflow) {
       local_profile: workflow
         ? { display_name: 'E2E User', avatar_id: 'e2e' }
         : undefined,
-      workspace_mode: 'personal',
+      workspace_mode: team ? 'team' : 'personal',
+      ...(team ? { team: { server_url: 'http://127.0.0.1:1' } } : {}),
       enable_auto_launch: false,
       auto_check_update: false,
     }),

@@ -17,6 +17,8 @@ Final result ←──── explicit state publication, node events, and tool r
 Run history, checkpoints, traces, evaluations, and publishable versions
 ```
 
+For component responsibilities, homepage orchestration, team models, and observability, see [Architecture and deployment boundaries](/concepts/architecture/).
+
 ## What makes up a workflow
 
 A workflow is a saved canvas definition. Nodes decide who performs work, edges decide what runs next, and **More settings → Run inputs** defines the values that can be supplied for each run. A new workflow includes one non-editable `Start` node. It is the single fixed entry point, not where inputs are configured.

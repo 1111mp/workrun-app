@@ -7,6 +7,58 @@ import zh from '@/locales/zh_CN.json';
 import type { WorkflowPlan } from '@/services/assistant';
 
 import { AssistantWorkflowPlan } from './assistant-workflow-plan';
+
+it('shows the completion reply below and outside the workflow card', async () => {
+  const plan: WorkflowPlan = {
+    id: 'plan',
+    sessionId: 'session',
+    version: 1,
+    status: 'saved',
+    workflowId: 'saved-workflow',
+    dependencyIssues: [],
+    outcome: {
+      validation: { valid: true },
+      published: false,
+      executed: false,
+      summary: '',
+    },
+    document: {
+      goal: 'Create a workflow',
+      summary: 'A reusable workflow',
+      inputs: [],
+      outputs: ['Result'],
+      steps: [],
+      constraints: [],
+      assumptions: [],
+      questions: [],
+      acceptance_criteria: ['Result is correct'],
+    },
+  };
+  const screen = await render(
+    <MemoryRouter>
+      <main style={{ padding: 24, maxWidth: 840, margin: '0 auto' }}>
+        <AssistantWorkflowPlan
+          plan={plan}
+          busy={false}
+          onDecide={vi.fn()}
+          onDiscuss={vi.fn()}
+        />
+      </main>
+    </MemoryRouter>,
+  );
+  for (const width of [1280, 390]) {
+    await page.viewport(width, 900);
+    const card = screen.getByLabelText('工作流规划').element();
+    const reply = screen.getByRole('status').element();
+    await expect.element(screen.getByRole('status')).toBeVisible();
+    expect(reply.textContent).toContain('已按确认的方案创建并保存工作流草稿');
+    expect(card.contains(reply)).toBe(false);
+    expect(reply.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      card.getBoundingClientRect().bottom,
+    );
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
+  }
+});
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, params?: { version?: number }) => {

@@ -53,3 +53,54 @@ impl<T, E: std::fmt::Display> StringifyErr<T> for Result<T, E> {
 }
 
 pub mod schedule_agent;
+
+// Authentication/configuration remains available before a Team workspace exists.
+fn requires_workspace(command: &str) -> bool {
+    !matches!(
+        command,
+        "get_workrun_config"
+            | "patch_workrun_config"
+            | "get_system_theme"
+            | "schedule_set_team_session"
+            | "restart_app"
+    )
+}
+
+pub(crate) fn require_workspace<R: tauri::Runtime>(
+    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        if !crate::utils::dirs::workspace_available() && requires_workspace(invoke.message.command()) {
+            invoke.resolver.reject("Sign in to access Team data");
+            return true;
+        }
+        handler(invoke)
+    }
+}
+
+#[cfg(test)]
+mod workspace_gate_tests {
+    #[test]
+    fn login_and_settings_are_available_but_business_commands_require_a_workspace() {
+        for command in [
+            "schedule_set_team_session",
+            "get_workrun_config",
+            "patch_workrun_config",
+            "get_system_theme",
+        ] {
+            assert!(!super::requires_workspace(command));
+        }
+        for command in [
+            "chat_session_get",
+            "run_history_list",
+            "workflow_run_start",
+            "process_node_install_archive",
+            "skill_list",
+            "schedule_list",
+            "remote_credentials_list",
+            "unknown_command",
+        ] {
+            assert!(super::requires_workspace(command));
+        }
+    }
+}

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::model_catalog;
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use std::sync::Mutex;
 
@@ -749,4 +750,305 @@ async fn direct_task_updates_preserve_conversations_and_pinned_execution_sources
             .is_err()
     );
     assert_eq!(store.raw("task-1").await.unwrap()["name"], "Updated from dialog");
+}
+
+#[tokio::test]
+async fn scheduling_tool_rounds_share_turn_trace_and_failed_tools_remain_visible() {
+    use crate::module::schedule::telemetry::tests::{attribute, exporter};
+    use tracing::instrument::WithSubscriber;
+    let pool = pool().await;
+    let workspace = dirs::active_workspace_id();
+    let mut initial = session(&pool, &workspace, proposal("create")).await;
+    let store = SchedulingStore::new(pool.clone(), workspace.clone());
+    store.decide(&mut initial, "card-1", true).await.unwrap();
+    let agent = ScheduleAgent {
+        store,
+        runtime: ScheduleRuntime::global(),
+    };
+    let mut state = json!({"id":"trace-session","scheduleId":"task-1","messages":[],"contents":[{"role":"user","parts":[{"text":"Pause the report"}]}],"proposals":[],"questions":[]});
+    let model = scripted(vec![
+        call("get_schedule", json!({"id":"missing-task"}), "missing"),
+        call("preview_change", json!({"operation":"pause","id":"task-1"}), "preview"),
+        Content::new("model").with_text("Confirm the pause."),
+    ]);
+    // Mirror ADK's native model boundary without making a provider request.
+    struct NativeModel(Model);
+    #[async_trait::async_trait]
+    impl Llm for NativeModel {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        async fn generate_content(
+            &self,
+            request: LlmRequest,
+            stream: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            let span = tracing::info_span!("gen_ai.generate");
+            let source = self
+                .0
+                .generate_content(request, stream)
+                .instrument(span.clone())
+                .await?;
+            // Keep the fixture's native span alive until usage/output accounting finishes.
+            Ok(Box::pin(futures::StreamExt::map(source, move |event| {
+                let _entered = span.enter();
+                event
+            })))
+        }
+    }
+    let model = NativeModel(model);
+    let (subscriber, exporter, _provider) = exporter();
+    async {
+        let span = telemetry::observation("test scheduling turn", "agent", &workspace, "trace-session");
+        let origin = crate::module::model_usage::CallContext {
+            workspace_id: workspace.clone(),
+            session_id: Some("trace-session".into()),
+            session_kind: Some("schedule_agent".into()),
+            turn_id: Some("turn-1".into()),
+            purpose: "schedule_agent".into(),
+            ..Default::default()
+        };
+        crate::module::model_usage::scope(
+            origin,
+            agent.run(
+                &model,
+                &crate::config::ModelProvider::Gemini,
+                &Catalog::empty_scheduling_catalog(),
+                "Asia/Shanghai",
+                &mut state,
+                &Channel::new(|_| Ok(())),
+            ),
+        )
+        .instrument(span.clone())
+        .await
+        .unwrap();
+        telemetry::finish(&span, "waiting_for_input", None);
+    }
+    .with_subscriber(subscriber)
+    .await;
+    let spans = exporter.get_finished_spans().unwrap();
+    let root = spans.iter().find(|s| s.name == "test scheduling turn").unwrap();
+    let tools = spans
+        .iter()
+        .filter(|s| attribute(s, "langfuse.observation.type").as_deref() == Some("tool"))
+        .collect::<Vec<_>>();
+    assert_eq!(tools.len(), 2);
+    for tool in &tools {
+        assert_eq!(tool.span_context.trace_id(), root.span_context.trace_id());
+        assert_eq!(tool.parent_span_id, root.span_context.span_id());
+        assert_eq!(
+            attribute(tool, "langfuse.observation.metadata.turnId").as_deref(),
+            Some("turn-1")
+        );
+        assert_eq!(attribute(tool, "langfuse.session.id").as_deref(), Some("trace-session"));
+    }
+    let failed = tools.iter().find(|s| s.name.contains("get_schedule")).unwrap();
+    assert_eq!(
+        attribute(failed, "langfuse.observation.metadata.status").as_deref(),
+        Some("failed")
+    );
+    let preview = tools.iter().find(|s| s.name.contains("preview_change")).unwrap();
+    assert_eq!(
+        attribute(preview, "langfuse.observation.metadata.scheduleId").as_deref(),
+        Some("task-1")
+    );
+    assert_eq!(
+        attribute(preview, "langfuse.observation.metadata.proposalId"),
+        state["pending"].as_str().map(str::to_owned)
+    );
+    let generations = spans
+        .iter()
+        .filter(|s| attribute(s, "langfuse.observation.type").as_deref() == Some("generation"))
+        .collect::<Vec<_>>();
+    assert_eq!(generations.len(), 3);
+    for generation in generations {
+        assert_eq!(generation.parent_span_id, root.span_context.span_id());
+        assert_eq!(
+            attribute(generation, "langfuse.observation.metadata.turnId").as_deref(),
+            Some("turn-1")
+        );
+    }
+    assert_eq!(model.0.requests.lock().unwrap().len(), 3);
+    assert_eq!(agent.store.raw("task-1").await.unwrap()["enabled"], true);
+}
+
+#[tokio::test]
+async fn confirmation_observations_report_committed_state_and_stale_card_failures() {
+    use crate::module::schedule::telemetry::tests::{attribute, exporter};
+    use tracing::instrument::WithSubscriber;
+    let pool = pool().await;
+    let workspace = dirs::active_workspace_id();
+    let store = SchedulingStore::new(pool.clone(), workspace.clone());
+    let mut state = session(&pool, &workspace, proposal("create")).await;
+    store.decide(&mut state, "card-1", true).await.unwrap();
+    let preview = store
+        .preview(
+            &Catalog::empty_scheduling_catalog(),
+            &json!({"operation":"pause","id":"task-1"}),
+        )
+        .await
+        .unwrap();
+    let card_id = preview["id"].as_str().unwrap().to_owned();
+    state["proposals"] = json!([preview]);
+    state["pending"] = json!(card_id);
+    store.save_session(&mut state).await.unwrap();
+    let agent = ScheduleAgent {
+        store,
+        runtime: ScheduleRuntime::global(),
+    };
+    let (subscriber, exporter, _provider) = exporter();
+    async {
+        agent.decide("session-1", &card_id, true, None).await.unwrap();
+        // Retries report the durable result rather than performing another write.
+        agent.decide("session-1", &card_id, true, None).await.unwrap();
+        assert!(agent.decide("session-1", "missing-card", true, None).await.is_err());
+    }
+    .with_subscriber(subscriber)
+    .await;
+    let spans = exporter.get_finished_spans().unwrap();
+    let decisions = spans.iter().filter(|s| s.name == "定时任务确认").collect::<Vec<_>>();
+    assert_eq!(decisions.len(), 3);
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|s| attribute(s, "langfuse.observation.metadata.status").as_deref() == Some("saved"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|s| attribute(s, "langfuse.observation.metadata.status").as_deref() == Some("failed"))
+            .count(),
+        1
+    );
+    assert_eq!(agent.store.raw("task-1").await.unwrap()["enabled"], false);
+}
+
+#[tokio::test]
+async fn failed_preview_does_not_export_an_older_pending_proposal_as_its_result() {
+    use crate::module::schedule::telemetry::tests::{attribute, exporter};
+    use tracing::instrument::WithSubscriber;
+    let workspace = dirs::active_workspace_id();
+    let store = SchedulingStore::new(pool().await, workspace);
+    let catalog = Catalog::empty_scheduling_catalog();
+    let mut state = json!({"id":"session","pending":"card-1","messages":[],"proposals":[proposal("create")]});
+    let (subscriber, exporter, _provider) = exporter();
+    async {
+        assert!(
+            ScheduleTools::new(&store, &catalog)
+                .call(
+                    &mut state,
+                    "preview_change",
+                    &json!({"operation":"pause","id":"missing"})
+                )
+                .await
+                .is_err()
+        );
+    }
+    .with_subscriber(subscriber)
+    .await;
+    let spans = exporter.get_finished_spans().unwrap();
+    let preview = spans.iter().find(|s| s.name.contains("preview_change")).unwrap();
+    assert_eq!(
+        attribute(preview, "langfuse.observation.metadata.status").as_deref(),
+        Some("failed")
+    );
+    assert!(attribute(preview, "langfuse.observation.metadata.proposalId").is_none());
+    assert_eq!(state["pending"], "card-1");
+}
+
+#[tokio::test]
+#[ignore = "requires local Collector/Langfuse; scripted model and temporary schedule database only"]
+async fn export_scheduling_conversation_and_confirmation() {
+    use tracing::instrument::WithSubscriber;
+    struct NativeFixture(Model);
+    #[async_trait::async_trait]
+    impl Llm for NativeFixture {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        async fn generate_content(
+            &self,
+            request: LlmRequest,
+            stream: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            let span = tracing::info_span!("gen_ai.generate");
+            let source = self
+                .0
+                .generate_content(request, stream)
+                .instrument(span.clone())
+                .await?;
+            // Keep the fixture's native span alive until usage/output accounting finishes.
+            Ok(Box::pin(futures::StreamExt::map(source, move |event| {
+                let _entered = span.enter();
+                event
+            })))
+        }
+    }
+    let pool = pool().await;
+    let workspace = dirs::active_workspace_id();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let task_id = format!("probe-{session_id}");
+    let store = SchedulingStore::new(pool.clone(), workspace.clone());
+    let mut creation = proposal("create");
+    creation["after"]["id"] = json!(task_id);
+    let mut state = session(&pool, &workspace, creation).await;
+    store.decide(&mut state, "card-1", true).await.unwrap();
+    state["id"] = json!(session_id);
+    state["proposals"] = json!([]);
+    state["messages"] = json!([]);
+    state["contents"] = json!([{"role":"user","parts":[{"text":"Pause the fixture report"}]}]);
+    let model = NativeFixture(scripted(vec![
+        call(
+            "get_schedule",
+            json!({"id":"missing","api_key":"secret-schedule-probe"}),
+            "failed-read",
+        ),
+        call("preview_change", json!({"operation":"pause","id":task_id}), "preview"),
+        Content::new("model").with_text("Confirm the pause to save it."),
+    ]));
+    let agent = ScheduleAgent {
+        store,
+        runtime: ScheduleRuntime::global(),
+    };
+    let subscriber = crate::core::telemetry::subscriber("http://127.0.0.1:4317").unwrap();
+    crate::core::telemetry::test_capture(true);
+    println!("schedule_conversation_probe={session_id}");
+    async {
+        let span = telemetry::observation("定时任务对话验收", "agent", &workspace, &session_id);
+        let origin = crate::module::model_usage::CallContext {
+            workspace_id: workspace.clone(),
+            session_id: Some(session_id.clone()),
+            turn_id: Some(uuid::Uuid::new_v4().to_string()),
+            session_kind: Some("schedule_agent".into()),
+            purpose: "schedule_agent".into(),
+            ..Default::default()
+        };
+        crate::module::model_usage::scope(
+            origin,
+            agent.run(
+                &model,
+                &crate::config::ModelProvider::Gemini,
+                &Catalog::empty_scheduling_catalog(),
+                "Asia/Shanghai",
+                &mut state,
+                &Channel::new(|_| Ok(())),
+            ),
+        )
+        .instrument(span.clone())
+        .await
+        .unwrap();
+        telemetry::finish(&span, "waiting_for_input", None);
+        assert_eq!(agent.store.raw(&task_id).await.unwrap()["enabled"], true);
+        agent.store.save_session(&mut state).await.unwrap();
+        let card_id = state["pending"].as_str().unwrap();
+        drop(span);
+        agent.decide(&session_id, card_id, true, None).await.unwrap();
+        assert_eq!(agent.store.raw(&task_id).await.unwrap()["enabled"], false);
+    }
+    .with_subscriber(subscriber)
+    .await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    crate::core::telemetry::test_capture(false);
 }
