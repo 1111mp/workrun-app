@@ -41,8 +41,6 @@
     ],
     "resources": [
       "resources",
-      "resources/migrations/*",
-      "resources/python-wheels/*",
       "icons/icon.png"
     ],
     "externalBin": ["binaries/uv"],
