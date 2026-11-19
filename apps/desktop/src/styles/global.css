@@ -1,4 +1,6 @@
-@import '@xyflow/react/dist/style.css' layer(base);
+@layer theme, base, xyflow, components, utilities;
+
+@import '@xyflow/react/dist/style.css';
 @import '@workspace/ui/globals.css';
 
 @custom-variant light (&:is(.light *));

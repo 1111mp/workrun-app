@@ -11,7 +11,7 @@ import {
   Controls,
   ReactFlow,
   ReactFlowProvider,
-  useStore as useFlowStore,
+  useViewportStore,
   useNodesInitialized,
   useReactFlow,
   type Node,
@@ -152,8 +152,8 @@ function FocusChange({ ids }: { ids: string[] }) {
   const flow = useReactFlow();
   const key = JSON.stringify(ids);
   const initialized = useNodesInitialized();
-  const width = useFlowStore((state) => state.width);
-  const height = useFlowStore((state) => state.height);
+  const width = useViewportStore((state) => state.width);
+  const height = useViewportStore((state) => state.height);
   useEffect(() => {
     if (!initialized || !width || !height) return;
     const selectedIds = JSON.parse(key) as string[];
@@ -165,7 +165,7 @@ function FocusChange({ ids }: { ids: string[] }) {
           ...(selectedIds.length
             ? { nodes: selectedIds.map((id) => ({ id })) }
             : {}),
-          padding: 0.6,
+          padding: '60%',
           maxZoom: 1,
         }),
     );
@@ -662,7 +662,7 @@ export function WorkflowDiffView({
               <NodeDiffContext.Provider value={decorations}>
                 <ReactFlowProvider>
                   <ReactFlow
-                    colorMode={theme}
+                    forceColorMode={theme}
                     nodes={nodes}
                     edges={edges}
                     nodeTypes={workflowDiffNodeTypes}
@@ -670,10 +670,7 @@ export function WorkflowDiffView({
                     onNodesChange={(updates) => {
                       // Controlled read-only nodes still need to retain React Flow's
                       // measurements so fitView can wait for a fully measured graph.
-                      const dimensions = updates.filter(
-                        (update) =>
-                          update.type === 'dimensions' && update.dimensions,
-                      );
+                      const dimensions = updates.getByType('dimensions');
                       if (!dimensions.length) return;
                       setMeasurements((current) => {
                         const next = { ...current };

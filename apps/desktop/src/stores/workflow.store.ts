@@ -1,12 +1,10 @@
 import {
   addEdge,
-  applyEdgeChanges,
-  applyNodeChanges,
   type Connection,
   type Edge,
-  type EdgeChange,
+  type EdgeChangeset,
   type Node,
-  type NodeChange,
+  type NodeChangeset,
 } from '@xyflow/react';
 import { temporal } from 'zundo';
 import { createStore } from 'zustand';
@@ -40,8 +38,8 @@ export type WorkflowStore = TrackedWorkflowState & {
   settings: WorkflowSettings;
   selectedNodeId: string | null;
   dragStartNodes: Node[] | null;
-  onNodesChange: (changes: NodeChange<Node>[]) => void;
-  onEdgesChange: (changes: EdgeChange<Edge>[]) => void;
+  onNodesChange: (changes: NodeChangeset<Node>) => void;
+  onEdgesChange: (changes: EdgeChangeset<Edge>) => void;
   addNode: (node: Node) => void;
   addConnection: (connection: Connection | Edge) => void;
   updateNodeData: (nodeId: string, patch: Record<string, unknown>) => void;
@@ -85,12 +83,10 @@ export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>
 
         onNodesChange: (changes) => {
           const removedNodeIds = new Set(
-            changes.flatMap((change) =>
-              change.type === 'remove' ? [change.id] : [],
-            ),
+            changes.getByType('remove').map((change) => change.id),
           );
           set((state) => {
-            state.nodes = applyNodeChanges(changes, state.nodes);
+            state.nodes = changes.applyTo(state.nodes);
             // React Flow emits the connected-edge removals separately. Removing
             // them here keeps a node deletion as one zundo history entry.
             if (removedNodeIds.size > 0) {
@@ -105,7 +101,7 @@ export const createWorkflowStore = (initialWorkflow?: WorkflowDocumentState) =>
 
         onEdgesChange: (changes) => {
           set((state) => {
-            state.edges = applyEdgeChanges(changes, state.edges);
+            state.edges = changes.applyTo(state.edges);
           });
         },
 

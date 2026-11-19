@@ -111,7 +111,7 @@ zip = { workspace = true, default-features = false, features = ["deflate-flate2"
 opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["testing", "trace"] }
 
 [build-dependencies]
-tauri-build = { version = "2.7.4", features = [] }
+tauri-build = { version = "2.7.6", features = [] }
 
 [target."cfg(not(windows))".dependencies]
 libc = "0.2.190"

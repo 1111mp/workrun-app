@@ -341,7 +341,7 @@ function WorkflowCanvas({
         <div className='flex min-h-0 flex-1'>
           {canvasContent ?? (
             <ReactFlow
-              colorMode={colorMode}
+              forceColorMode={colorMode}
               fitView
               nodes={nodes}
               edges={displayEdges}
