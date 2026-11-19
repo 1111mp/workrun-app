@@ -1,6 +1,6 @@
 [package]
 name = "workrun"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 description = "workrun"
 authors = ["The1111mp@outlook.com"]
 build = "build.rs"
@@ -54,10 +54,9 @@ ignore = { workspace = true }
 jsonschema = "0.58.6"
 log = { workspace = true }
 once_cell = { version = "1.21.4", features = ["parking_lot"] }
+open = "5.4.4"
 # Standard context propagation and attributes on ADK-owned spans; no second SDK.
 opentelemetry = { version = "0.32.0", features = ["trace"] }
-tracing-opentelemetry = "0.33.0"
-open = "5.4.4"
 parking_lot = { workspace = true }
 regex = "1.13.1"
 rmcp = { version = "3.5.1", features = ["auth"] }
@@ -101,6 +100,7 @@ tokio-util = { version = "0.7.20", features = ["rt"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = "0.1.44"
+tracing-opentelemetry = "0.33.0"
 tracing-subscriber = "0.3.23"
 url = "2.5.8"
 uuid = { workspace = true, features = ["v4"] }
